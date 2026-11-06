@@ -323,8 +323,9 @@ the programs found these (all fixed in the front end):
 
 ### Performance
 
-The lowering is about a fifth of a `-c` run (README.md, "Speed"); the
-profile of sqlite3.c has no single hot spot in it. What helped: a table
+The lowering is 7% of the time of `goosecc -c` over CTMark and 19% on
+sqlite3.c, which has much code and few headers (README.md, "Speed of
+`goosecc -c`"); its profile has no single hot spot. What helped: a table
 from C type kind to GIR type in `vty` (it is called for nearly every
 node), debug locations that cost nothing without `-g` (each emitter is
 a wrapper that goes straight to the real function unless `-g` is on) and
