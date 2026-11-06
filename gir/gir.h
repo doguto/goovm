@@ -545,11 +545,14 @@ typedef struct GirDie {          /* 16 bytes */
  *   DW_FORM_data1/2/4/8, sdata, udata, flag, flag_present: val
  *   DW_FORM_ref4: val = index into dies (the back-end makes it an offset)
  *   DW_FORM_exprloc, block1: the bytes dstr[val .. val + aux)
+ *   DW_FORM_implicit_const: val (a signed value, kept in the abbreviation)
  * or one of the GIR forms, which the back-end resolves: */
 #define GIR_DF_STR        0x7F01u /* string at dstr[val] -> DW_FORM_strx1..4 */
 #define GIR_DF_FILE       0x7F02u /* dfiles index val -> line-table file number (data1/2) */
 #define GIR_DF_PC         0x7F03u /* DW_AT_low_pc + DW_AT_high_pc of function val (funcs index) */
-#define GIR_DF_SCOPE_PC   0x7F04u /* the code ranges of lexical block val (dscopes index):
+#define GIR_DF_SCOPE_PC   0x7F04u /* the code ranges of scope val (dscopes index: a lexical
+                                     block, or an inlined subprogram) in the code inlined at
+                                     location aux (dlocs index; 0: the function's own code):
                                      low_pc + high_pc, or DW_AT_ranges; without code the DIE
                                      and its subtree are dropped */
 #define GIR_DF_FRAME_BASE 0x7F05u /* DW_AT_frame_base: the frame register */

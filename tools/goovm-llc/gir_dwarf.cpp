@@ -5,16 +5,17 @@
 // appended as LLVM appends them (a type DIE goes to its context when it is
 // first referenced), in LLVM's order of events:
 //   beginModule      the unit, global variables, enums, retained types
-//   per function     the subprogram DIE (low/high pc, frame base), its
-//                    variables (location only), lexical blocks
+//   per function     the abstract subprograms of the code inlined into it
+//                    (attributes, abstract variables and lexical blocks), the
+//                    subprogram DIE (low/high pc, frame base), its variables
+//                    (location only), lexical blocks, inlined subroutines
 //   endModule        imported entities; the subprogram attributes
-//                    (finishSubprogramDefinitions), the variables' names
-//                    and types (finishEntityDefinitions), containing types
+//                    or abstract origins (finishSubprogramDefinitions), the
+//                    variables' names and types or abstract origins
+//                    (finishEntityDefinitions), containing types
 // and is then written in pre-order to T.dies / T.dattrs.
 //
-// Not ported: inlined subroutines (always_inline code at -O0: its
-// locations go to the line table, its scopes to the enclosing function),
-// location lists (-O0 variables live in memory), call-site entries,
+// Not ported: location lists (-O0 variables live in memory), call-site entries,
 // accelerator tables, type units, split DWARF, macros.
 #include "gir_dwarf.h"
 
@@ -31,6 +32,7 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 
 using namespace llvm;
@@ -46,24 +48,29 @@ struct Node {
     std::vector<GirDAttr> attrs;
 };
 
-// A lexical scope of the function being processed (LexicalScopes).
+// A lexical scope of the function being processed (LexicalScopes): a
+// regular one (the function's own), an inlined one (ia: the call site), or
+// an abstract one (the tree of an inlined subprogram).
 struct LScope {
     const DILocalScope *node;
-    int parent;                    // index, -1 for the function scope
+    const DILocation *ia;
+    bool abs;
+    int parent;                    // index, -1 for a root
     std::vector<int> kids;
     std::map<unsigned, uint32_t> args;   // arg number -> variable entity
     std::vector<uint32_t> locals;        // variable entities, in collection order
     std::vector<uint32_t> labels;
-    std::vector<const DIImportedEntity *> decls;   // local imported entities
 };
 
-// A variable or label whose common attributes are added at the end
-// (finishEntityDefinitions).
+// A variable or label (DbgEntity). A concrete one gets its common
+// attributes, or its abstract origin, at the end (finishEntityDefinitions);
+// an abstract one (abs) when its DIE is made.
 struct Entity {
-    uint32_t die;
+    uint32_t die;                  // NO: not made yet
     const DILocalVariable *var;
     const DILabel *label;
-    uint32_t inst;
+    uint32_t inst;                 // a label's GIR instruction (NO: none)
+    bool abs;
 };
 
 void put_uleb(std::vector<uint8_t> &o, uint64_t x) {
@@ -326,11 +333,17 @@ struct GirDwarfBuilder::Impl {
         if (auto *LS = dyn_cast<DILocalScope>(C)) {
             if (auto *LF = dyn_cast<DILexicalBlockFile>(LS)) LS = LF->getNonLexicalBlockFileScope();
             if (auto *LB = dyn_cast<DILexicalBlock>(LS)) {
+                if (abstract_dies.count(LB->getSubprogram())) {
+                    auto a = abstract_dies.find(LB);
+                    if (a != abstract_dies.end()) return a->second;
+                }
                 auto it = lexical_dies.find(LB);
                 if (it != lexical_dies.end()) return it->second;
                 // no concrete block (yet): the enclosing subprogram
                 return context_die(LB->getSubprogram());
             }
+            auto a = abstract_dies.find(LS);
+            if (a != abstract_dies.end()) return a->second;
         }
         if (auto *Ty = dyn_cast<DIType>(C)) {
             uint32_t d = get_type(Ty);
@@ -732,6 +745,8 @@ struct GirDwarfBuilder::Impl {
             if (!minimal) {
                 ctx = unit();
                 get_subprogram(Decl);
+                d = get_die(SP);
+                if (d != NO) return d;
             }
         }
         d = new_die(dwarf::DW_TAG_subprogram, ctx, SP);
@@ -937,35 +952,148 @@ struct GirDwarfBuilder::Impl {
     }
 
     // ---------------------------------------------------------- functions
+    // The lexical scopes of the function being processed (LexicalScopes): its
+    // own (regular) scopes, those of the code inlined into it (scope,
+    // inlinedAt), and the abstract scope trees of the inlined subprograms.
     std::vector<LScope> scopes;
-    DenseMap<const DILocalScope *, int> scope_of;
+    const DISubprogram *cur_sp = nullptr;
+    DenseMap<const DILocalScope *, int> regular_map, abstract_map;
+    std::map<std::pair<const DILocalScope *, const DILocation *>, int> inlined_map;
+    std::vector<int> abstract_sps;   // AbstractScopesList
+    DenseMap<const DILocalScope *, std::vector<const DINode *>> local_decls;   // LocalDeclsPerLS
+    // For the module: the abstract subprogram and lexical block DIEs, and the
+    // abstract entities (variables, labels) by node.
+    DenseMap<const DILocalScope *, uint32_t> abstract_dies;
+    DenseMap<const DINode *, uint32_t> abstract_entities;
 
-    int get_scope(const DILocalScope *S) {
-        S = S->getNonLexicalBlockFileScope();
-        auto it = scope_of.find(S);
-        if (it != scope_of.end()) return it->second;
-        int parent = -1;
-        if (auto *LB = dyn_cast<DILexicalBlockBase>(S)) {
-            parent = get_scope(LB->getScope());
-            if (parent < 0) return -1;
-        } else if (!scopes.empty()) {
-            return -1;   // another subprogram (not inlined here)
-        }
-        scopes.push_back(LScope{S, parent, {}, {}, {}, {}, {}});
+    int new_scope(const DILocalScope *S, const DILocation *IA, bool abs, int parent) {
+        scopes.push_back(LScope{S, IA, abs, parent, {}, {}, {}, {}});
         int k = (int)scopes.size() - 1;
         if (parent >= 0) scopes[parent].kids.push_back(k);
-        scope_of[S] = k;
         return k;
     }
-    // The scope of an instruction's location: inlined code counts as the
-    // call site's.
-    static const DILocation *outer(const DILocation *L) {
-        while (const DILocation *IA = L->getInlinedAt()) L = IA;
-        return L;
+    int scope_at(const DILocation *L) { return L ? lexical_scope(L->getScope(), L->getInlinedAt()) : -1; }
+    int lexical_scope(const DILocalScope *S, const DILocation *IA) {
+        if (IA) {
+            const DICompileUnit *U = S->getSubprogram()->getUnit();
+            if (U && U->getEmissionKind() == DICompileUnit::NoDebug) return scope_at(IA);
+            abstract_scope(S);
+            return inlined_scope(S, IA);
+        }
+        return regular_scope(S);
     }
-    int find_scope(const DILocalScope *S) {
-        auto it = scope_of.find(S->getNonLexicalBlockFileScope());
-        return it == scope_of.end() ? -1 : it->second;
+    int regular_scope(const DILocalScope *S) {
+        S = S->getNonLexicalBlockFileScope();
+        auto it = regular_map.find(S);
+        if (it != regular_map.end()) return it->second;
+        int parent = -1;
+        if (auto *B = dyn_cast<DILexicalBlockBase>(S)) {
+            parent = regular_scope(B->getScope());
+            if (parent < 0) return -1;
+        } else if (S != cur_sp) {
+            return -1;   // another subprogram's, not inlined here
+        }
+        int k = new_scope(S, nullptr, false, parent);
+        regular_map[S] = k;
+        return k;
+    }
+    int inlined_scope(const DILocalScope *S, const DILocation *IA) {
+        S = S->getNonLexicalBlockFileScope();
+        auto key = std::make_pair(S, IA);
+        auto it = inlined_map.find(key);
+        if (it != inlined_map.end()) return it->second;
+        int parent;
+        if (auto *B = dyn_cast<DILexicalBlockBase>(S)) parent = inlined_scope(B->getScope(), IA);
+        else parent = scope_at(IA);
+        if (parent < 0) return -1;
+        int k = new_scope(S, IA, false, parent);
+        inlined_map[key] = k;
+        return k;
+    }
+    int abstract_scope(const DILocalScope *S) {
+        S = S->getNonLexicalBlockFileScope();
+        auto it = abstract_map.find(S);
+        if (it != abstract_map.end()) return it->second;
+        int parent = -1;
+        if (auto *B = dyn_cast<DILexicalBlockBase>(S)) parent = abstract_scope(B->getScope());
+        int k = new_scope(S, nullptr, true, parent);
+        abstract_map[S] = k;
+        if (isa<DISubprogram>(S)) abstract_sps.push_back(k);
+        return k;
+    }
+    // findLexicalScope / findInlinedScope
+    int find_scope(const DILocalScope *S, const DILocation *IA) {
+        S = S->getNonLexicalBlockFileScope();
+        if (IA) {
+            auto it = inlined_map.find({S, IA});
+            return it == inlined_map.end() ? -1 : it->second;
+        }
+        auto it = regular_map.find(S);
+        return it == regular_map.end() ? -1 : it->second;
+    }
+    static const DILocalScope *retained_scope(const DINode *N) {
+        const DIScope *S = nullptr;
+        if (auto *LV = dyn_cast<DILocalVariable>(N)) S = LV->getScope();
+        else if (auto *L = dyn_cast<DILabel>(N)) S = L->getScope();
+        else if (auto *IE = dyn_cast<DIImportedEntity>(N)) S = IE->getScope();
+        auto *LS = dyn_cast_or_null<DILocalScope>(S);
+        return LS ? LS->getNonLexicalBlockFileScope() : nullptr;
+    }
+    const std::vector<const DINode *> &decls_of(const DILocalScope *S) {
+        static const std::vector<const DINode *> none;
+        auto it = local_decls.find(S);
+        return it == local_decls.end() ? none : it->second;
+    }
+    void add_decl(const DILocalScope *S, const DINode *N) {
+        auto &v = local_decls[S];
+        if (std::find(v.begin(), v.end(), N) == v.end()) v.push_back(N);
+    }
+
+    // An entity of scope s (DwarfFile::addScopeVariable / addScopeLabel).
+    uint32_t add_entity(int s, uint32_t die, const DINode *N, uint32_t inst, bool abs) {
+        const auto *V = dyn_cast<DILocalVariable>(N);
+        entities.push_back(Entity{die, V, V ? nullptr : cast<DILabel>(N), inst, abs});
+        uint32_t e = (uint32_t)entities.size() - 1;
+        if (!V) {
+            scopes[s].labels.push_back(e);
+        } else if (unsigned a = V->getArg()) {
+            if (!scopes[s].args.count(a)) scopes[s].args[a] = e;
+        } else {
+            scopes[s].locals.push_back(e);
+        }
+        return e;
+    }
+    static uint16_t entity_tag(const DINode *N) {
+        if (auto *V = dyn_cast<DILocalVariable>(N))
+            return V->getArg() ? dwarf::DW_TAG_formal_parameter : dwarf::DW_TAG_variable;
+        return dwarf::DW_TAG_label;
+    }
+    // ensureAbstractEntityIsCreatedIfScoped
+    void ensure_abstract(const DINode *N, const DILocalScope *S) {
+        if (abstract_entities.count(N)) return;
+        auto it = abstract_map.find(S);
+        if (it != abstract_map.end()) abstract_entities[N] = add_entity(it->second, NO, N, NO, true);
+    }
+    // A concrete entity (createConcreteEntity), its DIE made now.
+    void concrete_entity(int s, const DINode *N, uint32_t inst, const GirDwarfVar *V, uint32_t fi) {
+        ensure_abstract(N, scopes[s].node);
+        uint32_t d = new_die(entity_tag(N), NO);
+        std::vector<uint8_t> b;
+        if (V && V->addr != NO && expr_bytes(V->expr, b))
+            attr(d, dwarf::DW_AT_location, GIR_DF_LOCAL, ((uint64_t)fi << 32) | V->addr, counted(b));
+        add_entity(s, d, N, inst, false);
+    }
+    void var_attrs(uint32_t d, const DILocalVariable *V) {   // applyCommonDbgVariableAttributes
+        if (!V->getName().empty()) add_string(d, dwarf::DW_AT_name, V->getName());
+        if (V->getAlignInBytes()) attr(d, dwarf::DW_AT_alignment, dwarf::DW_FORM_udata, V->getAlignInBytes());
+        add_annotations(d, V->getAnnotations());
+        add_source_line(d, V->getLine(), 0, V->getFile());
+        add_type(d, V->getType());
+        if (V->isArtificial()) add_flag(d, dwarf::DW_AT_artificial);
+    }
+    void label_attrs(uint32_t d, const DILabel *L) {   // applyLabelAttributes
+        if (!L->getName().empty()) add_string(d, dwarf::DW_AT_name, L->getName());
+        add_source_line(d, L->getLine(), 0, L->getFile());
     }
 
     std::vector<uint32_t> sort_locals(const std::vector<uint32_t> &in) {
@@ -1007,100 +1135,154 @@ struct GirDwarfBuilder::Impl {
         }
         return out;
     }
-    uint32_t variable_die(uint32_t e, uint32_t parent, uint32_t &objptr) {
-        Entity &E = entities[e];
+    // constructVariableDIE / constructLabelDIE: an abstract entity gets its
+    // attributes now, a concrete one at the end (finishEntityDefinitions).
+    void entity_die(uint32_t e, uint32_t parent, uint32_t &objptr, bool abs) {
+        if (entities[e].die == NO) {
+            const DINode *N = entities[e].var ? (const DINode *)entities[e].var : entities[e].label;
+            entities[e].die = new_die(entity_tag(N), NO);
+        }
+        const Entity &E = entities[e];
         uint32_t d = E.die;
         nodes[d].parent = parent;
         nodes[parent].kids.push_back(d);
+        dmap[E.var ? (const MDNode *)E.var : E.label] = d;
+        if (abs) {
+            if (E.var) var_attrs(d, E.var);
+            else label_attrs(d, E.label);
+        }
         if (E.var && E.var->isObjectPointer()) objptr = d;
-        return d;
     }
+    // createAndAddScopeChildren
     uint32_t scope_children(int s, uint32_t die) {
         uint32_t objptr = NO;
-        LScope &S = scopes[s];
-        for (auto &a : S.args) variable_die(a.second, die, objptr);
-        for (uint32_t e : sort_locals(S.locals)) variable_die(e, die, objptr);
-        for (uint32_t e : S.labels) variable_die(e, die, objptr);
-        if (!minimal)
-            for (auto *IE : S.decls) deferred_decls.push_back(IE);
-        for (int k : scopes[s].kids) {
-            LScope &C = scopes[k];
-            bool skip = C.args.empty() && C.locals.empty() && (minimal || C.decls.empty());
-            if (skip) scope_children(k, die);
-            else {
-                auto *LB = cast<DILexicalBlockBase>(C.node);
-                uint32_t b = new_die(dwarf::DW_TAG_lexical_block, die);
-                if (auto *L = dyn_cast<DILexicalBlock>(LB)) lexical_dies[L] = b;
-                attr(b, 0, GIR_DF_SCOPE_PC, H.dw_scope(LB));
-                scope_children(k, b);
+        const LScope &S = scopes[s];
+        for (auto &a : S.args) entity_die(a.second, die, objptr, S.abs);
+        for (uint32_t e : sort_locals(S.locals)) entity_die(e, die, objptr, S.abs);
+        for (uint32_t e : S.labels) entity_die(e, die, objptr, S.abs);
+        if (!minimal && !S.ia)
+            for (const DINode *N : decls_of(S.node))
+                if (auto *IE = dyn_cast<DIImportedEntity>(N)) deferred_decls.push_back(IE);
+        for (int k : S.kids) {
+            const LScope &C = scopes[k];
+            bool sp = isa<DISubprogram>(C.node);
+            if (!sp && C.args.empty() && C.locals.empty() && (minimal || decls_of(C.node).empty())) {
+                scope_children(k, die);
+                continue;
             }
+            if (sp) {   // constructInlinedScopeDIE
+                uint32_t b = new_die(dwarf::DW_TAG_inlined_subroutine, die);
+                auto it = abstract_dies.find(C.node);
+                if (it != abstract_dies.end()) add_ref(b, dwarf::DW_AT_abstract_origin, it->second);
+                attr(b, 0, GIR_DF_SCOPE_PC, H.dw_scope(C.node), H.dw_loc(C.ia));
+                attr(b, dwarf::DW_AT_call_file, GIR_DF_FILE, H.dw_file(C.ia->getFile()));
+                add_uint(b, dwarf::DW_AT_call_line, C.ia->getLine());
+                if (C.ia->getColumn()) add_uint(b, dwarf::DW_AT_call_column, C.ia->getColumn());
+                if (C.ia->getDiscriminator()) add_uint(b, dwarf::DW_AT_GNU_discriminator, C.ia->getDiscriminator());
+                scope_children(k, b);
+                continue;
+            }
+            uint32_t b = new_die(dwarf::DW_TAG_lexical_block, die);   // constructLexicalScopeDIE
+            if (C.abs) {
+                abstract_dies[C.node] = b;
+            } else {
+                if (!C.ia)
+                    if (auto *L = dyn_cast<DILexicalBlock>(C.node)) lexical_dies[L] = b;
+                attr(b, 0, GIR_DF_SCOPE_PC, H.dw_scope(C.node), C.ia ? H.dw_loc(C.ia) : 0);
+            }
+            scope_children(k, b);
         }
         return objptr;
+    }
+    // constructAbstractSubprogramScopeDIE
+    void abstract_subprogram(int a) {
+        const auto *SP = cast<DISubprogram>(scopes[a].node);
+        if (abstract_dies.count(SP)) return;
+        uint32_t ctx;
+        if (minimal) {
+            ctx = unit();
+        } else if (auto *Decl = SP->getDeclaration()) {
+            ctx = unit();
+            get_subprogram(Decl);
+        } else {
+            ctx = context_die(SP->getScope());
+        }
+        uint32_t d = new_die(dwarf::DW_TAG_subprogram, ctx);
+        abstract_dies[SP] = d;
+        apply_subprogram_attributes(SP, d, minimal);
+        attr(d, dwarf::DW_AT_inline, dwarf::DW_FORM_implicit_const, dwarf::DW_INL_inlined);
+        uint32_t op = scope_children(a, d);
+        if (op != NO) add_ref(d, dwarf::DW_AT_object_pointer, op);
     }
 
     void function(const Function &F, uint32_t fi, const std::vector<GirDwarfVar> &vars,
                   const std::vector<GirDwarfLabel> &labels) {
         const DISubprogram *SP = F.getSubprogram();
         if (!SP || SP->getUnit() != CU) return;
-        // lexical scopes, in order of the instructions' locations
+        // lexical scopes, from the instructions' locations in order
         scopes.clear();
-        scope_of.clear();
-        get_scope(SP);
-        for (const BasicBlock &BB : F)
-            for (const Instruction &I : BB)
-                if (const DILocation *L = I.getDebugLoc().get()) {
-                    const DILocation *O = outer(L);
-                    if (O->getScope()->getSubprogram() == SP) get_scope(O->getScope());
-                }
-        // variables: the static-alloca ones first (LLVM's MF side table),
-        // then the others, each once
-        DenseSet<const DILocalVariable *> seen;
+        regular_map.clear();
+        abstract_map.clear();
+        inlined_map.clear();
+        abstract_sps.clear();
+        local_decls.clear();
+        cur_sp = SP;
+        regular_scope(SP);
+        for (const BasicBlock &BB : F) {
+            const DILocation *prev = nullptr;
+            for (const Instruction &I : BB) {
+                if (isa<DbgInfoIntrinsic>(I)) continue;
+                const DILocation *L = I.getDebugLoc().get();
+                if (L && L != prev) scope_at(L);
+                if (L) prev = L;
+            }
+        }
+        // collectEntityInfo: the variables of static allocas first (LLVM's
+        // MF side table), then the others, each (variable, inlinedAt) once;
+        // the labels; the retained nodes
+        DenseSet<std::pair<const DINode *, const DILocation *>> seen;
         for (int pass = 0; pass < 2; pass++)
             for (const GirDwarfVar &V : vars) {
-                if (V.mf != (pass == 0) || V.loc->getInlinedAt()) continue;
-                if (!seen.insert(V.var).second) continue;
-                int s = find_scope(V.loc->getScope());
-                if (s < 0) continue;
-                uint32_t d = new_die(V.var->getArg() ? dwarf::DW_TAG_formal_parameter : dwarf::DW_TAG_variable, NO,
-                                     V.var);
-                std::vector<uint8_t> b;
-                if (V.addr != NO && expr_bytes(V.expr, b))
-                    attr(d, dwarf::DW_AT_location, GIR_DF_LOCAL, ((uint64_t)fi << 32) | V.addr, counted(b));
-                entities.push_back(Entity{d, V.var, nullptr, 0});
-                uint32_t e = (uint32_t)entities.size() - 1;
-                if (unsigned a = V.var->getArg()) {
-                    if (!scopes[s].args.count(a)) scopes[s].args[a] = e;
-                } else {
-                    scopes[s].locals.push_back(e);
-                }
+                if (V.mf != (pass == 0)) continue;
+                const DILocation *IA = V.loc->getInlinedAt();
+                if (!seen.insert({V.var, IA}).second) continue;
+                int s = find_scope(V.loc->getScope(), IA);
+                if (s >= 0) concrete_entity(s, V.var, NO, &V, fi);
             }
         for (const GirDwarfLabel &L : labels) {
-            if (L.loc && L.loc->getInlinedAt()) continue;
-            int s = find_scope(L.label->getScope());
-            if (s < 0) continue;
-            uint32_t d = new_die(dwarf::DW_TAG_label, NO, L.label);
-            entities.push_back(Entity{d, nullptr, L.label, L.inst});
-            scopes[s].labels.push_back((uint32_t)entities.size() - 1);
+            const DILocation *IA = L.loc ? L.loc->getInlinedAt() : nullptr;
+            int s = find_scope(L.label->getScope(), IA);
+            if (s < 0 || !seen.insert({L.label, IA}).second) continue;
+            concrete_entity(s, L.label, L.inst, nullptr, fi);
         }
         for (const DINode *N : SP->getRetainedNodes()) {
-            if (auto *LV = dyn_cast<DILocalVariable>(N)) {
-                if (!seen.insert(LV).second) continue;
-                int s = find_scope(LV->getScope());
-                if (s < 0) continue;
-                uint32_t d = new_die(LV->getArg() ? dwarf::DW_TAG_formal_parameter : dwarf::DW_TAG_variable, NO, LV);
-                entities.push_back(Entity{d, LV, nullptr, 0});
-                uint32_t e = (uint32_t)entities.size() - 1;
-                if (unsigned a = LV->getArg()) {
-                    if (!scopes[s].args.count(a)) scopes[s].args[a] = e;
+            const DILocalScope *LS = retained_scope(N);
+            if (!LS) continue;
+            if (isa<DILocalVariable>(N) || isa<DILabel>(N)) {
+                if (!seen.insert({N, nullptr}).second) continue;
+                int s = find_scope(LS, nullptr);
+                if (s >= 0) concrete_entity(s, N, NO, nullptr, fi);
+            } else {
+                add_decl(LS, N);
+            }
+        }
+        // -gmlt: no subprogram DIE for a function without inlined code
+        if (minimal && !CU->getDebugInfoForProfiling() && abstract_sps.empty()) return;
+        // the abstract subprograms of the code inlined here
+        for (size_t i = 0; i < abstract_sps.size(); i++) {
+            int a = abstract_sps[i];
+            for (const DINode *N : cast<DISubprogram>(scopes[a].node)->getRetainedNodes()) {
+                const DILocalScope *LS = retained_scope(N);
+                if (!LS) continue;
+                int ls = abstract_scope(LS);
+                if (isa<DILocalVariable>(N) || isa<DILabel>(N)) {
+                    if (!seen.insert({N, nullptr}).second || abstract_entities.count(N)) continue;
+                    abstract_entities[N] = add_entity(ls, NO, N, NO, true);
                 } else {
-                    scopes[s].locals.push_back(e);
-                }
-            } else if (auto *IE = dyn_cast<DIImportedEntity>(N)) {
-                if (auto *LS = dyn_cast_or_null<DILocalScope>(IE->getScope())) {
-                    int s = find_scope(LS);
-                    if (s >= 0) scopes[s].decls.push_back(IE);
+                    add_decl(LS, N);
                 }
             }
+            abstract_subprogram(a);
         }
         // the subprogram scope DIE
         uint32_t d = get_subprogram(SP);
@@ -1121,24 +1303,24 @@ struct GirDwarfBuilder::Impl {
         // finishSubprogramDefinitions
         for (const DISubprogram *SP : processed_sps) {
             uint32_t d = get_die(SP);
-            if (d != NO) apply_subprogram_attributes(SP, d, minimal);
+            if (d == NO) continue;
+            auto a = abstract_dies.find(SP);
+            if (a != abstract_dies.end()) add_ref(d, dwarf::DW_AT_abstract_origin, a->second);
+            else apply_subprogram_attributes(SP, d, minimal);
         }
         // finishEntityDefinitions
         for (const Entity &E : entities) {
+            if (E.abs) continue;
             uint32_t d = E.die;
-            if (E.var) {
-                if (!E.var->getName().empty()) add_string(d, dwarf::DW_AT_name, E.var->getName());
-                if (E.var->getAlignInBytes())
-                    attr(d, dwarf::DW_AT_alignment, dwarf::DW_FORM_udata, E.var->getAlignInBytes());
-                add_annotations(d, E.var->getAnnotations());
-                add_source_line(d, E.var->getLine(), 0, E.var->getFile());
-                add_type(d, E.var->getType());
-                if (E.var->isArtificial()) add_flag(d, dwarf::DW_AT_artificial);
-            } else {
-                if (!E.label->getName().empty()) add_string(d, dwarf::DW_AT_name, E.label->getName());
-                add_source_line(d, E.label->getLine(), 0, E.label->getFile());
-                attr(d, dwarf::DW_AT_low_pc, GIR_DF_LABEL, E.inst);
-            }
+            const DINode *N = E.var ? (const DINode *)E.var : E.label;
+            auto a = abstract_entities.find(N);
+            if (a != abstract_entities.end() && entities[a->second].die != NO)
+                add_ref(d, dwarf::DW_AT_abstract_origin, entities[a->second].die);
+            else if (E.var)
+                var_attrs(d, E.var);
+            else
+                label_attrs(d, E.label);
+            if (E.label && E.inst != NO) attr(d, dwarf::DW_AT_low_pc, GIR_DF_LABEL, E.inst);
         }
         // constructContainingTypeDIEs
         for (auto &P : containing) {

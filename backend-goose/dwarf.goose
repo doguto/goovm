@@ -11,7 +11,7 @@
 //     the top of blocks without a location, is_stmt forced on the first
 //     line of a block that a predecessor leaves on another line);
 //   - runs of instructions with one location, from which the code ranges of
-//     lexical blocks follow (LLVM's LexicalScopes);
+//     lexical blocks and inlined subroutines follow (LLVM's LexicalScopes);
 //   - the frame address of every variable of the DIE table;
 //   - the code address of labels.
 // dbg_write() then builds the sections; the DIE tree is written in one pass
@@ -37,6 +37,7 @@ let R_X86_64_DTPOFF64 = 17;
 let DW_TAG_compile_unit = 0x11;
 let DW_TAG_subprogram = 0x2e;
 let DW_TAG_lexical_block = 0x0b;
+let DW_TAG_inlined_subroutine = 0x1d;
 let DW_TAG_variable = 0x34;
 let DW_TAG_formal_parameter = 0x05;
 let DW_TAG_label = 0x0a;
@@ -78,6 +79,7 @@ let DW_FORM_strx4 = 0x28;
 let DW_FORM_addrx = 0x1b;
 let DW_FORM_rnglistx = 0x23;
 let DW_FORM_data16 = 0x1e;
+let DW_FORM_implicit_const = 0x21;
 
 // ------------------------------------------------------------ rows
 
@@ -116,13 +118,21 @@ var run_open = false;
 var run_d: u32 = 0;
 var run_start: u32 = 0;
 
-// Lexical block code ranges (section-relative), a list per scope.
+// Scope instances: a dscopes index for a scope of a function's own code, or
+// sc_ns + k for the k-th scope in inlined code (scope, inlined-at location).
+var sc_ns: u32 = 0;
+var in_scope: u32[>..] = [];
+var in_ia: u32[>..] = [];
+var in_par: u32[>..] = [];     // the enclosing instance (0: none)
+var in_tab: u32[>..] = [];     // open addressing on (scope, ia): k + 1
+// Code ranges of lexical blocks and inlined subroutines (section-relative),
+// a list per scope instance.
 struct Rng { start: u32, end: u32, sec: u32, next: u32 }
 var rngs: Rng[>..] = [];
 var sc_head: u32[>..] = [];
 var sc_tail: u32[>..] = [];
 var sc_n: u32[>..] = [];
-var sc_first: u32[>..] = [];   // open range of each scope (per function, sc_tag == epoch)
+var sc_first: u32[>..] = [];   // open range of each instance (per function, sc_tag == epoch)
 var sc_last: u32[>..] = [];
 var sc_tag: u32[>..] = [];
 var sc_epoch: u32 = 0;
@@ -189,6 +199,11 @@ fn dbg_init() {
         sc_last.resize(ns, 0);
         sc_tag.resize(ns, 0);
     }
+    sc_ns = ns as! u32;
+    in_scope.clear();
+    in_ia.clear();
+    in_par.clear();
+    in_tab.clear();
     if M.dies.len == 0 { make_dies(); }
     index_attrs();
 }
@@ -527,69 +542,139 @@ fn dbg_epilogue() {
 
 // ------------------------------------------------- per function, late
 
-// The innermost scope of a location for scope ranges: inlined code counts as
-// its outermost call site; lexical block files are transparent.
-fn run_scope(d0: u32) -> u32 {
-    var d = d0;
-    while M.dlocs[d].inlined_at != 0 { d = M.dlocs[d].inlined_at; }
-    var s = M.dlocs[d].scope;
+// The innermost local scope of scope s0 that is not a lexical block file.
+fn nonfile(s0: u32) -> u32 {
+    var s = s0;
     while s != 0 && M.dscopes[s].kind == DS_FILE { s = M.dscopes[s].parent; }
     return s;
 }
 fn sc_parent(s: u32) -> u32 {
-    var p = M.dscopes[s].parent;
-    while p != 0 && M.dscopes[p].kind == DS_FILE { p = M.dscopes[p].parent; }
+    let p = nonfile(M.dscopes[s].parent);
     if p != 0 && M.dscopes[p].kind != DS_LEXICAL && M.dscopes[p].kind != DS_SUBPROGRAM { return 0; }
     return p;
 }
-// a is s or an ancestor of s
-fn sc_dominates(a: u32, s0: u32) -> bool {
-    var s = s0;
-    while s != 0 {
-        if s == a { return true; }
-        if M.dscopes[s].kind == DS_SUBPROGRAM { return false; }
-        s = sc_parent(s);
+fn in_slot(s: u32, ia: u32) -> i64 {
+    let h: u64 = ((s as u64) << 32 | ia) * 0x9E3779B97F4A7C15;
+    return ((h >> 24) as! i64) & (in_tab.len - 1);
+}
+// The instance of scope s in the code inlined at ia, GIR_NONE if there is none.
+fn inst_find(s: u32, ia: u32) -> u32 {
+    if ia == 0 { return s; }
+    if in_tab.len == 0 { return GIR_NONE; }
+    var i = in_slot(s, ia);
+    while in_tab[i] != 0 {
+        let k: i64 = in_tab[i] - 1;
+        if in_scope[k] == s && in_ia[k] == ia { return sc_ns + k as! u32; }
+        i = (i + 1) & (in_tab.len - 1);
+    }
+    return GIR_NONE;
+}
+// ... made if needed, with its enclosing instances (LexicalScopes'
+// getOrCreateInlinedScope): a lexical block's is its parent block's in the
+// same code, an inlined subprogram's is the scope of its call site.
+recursive fn inst_of(s: u32, ia: u32) -> u32 {
+    if ia == 0 { return s; }
+    let f = inst_find(s, ia);
+    if f != GIR_NONE { return f; }
+    var p: u32 = 0;
+    if M.dscopes[s].kind == DS_SUBPROGRAM {
+        p = inst_of(nonfile(M.dlocs[ia].scope), M.dlocs[ia].inlined_at);
+    } else {
+        let q = sc_parent(s);
+        if q != 0 { p = inst_of(q, ia); }
+    }
+    let k = in_scope.len as! u32;
+    in_scope.push(s);
+    in_ia.push(ia);
+    in_par.push(p);
+    sc_head.push(GIR_NONE);
+    sc_tail.push(GIR_NONE);
+    sc_n.push(0);
+    if sc_tag.len < sc_head.len {
+        sc_first.resize(sc_head.len, 0);
+        sc_last.resize(sc_head.len, 0);
+        sc_tag.resize(sc_head.len, 0);
+    }
+    if in_scope.len * 2 > in_tab.len {
+        let n = if in_tab.len == 0 { 64 } else { in_tab.len * 2 };
+        in_tab.clear();
+        in_tab.resize(n, 0);
+        for q in 0..in_scope.len {
+            var i = in_slot(in_scope[q], in_ia[q]);
+            while in_tab[i] != 0 { i = (i + 1) & (n - 1); }
+            in_tab[i] = q as! u32 + 1;
+        }
+    } else {
+        var i = in_slot(s, ia);
+        while in_tab[i] != 0 { i = (i + 1) & (in_tab.len - 1); }
+        in_tab[i] = k + 1;
+    }
+    return sc_ns + k;
+}
+// The instance of a location's scope.
+fn run_scope(d: u32) -> u32 {
+    let s = nonfile(M.dlocs[d].scope);
+    if s == 0 { return 0; }
+    return inst_of(s, M.dlocs[d].inlined_at);
+}
+// The enclosing instance (0 at the function's subprogram).
+fn i_par(x: u32) -> u32 {
+    if x >= sc_ns { return in_par[x - sc_ns]; }
+    if M.dscopes[x].kind == DS_SUBPROGRAM { return 0; }
+    return sc_parent(x);
+}
+// a is x or encloses x
+fn sc_dominates(a: u32, x0: u32) -> bool {
+    var x = x0;
+    while x != 0 {
+        if x == a { return true; }
+        x = i_par(x);
     }
     return false;
 }
-fn sc_open(s0: u32, at: u32) {
-    var s = s0;
-    while s != 0 {
-        if sc_tag[s] != sc_epoch {
-            sc_tag[s] = sc_epoch;
-            sc_first[s] = at;
+fn sc_open(x0: u32, at: u32) {
+    var x = x0;
+    while x != 0 {
+        if sc_tag[x] != sc_epoch {
+            sc_tag[x] = sc_epoch;
+            sc_first[x] = at;
         }
-        if M.dscopes[s].kind == DS_SUBPROGRAM { return; }
-        s = sc_parent(s);
+        x = i_par(x);
     }
 }
-fn sc_extend(s0: u32, at: u32) {
-    var s = s0;
-    while s != 0 {
-        sc_last[s] = at;
-        if M.dscopes[s].kind == DS_SUBPROGRAM { return; }
-        s = sc_parent(s);
+fn sc_extend(x0: u32, at: u32) {
+    var x = x0;
+    while x != 0 {
+        sc_last[x] = at;
+        x = i_par(x);
     }
 }
-// Closes the range of s (and of its ancestors that do not dominate ns).
-fn sc_close(s0: u32, ns: u32, base: u32, sec: u32) {
-    var s = s0;
-    while s != 0 {
-        if sc_tag[s] == sc_epoch {
-            if M.dscopes[s].kind == DS_LEXICAL {
+// Closes the range of x (and of its enclosing instances that do not
+// enclose nx).
+fn sc_close(x0: u32, nx: u32, base: u32, sec: u32) {
+    var x = x0;
+    while x != 0 {
+        let p = i_par(x);
+        if sc_tag[x] == sc_epoch {
+            if p != 0 {
                 let k = rngs.len as! u32;
-                rngs.push(Rng { start: sc_first[s] + base, end: sc_last[s] + base, sec: sec, next: GIR_NONE });
-                if sc_head[s] == GIR_NONE { sc_head[s] = k; } else { rngs[sc_tail[s]].next = k; }
-                sc_tail[s] = k;
-                sc_n[s] += 1;
+                rngs.push(Rng { start: sc_first[x] + base, end: sc_last[x] + base, sec: sec, next: GIR_NONE });
+                if sc_head[x] == GIR_NONE { sc_head[x] = k; } else { rngs[sc_tail[x]].next = k; }
+                sc_tail[x] = k;
+                sc_n[x] += 1;
             }
-            sc_tag[s] = 0;
+            sc_tag[x] = 0;
         }
-        if M.dscopes[s].kind == DS_SUBPROGRAM { return; }
-        let p = sc_parent(s);
-        if p == 0 || ns != 0 && sc_dominates(p, ns) { return; }
-        s = p;
+        if p == 0 || nx != 0 && sc_dominates(p, nx) { return; }
+        x = p;
     }
+}
+// The code ranges of a GIR_DF_SCOPE_PC attribute: its instance, GIR_NONE if
+// it has no code.
+fn scope_inst(A: DAttr) -> u32 {
+    let x = inst_find(A.val as! u32, A.aux);
+    if x == GIR_NONE || sc_n[x] == 0 { return GIR_NONE; }
+    return x;
 }
 
 // The function just placed at mcode[start ..] (prologue prolen, size size)
@@ -817,6 +902,12 @@ fn put_attr(A: DAttr) {
     let at: u32 = A.at;
     let form: u32 = A.form;
     if form == DF_STR { put_strx(at, A.val as! u32); return; }
+    if form == DW_FORM_implicit_const {
+        // the value goes to the abbreviation
+        assert(A.val as! i64 >= 0 && A.val < 0x80000000);
+        ab_add(at, 0x80000000 | A.val as! u32);
+        return;
+    }
     if form < 0x7F00 {
         if form == DW_FORM_ref4 {
             let t: u32 = A.val as! u32;
@@ -863,7 +954,9 @@ fn put_attr(A: DAttr) {
         let g = M.funcs[A.val].global;
         put_lowhigh(sec_sym(g_sec[g]), g_value[g], g_size[g] as! u32);
     } else if form == DF_SCOPE_PC {
-        let s: i64 = A.val as! i64;
+        let x = scope_inst(A);
+        if x == GIR_NONE { return; }
+        let s: i64 = x;
         let n = sc_n[s];
         if n == 1 {
             let R = rngs[sc_head[s]];
@@ -1006,10 +1099,10 @@ fn mark_dies() {
                 dk_keep[k] = 0;
             }
         }
-        if D.tag == DW_TAG_lexical_block {
+        if D.tag == DW_TAG_lexical_block || D.tag == DW_TAG_inlined_subroutine {
             for q in D.attrs..D.attrs + D.n_attrs {
                 let A = attr_at(q);
-                if A.form == DF_SCOPE_PC && sc_n[A.val as! i64] == 0 { dk_keep[k] = 0; }
+                if A.form == DF_SCOPE_PC && scope_inst(A) == GIR_NONE { dk_keep[k] = 0; }
             }
         }
     }
@@ -1063,11 +1156,14 @@ fn dbg_write() {
     use_rng = n_cs > 1;
     for k in 0..nd {
         if use_rng { break; }
-        if dk_keep[k] == 0 || die_at(k).tag != DW_TAG_lexical_block { continue; }
+        if dk_keep[k] == 0 { continue; }
         let D = die_at(k);
+        if D.tag != DW_TAG_lexical_block && D.tag != DW_TAG_inlined_subroutine { continue; }
         for q in D.attrs..D.attrs + D.n_attrs {
             let A = attr_at(q);
-            if A.form == DF_SCOPE_PC && sc_n[A.val as! i64] > 1 { use_rng = true; }
+            if A.form != DF_SCOPE_PC { continue; }
+            let x = scope_inst(A);
+            if x != GIR_NONE && sc_n[x] > 1 { use_rng = true; }
         }
     }
     // the DIEs: bodies and abbreviations
@@ -1167,7 +1263,13 @@ fn dbg_write() {
         let na: i64 = ab_data[x + 2];
         for q in 0..na {
             uleb(b_abbrev, ab_data[x + 3 + 2 * q]);
-            uleb(b_abbrev, ab_data[x + 4 + 2 * q]);
+            let f = ab_data[x + 4 + 2 * q];
+            if f & 0x80000000 != 0 {
+                uleb(b_abbrev, DW_FORM_implicit_const);
+                sleb(b_abbrev, f & 0x7FFFFFFF);
+            } else {
+                uleb(b_abbrev, f);
+            }
         }
         o1(b_abbrev, 0);
         o1(b_abbrev, 0);

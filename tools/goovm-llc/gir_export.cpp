@@ -225,6 +225,7 @@ struct Exporter : GirDwarfHost {
     }
     uint32_t dw_file(const DIFile *f) override { return dfile(f); }
     uint32_t dw_scope(const DIScope *s) override { return dscope(s); }
+    uint32_t dw_loc(const DILocation *l) override { return dloc(l); }
     uint32_t dw_global(const GlobalValue *g) override {
         auto it = gmap.find(g);
         return it == gmap.end() ? GIR_NONE : it->second;
@@ -2542,7 +2543,10 @@ struct Exporter : GirDwarfHost {
             uint32_t a = GIR_NONE;
             const Value *v = P.addr;
             bool mf = false;
-            if (v) {
+            // a null or undef address: the variable is dropped (FastISel's
+            // lowerDbgDeclare)
+            if (!v || isa<UndefValue>(v)) continue;
+            {
                 if (const auto *A = dyn_cast<Argument>(v)) {
                     a = GIR_MK(GIR_V_ARG, A->getArgNo());
                 } else if (isa<Instruction>(v)) {

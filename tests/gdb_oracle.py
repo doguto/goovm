@@ -17,8 +17,15 @@ script fills the 8 KB below the stack pointer with one byte pattern, and an
 uninitialized local reads the same in both builds. The transcripts are
 normalized (addresses, pids, directories) and compared line by line.
 
+With --unwind, the goovm build alone is checked instead: for each of the
+program's functions (its first --unwind-calls activations), the session
+breaks on the function's first instruction and single-steps it (`stepi`,
+`nexti` over calls) until it has returned, checking at every instruction
+boundary - the prologue's pushes, the body, the epilogue's pops and `ret` -
+that the backtrace is the function over the same callers as on entry.
+
 usage: tests/gdb_oracle.py [--goovm PATH | --cc PATH] [-j 3] [--work DIR] [--stops N]
-                           [--corpus c,sample] [--keep] [filter ...]
+                           [--corpus c,sample] [--unwind] [--keep] [filter ...]
 Corpora: c (tests/c/*.c), sample (a sample of llvm-test-suite programs, C and C++).
 Exit status 0 iff every transcript matches.
 """
@@ -119,6 +126,101 @@ while stops < cfg["stops"] and alive() and stopped_in_code():
 out.write("=== end after %d stops\n" % stops)
 out.close()
 ex("kill")
+'''
+
+
+UNWIND_SCRIPT = r'''
+import gdb, json
+cfg = json.load(open(CFG))
+out = open(cfg["out"], "w")
+for c in ["set pagination off", "set confirm off", "set width 0", "set breakpoint pending on",
+          "set disable-randomization on"]:
+    gdb.execute(c, to_string=True)
+def chain():
+    names = []
+    f = gdb.newest_frame()
+    while f is not None and len(names) < 64:
+        names.append(f.name() or "??")
+        if f.name() == "main":
+            break
+        f = f.older()
+    return names
+checked = 0
+bad = 0
+steps = 0
+bps = {}
+for fn in cfg["funcs"]:
+    try:
+        bps[fn] = gdb.Breakpoint("*" + fn, internal=True)
+    except gdb.error:
+        pass
+try:
+    gdb.execute("run " + " ".join(cfg["args"]), to_string=True)
+except gdb.error:
+    pass
+def returned(c, entry):
+    callers = entry[1:]
+    if entry[0] == "main":
+        return "main" not in c
+    return c == callers or (len(c) == len(callers) and c[1:] == callers[1:])
+while checked < cfg["max_checks"] and steps < cfg["max_steps"]:
+    try:
+        gdb.selected_frame()
+    except gdb.error:
+        break
+    for b in bps.values():
+        if b.is_valid() and b.enabled and b.hit_count >= cfg["calls"]:
+            b.enabled = False
+    stack = [(chain(), 0)]
+    checked += 1
+    while stack and steps < cfg["max_steps"]:
+        entry, n = stack[-1]
+        if n >= 20000:
+            stack.pop()
+            continue
+        insn = gdb.execute("x/i $pc", to_string=True)
+        try:
+            if "call" in insn.split(":", 1)[-1]:
+                gdb.execute("nexti", to_string=True)
+            else:
+                gdb.execute("stepi", to_string=True)
+        except gdb.error:
+            stack = []
+            break
+        steps += 1
+        stack[-1] = (entry, n + 1)
+        try:
+            c = chain()
+        except gdb.error:
+            stack = []
+            break
+        if c == entry:
+            continue
+        if returned(c, entry):
+            stack.pop()
+            continue
+        if len(c) > len(entry) and c[-len(entry):] == entry:
+            # nexti stopped at a breakpoint in a callee: check it too
+            for b in bps.values():
+                if b.is_valid() and b.enabled and b.hit_count >= cfg["calls"]:
+                    b.enabled = False
+            stack.append((c, 0))
+            checked += 1
+            continue
+        out.write("MISMATCH in %s after %d instructions: %s / entry %s\n" % (entry[0], n + 1, c, entry))
+        out.write(insn)
+        bad += 1
+        stack.pop()
+    try:
+        gdb.execute("continue", to_string=True)
+    except gdb.error:
+        break
+out.write("checked %d activations, %d instructions, %d mismatches\n" % (checked, steps, bad))
+out.close()
+try:
+    gdb.execute("kill", to_string=True)
+except gdb.error:
+    pass
 '''
 
 
@@ -251,8 +353,8 @@ def breakpoints(p, ref_objs, nlines):
             seen.add(x)
             uniq.append(x)
     if uniq:
-        step = max(1, len(uniq) // nlines)
-        locs += [f"{b}:{ln}" for b, ln in uniq[::step][:nlines]]
+        step = max(1, len(uniq) // max(1, nlines))
+        locs += [f"{b}:{ln}" for b, ln in uniq[::step][:nlines]] if nlines else []
     return locs[:60], funcs
 
 
@@ -293,7 +395,37 @@ def compare(ref, got):
     return bad
 
 
+def unwind_test(p, args):
+    wd = os.path.join(args.work, p.name.replace("/", "__"))
+    os.makedirs(wd, exist_ok=True)
+    try:
+        goo = compile_goovm(p, wd, args)
+        _, ref_objs = compile_ref(p, wd, [], args, "ref")
+    except RuntimeError as e:
+        return p.name, "error", str(e), 0
+    _, funcs = breakpoints(p, ref_objs, 0)
+    out = os.path.join(wd, "unwind.txt")
+    cfgf = os.path.join(wd, "unwind.json")
+    json.dump({"out": out, "funcs": funcs, "args": p.args, "calls": args.unwind_calls,
+               "max_checks": 400, "max_steps": 200000}, open(cfgf, "w"))
+    scr = os.path.join(wd, "unwind.py")
+    open(scr, "w").write(f"CFG = {cfgf!r}\n" + UNWIND_SCRIPT)
+    sh(["gdb", "-nx", "-batch", "-x", scr, goo], timeout=1200, cwd=p.rundir or wd, stdin=subprocess.DEVNULL)
+    if not os.path.exists(out):
+        return p.name, "error", "no unwind transcript", 0
+    t = open(out).read().strip().splitlines()
+    last = t[-1] if t else ""
+    m = re.match(r"checked (\d+) activations, (\d+) instructions, (\d+) mismatches", last)
+    if not m:
+        return p.name, "error", last, 0
+    if int(m.group(3)):
+        return p.name, "diff", "\n".join(t[:6]), int(m.group(2))
+    return p.name, "same", last, int(m.group(2))
+
+
 def test(p, args):
+    if args.unwind:
+        return unwind_test(p, args)
     wd = os.path.join(args.work, p.name.replace("/", "__"))
     os.makedirs(wd, exist_ok=True)
     try:
@@ -335,6 +467,8 @@ def main():
                     help="stop filling the stack after this many function entries")
     ap.add_argument("--corpus", default="c,sample")
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--unwind", action="store_true", help="single-step the goovm build's functions, checking bt")
+    ap.add_argument("--unwind-calls", type=int, default=2)
     ap.add_argument("--json", default="")
     ap.add_argument("filter", nargs="*")
     args = ap.parse_args()
@@ -348,7 +482,9 @@ def main():
             res.append((name, st, msg, n))
             print(f"{name:55s} {st:5s} stops={n:3d} {msg if st != 'same' else msg}", flush=True)
     same = sum(1 for r in res if r[1] == "same")
-    print(f"\n{same}/{len(res)} transcripts match ({sum(r[3] for r in res)} stops)")
+    what = "instructions" if args.unwind else "stops"
+    print(f"\n{same}/{len(res)} {'programs unwind correctly' if args.unwind else 'transcripts match'} "
+          f"({sum(r[3] for r in res)} {what})")
     if args.json:
         json.dump(res, open(args.json, "w"), indent=1)
     sys.exit(0 if same == len(res) else 1)

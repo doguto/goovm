@@ -36,6 +36,7 @@ struct GirDwarfHost {
     virtual uint32_t dw_file(const llvm::DIFile *f) = 0;          // dfiles index
     virtual uint32_t dw_scope(const llvm::DIScope *s) = 0;        // dscopes index
     virtual uint32_t dw_global(const llvm::GlobalValue *g) = 0;   // globals index or GIR_NONE
+    virtual uint32_t dw_loc(const llvm::DILocation *l) = 0;       // dlocs index
 };
 
 // A variable of a function: a #dbg_declare (or llvm.dbg.declare) whose
