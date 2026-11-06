@@ -52,8 +52,11 @@ def corpus(names=None):
     ss = os.path.join(SUITE, "SingleSource")
     want = lambda n: not names or n in names
     if want("torture"):
+        # per-test flags from the torture CMakeLists.txt
+        extra = {"920302-1.c": ["-Wno-return-type"], "920501-3.c": ["-Wno-return-type"], "920728-1.c": ["-Wno-return-type"],
+                 "20040409-1.c": ["-fwrapv"], "20040409-2.c": ["-fwrapv"], "20040409-3.c": ["-fwrapv"], "950704-1.c": ["-fwrapv"]}
         for p in c_files(os.path.join(ss, "Regression/C/gcc-c-torture/execute")):
-            yield "torture", p, list(TORTURE_FLAGS)
+            yield "torture", p, list(TORTURE_FLAGS) + extra.get(os.path.basename(p), [])
     if want("unit"):
         # Non-x86 vector tests are left out; AVX512 tests need -march=skylake-avx512.
         skip = ("ObjC", "Altivec", "NEON", "AArch64", "HVX", "LASX", "LSX", "AVX512")

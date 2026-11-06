@@ -17,6 +17,13 @@ import .ppdir;
 import .ppexpr;
 import .print;
 import .predef_gen;
+import .types;
+import .ast;
+import .sema;
+import .expr;
+import .parse;
+import .init;
+import .builtins;
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
 var opt_input: u8[>..] = [];
@@ -87,6 +94,10 @@ fn main() {
         else if s == "-nostdinc" { nostdinc = true; }
         else if s == "-funsigned-char" { opt_unsigned_char = true; }
         else if s == "-trigraphs" { opt_trigraphs = true; }
+        else if s == "-Wno-return-type" || s == "-Wno-return-mismatch" || s == "-Wno-error=return-type" || s == "-Wno-error=return-mismatch" { opt_wno_return = true; }
+        else if s == "-Wno-int-conversion" || s == "-Wno-error=int-conversion" { opt_wno_int_conv = true; }
+        else if s == "-Wno-implicit-function-declaration" || s == "-Wno-error=implicit-function-declaration" { opt_wno_implicit_fn = true; }
+        else if s == "-Wno-implicit-int" || s == "-Wno-error=implicit-int" { opt_wno_implicit_int = true; }
         else if s == "-Wall" || s == "-W" { quiet_warnings = false; }
         else if s == "-O0" { opt_optimize = 0; }
         else if starts_with(s, "-O") {
@@ -141,6 +152,22 @@ fn main() {
             let t = pp_lex();
             tu_toks.push(t);
             if t.kind == TK_EOF { break; }
+        }
+        let t1 = clock_ns();
+        let v = std_version();
+        opt_kw_inline = v.len > 0 || opt_gnu;
+        opt_kw_restrict = v.len > 0;
+        opt_kw_gnu = opt_gnu;
+        opt_c89 = v.len == 0;
+        keywords_init();
+        types_init();
+        prepare_tokens();
+        parse_init();
+        parse_tu();
+        if opt_time {
+            let t2 = clock_ns();
+            write_stderr(str("goosecc: pp ", (t1 - t0) / 1000, " us, parse+sema ", (t2 - t1) / 1000, " us, ", nodes.len, " nodes, ",
+                types.len, " types, ", syms.len, " symbols\n"));
         }
     }
     if opt_time {

@@ -956,6 +956,12 @@ recursive fn do_pragma(t: Tok, from_op: bool) {
         error_at(t.xloc as i64, "#pragma GCC error");
     } else if ptok_is(0, "pack") {
         do_pack();
+    } else if ptok_is(0, "ms_struct") {
+        var v: u32 = 0;
+        if ptok_is(1, "on") { v = 1; }
+        if tu_annot {
+            tu_toks.push(Tok { kind: TK_ANNOT_MSSTRUCT, flags: 0, aux: 0, spell: ptoks[0].xloc, val: v, xloc: ptoks[0].xloc });
+        }
     }
     if print && mode_E { print_pragma_tokens(0); }
 }

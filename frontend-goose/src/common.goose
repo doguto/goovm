@@ -24,6 +24,7 @@ let TK_HASHHASH_NP = 9;  // a ## that came from an argument: prints as ##, never
 let TK_CTX_END = 10;     // internal: a token context ran out
 let TK_ANNOT_PACK = 11;  // #pragma pack: val = new max field alignment (0 = default)
 let TK_COMMENT = 12;     // internal
+let TK_ANNOT_MSSTRUCT = 13; // #pragma ms_struct: val = 1 on, 0 off
 
 let TK_L_SQUARE = 20;
 let TK_R_SQUARE = 21;
@@ -289,7 +290,11 @@ fn loc_prefix(out: u8[>..]&, loc: i64) {
     format(out, ":", line, ":", col, ": ");
 }
 
+var diag_suppress: i64 = 0;
+var diag_suppressed_errors: i64 = 0;
+
 fn error_at(loc: i64, msg: const u8[:]) {
+    if diag_suppress > 0 { diag_suppressed_errors++; return; }
     err_out.clear();
     loc_prefix(err_out, loc);
     err_out.append("error: ");
@@ -301,6 +306,7 @@ fn error_at(loc: i64, msg: const u8[:]) {
 }
 
 fn warn_at(loc: i64, msg: const u8[:]) {
+    if diag_suppress > 0 { return; }
     n_warnings++;
     if quiet_warnings { return; }
     err_out.clear();
