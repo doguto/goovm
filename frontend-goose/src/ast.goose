@@ -35,6 +35,8 @@ let N_ERROR = 22;       // recovery
 let N_BUILTIN = 23;     // op = BI_* : a builtin with custom semantics; v/c = args (nlist)
 let N_DESIG = 24;       // syntactic designated initializer (only during initializer analysis)
 let N_SYNINIT = 25;     // syntactic { } list (only during initializer analysis)
+let N_SWIZZLE = 26;     // ext_vector_type element access: a = vector (op = 1: pointer to it, p->x),
+                        // c = count, v = element indices (4 bits each, the first lowest)
 
 // statements
 let N_COMPOUND = 40;    // v = first in nlist, c = count

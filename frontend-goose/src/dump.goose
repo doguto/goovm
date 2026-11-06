@@ -223,6 +223,12 @@ recursive fn dump_node(n: u32, depth: i64) {
         dump_node(nd.a, depth + 1);
         return;
     }
+    if k == N_SWIZZLE {
+        dline(depth, "ExtVectorElementExpr", nd.ty);
+        dout.push('\n');
+        dump_node(nd.a, depth + 1);
+        return;
+    }
     if k == N_INDEX {
         dline(depth, "ArraySubscriptExpr", nd.ty);
         dout.push('\n');

@@ -826,10 +826,15 @@ fn is_modifiable(n: u32, loc: u32, what: const u8[:]) -> bool {
         err_at(loc, "expression is not assignable");
         return false;
     }
-    let t = nty(n);
+    var t = nty(n);
     if is_array(t) {
         err_at(loc, str("array type ", tname(t), " is not assignable"));
         return false;
+    }
+    if nodes[n].kind == N_SWIZZLE {
+        // the element type is unqualified (clang); the vector's counts
+        let vt = nty(nodes[n].a);
+        t = if nodes[n].op == 1 { tbase(vt) } else { vt };
     }
     if quals(t) & Q_CONST != 0 {
         err_at(loc, str("cannot assign to ", what, " with const-qualified type ", tname(t)));
@@ -903,6 +908,12 @@ fn rv_load_type(l: u32) -> u32 {
 // qualified type (clang), everything else to the unqualified one.
 recursive fn assign_convert(n: u32, to0: u32, loc: u32, what: i64) -> u32 {
     if is_error(n) { return n; }
+    if quals(to0) & Q_ATOMIC != 0 && !is_error(n) {
+        // to an _Atomic type: convert to the value type, then NonAtomicToAtomic
+        let c = assign_convert(n, to0 & ~(Q_ATOMIC as! u32), loc, what);
+        if is_error(c) { return c; }
+        return icast(c, CK_ATOMIC, unqual(to0) | (Q_ATOMIC as! u32));
+    }
     let to = unqual(to0);
     let from = nty(n);
     let kt = kind_of(to);
@@ -1344,6 +1355,14 @@ fn mk_member(base: u32, name: u32, arrow: bool, loc: u32) -> u32 {
     if arrow {
         b = rv(base);
         let t = nty(b);
+        if is_pointer(t) && kind_of(tbase(t)) == TY_EXTVECTOR {
+            let r = mk_swizzle(b, tbase(t), name, loc);
+            if !is_error(r) {
+                nodes[r].op = 1;
+                nodes[r].flags = NF_LVALUE;
+            }
+            return r;
+        }
         if !is_pointer(t) || !is_record(tbase(t)) {
             err_at(loc, str("member reference type ", tname(t), " is not a pointer to a structure or union"));
             return error_node(loc);
@@ -1352,6 +1371,7 @@ fn mk_member(base: u32, name: u32, arrow: bool, loc: u32) -> u32 {
         lval = true;
     } else {
         rt = nty(b);
+        if kind_of(rt) == TY_EXTVECTOR { return mk_swizzle(b, rt, name, loc); }
         if !is_record(rt) {
             err_at(loc, str("member reference base type ", tname(rt), " is not a structure or union"));
             return error_node(loc);
@@ -1363,6 +1383,60 @@ fn mk_member(base: u32, name: u32, arrow: bool, loc: u32) -> u32 {
         return error_node(loc);
     }
     return member_walk(b, rec_of(rt), quals(rt), name, arrow, lval, loc, 0);
+}
+
+// An ext_vector_type element access (clang's ExtVectorElementExpr): v.x,
+// v.xyzw / v.rgba, v.s0123 (hex digits), v.hi / v.lo / v.even / v.odd.
+// One element has the element type; several make an ext vector of them.
+// It is an lvalue when the vector is one and no element repeats.
+fn mk_swizzle(b: u32, vt: u32, name: u32, loc: u32) -> u32 {
+    let s = ident_text(name as i64);
+    let n = types[vt >> 4].n;
+    var idx: i64 = 0;
+    var cnt: i64 = 0;
+    var bad = false;
+    if s == "hi" || s == "lo" || s == "even" || s == "odd" {
+        let half = (n + 1) / 2;
+        for i in half {
+            let e = if s == "lo" { i } else if s == "hi" { half + i } else if s == "even" { 2 * i } else { 2 * i + 1 };
+            idx = idx | (e << (4 * cnt));
+            cnt++;
+        }
+    } else if s.len > 1 && (s[0] == 's' || s[0] == 'S') {
+        for c in s[1..] {
+            var e: i64 = -1;
+            if c >= '0' && c <= '9' { e = (c - '0') as i64; }
+            else if c >= 'a' && c <= 'f' { e = (c - 'a') as i64 + 10; }
+            else if c >= 'A' && c <= 'F' { e = (c - 'A') as i64 + 10; }
+            if e < 0 || e >= n || cnt >= 16 { bad = true; break; }
+            idx = idx | (e << (4 * cnt));
+            cnt++;
+        }
+    } else {
+        for c in s {
+            let e: i64 = match c { 'x', 'r' => 0, 'y', 'g' => 1, 'z', 'b' => 2, 'w', 'a' => 3, _ => -1 };
+            if e < 0 || e >= n || cnt >= 16 { bad = true; break; }
+            idx = idx | (e << (4 * cnt));
+            cnt++;
+        }
+    }
+    if bad || cnt == 0 {
+        err_at(loc, str("vector component access exceeds type ", tname(vt)));
+        return error_node(loc);
+    }
+    var dup = false;
+    for i in cnt {
+        for j in i + 1..cnt {
+            if (idx >> (4 * i)) & 15 == (idx >> (4 * j)) & 15 { dup = true; }
+        }
+    }
+    // the result type is unqualified, as in clang (is_modifiable looks at
+    // the vector's qualifiers)
+    var rt = unqual(tbase(vt));
+    if cnt > 1 { rt = qt(mk_type(TY_EXTVECTOR, 0, unqual(tbase(vt)), cnt, 0, 0) as i64, 0); }
+    let r = node_v(N_SWIZZLE, 0, rt, b as i64, 0, cnt, loc, idx);
+    if is_lvalue(b) && !dup { nodes[r].flags = NF_LVALUE; }
+    return r;
 }
 
 recursive fn member_walk(b: u32, r: i64, q: i64, name: u32, arrow: bool, lval: bool, loc: u32, depth: i64) -> u32 {

@@ -249,6 +249,12 @@ fn rv(n: u32) -> u32 {
         return icast(n, CK_FUNC2PTR, mk_ptr(unqual(t)));
     }
     if is_lvalue(n) {
+        if quals(t) & Q_ATOMIC != 0 {
+            // an atomic load, then the value (clang: LValueToRValue to
+            // _Atomic(T), AtomicToNonAtomic)
+            let l = icast(n, CK_LVAL2RVAL, unqual(t) | (Q_ATOMIC as! u32));
+            return icast(l, CK_ATOMIC, unqual(t));
+        }
         let r = icast(n, CK_LVAL2RVAL, unqual(t));
         return r;
     }
