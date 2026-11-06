@@ -524,6 +524,28 @@ fn lower_cast_a(I: Inst, j: u32) {
     let st: u32 = I.aux;
     let dc = rc_of(dt);
     let sc = rc_of(st);
+    if op == GIR_BITCAST && (dc == RC_VX || sc == RC_VX) {
+        if in_xmm(dc) && in_xmm(sc) {
+            let xs = ra_xmm(I.a);
+            var x = ra_xreuse(I.a);
+            if x != xs {
+                x = ra_xdef(j);
+                movaps_rr(x, xs);
+            }
+            ra_xset(j, x);
+        } else if dc == RC_GPR {
+            let xs = ra_xmm(I.a);
+            let rd = ra_def(j);
+            if size_of(dt) <= 4 { movd_rx(rd, xs); } else { movq_rx(rd, xs); }
+            ra_set(j, rd, false);
+        } else {
+            let rs = ra_gpr(I.a, false);
+            let xd = ra_xdef(j);
+            if size_of(st) <= 4 { movd_xr(xd, rs); } else { movq_xr(xd, rs); }
+            ra_xset(j, xd);
+        }
+        return;
+    }
     if dc == RC_GPR && sc == RC_GPR {
         lower_icast_a(I, j, op, bits_of(st), bits_of(dt));
         return;
@@ -749,15 +771,15 @@ fn ra_addr(v: u32) -> Mem {
 
 fn lower_load_a(I: Inst, j: u32) {
     let t: u32 = I.ty;
-    if I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && vi[j].nuse == 1
+    if I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && vi[j].nuse == 1 && rc_of(t) != RC_VX
        && vi[j].st & (ST_GLOB | ST_NODEF) == 0 && vi[j].last > j && addr_is_static(I.a) {
         ra_pend_add(j, ra_addr(I.a));
         return;
     }
     let m = ra_addr(I.a);
-    if rc_of(t) == RC_XMM {
+    if in_xmm(rc_of(t)) {
         let xd = ra_xdef(j);
-        if t == GIR_T_F32 { movss_load(xd, m); } else { movsd_load(xd, m); }
+        xmm_load_t(xd, m, t);
         ra_xset(j, xd);
         return;
     }
@@ -801,6 +823,10 @@ fn lower_store_a(I: Inst) {
             if store_const(m, M.consts[gir_idx(v)].lo, n) { return; }
         }
         store_int(m, ra_gpr(v, false), bits_of(t));
+        return;
+    }
+    if c == RC_VX {
+        xmm_store_t(m, ra_xmm(v), t);
         return;
     }
     // f32 / f64
@@ -992,7 +1018,8 @@ fn lower_fbin_a(I: Inst, j: u32) {
 }
 // fneg, fabs, fsqrt on f32 / f64.
 fn lower_funary_a(I: Inst, j: u32) {
-    let dbl = I.ty == GIR_T_F64;
+    var dbl = I.ty == GIR_T_F64;
+    if rc_of(I.ty) == RC_VX { dbl = M.types[I.ty].elems == GIR_T_F64; }
     let op: u32 = I.op;
     if op == GIR_FSQRT {
         let okm, m = ra_mem_opnd(I.a, 0);
@@ -1094,4 +1121,139 @@ fn lower_memcpy_a(I: Inst) {
         let t = ra_temp();
         copy_mem_t(m_add(dst, k), m_add(src, k), n - k, 8, t);
     }
+}
+
+// ------------------------------------------------- vectors in xmm registers
+
+// Lane-wise arithmetic on vectors of 8 or 16 bytes.
+fn lower_vbin_a(I: Inst, j: u32) {
+    let t = I.ty;
+    let lt = M.types[t].elems;
+    let lfp = cls_of(lt) == C_FP;
+    let lb = bits_of(lt);
+    let op: u32 = I.op;
+    var a = I.a;
+    var b = I.b;
+    let comm = op == GIR_FADD || op == GIR_FMUL || op == GIR_ADD || op == GIR_MUL || op == GIR_AND
+               || op == GIR_OR || op == GIR_XOR;
+    if comm && ra_xreuse(a) == 32 && ra_xreuse(b) != 32 {
+        a = I.b;
+        b = I.a;
+    }
+    let xa = ra_xmm(a);
+    let xb = ra_xmm(b);
+    var xd = ra_xreuse(a);
+    if xd != xa {
+        xd = ra_xdef(j);
+        movaps_rr(xd, xa);
+    }
+    if lfp {
+        sse_packed(sse_op(op), lb == 64, xd, xb);
+    } else {
+        var o: u32 = 0;
+        if op == GIR_ADD { o = if lb == 8 { 0xFC } else if lb == 16 { 0xFD } else if lb == 32 { 0xFE } else { 0xD4 }; }
+        else if op == GIR_SUB { o = if lb == 8 { 0xF8 } else if lb == 16 { 0xF9 } else if lb == 32 { 0xFA } else { 0xFB }; }
+        else if op == GIR_AND { o = 0xDB; }
+        else if op == GIR_OR { o = 0xEB; }
+        else if op == GIR_XOR { o = 0xEF; }
+        else { o = 0xD5; }   // pmullw
+        sse_pint(o, xd, xb);
+    }
+    ra_xset(j, xd);
+}
+// The result register for j as a copy of xmm register xa (operand a), or
+// a's register if a dies here.
+fn xdef_from(j: u32, a: u32, xa: u32) -> u32 {
+    let x = ra_xreuse(a);
+    if x == xa { return x; }
+    let xd = ra_xdef(j);
+    movaps_rr(xd, xa);
+    return xd;
+}
+// insertelement with a constant lane: SSE2 shuffles (lanes of 16, 32, 64 bits).
+fn lower_vins_a(I: Inst, j: u32) {
+    let t = I.ty;
+    let n = M.types[t].n;
+    let lt = M.types[t].elems;
+    let lb = bits_of(lt);
+    let lfp = cls_of(lt) == C_FP;
+    let k = M.consts[gir_idx(I.c)].lo;
+    let xv = ra_xmm(I.a);
+    if k >= n {
+        ra_xset(j, xdef_from(j, I.a, xv));
+        return;
+    }
+    let kk = k as! u32;
+    if lb == 16 {
+        let r = ra_gpr(I.b, false);
+        let xd = xdef_from(j, I.a, xv);
+        pinsrw(xd, r, kk);
+        ra_xset(j, xd);
+        return;
+    }
+    // the scalar in an xmm register
+    var xs: u32 = 0;
+    if lfp { xs = ra_xmm(I.b); }
+    else {
+        let r = ra_gpr(I.b, false);
+        xs = ra_xtemp();
+        if lb == 64 { movq_xr(xs, r); } else { movd_xr(xs, r); }
+    }
+    if lb == 64 {
+        let xd = xdef_from(j, I.a, xv);
+        if kk == 0 { movsd_rr(xd, xs); } else { sse_packed(0x14, true, xd, xs); }   // unpcklpd
+        ra_xset(j, xd);
+        return;
+    }
+    // 32-bit lanes
+    if kk == 0 {
+        let xd = xdef_from(j, I.a, xv);
+        movss_rr(xd, xs);
+        ra_xset(j, xd);
+        return;
+    }
+    if kk == 1 {
+        // [s, v0, ., v1] by unpcklps, then [v0, s, v2, v3]
+        let xd = ra_xdef(j);
+        movaps_rr(xd, xs);
+        sse_packed(0x14, false, xd, xv);
+        shufps(xd, xv, 0xE1);
+        ra_xset(j, xd);
+        return;
+    }
+    // b = [s, v1, v2, v3]; result = [v0, v1, b0, b3] (lane 2) or [v0, v1, b2, b0] (lane 3)
+    let tb = ra_xtemp();
+    movaps_rr(tb, xv);
+    movss_rr(tb, xs);
+    let xd = xdef_from(j, I.a, xv);
+    shufps(xd, tb, if kk == 2 { 0xC4 } else { 0x24 });
+    ra_xset(j, xd);
+}
+// extractelement with a constant lane.
+fn lower_vext_a(I: Inst, j: u32) {
+    let at: u32 = I.aux;
+    let n = M.types[at].n;
+    let lt = M.types[at].elems;
+    let lb = bits_of(lt);
+    var k = M.consts[gir_idx(I.b)].lo;
+    if k >= n { k = 0; }
+    let kk = k as! u32;
+    let xv = ra_xmm(I.a);
+    if cls_of(lt) == C_FP {
+        let xd = xdef_from(j, I.a, xv);
+        if lb == 32 && kk != 0 { shufps(xd, xd, kk); }
+        else if lb == 64 && kk != 0 { sse_packed(0x15, true, xd, xd); }   // unpckhpd
+        ra_xset(j, xd);
+        return;
+    }
+    let rd = ra_def(j);
+    if lb == 16 { pextrw(rd, xv, kk); }
+    else if kk == 0 {
+        if lb == 64 { movq_rx(rd, xv); } else { movd_rx(rd, xv); }
+    } else {
+        let x = ra_xtemp();
+        pshufd(x, xv, if lb == 64 { 0xEE } else { kk });
+        if lb == 64 { movq_rx(rd, x); } else { movd_rx(rd, x); }
+    }
+    ra_set(j, rd, false);
 }

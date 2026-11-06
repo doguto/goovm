@@ -43,6 +43,7 @@ let ST_NODEF: u8 = 32;  // a memory write lies between the definition and the us
 let RC_MEM: u8 = 0;
 let RC_GPR: u8 = 1;
 let RC_XMM: u8 = 2;
+let RC_VX: u8 = 3;    // vectors of 8 or 16 bytes: an xmm register
 
 // Homes.
 let H_NONE: u8 = 0;
@@ -114,10 +115,33 @@ fn build_type_rc() {
         var rc: u8 = RC_MEM;
         if T.cls == C_INT { rc = RC_GPR; }
         else if T.cls == C_FP && T.bits != 16 { rc = RC_XMM; }
+        else if T.cls == C_VEC && T.n >= 2 && (T.store == 16 || T.store == 8) {
+            let L = M.types[T.elems];
+            if L.cls == C_INT && (L.bits == 8 || L.bits == 16 || L.bits == 32 || L.bits == 64) && L.size * T.n == T.store
+               || L.cls == C_FP && (L.bits == 32 || L.bits == 64) {
+                rc = RC_VX;
+            }
+        }
         t_rc.push(rc);
     }
 }
 inline fn rc_of(t: u32) -> u8 { t_rc[t] }
+inline fn in_xmm(c: u8) -> bool { c >= RC_XMM }
+
+// Moves between an xmm register and memory for a value of type t (f32, f64
+// or a register-resident vector).
+fn xmm_load_t(x: u32, m: Mem, t: u32) {
+    if t == GIR_T_F32 { movss_load(x, m); }
+    else if t == GIR_T_F64 { movsd_load(x, m); }
+    else if M.types[t].store == 16 { movups_load(x, m); }
+    else { movq_load(x, m); }
+}
+fn xmm_store_t(m: Mem, x: u32, t: u32) {
+    if t == GIR_T_F32 { movss_store(m, x); }
+    else if t == GIR_T_F64 { movsd_store(m, x); }
+    else if M.types[t].store == 16 { movups_store(m, x); }
+    else { movq_store(m, x); }
+}
 
 inline fn is_val(v: u32) -> bool { gir_kind(v) <= GIR_V_ARG }
 inline fn vid(v: u32) -> u32 {
@@ -168,7 +192,7 @@ let OP_KIND: u8[83] = [
     1, 1, 1, 1, 1, 1, 1, 1,  // lshr ashr icmp select zext sext trunc ptrtoint
     1, 1, 0, 1, 17, 0, 19, 0,  // inttoptr bitcast alloca load store gep call phi
     1, 1, 1, 1, 1, 1, 1, 1,  // fadd fsub fmul fdiv fneg fcmp fpext fptrunc
-    1, 1, 1, 1, 2, 2, 2, 2,  // fptosi fptoui sitofp uitofp extractvalue insertvalue extractelt insertelt
+    1, 1, 1, 1, 2, 2, 1, 1,  // fptosi fptoui sitofp uitofp extractvalue insertvalue extractelt insertelt
     2, 2, 2, 2, 18, 16, 16, 2,  // shuffle dynalloca stacksave stackrestore vastart memcpy memset ctlz
     2, 2, 2, 2, 2, 2, 2, 2,  // cttz ctpop bswap bitreverse fshl fshr ovf scmp
     2, 1, 1, 1, 2, 18, 18, 18,  // ucmp fabs copysign fsqrt isfpclass cmpxchg atomicrmw fence
@@ -185,14 +209,38 @@ fn inst_kind(I: Inst) -> u32 {
     // the type that decides: the compared / stored / cast source type, or the result
     var t: u32 = I.ty;
     if op == GIR_ICMP || op == GIR_FCMP || op == GIR_STORE { t = I.aux; }
+    if op == GIR_EXTRACTELT { t = I.aux; }
     let rc = t_rc[t];
     if rc == RC_MEM { return K_B; }
+    if rc == RC_VX { return vx_kind(I, op, t); }
     if op < GIR_ZEXT { return K_A; }   // binops, icmp
     return inst_kind2(I, op, t, rc);
 }
+// Operations on vectors that live in xmm registers; the others are legacy
+// (lane by lane in memory).
+fn vx_kind(I: Inst, op: u32, t: u32) -> u32 {
+    let L = M.types[M.types[t].elems];
+    let lfp = L.cls == C_FP;
+    let lb: u32 = L.bits;
+    if op == GIR_LOAD || op == GIR_STORE { return K_A; }
+    if op >= GIR_FADD && op <= GIR_FDIV || op == GIR_FNEG || op == GIR_FABS { return if lfp { K_A } else { K_B }; }
+    if op == GIR_ADD || op == GIR_SUB || op == GIR_AND || op == GIR_OR || op == GIR_XOR { return if lfp { K_B } else { K_A }; }
+    if op == GIR_MUL { return if !lfp && lb == 16 { K_A } else { K_B }; }
+    if op == GIR_INSERTELT { return if gir_kind(I.c) == GIR_V_CONST && lb != 8 { K_A } else { K_B }; }
+    if op == GIR_EXTRACTELT { return if gir_kind(I.b) == GIR_V_CONST && lb != 8 { K_A } else { K_B }; }
+    if op == GIR_BITCAST {
+        let o = rc_of(I.aux);
+        if o == RC_MEM || size_of(I.ty) != size_of(I.aux) { return K_B; }
+        return K_A;
+    }
+    if op == GIR_SELECT { return if rc_of(type_of(I.a)) == RC_GPR { K_A } else { K_B }; }
+    return K_B;
+}
 fn inst_kind2(I: Inst, op: u32, t: u32, rc: u8) -> u32 {
     if op >= GIR_ZEXT && op <= GIR_BITCAST || op >= GIR_FPEXT && op <= GIR_UITOFP {
-        if rc_of(I.aux) == RC_MEM { return K_B; }
+        let o = rc_of(I.aux);
+        if o == RC_MEM { return K_B; }
+        if o == RC_VX && (op != GIR_BITCAST || size_of(I.ty) != size_of(I.aux)) { return K_B; }
         return K_A;
     }
     if op == GIR_SELECT && rc_of(type_of(I.a)) == RC_MEM { return K_B; }  // vector condition
@@ -426,20 +474,14 @@ checkfree fn exact_width(bits: u32) -> bool { bits == 8 || bits == 16 || bits ==
 fn ra_store_home(id: u32, r: u32) {
     let t = vtype(id);
     let m = ra_home(id);
-    if r >= 16 {
-        if t == GIR_T_F32 { movss_store(m, r - 16); } else { movsd_store(m, r - 16); }
-    } else {
-        store_int(m, r, bits_of(t));
-    }
+    if r >= 16 { xmm_store_t(m, r - 16, t); }
+    else { store_int(m, r, bits_of(t)); }
     vi[id].st |= ST_MEM;
 }
 // Loads value id from memory m into register r (marks nothing).
 fn ra_load_from(r: u32, m: Mem, t: u32) {
-    if r >= 16 {
-        if t == GIR_T_F32 { movss_load(r - 16, m); } else { movsd_load(r - 16, m); }
-    } else {
-        load_int(r, m, bits_of(t));
-    }
+    if r >= 16 { xmm_load_t(r - 16, m, t); }
+    else { load_int(r, m, bits_of(t)); }
 }
 
 // --------------------------------------------------------------- allocation
@@ -737,8 +779,8 @@ fn ra_mat_xmm(v: u32, x: u32) {
     let i = gir_idx(v);
     if k == GIR_V_CONST {
         let c = M.consts[i];
-        if c.lo == 0 && c.hi == 0 { xorps_rr(x, x); return; }
-        if c.ty == GIR_T_F32 { movss_load(x, const_mem(i)); } else { movsd_load(x, const_mem(i)); }
+        if c.lo == 0 && c.hi == 0 && c.data == GIR_NONE { xorps_rr(x, x); return; }
+        xmm_load_t(x, const_mem(i), c.ty);
         return;
     }
     let id = vid(v);
@@ -747,7 +789,7 @@ fn ra_mat_xmm(v: u32, x: u32) {
     if vi[id].reg == PEND { m = ra_take_pend(id); }
     else if vi[id].home == H_STACK { m = m_rbp(vi[id].off); }
     else { m = ra_home(id); }
-    if t == GIR_T_F32 { movss_load(x, m); } else { movsd_load(x, m); }
+    xmm_load_t(x, m, t);
 }
 fn ra_xmm(v: u32) -> u32 {
     if is_val(v) {
@@ -832,7 +874,7 @@ fn ra_mem_opnd(v: u32, n: u32) -> bool, Mem {
     if r < 32 { return false, z; }
     let t = vtype(id);
     let c = rc_of(t);
-    if c == RC_GPR && int_bytes(bits_of(t)) != n { return false, z; }
+    if c == RC_GPR && int_bytes(bits_of(t)) != n || c == RC_VX { return false, z; }
     if r == PEND {
         ra_note(id);
         return true, ra_take_pend(id);

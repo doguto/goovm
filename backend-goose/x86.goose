@@ -489,6 +489,18 @@ checkfree fn sse_packed(op: u32, dbl: bool, d: u32, s: u32) {
 checkfree fn sse_packed_m(op: u32, dbl: bool, d: u32, m: Mem) {
     sse_rm(if dbl { P_66 } else { P_NONE }, 0, 0x0F00 | op, d, m);
 }
+checkfree fn pshufd(d: u32, s: u32, imm: u32) {
+    sse_rr(P_66, 0, 0x0F70, d, s);
+    b1(imm);
+}
+checkfree fn pinsrw(x: u32, r: u32, k: u32) {   // x.word[k] = r
+    sse_rr(P_66, 0, 0x0FC4, x, r);
+    b1(k);
+}
+checkfree fn pextrw(r: u32, x: u32, k: u32) {   // r = zext(x.word[k])
+    sse_rr(P_66, 0, 0x0FC5, r, x);
+    b1(k);
+}
 // Packed integer op 66 0F op /r (paddd 0xFE, psubd 0xFA, ...).
 checkfree fn sse_pint(op: u32, d: u32, s: u32) { sse_rr(P_66, 0, 0x0F00 | op, d, s); }
 // Scalar arithmetic: op 0x58 add, 0x59 mul, 0x5C sub, 0x5E div, 0x51 sqrt; dbl selects sd.

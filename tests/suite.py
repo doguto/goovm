@@ -30,7 +30,7 @@ consumer-typeset).
 
 usage: tests/suite.py [--goovm PATH] [--corpus a,b] [--variants O0,g,mem2reg]
                       [-j 3] [--work DIR] [--fallback] [--report FILE] [--json FILE]
-                      [--rebaseline] [--emit-bc] [filter ...]
+                      [--rebaseline] [--emit-bc] [--time-run N] [filter ...]
 """
 import argparse
 import concurrent.futures as cf
@@ -425,6 +425,21 @@ def run_and_verify(t, exe, wd, args, timeout):
     return dt
 
 
+def time_exe(t, exe, wd, n):
+    """Best wall time of n runs of exe (output discarded, not verified again)."""
+    rd = setup_rundir(t, wd)
+    best = None
+    for _ in range(n):
+        stdin = open(os.path.join(rd, t.stdin), "rb") if t.stdin else subprocess.DEVNULL
+        t0 = time.perf_counter()
+        subprocess.run([exe] + t.args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=stdin, cwd=rd)
+        dt = time.perf_counter() - t0
+        if t.stdin:
+            stdin.close()
+        best = dt if best is None else min(best, dt)
+    return best
+
+
 def obj_name(src, i):
     return f"{i:03d}_{os.path.basename(src)[:-2]}"
 
@@ -514,12 +529,19 @@ def do_test(t, args, baseline_cache):
     if b["status"] != "pass" or args.baseline_only:
         return res
     tmo = max(60.0, 20 * b["time"]) if t.timeout is None else max(t.timeout, 20 * b["time"])
+    if args.time_run:
+        exe = os.path.join(wd, "base.exe")
+        if not os.path.exists(exe):
+            exe = build_baseline(t, wd, args)
+        res["base_run"] = time_exe(t, exe, wd, args.time_run)
     for v in args.variants:
         info = {}
         try:
             exe = build_goovm(t, wd, v, args, info)
             run_and_verify(t, exe, wd, args, timeout=tmo)
             info["status"] = "fallback" if info.get("fallback") else "pass"
+            if args.time_run:
+                info["run"] = time_exe(t, exe, wd, args.time_run)
         except Fail as e:
             info["status"] = e.kind if e.kind in ("unsupported", "error") else "fail"
             info["msg"] = e.msg[:3000]
@@ -565,6 +587,34 @@ def report(results, tests, args):
     lines.append("pass includes fallback; fallback counts tests in which at least one file was compiled by "
                  "LLVM's code generator (goovm-llc --fallback).")
     lines.append("")
+    if args.time_run:
+        lines.append(f"## Run times (best of {args.time_run}, seconds; ratio to clang -O0)")
+        lines.append("")
+        hdr = "| test | clang -O0 |" + "".join(f" {v} | {v} / clang |" for v in args.variants)
+        lines += [hdr, "|---|---:|" + "---:|---:|" * len(args.variants)]
+        import math
+        logs = {v: [] for v in args.variants}
+        for t in tests:
+            r = results[t.id]
+            if "base_run" not in r:
+                continue
+            row = f"| {t.id} | {r['base_run']:.3f} |"
+            for v in args.variants:
+                x = r.get(v, {}).get("run")
+                if x is None:
+                    row += " - | - |"
+                else:
+                    q = x / r["base_run"] if r["base_run"] > 0 else 0
+                    row += f" {x:.3f} | {q:.2f} |"
+                    if r["base_run"] >= 0.05 and q > 0:
+                        logs[v].append(math.log(q))
+            lines.append(row)
+        geo = "| geometric mean (clang -O0 >= 50 ms) | |"
+        for v in args.variants:
+            g = math.exp(sum(logs[v]) / len(logs[v])) if logs[v] else 0
+            geo += f" | {g:.3f} |"
+        lines.append(geo)
+        lines.append("")
     for c in CORPORA:
         if c not in by:
             continue
@@ -609,6 +659,8 @@ def main():
     ap.add_argument("--rebaseline", action="store_true", help="recompute the clang -O0 baseline")
     ap.add_argument("--baseline-only", action="store_true")
     ap.add_argument("--emit-bc", action="store_true", help="only write the bitcode of each variant (for analysis)")
+    ap.add_argument("--time-run", type=int, default=0, metavar="N",
+                    help="also time each passing program and its clang -O0 build: best of N runs (use -j 1)")
     ap.add_argument("--report", default="")
     ap.add_argument("--json", default="")
     ap.add_argument("filter", nargs="*", help="substrings of test ids to run")

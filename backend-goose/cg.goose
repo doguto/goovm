@@ -82,6 +82,22 @@ fn phi_copy(dst: Mem, v: u32, t: u32) {
         store_int(dst, phi_t, bits);
         return;
     }
+    if c == RC_VX {
+        if is_val(v) {
+            let r: u32 = vi[vid(v)].reg;
+            if r >= 16 && r < 32 {
+                xmm_store_t(dst, r - 16, t);
+                return;
+            }
+        }
+        if is_const(v) { xmm_load_t(phi_x, const_mem(gir_idx(v)), t); }
+        else {
+            let id = vid(v);
+            xmm_load_t(phi_x, if vi[id].home == H_STACK { m_rbp(vi[id].off) } else { ra_home(id) }, t);
+        }
+        xmm_store_t(dst, phi_x, t);
+        return;
+    }
     if c == RC_XMM {
         if is_const(v) && store_const(dst, M.consts[gir_idx(v)].lo, store_of(t)) { return; }
         if is_val(v) {
@@ -281,7 +297,7 @@ fn lower_ret(I: Inst, j: u32) {
         let t = type_of(I.a);
         let c = rc_of(t);
         if c == RC_GPR { ra_gpr_into(I.a, RAX, bits_of(t) < 32); }
-        else if c == RC_XMM { ra_xmm_into(I.a, XMM0); }
+        else if in_xmm(c) { ra_xmm_into(I.a, XMM0); }
         else {
             ra_tierb_begin(false);
             ret_value(I.a, t);
@@ -326,10 +342,16 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_UNREACHABLE, GIR_TRAP => ud2(),
             GIR_DEBUGTRAP => b1(0xCC),
             GIR_ADD, GIR_SUB, GIR_MUL, GIR_SDIV, GIR_UDIV, GIR_SREM, GIR_UREM,
-            GIR_AND, GIR_OR, GIR_XOR, GIR_SHL, GIR_LSHR, GIR_ASHR => lower_binop_a(I, j),
+            GIR_AND, GIR_OR, GIR_XOR, GIR_SHL, GIR_LSHR, GIR_ASHR => {
+                if rc_of(I.ty) == RC_VX { lower_vbin_a(I, j); } else { lower_binop_a(I, j); }
+            },
             GIR_ICMP => lower_icmp_a(I, j),
             GIR_FCMP => lower_fcmp_a(I, j),
-            GIR_FADD, GIR_FSUB, GIR_FMUL, GIR_FDIV => lower_fbin_a(I, j),
+            GIR_FADD, GIR_FSUB, GIR_FMUL, GIR_FDIV => {
+                if rc_of(I.ty) == RC_VX { lower_vbin_a(I, j); } else { lower_fbin_a(I, j); }
+            },
+            GIR_INSERTELT => lower_vins_a(I, j),
+            GIR_EXTRACTELT => lower_vext_a(I, j),
             GIR_FNEG, GIR_FABS, GIR_FSQRT, GIR_COPYSIGN => lower_funary_a(I, j),
             GIR_SELECT => lower_select_a(I, j),
             GIR_ZEXT, GIR_SEXT, GIR_TRUNC, GIR_PTRTOINT, GIR_INTTOPTR, GIR_BITCAST,
