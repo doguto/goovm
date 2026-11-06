@@ -818,7 +818,7 @@ fn gen_function(fd: u32) {
     f_igoto = NONE;
     f_igoto_vals.clear();
     f_arg_types.clear();
-    fmap.clear();
+    if fmap.count > 0 { fmap.clear(); }   // clear walks every slot
     cleanups.clear();
     cleanup_marks.clear();
     dbg_function_begin(s, nd.loc);
