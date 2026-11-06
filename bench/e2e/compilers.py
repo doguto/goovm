@@ -60,6 +60,8 @@ def main():
     ap.add_argument("--g", action="store_true")
     ap.add_argument("--out", default="")
     a = ap.parse_args()
+    # Each compile runs in its own directory, so tool paths must be absolute.
+    a.goovm_cc, a.goosecc = os.path.abspath(a.goovm_cc), os.path.abspath(a.goosecc)
     have_tcc = subprocess.run(["which", a.tcc], capture_output=True).returncode == 0
 
     entries = [e for e in json.load(open(a.ccjson)) if program_of(e["file"])]
