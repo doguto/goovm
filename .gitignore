@@ -2,3 +2,4 @@
 /build-*/
 /backend-goose/build/
 __pycache__/
+.claude/
