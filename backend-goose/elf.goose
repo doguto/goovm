@@ -20,7 +20,7 @@ let SEC_FIRST_CUSTOM = 10;
 
 // Where an output section's bytes are.
 let BUF_NONE = 0;    // NOBITS (or empty)
-let BUF_CODE = 1;    // code[start .. start + size]
+let BUF_CODE = 1;    // mcode[start .. start + size]
 let BUF_DATA = 2;    // sdata[start .. start + size]
 let BUF_RODATA = 3;  // srodata
 let BUF_CST4 = 4;
@@ -62,7 +62,7 @@ var sec_count: u32[>..] = [];
 
 // Per block (global block index): code offset, for blockaddress.
 var blk_code: u32[>..] = [];
-// Pending blockaddress operands: rel32 at code[pos] -> global block blk.
+// Pending blockaddress operands: rel32 at mcode[pos] -> global block blk.
 var baddr: Fixup[>..] = [];
 // Code range of the section each function went to: f_sec[fi].
 var f_sec: u32[>..] = [];
@@ -264,7 +264,13 @@ fn resolve_aliases() {
 fn resolve_blockaddrs() {
     for x in baddr {
         let tgt = blk_code[x.blk];
-        patch4(x.pos, tgt - (x.pos + 4));
+        let d = tgt - (x.pos + 4);
+        let p: i64 = x.pos;
+        let w = mcode[p..p + 4];
+        w[0] = d as! u8;
+        w[1] = (d >> 8) as! u8;
+        w[2] = (d >> 16) as! u8;
+        w[3] = (d >> 24) as! u8;
     }
 }
 
@@ -428,7 +434,7 @@ fn write_elf(o: u8[>..]&) {
         sh_off[s] = o.len as u64;
         let st: i64 = x.start as! i64;
         let sz: i64 = x.size as! i64;
-        if x.buf == BUF_CODE { obytes(o, code[st..st + sz]); sh_size[s] = x.size; }
+        if x.buf == BUF_CODE { obytes(o, mcode[st..st + sz]); sh_size[s] = x.size; }
         else if x.buf == BUF_DATA { obytes(o, sdata[st..st + sz]); sh_size[s] = x.size; }
         else if x.buf == BUF_RODATA { obytes(o, srodata); sh_size[s] = srodata.len as u64; }
         else if x.buf == BUF_CST4 { obytes(o, cst4); sh_size[s] = cst4.len as u64; }
