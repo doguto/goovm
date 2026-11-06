@@ -2,9 +2,15 @@
 
 `backend-goose/` turns GIR version 2 tables ([`../gir/README.md`](../gir/README.md))
 into an ELF64 x86-64 relocatable object. It compiles everything clang-20
-emits at -O0 for C on x86-64 Linux (SysV ABI, PIE), with and without `-g`,
-and the same IR after `opt -passes=mem2reg`. It is written in Goose and
-called from `goovm-llc` (C++) through one `export fn`.
+emits at -O0 for C and C++17 on x86-64 Linux (SysV ABI, PIE), with and
+without `-g`, and the same IR after `opt -passes=mem2reg`. It is written in
+Goose and called from `goovm-llc` and `goovm-cc` (C++) and from `goosecc`
+(Goose) through two `export fn`s (`gir_codegen`, `gir_codegen_ex`).
+
+Milestone A3 added what a debugger, an unwinder and a C++ program need:
+`.eh_frame` for every function with CFI exact at every instruction (§10),
+C++ exception tables (§11), comdat groups (§9) and DWARF 5 debug
+information as clang -g writes it (§12).
 
 v2 (milestone A2) is a fast -O0 code generator in the class of LLVM's
 `-O0` pipeline (FastISel + RegAllocFast) and TPDE: a liveness pre-pass and
@@ -28,7 +34,9 @@ frequent instructions, which got allocator-aware lowerings (§6).
 | `lowera.goose` | allocator-aware lowerings: integer ops, compares, selects, casts, loads/stores, GEP, FP, vectors in xmm registers, memcpy/memset |
 | `abi.goose` | SysV classification, calls (parallel argument moves), returns, argument homes and the prologue's argument code, `va_start` |
 | `lower.goose` | legacy lowerings (A1): INT2, x87, vectors in memory, aggregates, bit operations, atomics, TLS, sjlj, inline asm, ... |
-| `elf.goose` | output sections, symbols, data layout, relocations and the ELF writer |
+| `elf.goose` | output sections (incl. comdat sections and groups), symbols, data layout, relocations and the ELF writer |
+| `eh.goose` | `.eh_frame` (CIEs, FDEs, CFI from the prologue/epilogue events) and the LSDAs in `.gcc_except_table` |
+| `dwarf.goose` | DWARF 5: line-table rows and scope ranges recorded during code generation, then `.debug_info`/`abbrev`/`str`/`str_offsets`/`addr`/`line`/`line_str`/`rnglists` |
 | `CMakeLists.txt` | runs `goose --standalone --header cg.h -o cg.c cg.goose` and builds the C |
 
 `goose` compiles the whole program from `cg.goose` (an `import` includes a
@@ -40,9 +48,10 @@ file once) into one C file. The encoder and byte-output layer is
 ```
 gir_codegen(tables):
   reset module state; register classes of all types (t_rc)
-  make_sections(); layout_globals()
+  dbg_init(); make_sections() (with comdat, .eh_frame, except and debug
+  sections); layout_globals()
   gen_functions(): per code section, per function: gen_function(fi)
-  resolve_blockaddrs(); resolve_aliases(); write_elf()
+  resolve_blockaddrs(); resolve_aliases(); dbg_write(); write_elf()
 
 gen_function(f):
   ra_prepass()       uses, last use, local/global, call-spanning values,
@@ -55,7 +64,13 @@ gen_function(f):
   fixups             forward branches within the function
   prologue           emitted last, when the frame size and the callee-saved
                      registers in use are known; placed before the body
+  eh_func_end        the FDE (and LSDA) of the placed function
+  dbg_func_end       rows and runs rebased, variables' frame offsets,
+                     lexical block and inlined subroutine ranges
 ```
+
+With `-g`, `gen_function` also calls the `dbg_*` hooks of `dwarf.goose`
+around every block and instruction (§12); without it they are not called.
 
 The function's code is generated into a per-function buffer (`code`);
 `gen_function` appends prologue and body to the module's code (`mcode`) and
@@ -277,8 +292,20 @@ grouped by code section, so each code section is a contiguous range of the
 module code buffer; data sections are laid out section by section from a
 counting sort of the globals.
 
+Comdats: every defined function or variable in a comdat gets a section of
+its own (`.text.<name>`, `.data.rel.ro.<name>`, ...; `make_comdat_sections`)
+with `SHF_GROUP`, and its comdat an `SHT_GROUP` section (`GRP_COMDAT` for
+`any`, 0 for `nodeduplicate`) listing those sections, their `.rela`
+sections and the function's `.gcc_except_table` section. Groups come first
+in the file (a group must precede its members), so output section `s` is ELF
+section `s + n_groups`. The group's signature is the global of the
+comdat's name, or a local `STT_NOTYPE` symbol the back-end adds for it. Other
+sections: `.eh_frame` (`SHT_X86_64_UNWIND`), `.gcc_except_table` and the
+debug sections, whose bytes are built in their own buffers; their
+relocations are collected with the code and data relocations.
+
 Symbols: null, one `STT_SECTION` per output section, local globals, pool
-entries, then the other globals (`STB_GLOBAL`/`STB_WEAK`, `STT_FUNC`,
+entries, comdat signature symbols, then the other globals (`STB_GLOBAL`/`STB_WEAK`, `STT_FUNC`,
 `STT_OBJECT`, `STT_TLS`, visibility in `st_other`, `SHN_COMMON` for common
 symbols, aliases with their target's section and value).
 
@@ -289,7 +316,139 @@ preemptible symbols), `R_X86_64_64` (data), `R_X86_64_TPOFF32` and
 Block-address data relocations are `R_X86_64_64` against the function
 symbol plus the block's offset; label differences are resolved in place.
 
-## 10. Code quality and speed
+## 10. Unwind information
+
+Every function has one frame shape: `push rbp; mov rbp, rsp`, a push of
+each callee-saved register it uses, `sub rsp, n` (not for a leaf whose frame
+fits in the red zone), the body, and one epilogue at the end of the
+function (returns elsewhere jump to it). The body addresses its frame
+through rbp, so from the fourth byte of the function to the epilogue's `pop
+rbp` / `leave` the CFA is rbp + 16 whatever the body does to rsp (dynamic
+allocas, outgoing argument areas, red-zone frames). The CFI therefore only
+has to describe a handful of events, which `emit_prologue` and
+`emit_epilogue` record as they emit the instructions (`CfiEv`: pos, kind,
+register):
+
+```
+CIE   zR (or zPLR with a personality): code align 1, data align -8, ra = 16,
+      DW_CFA_def_cfa rsp+8, DW_CFA_offset rip at cfa-8
+FDE   advance 1, def_cfa_offset 16, offset rbp at cfa-16   (push rbp)
+      advance 3, def_cfa_register rbp                      (mov rbp, rsp)
+      advance, offset r at cfa-24, -32, ...                (each push r)
+      [body: advance, GNU_args_size n                      (invoke with stack arguments)]
+      advance, restore r ...                               (each pop r)
+      advance, def_cfa rsp+8                               (pop rbp / leave)
+```
+
+So the rules are exact at every instruction boundary, including between
+the pushes and the pops: `tests/gdb_oracle.py --unwind` single-steps every
+function and checks the backtrace after each instruction. There is one CIE
+per personality routine (and one without); an FDE's start address and LSDA
+pointer are `pcrel sdata4` (`R_X86_64_PC32` against the section symbols),
+the CIE's personality pointer `indirect pcrel sdata4` to the `DW.ref`
+variable the exporter made.
+
+`DW_CFA_GNU_args_size` is emitted at an invoke that passes arguments on the
+stack (`sub rsp` before it, `add rsp` after, which the landing pad does
+not run): the unwinder adds the size to the stack pointer it installs for
+the landing pad, as for LLVM's X86 back-end.
+
+## 11. C++ exceptions
+
+An invoke is a `CALL` with `GIR_IF_INVOKE`; `emit_call_insn` records the call
+instruction's code range with the landing-pad block (`f_sites`). A landing
+pad block starts with `LANDINGPAD`, whose result is `{rax, edx}` (exception
+object, selector) as the personality routine leaves them; the register file
+is empty at block entry, so nothing else is assumed live. `resume` is a
+call of `_Unwind_Resume` (exporter).
+
+`eh_lsda` writes the function's LSDA into `.gcc_except_table` (or the except
+section of the function's comdat group) after the function is placed:
+
+- header: LPStart omitted (the function start), TType `indirect pcrel
+  sdata4` with the offset to the end of the 4-aligned type table (found by
+  iterating on the uleb128 length), call sites `uleb128`;
+- call sites: the invokes in code order, and a site with no landing pad
+  for every gap between them, from the function start to its end, so that a
+  throwing call outside any invoke unwinds instead of terminating;
+- actions: one chain per landing pad (`lp_action`), shared by the invokes
+  that reach the same pad: catch clauses are positive type indices, filters
+  negative byte offsets into the exception-specification table, a cleanup
+  is 0 at the end of the chain;
+- type table: the typeinfo stubs in reverse index order (`R_X86_64_PC32`
+  to the stub variable, a null entry for catch-all), then the specification
+  lists.
+
+## 12. Debug information
+
+DWARF is split between the exporter, which knows the metadata, and the
+back-end, which knows the code. The exporter (`gir_dwarf.cpp`) ports LLVM
+20's DwarfDebug / DwarfCompileUnit / DwarfUnit for one compile unit at -O0
+(DWARF 5, GDB tuning): the DIE tree with LLVM's attributes, forms and child
+order, abstract subprograms and inlined subroutines included, in the
+`dies`/`dattrs` tables, where what only the back-end knows is a GIR form
+(`gir/README.md`). The back-end (`dwarf.goose`) records three things while
+it generates code:
+
+- **Line-table rows**, by LLVM's `DwarfDebug::beginInstruction` rules: a
+  row with `is_stmt` when the line changes, `prologue_end` at the first
+  instruction with a line after the prologue, `epilogue_begin` at the
+  epilogue (with the location of the last return, and no `is_stmt` when a
+  jump from the return reaches it, as LLVM's epilogue continues the
+  return's statement), a line-0 row at the top
+  of a block that has no location after one that had, and `is_stmt` forced
+  on the first line of a block that a predecessor leaves on another line
+  (computed per function from the terminators before the body is
+  generated). A row is (code offset, location, flags); offsets are rebased
+  when the function is placed. Three rules keep the rows where LLVM's would
+  be although goovm's code differs from FastISel's: a GIR instruction that
+  emits no code (a folded compare or GEP, a deferred load, a branch to the
+  next block) leaves no trace (`dbg_inst_end` undoes its row); a deferred
+  load that an instruction materializes into a register gets a row of its
+  own when its line differs (`dbg_ld`, from `ra_mat_gpr`/`ra_mat_xmm`), and
+  the first such load also takes the code emitted since its IR position
+  (in LLVM it precedes that code); a variadic function's prologue_end is
+  on its register-save code (LLVM 20's `findPrologueEndLoc` stops at the
+  save area's branch). For the same reason `cg.goose` emits the `jmp` of a
+  block that is only a branch to the next block, as FastISel does.
+- **Runs** of instructions with one location, from which the code ranges of
+  lexical blocks and inlined subroutines follow by LLVM's LexicalScopes
+  algorithm: a run opens its scope instance and the enclosing ones, a run in
+  a scope that the previous one does not enclose closes the ranges up to the
+  common ancestor. A scope instance is a scope of the function's own code
+  (its `dscopes` index) or a scope in code inlined at a location (hash map on
+  (scope, inlined-at); its parent is the call site's instance). A lexical
+  block or inlined subroutine with no range is dropped with its variables,
+  as LLVM drops scopes without instructions.
+- **Frame locations**: `dbg_keep_homes` keeps every value that is a
+  variable's address in a frame slot, and `dbg_func_end` turns its home into
+  `DW_OP_fbreg off` (an alloca or byval argument) or `DW_OP_fbreg off,
+  DW_OP_deref` (a pointer kept in a slot). Labels get their code address.
+
+`dbg_write` then makes the sections in two passes over the DIE table. The
+first resolves each DIE's attributes into a body (`b_body`) and an
+abbreviation (hashed, codes in first-use order like LLVM's), drops the
+DIEs of empty scopes, and computes every DIE's offset; the second places
+the bodies, patches `ref4` values and emits the relocations. Strings go to
+`.debug_str` with `strx1..4` indices in first-use order; addresses to
+`.debug_addr` (`addrx`); the ranges of multi-range scopes and of a unit
+with several code ranges to `.debug_rnglists` (`startx_length`), which also
+adds `DW_AT_rnglists_base`. The unit's code ranges are LLVM's
+(`DwarfCompileUnit::addRange`): runs of functions with debug information
+that follow each other in the module in one section; each run is a
+line-table sequence (a function of only line-0 rows then does not inherit
+its predecessor's last line in gdb). The line program has the sequences
+grouped by section, the DWARF 5 directory and file tables (MD5-less,
+`line_strp`), and LLVM's special-opcode parameters (line base -5, range 14,
+opcode base 13). A
+module with locations but no DIE table (goosecc's `-g`) gets a unit with one
+subprogram per function, so its line table is usable by a debugger.
+
+Not done (gaps): location lists (variables at -O0 live in memory; LLVM
+uses a list for a VLA's `DBG_VALUE`, we a frame slot), call-site entries
+(LLVM emits none at -O0), accelerator tables, type units, split DWARF.
+
+## 13. Code quality and speed
 
 See `NOTES.md` §9 for the measurements. In short: on `bench/codequal` the
 generated code runs at 0.98x llc -O0's time with 1.05x its `.text` (spass
@@ -297,3 +456,10 @@ generated code runs at 0.98x llc -O0's time with 1.05x its `.text` (spass
 -O0's time (geometric mean 0.99x; A1 2.78x); Vector/build2 at 1.15x clang
 -O0 (A1: 11x). The back-end phase is 1.04x to 1.32x A1's time: the pre-pass
 and the allocator's bookkeeping cost more than the 3x fewer bytes save.
+
+A3 (`NOTES.md` §10): without `-g` the back-end takes 1.04x to 1.10x A2's
+time (gen-20000, spass, typeset; goovm-llc in total 1.02x to 1.07x), of which
+`.eh_frame` is 2% to 4%. With `-g` the back-end takes about 2x its time on C
+and 4x on template-heavy C++, the exporter 4x to 6x; goovm with `-g` is
+still 8.5x faster than LLVM's -O0 code generator with `-g` on sqlite3 and
+tramp3d-v4.

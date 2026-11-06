@@ -7,12 +7,14 @@ writes an ELF64 x86-64 relocatable object. [`gir.h`](gir.h) is the normative
 definition; this page describes the format in prose and lists what changed
 from version 0 (frozen at commit 8f55b18 with the C++ reference back-end).
 
-Version 2 covers what clang-20 emits at -O0 for C on x86-64 Linux, with and
-without `-g`, and after `opt -passes=mem2reg`: every integer width up to 128
-bits, `half`/`float`/`double`/`x86_fp80`, vectors, first-class aggregates,
-the SysV ABI attributes, variadic functions, dynamic stack allocation, the
-intrinsics C uses, atomics, TLS, aliases, constructors, sections, inline
-assembly and debug locations.
+Version 2 covers what clang-20 emits at -O0 for C and C++17 on x86-64
+Linux, with and without `-g`, and after `opt -passes=mem2reg`: every
+integer width up to 128 bits, `half`/`float`/`double`/`x86_fp80`, vectors,
+first-class aggregates, the SysV ABI attributes, variadic functions,
+dynamic stack allocation, the intrinsics C and C++ use, atomics, TLS,
+aliases, constructors, sections, inline and module-level assembly, debug
+locations and, in tables added by milestone A3 (all additive, see the end),
+exception handling, comdat groups and the DWARF debug-information tree.
 
 ## Tables
 
@@ -41,6 +43,11 @@ generated Goose struct against `gir.h`.
 | `dscopes` | `GirDScope` | 24 | compile units, subprograms, lexical blocks |
 | `dfiles` | `GirDFile` | 8 | file name and directory |
 | `dstr` | `u8` | 1 | debug strings |
+| `ehs` | `GirEh` | 24 | functions with landing pads: personality, type table, exception specifications |
+| `comdats` | `GirComdat` | 16 | comdat groups: signature, signature symbol, kind |
+| `gcomdat` | `u32` | 4 | empty, or per global: its comdat or `GIR_NONE` |
+| `dies` | `GirDie` | 16 | the DWARF DIE tree of the compile unit, in pre-order |
+| `dattrs` | `GirDAttr` | 16 | DIE attributes: DWARF forms, or GIR forms the back-end resolves |
 
 Functions own contiguous ranges of `blocks` and `insts`, and blocks own
 contiguous ranges of `insts`; layout order is table order. Block 0 is the
@@ -117,12 +124,23 @@ operand conventions are listed in `gir.h`; by group:
 - **Memory**: `ALLOCA` (static, entry block, any alignment), `DYNALLOCA`
   (variable size), `STACKSAVE`, `STACKRESTORE`, `LOAD`, `STORE`, `GEP`
   (constant offset plus (index, scale) pairs), `MEMCPY`/`MEMSET` (constant
-  size up to 256 bytes; anything else is a libc call).
+  size up to 256 bytes). The exporter makes them where LLVM's -O0 inlines
+  the intrinsic (`llvm.memcpy` up to 32 bytes, the `.inline` forms,
+  volatile ones); other copies and every `llvm.memset` are libc calls, as
+  in a clang -O0 build (milestone A3; A1/A2 inlined everything up to 256
+  bytes).
 - **Aggregates and vectors**: `EXTRACTVALUE`/`INSERTVALUE` (with the byte
   offset the exporter computed from the index path), `EXTRACTELT`,
   `INSERTELT`, `SHUFFLE` (mask in `opnds`). Arithmetic, compares, selects and
   casts on vector types are lane-wise.
-- **Calls**: `CALL` with (value, ABI word) argument pairs; `VASTART`.
+- **Calls**: `CALL` with (value, ABI word) argument pairs; `VASTART`. An
+  `invoke` is a `CALL` with `GIR_IF_INVOKE`: one more operand, the local
+  block of its landing pad, and the block's terminator (the next
+  instruction) is the `BR` to the normal destination.
+- **Exceptions**: `LANDINGPAD`, the first instruction of a block that only
+  unwind edges reach: `{ptr, i32}` from `rax`/`edx`, and its action list
+  (catch type index, exception specification, cleanup). `resume` is a call
+  of `_Unwind_Resume`; `llvm.eh.typeid.for` folds to the type index.
 - **Bit operations**: `CTLZ`, `CTTZ`, `CTPOP`, `BSWAP`, `BITREVERSE`, `FSHL`,
   `FSHR`, `OVF` (the six `*.with.overflow`), `SCMP`, `UCMP`.
 - **Atomics**: `LOAD`/`STORE` with an ordering, `CMPXCHG`, `ATOMICRMW` (13
@@ -220,19 +238,63 @@ inputs and (register, offset) outputs; the back-end only moves values.
 x87 operands (`t`, `u`, `{st(N)}`) follow LLVM's stack rules; `x87_pop`
 says how many inputs the code leaves on the stack.
 
+## Exception handling
+
+A function with landing pads has a `GirEh` record: its personality routine
+and type table, both as globals that hold the address (`DW.ref.<name>`, a
+hidden pointer variable in its own comdat, and one private stub per
+typeinfo, as LLVM does for PIC, so the read-only tables need no dynamic
+relocations), and its exception specifications as uleb128 lists in `data`.
+Calls that are not invokes may still throw through the function: the
+back-end covers them in the call-site table with no landing pad. Every
+function gets an `.eh_frame` FDE, with or without EH.
+
+## Comdat groups
+
+`comdats` lists the module's comdats (signature, the global of that name if
+there is one, `any` or `nodeduplicate`) and `gcomdat` gives each global its
+comdat. The back-end gives every defined function or variable in a comdat a
+section of its own (`.text.<name>`, `.data.<name>`, `.rodata.<name>`,
+`.data.rel.ro.<name>`, `.bss.<name>`, ... with its `.rela` and its
+`.gcc_except_table` section) in the ELF section group, as LLVM's
+`-ffunction-sections`-style comdat lowering does.
+
+Module-level assembly is parsed by the exporter with LLVM's MC for its
+symbols only: what it references or marks global or weak (libstdc++ 13's
+`<iostream>` emits `.globl _ZSt21ios_base_library_initv`) becomes or
+updates a global; assembly that defines a symbol is unsupported.
+
 ## Debug information
 
 With `-g`, every instruction's `dbg` names a `GirDLoc` (line, column,
 scope, inlined-at), and `GirFunc.dbg` names the function's DISubprogram in
 `dscopes`. Scopes form a tree (compile unit, subprograms, lexical blocks,
 lexical block files) with files in `dfiles` and strings in `dstr`. Entry 0
-of each table means "none". The A1 back-end ignores these tables; they are
-there for a DWARF emitter.
+of each table means "none". The back-end makes the line table
+(`.debug_line`) from these alone.
+
+`dies` and `dattrs` (milestone A3) carry the rest of DWARF 5: the exporter
+(`tools/goovm-llc/gir_dwarf.cpp`, a port of LLVM 20's DwarfDebug and
+DwarfUnit for one compile unit) builds the DIE tree that LLVM would build -
+the unit, types, global variables, namespaces, imported entities,
+subprograms with their parameters, variables, labels and lexical blocks,
+abstract subprograms and inlined subroutines - in LLVM's DIE order. An
+attribute is a DWARF form with its value, or a GIR form for what only the
+back-end knows: strings (`GIR_DF_STR`, which become `strx` forms), file
+numbers, function and scope code ranges (`GIR_DF_PC`, `GIR_DF_SCOPE_PC`:
+low/high pc or a range list; a lexical block or inlined subroutine without
+code is dropped with its variables), a variable's frame location
+(`GIR_DF_LOCAL`: the GIR value that holds its address), a global's address,
+a label's address, and the unit's section offsets. The back-end assigns
+abbreviations, offsets and the string, address and range-list indices.
+With empty `dies` (goosecc, or a module with locations only), the back-end
+makes a unit with one subprogram per function.
 
 ## What the exporter drops or folds
 
-- Debug records, `llvm.lifetime.*`, `llvm.assume`, `llvm.donothing`,
-  `llvm.sideeffect`, `llvm.var.annotation`, `llvm.invariant.*`,
+- Debug records (which feed the DIE tables), `llvm.lifetime.*`,
+  `llvm.assume`, `llvm.donothing`, `llvm.sideeffect`,
+  `llvm.var.annotation`, `llvm.invariant.*`,
   `llvm.experimental.noalias.scope.decl`, `llvm.pseudoprobe`,
   `llvm.prefetch`, `llvm.va_end`, `llvm.clear_cache`.
 - `llvm.expect*`, `llvm.ptr.annotation`, `llvm.annotation`, `freeze`, the
@@ -250,8 +312,8 @@ there for a DWARF emitter.
   user (for PHI operands, at the start of the entry block). So do TLS
   addresses and block addresses.
 
-Anything else outside the format (exception handling, `va_arg` instructions,
-scalable vectors, `asm goto`, Intel-syntax inline assembly, ...) makes
+Anything else outside the format (`va_arg` instructions, scalable vectors,
+`asm goto`, Intel-syntax inline assembly, Windows EH pads, ...) makes
 `goovm-llc` exit with status 2 and a message that names the construct, the
 function and the instruction, or, with `--fallback`, compile the module with
 LLVM's code generator.
@@ -286,6 +348,24 @@ the C++ and Goose back-ends compiled byte-identically. Version 2:
    variable-size allocas are `DYNALLOCA`.
 10. **Libcalls are explicit**: memory intrinsics with a constant size up to
     256 bytes are `MEMCPY`/`MEMSET` instead of always calling libc.
+
+### Additions in milestone A3 (backward compatible)
+
+The version number stays 2: every addition is either a new table that may
+be empty or a new opcode or flag that older producers never emit.
+
+1. **New entry point** `gir_codegen_ex`: `gir_codegen` plus the five new
+   tables. `gir_codegen` (which goosecc calls) is unchanged and runs the
+   same code with the new tables empty.
+2. **New tables**: `ehs`, `comdats`, `gcomdat`, `dies`, `dattrs`.
+3. **New opcode** `LANDINGPAD` (83) and flag `GIR_IF_INVOKE` on `CALL`.
+4. **New attribute forms** `GIR_DF_*` and `DW_FORM_implicit_const` in
+   `dattrs`; `GIR_DF_SCOPE_PC`'s `aux` names the inlined-at location of an
+   instance of an inlined scope.
+5. **Behaviour with the old tables**: the back-end now writes `.eh_frame`
+   for every function and, when `dlocs` has locations, `.debug_line` and a
+   minimal `.debug_info` even with empty `dies` - which is how goosecc's
+   `-g` gets line tables without a change on its side.
 
 ## Debugging aid
 

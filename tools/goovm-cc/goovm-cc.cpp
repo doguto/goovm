@@ -30,6 +30,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -102,6 +103,7 @@ int main(int argc, char **argv) {
 #endif
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();   // module-level asm (libstdc++'s <iostream>)
 
     // Run the clang driver to get the cc1 job, exactly as `clang -c` would
     // (createInvocation is meant for tools and forces -fsyntax-only).
@@ -125,6 +127,14 @@ int main(int argc, char **argv) {
     auto inv = std::make_shared<clang::CompilerInvocation>();
     if (!clang::CompilerInvocation::CreateFromArgs(*inv, cmd.getArguments(), *diags, GOOVM_CLANG_PATH)) return 1;
     const std::string out = inv->getFrontendOpts().OutputFile;
+    // -mllvm options (e.g. -enable-matrix from -fenable-matrix), as
+    // clang's ExecuteCompilerInvocation applies them
+    const auto &llvm_args = inv->getFrontendOpts().LLVMArgs;
+    if (!llvm_args.empty()) {
+        std::vector<const char *> av = {"goovm-cc (LLVM option parsing)"};
+        for (const auto &a : llvm_args) av.push_back(a.c_str());
+        llvm::cl::ParseCommandLineOptions((int)av.size(), av.data());
+    }
 
     clang::CompilerInstance CI;
     CI.setInvocation(inv);

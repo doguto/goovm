@@ -165,7 +165,7 @@ let U_C = 4;
 let U_GEP = 8;
 let U_CALL = 16;
 let U_ASM = 64;
-let OP_USES: u8[83] = [
+let OP_USES: u8[84] = [
     1, 0, 1, 1, 0, 3, 3, 3,  // ret br condbr switch unreachable add sub mul
     3, 3, 3, 3, 3, 3, 3, 3,  // sdiv udiv srem urem and or xor shl
     3, 3, 3, 7, 1, 1, 1, 1,  // lshr ashr icmp select zext sext trunc ptrtoint
@@ -176,7 +176,7 @@ let OP_USES: u8[83] = [
     1, 1, 1, 1, 7, 7, 3, 3,  // cttz ctpop bswap bitreverse fshl fshr ovf scmp
     3, 1, 3, 1, 1, 7, 3, 0,  // ucmp fabs copysign fsqrt isfpclass cmpxchg atomicrmw fence
     0, 0, 0, 1, 1, 0, 0, 1,  // tlsaddr frameaddr retaddr sjlj_setjmp sjlj_longjmp trap debugtrap indirectbr
-    0, 3, 64,  // blockaddr x86 asm
+    0, 3, 64, 0,  // blockaddr x86 asm landingpad
 ];
 // Lowering kinds: K_A allocator-aware; K_T allocator-aware if the result
 // (or compared/stored/source) type is in a register class, else legacy;
@@ -188,7 +188,7 @@ let K_B = 2;
 let K_CALL = 3;
 let K_ALL = 4;
 let K_W = 16;
-let OP_KIND: u8[83] = [
+let OP_KIND: u8[84] = [
     0, 0, 0, 0, 0, 1, 1, 1,  // ret br condbr switch unreachable add sub mul
     1, 1, 1, 1, 1, 1, 1, 1,  // sdiv udiv srem urem and or xor shl
     1, 1, 1, 1, 1, 1, 1, 1,  // lshr ashr icmp select zext sext trunc ptrtoint
@@ -199,13 +199,13 @@ let OP_KIND: u8[83] = [
     2, 2, 2, 2, 2, 2, 2, 2,  // cttz ctpop bswap bitreverse fshl fshr ovf scmp
     2, 1, 1, 1, 2, 18, 18, 18,  // ucmp fabs copysign fsqrt isfpclass cmpxchg atomicrmw fence
     2, 2, 2, 20, 18, 0, 0, 0,  // tlsaddr frameaddr retaddr sjlj_setjmp sjlj_longjmp trap debugtrap indirectbr
-    2, 2, 20,  // blockaddr x86 asm
+    2, 2, 20, 2,  // blockaddr x86 asm landingpad
 ];
 
 // How instruction I is lowered: K_A, K_B, K_CALL or K_ALL.
 fn inst_kind(I: Inst) -> u32 {
     let op: u32 = I.op;
-    if op >= 83 { return K_B; }
+    if op >= GIR_NOPS { return K_B; }
     let k: u32 = OP_KIND[op] & 15;
     if k != K_T { return k; }
     // the type that decides: the compared / stored / cast source type, or the result
@@ -408,11 +408,11 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
         while j < hi {
             let I = insts[j];
             let op: u32 = I.op;
-            let kd: u32 = if op < 83 { OP_KIND[op] } else { K_B };
+            let kd: u32 = if op < GIR_NOPS { OP_KIND[op] } else { K_B };
             var k2 = kd & 15;
             if k2 == K_T { k2 = inst_kind(I); }
             let nodef = k2 == K_B || k2 == K_ALL;
-            let m: u32 = if op < 83 { OP_USES[op] } else { U_A | U_B | U_C };
+            let m: u32 = if op < GIR_NOPS { OP_USES[op] } else { U_A | U_B | U_C };
             if m & U_A != 0 { pp_use(I.a, j, lo, ncl, mw, nodef); }
             if m & U_B != 0 { pp_use(I.b, j, lo, ncl, mw, nodef); }
             if m & U_C != 0 { pp_use(I.c, j, lo, ncl, mw, nodef); }
@@ -716,7 +716,12 @@ fn ra_mat_gpr(v: u32, r: u32) {
         return;
     }
     let t = vtype(id);
-    if vi[id].reg == PEND { load_int(r, ra_take_pend(id), bits_of(t)); return; }
+    if vi[id].reg == PEND {
+        if dbg_on { dbg_ld(id); }
+        load_int(r, ra_take_pend(id), bits_of(t));
+        if dbg_on { dbg_ld_end(); }
+        return;
+    }
     if h == H_STACK {
         load_int(r, m_rbp(vi[id].off), bits_of(t));
         if !exact_width(bits_of(t)) { zext_reg(r, bits_of(t)); }
@@ -865,10 +870,13 @@ fn ra_mat_xmm(v: u32, x: u32) {
     let id = vid(v);
     let t = vtype(id);
     var m = Mem { M_REG, 0, 0, 0, 0 };
-    if vi[id].reg == PEND { m = ra_take_pend(id); }
+    let pend = vi[id].reg == PEND;
+    if pend { m = ra_take_pend(id); }
     else if vi[id].home == H_STACK { m = m_rbp(vi[id].off); }
     else { m = ra_home(id); }
+    if pend && dbg_on { dbg_ld(id); }
     xmm_load_t(x, m, t);
+    if pend && dbg_on { dbg_ld_end(); }
 }
 fn ra_xmm(v: u32) -> u32 {
     if is_val(v) {

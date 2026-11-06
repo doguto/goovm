@@ -91,7 +91,7 @@ let M_SIB = 2;
 let M_RIP = 3;
 struct Mem { kind: u8, reg: u8, rtype: u16, disp: i32, sym: u32 }
 
-struct Rela { offset: u64, info: u64, addend: i64 }  // = Elf64_Rela; info = (symbol << 32) | type
+struct Rela { offset: u64, info: u64, addend: i64, sec: u32 }  // info = (symbol << 32) | type; sec: code section (set when placed)
 
 // rel32 at code[pos] -> start of local block `blk`.
 struct Fixup { pos: u32, blk: u32 }
@@ -156,7 +156,7 @@ checkfree fn opc(op: u32) {
     b1(op & 0xFF);
 }
 checkfree fn rela(off: u32, sym: u32, typ: u32, addend: i64) {
-    rela_code.push(Rela { offset: off, info: (sym as u64 << 32) | typ, addend: addend });
+    rela_code.push(Rela { offset: off, info: (sym as u64 << 32) | typ, addend: addend, sec: 0 });
 }
 // ModRM (+ SIB + displacement) for `reg` and memory operand x; `tail` is the
 // number of immediate bytes that follow (for the rip-relative addend).

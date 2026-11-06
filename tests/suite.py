@@ -45,7 +45,13 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-CORPORA = ["torture", "ieee", "builtins", "unittests", "regression", "benchmarks", "ctmark"]
+CORPORA = ["torture", "ieee", "builtins", "unittests", "regression", "benchmarks", "ctmark",
+           "unittests-cxx", "regression-cxx", "benchmarks-cxx", "ctmark-cxx"]
+CXX_EXTS = (".cpp", ".cc", ".cxx", ".C")
+
+
+def is_cxx(src):
+    return os.path.splitext(src)[1] in CXX_EXTS
 VARIANTS = ["O0", "g", "mem2reg"]
 # Opt-in variants: "cc" builds each file with goovm-cc (clang front end in-process
 # + the Goose back-end) instead of clang -emit-llvm + goovm-llc.
@@ -55,11 +61,12 @@ EXTRA_VARIANTS = ["cc", "cc-g"]
 class Test:
     def __init__(self, corpus, name, srcs, cflags=(), ldflags=(), args=(), stdin=None, rundir=None,
                  ref=None, hash_output=False, fp_rel=None, fp_abs=None, exit0=False, data=(), prepare=None,
-                 timeout=None):
+                 timeout=None, cxxflags=None):
         self.corpus = corpus
         self.name = name                 # unique within the corpus
         self.srcs = list(srcs)
         self.cflags = list(cflags)
+        self.cxxflags = list(cflags if cxxflags is None else cxxflags)   # flags for C++ sources
         self.ldflags = list(ldflags)
         self.args = list(args)
         self.stdin = stdin               # path relative to the run directory
@@ -77,9 +84,19 @@ class Test:
     def id(self):
         return f"{self.corpus}/{self.name}"
 
+    @property
+    def cxx(self):
+        return any(is_cxx(s) for s in self.srcs)
+
+    def flags(self, src):
+        return self.cxxflags if is_cxx(src) else self.cflags
+
     def key(self):
-        h = hashlib.sha1(json.dumps([self.srcs, self.cflags, self.ldflags, self.args, self.stdin, self.ref,
-                                     self.hash_output, self.fp_rel, self.fp_abs, self.exit0]).encode())
+        k = [self.srcs, self.cflags, self.ldflags, self.args, self.stdin, self.ref,
+             self.hash_output, self.fp_rel, self.fp_abs, self.exit0]
+        if self.cxxflags != self.cflags:
+            k.append(self.cxxflags)
+        h = hashlib.sha1(json.dumps(k).encode())
         return h.hexdigest()[:16]
 
 
@@ -167,17 +184,18 @@ def ref_output(d, name):
 
 
 def singlesource(corpus, d, cflags=(), ldflags=(), args=(), hash_output=False, fp_rel=None, fp_abs=None,
-                 only=None, prefix=""):
+                 only=None, prefix="", exts=(".c",), flags_of=None):
     tests = []
-    files = only if only is not None else sorted(f for f in os.listdir(d) if f.endswith(".c"))
+    files = only if only is not None else sorted(f for f in os.listdir(d) if os.path.splitext(f)[1] in exts)
     for f in files:
         name = re.sub(r"\.[^.]*$", "", f)
         ref = ref_output(d, name)
         stdin = None
         if os.path.exists(os.path.join(d, name + ".reference_input")):
             stdin = name + ".reference_input"
+        fl = list(cflags) + (flags_of(f) if flags_of else [])
         tests.append(Test(corpus, prefix + os.path.relpath(os.path.join(d, name), d0(corpus)),
-                          [os.path.join(d, f)], cflags, ldflags, args, stdin=stdin, rundir=d, ref=ref,
+                          [os.path.join(d, f)], fl, ldflags, args, stdin=stdin, rundir=d, ref=ref,
                           hash_output=hash_output, fp_rel=fp_rel, fp_abs=fp_abs,
                           data=[stdin] if stdin else []))
     return tests
@@ -336,6 +354,92 @@ def ctmark_tests(suite):
     return t
 
 
+CXX_EXT = (".cpp", ".cc")
+
+
+def unittest_cxx_tests(suite):
+    """The C++ files of SingleSource/UnitTests (the directories its CMakeLists adds for x86, plus EH/)."""
+    u = os.path.join(suite, "SingleSource/UnitTests")
+    _D0["unittests-cxx"] = u
+    j = os.path.join
+    common = ["-Wno-implicit-function-declaration", "-Wno-implicit-int"]
+    t = singlesource("unittests-cxx", u, common, exts=CXX_EXT,
+                     flags_of=lambda f: ["-fenable-matrix"] if f == "matrix-types-spec.cpp" else [])
+    t += singlesource("unittests-cxx", j(u, "C++11"), common + ["-std=c++11", "-pthread"], ["-pthread"], exts=CXX_EXT)
+    t += singlesource("unittests-cxx", j(u, "EH"), common + ["-std=gnu++14"], exts=CXX_EXT)  # dynamic exception specs
+    t += singlesource("unittests-cxx", j(u, "SignlessTypes"), common, args=["31415926"], exts=CXX_EXT)
+    t += singlesource("unittests-cxx", j(u, "SignlessTypes/Large"), common, args=["31415926"], hash_output=True,
+                      exts=CXX_EXT)
+    t += singlesource("unittests-cxx", j(u, "Vectorizer"), common + ["-std=gnu++17"], exts=CXX_EXT)
+    t += singlesource("unittests-cxx", j(u, "Vectorizer/VPlanNativePath"),
+                      common + ["-mllvm", "-enable-vplan-native-path", "-fno-vectorize"], exts=CXX_EXT)
+    t += singlesource("unittests-cxx", j(u, "X86"), common, exts=CXX_EXT)
+    return t
+
+
+def regression_cxx_tests(suite):
+    r = os.path.join(suite, "SingleSource/Regression/C++")
+    _D0["regression-cxx"] = r
+    t = singlesource("regression-cxx", r, [], exts=CXX_EXT)
+    t += singlesource("regression-cxx", os.path.join(r, "EH"), ["-std=gnu++14"], exts=CXX_EXT)
+    return t
+
+
+def benchmark_cxx_tests(suite):
+    b = os.path.join(suite, "SingleSource/Benchmarks")
+    _D0["benchmarks-cxx"] = b
+    j = os.path.join
+    t = []
+    t += singlesource("benchmarks-cxx", j(b, "Misc-C++"), ["-std=gnu++14"], ["-lm"], fp_abs=0.01, exts=CXX_EXT)
+    t += singlesource("benchmarks-cxx", j(b, "Misc-C++/Large"), ["-ffp-contract=off", "-DFMA_DISABLED=1"], ["-lm"],
+                      fp_abs=0.01, hash_output=True, exts=CXX_EXT)
+    t += singlesource("benchmarks-cxx", j(b, "Misc-C++-EH"), ["-std=gnu++14", "-pthread"], ["-lm", "-pthread"],
+                      exts=CXX_EXT)
+    shoot = ["ackermann.cpp", "ary.cpp", "ary2.cpp", "ary3.cpp", "fibo.cpp", "hash.cpp", "hash2.cpp", "heapsort.cpp",
+             "lists.cpp", "lists1.cpp", "matrix.cpp", "methcall.cpp", "moments.cpp", "nestedloop.cpp", "objinst.cpp",
+             "random.cpp", "sieve.cpp", "strcat.cpp", "hello.cpp", "reversefile.cpp", "spellcheck.cpp", "sumcol.cpp",
+             "wc.cpp", "wordfreq.cpp"]
+    t += singlesource("benchmarks-cxx", j(b, "Shootout-C++"), ["-Wno-deprecated"], ["-lm"], fp_rel=0.00000001,
+                      only=shoot)
+    t += singlesource("benchmarks-cxx", j(b, "Shootout-C++/EH"), [], exts=CXX_EXT)
+    t += singlesource("benchmarks-cxx", j(b, "Adobe-C++"), [], ["-lm"], fp_abs=0.01, exts=CXX_EXT)
+    t += singlesource("benchmarks-cxx", j(b, "CoyoteBench"), [], ["-lm"], exts=CXX_EXT)
+    t += singlesource("benchmarks-cxx", j(b, "SmallPT"), ["-std=gnu++98"], ["-lm"], fp_rel=0.001, exts=CXX_EXT)
+    for x in t:
+        x.timeout = 600
+    return t
+
+
+def ctmark_cxx_tests(suite):
+    """The four CTMark C++ programs, with their MultiSource CMakeLists' flags and RUN_OPTIONS."""
+    m = os.path.join(suite, "MultiSource")
+    j = os.path.join
+    t = []
+    d = j(m, "Benchmarks/7zip")
+    zs = re.search(r"llvm_multisource\(7zip-benchmark(.*?)\)", open(j(d, "CMakeLists.txt")).read(), re.S).group(1).split()
+    zf = ["-DBREAK_HANDLER", "-DUNICODE", "-D_UNICODE", "-I" + j(d, "C"), "-I" + j(d, "CPP/myWindows"),
+          "-I" + j(d, "CPP/include_windows"), "-I" + j(d, "CPP"), "-D_FILE_OFFSET_BITS=64", "-D_LARGEFILE_SOURCE",
+          "-DNDEBUG", "-D_REENTRANT", "-DENV_UNIX", "-D_7ZIP_LARGE_PAGES", "-pthread"]
+    t.append(Test("ctmark-cxx", "7zip", [j(d, f) for f in zs], zf + ["-std=gnu17"], ["-pthread"], ["b"], rundir=d,
+                  cxxflags=["-Wno-error=narrowing"] + zf))
+    d = j(m, "Benchmarks/Bullet")
+    t.append(Test("ctmark-cxx", "Bullet", sorted(j(d, f) for f in os.listdir(d) if f.endswith(".cpp")),
+                  ["-I" + j(d, "include"), "-DNO_TIME", "-std=gnu++98"], ["-lm"], rundir=d,
+                  ref=j(d, "bullet.reference_output")))
+    d = j(m, "Applications/kimwitu++")
+    t.append(Test("ctmark-cxx", "kimwitu++", sorted(j(d, f) for f in os.listdir(d) if f.endswith(".cc")),
+                  ["-I" + d, "-DYYDEBUG=1", "-std=gnu++14"], [],
+                  ["-f", "test", "-o", "-v", "-s", "kcc", "inputs/f3.k", "inputs/f2.k", "inputs/f1.k"], rundir=d,
+                  ref=j(d, "kc.reference_output"), hash_output=True, data=["inputs"]))
+    d = j(m, "Benchmarks/tramp3d-v4")
+    t.append(Test("ctmark-cxx", "tramp3d-v4", [j(d, "tramp3d-v4.cpp")], ["-std=gnu++14", "-fno-exceptions"], [],
+                  ["--cartvis", "1.0", "0.0", "--rhomin", "1e-8", "-n", "10", "--domain", "32", "32", "32"], rundir=d,
+                  ref=j(d, "tramp3d-v4.reference_output"), fp_abs=0.0000001))
+    for x in t:
+        x.timeout = 1200
+    return t
+
+
 def all_tests(suite, corpora):
     out = []
     if {"torture", "ieee", "builtins"} & set(corpora):
@@ -348,6 +452,14 @@ def all_tests(suite, corpora):
         out += benchmark_tests(suite)
     if "ctmark" in corpora:
         out += ctmark_tests(suite)
+    if "unittests-cxx" in corpora:
+        out += unittest_cxx_tests(suite)
+    if "regression-cxx" in corpora:
+        out += regression_cxx_tests(suite)
+    if "benchmarks-cxx" in corpora:
+        out += benchmark_cxx_tests(suite)
+    if "ctmark-cxx" in corpora:
+        out += ctmark_cxx_tests(suite)
     return out
 
 
@@ -444,7 +556,15 @@ def time_exe(t, exe, wd, n):
 
 
 def obj_name(src, i):
-    return f"{i:03d}_{os.path.basename(src)[:-2]}"
+    return f"{i:03d}_{os.path.splitext(os.path.basename(src))[0]}"
+
+
+def compiler(t, src, args):
+    return args.clangxx if is_cxx(src) else args.clang
+
+
+def linker(t, args):
+    return args.clangxx if t.cxx else args.clang
 
 
 def build_baseline(t, wd, args):
@@ -452,11 +572,11 @@ def build_baseline(t, wd, args):
     objs = []
     for i, s in enumerate(t.srcs):
         o = os.path.join(wd, obj_name(s, i) + ".base.o")
-        r = sh([args.clang, "-O0"] + t.cflags + ["-c", s, "-o", o])
+        r = sh([compiler(t, s, args), "-O0"] + t.flags(s) + ["-c", s, "-o", o])
         if r.returncode:
             raise Fail("build", f"clang -O0 failed on {os.path.basename(s)}:\n{r.stderr.decode(errors='replace')[-800:]}")
         objs.append(o)
-    r = sh([args.clang] + objs + t.ldflags + ["-o", exe])
+    r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise Fail("build", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -465,13 +585,14 @@ def build_baseline(t, wd, args):
 def emit_bc(t, s, i, wd, variant, args):
     base = os.path.join(wd, obj_name(s, i) + "." + variant)
     bc = base + ".bc"
+    cc = compiler(t, s, args)
     if variant == "O0":
-        cmd = [args.clang, "-O0"] + t.cflags + ["-c", "-emit-llvm", s, "-o", bc]
+        cmd = [cc, "-O0"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     elif variant == "g":
-        cmd = [args.clang, "-O0", "-g"] + t.cflags + ["-c", "-emit-llvm", s, "-o", bc]
+        cmd = [cc, "-O0", "-g"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     else:
         raw = base + ".raw.bc"
-        r = sh([args.clang, "-O0", "-Xclang", "-disable-O0-optnone"] + t.cflags + ["-c", "-emit-llvm", s, "-o", raw])
+        r = sh([cc, "-O0", "-Xclang", "-disable-O0-optnone"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", raw])
         if r.returncode:
             raise Fail("error", f"clang -emit-llvm failed on {os.path.basename(s)}")
         cmd = [args.opt, "-passes=mem2reg", raw, "-o", bc]
@@ -482,13 +603,25 @@ def emit_bc(t, s, i, wd, variant, args):
     return base, bc
 
 
+def verify_dwarf(o, s, args, info):
+    """--verify-dwarf: llvm-dwarfdump --verify on a -g object; a failure fails the test."""
+    if not args.verify_dwarf:
+        return
+    r = sh([args.dwarfdump, "--verify", o], timeout=600)
+    out = (r.stdout + r.stderr).decode(errors="replace")
+    bad = [l for l in out.splitlines() if l.startswith(("error:", "warning:"))]
+    if r.returncode != 0 or bad:
+        raise Fail("fail", f"llvm-dwarfdump --verify on {os.path.basename(s)}: {(bad or out.splitlines()[-1:] or [''])[0][:300]}")
+    info["dwarf_verified"] = info.get("dwarf_verified", 0) + 1
+
+
 def build_goovm_cc(t, wd, variant, args, info):
     exe = os.path.join(wd, variant + ".exe")
     objs = []
     for i, s in enumerate(t.srcs):
         o = os.path.join(wd, obj_name(s, i) + "." + variant + ".o")
         cmd = ([args.cc, "--backend=goose"] + (["--fallback"] if args.fallback else []) + ["-O0"]
-               + (["-g"] if variant == "cc-g" else []) + t.cflags + ["-c", s, "-o", o])
+               + (["-g"] if variant == "cc-g" else []) + t.flags(s) + ["-c", s, "-o", o])
         r = sh(cmd, timeout=600)
         err = r.stderr.decode(errors="replace")
         if r.returncode == 2:
@@ -498,8 +631,10 @@ def build_goovm_cc(t, wd, variant, args, info):
         if "goovm-cc: falling back to LLVM:" in err:
             info.setdefault("fallback", []).append(
                 f"{os.path.basename(s)}: {err.split('goovm-cc: falling back to LLVM:', 1)[1].strip().splitlines()[0]}")
+        if variant == "cc-g":
+            verify_dwarf(o, s, args, info)
         objs.append(o)
-    r = sh([args.clang] + objs + t.ldflags + ["-o", exe])
+    r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise Fail("fail", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -523,8 +658,10 @@ def build_goovm(t, wd, variant, args, info):
         if "goovm-llc: fallback:" in err:
             info.setdefault("fallback", []).append(
                 f"{os.path.basename(s)}: {err.split('goovm-llc: fallback:', 1)[1].strip().splitlines()[0]}")
+        if variant == "g":
+            verify_dwarf(o, s, args, info)
         objs.append(o)
-    r = sh([args.clang] + objs + t.ldflags + ["-o", exe])
+    r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise Fail("fail", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -614,6 +751,11 @@ def report(results, tests, args):
     lines.append("")
     lines.append("pass includes fallback; fallback counts tests in which at least one file was compiled by "
                  "LLVM's code generator (goovm-llc --fallback).")
+    if args.verify_dwarf:
+        nv = sum(r.get(v, {}).get("dwarf_verified", 0) for r in results.values() for v in args.variants)
+        lines.append("")
+        lines.append(f"llvm-dwarfdump --verify passed on {nv} objects (variants g / cc-g of the passing tests; "
+                     "a failure counts as a failed test).")
     lines.append("")
     if args.time_run:
         lines.append(f"## Run times (best of {args.time_run}, seconds; ratio to clang -O0)")
@@ -679,6 +821,7 @@ def main():
     ap.add_argument("--corpus", default=",".join(CORPORA))
     ap.add_argument("--variants", default=",".join(VARIANTS))
     ap.add_argument("--clang", default="clang-20")
+    ap.add_argument("--clangxx", default="clang++-20")
     ap.add_argument("--cc", default=os.environ.get("GOOVM_CC", os.path.join(ROOT, "build/tools/goovm-cc/goovm-cc")),
                     help="goovm-cc, for the cc and cc-g variants")
     ap.add_argument("--opt", default="opt-20")
@@ -686,6 +829,9 @@ def main():
     ap.add_argument("--work", default=os.path.join(ROOT, "build-suite"))
     ap.add_argument("--fallback", action="store_true", help="pass --fallback to goovm-llc")
     ap.add_argument("--keep", action="store_true", help="keep build products of passing tests")
+    ap.add_argument("--verify-dwarf", action="store_true",
+                    help="run llvm-dwarfdump --verify on every object of the g and cc-g variants")
+    ap.add_argument("--dwarfdump", default="llvm-dwarfdump-20")
     ap.add_argument("--rebaseline", action="store_true", help="recompute the clang -O0 baseline")
     ap.add_argument("--baseline-only", action="store_true")
     ap.add_argument("--emit-bc", action="store_true", help="only write the bitcode of each variant (for analysis)")

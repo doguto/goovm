@@ -19,6 +19,11 @@ struct DLoc { line: u32, col: u32, scope: u32, inlined_at: u32 }
 struct DScope { kind: u32, parent: u32, file: u32, line: u32, name: u32, extra: u32 }
 struct DFile { name: u32, dir: u32 }
 struct Asm { code: u32, code_len: u32, n_in: u32, n_out: u32, ops: u32, x87_pop: u32 }
+// Additive tables (exception handling, comdats, debug information entries).
+struct Eh { func: u32, personality: u32, ttypes: u32, n_ttypes: u32, specs: u32, n_specs: u32 }
+struct Comdat { name: u32, name_len: u32, sig: u32, kind: u32 }
+struct Die { tag: u16, flags: u16, parent: u32, attrs: u32, n_attrs: u32 }
+struct DAttr { at: u16, form: u16, aux: u32, val: u64 }
 
 // The module, as read-only views of the host's tables (set at entry).
 struct Module {
@@ -39,6 +44,11 @@ struct Module {
     dfiles: const DFile[:],
     dstr: const u8[:],
     asms: const Asm[:],
+    ehs: const Eh[:],
+    comdats: const Comdat[:],
+    gcomdat: const u32[:],
+    dies: const Die[:],
+    dattrs: const DAttr[:],
 }
 
 let GIR_V_INST = 0;
@@ -165,6 +175,8 @@ let GIR_INDIRECTBR = 79;
 let GIR_BLOCKADDR = 80;
 let GIR_X86 = 81;
 let GIR_ASM = 82;
+let GIR_LANDINGPAD = 83;
+let GIR_NOPS = 84;            // opcode count
 let ASMREG_XMM0 = 16;
 let ASMREG_ST0 = 32;
 
@@ -237,6 +249,7 @@ let IF_ORD_MASK = 0x000E;
 let IF_SINGLETHREAD = 0x0100;
 let IF_VARARG = 0x0200;
 let IF_NORETURN = 0x0400;
+let IF_INVOKE = 0x0800;
 let ORD_SEQ_CST = 7;
 
 // ABI words.
@@ -281,3 +294,27 @@ let DR_BLOCK = 1;
 let DR_BLOCKDIFF32 = 2;
 
 let MF_PIE = 1;
+
+// Comdat kinds.
+let CD_ANY = 0;
+let CD_NODEDUP = 1;
+
+// GIR attribute forms (GirDAttr.form).
+let DF_STR = 0x7F01;
+let DF_FILE = 0x7F02;
+let DF_PC = 0x7F03;
+let DF_SCOPE_PC = 0x7F04;
+let DF_FRAME_BASE = 0x7F05;
+let DF_LOCAL = 0x7F06;
+let DF_GLOBAL = 0x7F07;
+let DF_STMT_LIST = 0x7F08;
+let DF_STR_BASE = 0x7F09;
+let DF_CU_PC = 0x7F0A;
+let DF_ADDR_BASE = 0x7F0B;
+let DF_LABEL = 0x7F0C;
+
+// Debug scope kinds.
+let DS_CU = 1;
+let DS_SUBPROGRAM = 2;
+let DS_LEXICAL = 3;
+let DS_FILE = 4;

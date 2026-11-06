@@ -17,7 +17,18 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 - [初期調査（2026-11-05）](docs/research/2026-11-05-goose-llvm-investigation.md)
 - [検証結果：フェーズ0〜2（2026-11-06）](docs/research/2026-11-06-results.md)
 
-## 現在の状態（マイルストーン A2）
+## 現在の状態（マイルストーン A3）
+
+A3 で、Goose 版バックエンドの出力がデバッガと例外処理で使えるようになり、C++ もコンパイルできるようになりました。設計は [`backend-goose/DESIGN.md`](backend-goose/DESIGN.md) の §9〜§12、記録は [`backend-goose/NOTES.md`](backend-goose/NOTES.md) の10節です。
+
+- **巻き戻し情報**：すべての関数に `.eh_frame` の FDE を出します。CFI は命令境界ごとに正確です（プロローグの push、エピローグの pop、可変長 alloca、レッドゾーン、スタック渡しの引数を持つ invoke の `DW_CFA_GNU_args_size`）。`tests/gdb_oracle.py --unwind` で、全関数を1命令ずつ実行してバックトレースを確かめます。
+- **C++**：invoke / landingpad / resume、パーソナリティ、`.gcc_except_table` の LSDA、comdat（ELF のセクショングループ）、初期化の優先順位、`thread_local` の動的初期化、モジュールレベルのアセンブリ。SingleSource の C++ コーパス（107本）と CTMark の C++ 4本（7zip、Bullet、kimwitu++、tramp3d-v4）が、LLVM へのフォールバックなしに参照出力と一致します。goovm-llc と goovm-cc の両方で確かめています。
+- **DWARF 5**：clang-20 `-g` と同じものを出します。行テーブル（is_stmt、prologue_end、epilogue_begin）、コンパイル単位、サブプログラム、引数と局所変数の位置、レキシカルブロック、インライン展開された関数、すべての型です。エクスポータが LLVM 20 の DwarfDebug を移植して DIE の木を作り、バックエンドはコードのアドレス、フレーム上の位置、範囲を埋めます。
+- 正しさ：全コーパス（C と C++ の1,921本、clang で通る1,915本）の全変種（O0、g、mem2reg、goovm-cc の cc と cc-g）で失敗0、フォールバック0です。`-g` の全オブジェクト（5,266個）が `llvm-dwarfdump --verify` を通ります。clang `-O0 -g` との gdb のやりとりの比較（`tests/gdb_oracle.py`、93本、1,389回の停止）は87本で一致します。残りの差は既知の LLVM との違いです（NOTES.md の10節）。全関数を1命令ずつ実行する巻き戻し検査は91本で不一致0です（2本は再帰が深く時間切れ）。
+- goosecc は `frontend-goose/` を変えずに、`-g` で行テーブルを出すようになりました（GIR の追加は後方互換です）。`tests/run.py --goosecc` は98/98です。
+- 速さ：`-g` なしのバックエンドの時間は A2 の1.04〜1.10倍です（goovm-llc 全体では1.02〜1.07倍、うち `.eh_frame` が2〜4%）。`-g` ではバックエンドが2〜4倍、エクスポータが4〜6倍になりますが、LLVM の `-O0 -g` のコード生成より、sqlite3 と tramp3d-v4 で8.5倍速いままです。
+
+## マイルストーン A2：レジスタ割り付け
 
 バックエンドは Goose 版だけを育てます。A1 で、clang-20 が `-O0`（`-g` 付き、`mem2reg` 後を含む）で出す C の LLVM IR をすべて扱う `-O0` バックエンドになりました。A2 で、出力コードの質が LLVM の `-O0`（FastISel + RegAllocFast）と同じ水準になりました。
 
@@ -51,7 +62,7 @@ A1 から変わらない点:
 | `backend-cpp/` | v0 の C++ 版バックエンド。`8f55b18` で凍結し、ビルドしない |
 | `frontend-goose/` | Goose で一から書いた C コンパイラ `goosecc`（プリプロセッサ・構文解析・型検査・GIR への変換。Goose 版バックエンドを同じプロセスで呼び、LLVM なしで ELF オブジェクトを出す） |
 | `tools/goovm-cc/` | clang のフロントエンドを同じプロセス内で動かし、LLVM IR をそのままバックエンドへ渡す `clang -c` 代替 |
-| `tests/` | `suite.py`（各コーパスでの正しさの検証）、`suite_goosecc.py`（同じコーパスを goosecc で）、`bench_goosecc.py`（goosecc の速さ）、C テストプログラム49本（`run.py`） |
+| `tests/` | `suite.py`（C と C++ の各コーパスでの正しさの検証、`--verify-dwarf`）、`gdb_oracle.py`（clang `-O0 -g` との gdb の比較と巻き戻しの検査）、`suite_goosecc.py`（同じコーパスを goosecc で）、`bench_goosecc.py`（goosecc の速さ）、C と C++ のテストプログラム52本（`run.py`） |
 | `bench/` | CTMark、LLVM 自身のビルド、バックエンド、要因の切り分け、出力コードの質、全体への効果の計測 |
 | `poc/` | Goose コンパイラの伸び方、C++ との接続、変更可能な IR グラフの試作 |
 
@@ -61,7 +72,10 @@ A1 から変わらない点:
 # 必要なもの: clang-20 / llvm-20-dev / lld-20 (Ubuntu 24.04)、cmake、ninja、ビルド済みの goose
 GOOSE=/path/to/goose GOOSE_STDLIB=/path/to/goose/stdlib backend-goose/build.sh build
 tests/run.py --goovm build/tools/goovm-llc/goovm-llc
-tests/suite.py --goovm build/tools/goovm-llc/goovm-llc --work /tmp/suite -j3 --report report.md
+tests/suite.py --goovm build/tools/goovm-llc/goovm-llc --cc build/tools/goovm-cc/goovm-cc \
+    --variants O0,g,mem2reg,cc,cc-g --verify-dwarf --work /tmp/suite -j3 --report report.md
+tests/gdb_oracle.py --goovm build/tools/goovm-llc/goovm-llc -j3            # clang -O0 -g と gdb で比較
+tests/gdb_oracle.py --goovm build/tools/goovm-llc/goovm-llc --unwind -j3   # 1命令ずつの巻き戻し検査
 # goosecc（LLVM 不要）
 GOOSE=/path/to/goose GOOSE_STDLIB=/path/to/goose/stdlib frontend-goose/build.sh
 tests/suite_goosecc.py --goosecc frontend-goose/build/goosecc --work /tmp/sgc -j3 --report report-goosecc.md

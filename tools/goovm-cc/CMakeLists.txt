@@ -13,6 +13,7 @@ target_link_libraries(goovm-cc PRIVATE clang-cpp LLVM)
 if (GOOVM_WITH_GOOSE)
     set(goovm_cc_exc_srcs goovm_backend.cpp
         ${PROJECT_SOURCE_DIR}/tools/goovm-llc/gir_export.cpp
+        ${PROJECT_SOURCE_DIR}/tools/goovm-llc/gir_dwarf.cpp
         ${PROJECT_SOURCE_DIR}/tools/goovm-llc/gir_asm.cpp)
     target_sources(goovm-cc PRIVATE ${goovm_cc_exc_srcs})
     # gir_export reports unsupported input by throwing GirUnsupported inside

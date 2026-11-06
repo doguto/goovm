@@ -14,9 +14,11 @@
 
 #include "gir_export.h"
 #include "gir_asm.h"
+#include "gir_dwarf.h"
 
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 
 #include "llvm/ADT/DenseMap.h"
@@ -25,9 +27,11 @@
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/IR/Comdat.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DebugProgramInstruction.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
@@ -64,6 +68,11 @@ GirModule GirTables::view() const {
     m.dfiles = dfiles.data();     m.n_dfiles = (uint32_t)dfiles.size();
     m.dstr = dstr.data();         m.n_dstr = (uint32_t)dstr.size();
     m.asms = asms.data();         m.n_asms = (uint32_t)asms.size();
+    m.ehs = ehs.data();           m.n_ehs = (uint32_t)ehs.size();
+    m.comdats = comdats.data();   m.n_comdats = (uint32_t)comdats.size();
+    m.gcomdat = gcomdat.data();   m.n_gcomdat = (uint32_t)gcomdat.size();
+    m.dies = dies.data();         m.n_dies = (uint32_t)dies.size();
+    m.dattrs = dattrs.data();     m.n_dattrs = (uint32_t)dattrs.size();
     return m;
 }
 
@@ -141,11 +150,10 @@ struct PtrMap {
     }
 };
 
-// Inline copies and fills up to this many bytes; larger or variable sizes
-// call libc.
+// The largest inline copy or fill (mem_intrinsic: which ones are inline).
 constexpr uint64_t MAX_INLINE_MEM = 256;
 
-struct Exporter {
+struct Exporter : GirDwarfHost {
     const Module &M;
     const DataLayout &DL;
     GirTables &T;
@@ -164,6 +172,11 @@ struct Exporter {
     DenseMap<const DIFile *, uint32_t> dfmap;
     uint32_t n_unnamed = 0;
     bool pie = false;
+    // Exception handling and comdats (module).
+    DenseMap<const Comdat *, uint32_t> cdmap;       // comdat -> comdats index
+    StringMap<uint32_t> cdnames;                    // group signature -> comdats index
+    DenseMap<const GlobalValue *, uint32_t> tistub; // typeinfo -> pointer variable holding its address
+    DenseMap<const GlobalValue *, uint32_t> dwref;  // personality -> DW.ref.<name>
 
     // Per function.
     const Function *F = nullptr;
@@ -179,9 +192,55 @@ struct Exporter {
     const DILocation *last_dl = nullptr;
     uint32_t last_dl_idx = 0;
     std::string where;  // extra context for errors outside instructions
+    // Exception handling (per function).
+    bool fn_eh = false;                             // has a personality and landing pads
+    std::vector<uint32_t> eh_types;                 // type table: typeinfo stubs (GIR_NONE: catch-all)
+    DenseMap<const Value *, uint32_t> eh_tidx;      // typeinfo (stripped) -> type index (1-based)
+    std::vector<uint8_t> eh_specs;                  // exception specification table
+    std::map<std::vector<uint32_t>, int32_t> eh_specmap;
+    DenseMap<const PHINode *, uint32_t> lp_slot;    // landing-pad PHI -> its alloca (demoted)
+    uint32_t cur_invoke_lp = GIR_NONE;              // landing pad block of the invoke being lowered
+    // Debug information entries (gir_dwarf.cpp); the function's declares and labels.
+    std::unique_ptr<GirDwarfBuilder> dw;
+    bool dw_on = false;
+    struct PendVar {
+        const DILocalVariable *var;
+        const DIExpression *expr;
+        const DILocation *loc;
+        const Value *addr;
+    };
+    std::vector<PendVar> fvars;
+    std::vector<GirDwarfLabel> flabels;
 
     Exporter(const Module &m, GirTables &t)
         : M(m), DL(m.getDataLayout()), T(t), TLII(Triple(m.getTargetTriple())), TLI(TLII) {}
+
+    // GirDwarfHost
+    uint32_t dw_str(StringRef s) override { return dstring(s); }
+    uint32_t dw_bytes(const uint8_t *p, size_t n) override {
+        uint32_t off = (uint32_t)T.dstr.size();
+        T.dstr.insert(T.dstr.end(), p, p + n);
+        return off;
+    }
+    uint32_t dw_file(const DIFile *f) override { return dfile(f); }
+    uint32_t dw_scope(const DIScope *s) override { return dscope(s); }
+    uint32_t dw_loc(const DILocation *l) override { return dloc(l); }
+    uint32_t dw_global(const GlobalValue *g) override {
+        auto it = gmap.find(g);
+        return it == gmap.end() ? GIR_NONE : it->second;
+    }
+    // A #dbg_declare / #dbg_label attached to the instruction being exported.
+    void dbg_records(const Instruction &I) {
+        for (const DbgRecord &R : I.getDbgRecordRange()) {
+            if (const auto *V = dyn_cast<DbgVariableRecord>(&R)) {
+                if (V->isDbgDeclare())
+                    fvars.push_back(PendVar{V->getVariable(), V->getExpression(), V->getDebugLoc().get(),
+                                            V->getVariableLocationOp(0)});
+            } else if (const auto *L = dyn_cast<DbgLabelRecord>(&R)) {
+                flabels.push_back(GirDwarfLabel{L->getLabel(), L->getDebugLoc().get(), (uint32_t)T.insts.size()});
+            }
+        }
+    }
 
     // ---------------------------------------------------------------- errors
     [[noreturn]] void fail(const std::string &why) {
@@ -534,7 +593,7 @@ struct Exporter {
             d.kind = GIR_DS_SUBPROGRAM;
             d.parent = dscope(SP->getUnit());
             d.file = dfile(SP->getFile());
-            d.line = SP->getLine();
+            d.line = SP->getScopeLine() ? SP->getScopeLine() : SP->getLine();
             d.name = dstring(SP->getName());
             d.extra = dstring(SP->getLinkageName());
         } else if (auto *LB = dyn_cast<DILexicalBlock>(s)) {
@@ -1072,6 +1131,10 @@ struct Exporter {
             T.opnds.push_back(args[i + 1]);
         }
         uint16_t fl = (vararg ? GIR_IF_VARARG : 0) | (al & AL_NR ? GIR_IF_NORETURN : 0);
+        if (cur_invoke_lp != GIR_NONE) {
+            fl |= GIR_IF_INVOKE;
+            T.opnds.push_back(cur_invoke_lp);
+        }
         uint32_t r = emit(GIR_CALL, rt, 0, fl, 0, callee, s, (uint32_t)(args.size() / 2), RA);
         if (rt != GIR_T_VOID) vmap[&CB] = r;
     }
@@ -1090,7 +1153,14 @@ struct Exporter {
         uint32_t a0 = ref(CB.getArgOperand(0));
         uint32_t a1 = ref(CB.getArgOperand(1));
         bool vol = id != Intrinsic::memmove && cast<ConstantInt>(CB.getArgOperand(3))->isOne();
-        if (CL && CL->getZExtValue() <= MAX_INLINE_MEM && id != Intrinsic::memmove) {
+        // Inline as LLVM's -O0 does (X86FastISel): llvm.memcpy of at most 32
+        // bytes, the *.inline forms; volatile ones (which FastISel leaves to
+        // SelectionDAG's inline expansion) up to MAX_INLINE_MEM bytes. Other
+        // memcpy and every memset are libc calls, so that a debugger steps
+        // into memcpy/memset where it does in a clang -O0 build.
+        bool inl = id == Intrinsic::memcpy_inline || id == Intrinsic::memset_inline ||
+                   (id == Intrinsic::memcpy && CL && CL->getZExtValue() <= 32) || (vol && id != Intrinsic::memmove);
+        if (CL && inl && CL->getZExtValue() <= MAX_INLINE_MEM) {
             uint8_t op = (id == Intrinsic::memset || id == Intrinsic::memset_inline) ? GIR_MEMSET : GIR_MEMCPY;
             if (CL->getZExtValue() == 0) return;
             emit(op, GIR_T_VOID, 0, vol ? GIR_IF_VOLATILE : 0, 0, a0, a1, (uint32_t)CL->getZExtValue(), RA | RB);
@@ -1184,17 +1254,31 @@ struct Exporter {
         }
         if (libm_intrinsic(CB, id)) return;
         switch (id) {
+        case Intrinsic::eh_typeid_for:
+            // the type index of the typeinfo in this function's LSDA type table
+            vmap[&CB] = cint(eh_type_index(CB.getArgOperand(0)), GIR_T_I32);
+            return;
         case Intrinsic::memcpy:
         case Intrinsic::memcpy_inline:
         case Intrinsic::memmove:
         case Intrinsic::memset:
         case Intrinsic::memset_inline:
             return mem_intrinsic(CB, id);
+        case Intrinsic::dbg_declare:
+            if (dw_on) {
+                const auto &D = cast<DbgDeclareInst>(CB);
+                fvars.push_back(PendVar{D.getVariable(), D.getExpression(), D.getDebugLoc().get(), D.getAddress()});
+            }
+            return;
+        case Intrinsic::dbg_label:
+            if (dw_on) {
+                const auto &D = cast<DbgLabelInst>(CB);
+                flabels.push_back(GirDwarfLabel{D.getLabel(), D.getDebugLoc().get(), (uint32_t)T.insts.size()});
+            }
+            return;
         case Intrinsic::lifetime_start:
         case Intrinsic::lifetime_end:
-        case Intrinsic::dbg_declare:
         case Intrinsic::dbg_value:
-        case Intrinsic::dbg_label:
         case Intrinsic::dbg_assign:
         case Intrinsic::experimental_noalias_scope_decl:
         case Intrinsic::assume:
@@ -2052,6 +2136,7 @@ struct Exporter {
             return;
         case Instruction::PHI: {
             const auto &P = cast<PHINode>(I);
+            if (fn_eh && P.getParent()->isLandingPad()) return;   // a LOAD after the LANDINGPAD
             uint16_t t = ty(P.getType());
             SmallVector<uint32_t, 16> pairs;
             for (unsigned i = 0, n = P.getNumIncomingValues(); i < n; i++) {
@@ -2165,14 +2250,181 @@ struct Exporter {
             return;
         }
         case Instruction::VAArg: fail("va_arg");
-        case Instruction::Invoke: case Instruction::Resume: case Instruction::LandingPad:
+        case Instruction::Invoke: {
+            const auto &IV = cast<InvokeInst>(I);
+            const BasicBlock *U = IV.getUnwindDest();
+            // the landing pad's PHIs (demoted to allocas): their values on this edge
+            for (const PHINode &P : U->phis()) {
+                uint16_t t = ty(P.getType());
+                uint32_t v = ref(P.getIncomingValueForBlock(IV.getParent()));
+                emit(GIR_STORE, GIR_T_VOID, 0, 0, t, v, lp_slot[&P], 0, RA | RB);
+            }
+            if (IV.isInlineAsm() || isa<IntrinsicInst>(IV)) {
+                call(IV);   // cannot throw
+            } else {
+                cur_invoke_lp = block(U);
+                call(IV);
+                cur_invoke_lp = GIR_NONE;
+            }
+            curI = &I;
+            emit(GIR_BR, GIR_T_VOID, 0, 0, 0, block(IV.getNormalDest()), 0, 0, 0);
+            return;
+        }
+        case Instruction::LandingPad: {
+            const auto &LP = cast<LandingPadInst>(I);
+            if (!fn_eh) fail("landingpad without a personality");
+            std::vector<uint32_t> acts = lp_actions(LP);
+            uint32_t s = (uint32_t)T.opnds.size();
+            T.opnds.insert(T.opnds.end(), acts.begin(), acts.end());
+            vmap[&I] = emit(GIR_LANDINGPAD, ty(LP.getType()), 0, 0, 0, s, (uint32_t)acts.size(), 0, 0);
+            for (const PHINode &P : LP.getParent()->phis())
+                vmap[&P] = emit(GIR_LOAD, ty(P.getType()), 0, 0, 0, lp_slot[&P], 0, 0, 0);
+            return;
+        }
+        case Instruction::Resume: {
+            // _Unwind_Resume(exception object), as LLVM's DwarfEHPrepare does
+            const auto &RS = cast<ResumeInst>(I);
+            ty(RS.getValue()->getType());
+            uint32_t v = ref(RS.getValue());
+            uint32_t e = emit(GIR_EXTRACTVALUE, GIR_T_PTR, 0, 0, 0, v, 0, 0, RA);
+            uint32_t c = libcall("_Unwind_Resume", GIR_T_VOID, {e});
+            T.insts[GIR_IDX(c)].flags |= GIR_IF_NORETURN;
+            emit(GIR_UNREACHABLE, GIR_T_VOID, 0, 0, 0, 0, 0, 0, 0);
+            return;
+        }
         case Instruction::CleanupPad: case Instruction::CatchPad: case Instruction::CatchSwitch:
         case Instruction::CatchRet: case Instruction::CleanupRet:
-            fail("exception handling");
+            fail("funclet-based exception handling (Windows)");
         case Instruction::CallBr: fail("callbr (asm goto)");
         default: break;
         }
         fail(std::string("instruction '") + I.getOpcodeName() + "'");
+    }
+
+    // ---------------------------------------------------- exception handling
+    // A pointer variable holding the address of global `target` (LLVM's
+    // .DW.stub / DW.ref.<name>): the unwind tables reach typeinfos and the
+    // personality routine through it, so they need no dynamic relocations.
+    uint32_t addr_holder(const std::string &name, uint32_t target, uint32_t flags) {
+        uint32_t g = add_global(name, GIR_G_VAR, flags | GIR_GF_DEFINED | GIR_GF_LOCALREF, 8);
+        T.globals[g].size = 8;
+        uint32_t at = (uint32_t)T.data.size();
+        T.data.resize(at + 8, 0);
+        T.globals[g].data = at;
+        reloc(g, 0, target, GIR_DR_ABS64, 0);
+        return g;
+    }
+    uint32_t global_of(const Value *v) {
+        const auto *G = dyn_cast<GlobalValue>(v->stripPointerCasts());
+        auto it = G ? gmap.find(G) : gmap.end();
+        if (it == gmap.end()) fail("exception handling with a typeinfo or personality that is not a global");
+        return it->second;
+    }
+    // Comdat index for a group signature (created on first use).
+    uint32_t comdat_named(StringRef name, uint32_t kind) {
+        auto it = cdnames.find(name);
+        if (it != cdnames.end()) return it->second;
+        GirComdat c{add_name(name), (uint32_t)name.size(), GIR_NONE, kind};
+        if (const GlobalValue *G = M.getNamedValue(name)) {
+            auto gi = gmap.find(G);
+            if (gi != gmap.end() && (T.globals[gi->second].flags & GIR_GF_DEFINED)) c.sig = gi->second;
+        }
+        T.comdats.push_back(c);
+        return cdnames[name] = (uint32_t)T.comdats.size() - 1;
+    }
+    void set_comdat(uint32_t g, uint32_t c) {
+        if (T.gcomdat.size() < T.globals.size()) T.gcomdat.resize(T.globals.size(), GIR_NONE);
+        T.gcomdat[g] = c;
+    }
+    // Type index (1-based) of typeinfo v (null: catch-all) in the current
+    // function's type table.
+    uint32_t eh_type_index(const Value *v) {
+        const Value *k = v->stripPointerCasts();
+        auto it = eh_tidx.find(k);
+        if (it != eh_tidx.end()) return it->second;
+        uint32_t stub = GIR_NONE;
+        if (!isa<ConstantPointerNull>(k)) {
+            const auto *G = dyn_cast<GlobalValue>(k);
+            if (!G) fail("catch clause that is not a typeinfo global");
+            auto si = tistub.find(G);
+            if (si != tistub.end()) stub = si->second;
+            else stub = tistub[G] = addr_holder(".L" + sym_name(*G) + ".DW.stub", global_of(G), GIR_GF_INTERNAL);
+        }
+        eh_types.push_back(stub);
+        return eh_tidx[k] = (uint32_t)eh_types.size();
+    }
+    // Filter value of an exception specification (filter clause).
+    int32_t eh_filter(const Constant *C) {
+        std::vector<uint32_t> ids;
+        if (const auto *CA = dyn_cast<ConstantArray>(C))
+            for (const Use &u : CA->operands()) ids.push_back(eh_type_index(u.get()));
+        else if (!C->isNullValue() && !isa<UndefValue>(C))
+            fail("filter clause");
+        auto it = eh_specmap.find(ids);
+        if (it != eh_specmap.end()) return it->second;
+        int32_t f = -1 - (int32_t)eh_specs.size();
+        for (uint32_t id : ids) {
+            uint64_t x = id;
+            do {
+                uint8_t b = x & 0x7F;
+                x >>= 7;
+                eh_specs.push_back(x ? (uint8_t)(b | 0x80) : b);
+            } while (x);
+        }
+        eh_specs.push_back(0);
+        return eh_specmap[ids] = f;
+    }
+    // The action list of a landing pad (gir.h, GIR_LANDINGPAD).
+    std::vector<uint32_t> lp_actions(const LandingPadInst &LP) {
+        std::vector<uint32_t> acts;
+        for (unsigned i = 0, n = LP.getNumClauses(); i < n; i++) {
+            if (LP.isCatch(i)) acts.push_back(eh_type_index(LP.getClause(i)));
+            else acts.push_back((uint32_t)eh_filter(LP.getClause(i)));
+        }
+        if (LP.isCleanup() && !acts.empty()) acts.push_back(0);
+        return acts;
+    }
+    void eh_begin(const Function &Fn) {
+        fn_eh = false;
+        eh_types.clear();
+        eh_tidx.clear();
+        eh_specs.clear();
+        eh_specmap.clear();
+        lp_slot.clear();
+        cur_invoke_lp = GIR_NONE;
+        if (!Fn.hasPersonalityFn()) return;
+        for (const BasicBlock &BB : Fn)
+            if (BB.isLandingPad()) {
+                fn_eh = true;
+                // number the typeinfos in clause order of the landing pads
+                lp_actions(*BB.getLandingPadInst());
+            }
+    }
+    void eh_end(const Function &Fn, uint32_t fi) {
+        const Value *P = Fn.getPersonalityFn()->stripPointerCasts();
+        const auto *PG = dyn_cast<GlobalValue>(P);
+        if (!PG) fail("personality that is not a function");
+        uint32_t pers;
+        auto it = dwref.find(PG);
+        if (it != dwref.end()) {
+            pers = it->second;
+        } else {
+            std::string nm = "DW.ref." + sym_name(*PG);
+            pers = dwref[PG] = addr_holder(nm, global_of(PG), GIR_GF_WEAK | GIR_GF_HIDDEN);
+            set_comdat(pers, comdat_named(nm, GIR_CD_ANY));
+            T.comdats[T.gcomdat[pers]].sig = pers;
+        }
+        GirEh e{};
+        e.func = fi;
+        e.personality = pers;
+        e.ttypes = (uint32_t)T.opnds.size();
+        e.n_ttypes = (uint32_t)eh_types.size();
+        T.opnds.insert(T.opnds.end(), eh_types.begin(), eh_types.end());
+        e.specs = (uint32_t)T.data.size();
+        e.n_specs = (uint32_t)eh_specs.size();
+        T.data.insert(T.data.end(), eh_specs.begin(), eh_specs.end());
+        T.ehs.push_back(e);
+        fn_eh = false;
     }
 
     // ------------------------------------------------------------ functions
@@ -2183,7 +2435,6 @@ struct Exporter {
         if (Fn.getCallingConv() != CallingConv::C) fail("calling convention " + std::to_string(Fn.getCallingConv()));
         if (Fn.hasPrefixData() || Fn.hasPrologueData()) fail("prefix/prologue data");
         if (Fn.hasGC()) fail("garbage collector");
-        if (Fn.hasPersonalityFn()) fail("personality function (exception handling)");
         if (Fn.hasFnAttribute(Attribute::Naked)) fail("naked function");
         FunctionType *FT = Fn.getFunctionType();
 
@@ -2225,9 +2476,21 @@ struct Exporter {
         phimat.clear();
         fixes.clear();
 
+        eh_begin(Fn);
         bool entry = true;
         for (const BasicBlock &BB : Fn) {
             GirBlock b{(uint32_t)T.insts.size(), 0};
+            if (entry && fn_eh) {
+                // allocas for the landing pads' PHIs
+                cur_dbg = 0;
+                for (const BasicBlock &PB : Fn)
+                    if (PB.isLandingPad())
+                        for (const PHINode &P : PB.phis()) {
+                            uint16_t t = ty(P.getType());
+                            lp_slot[&P] = emit(GIR_ALLOCA, GIR_T_PTR, 0, 0, 0, T.types[t].size,
+                                               T.types[t].align, 0, 0);
+                        }
+            }
             if (entry) {
                 // Constants used by PHIs that become instructions are computed once, here.
                 in_phi_prepass = true;
@@ -2241,9 +2504,17 @@ struct Exporter {
                 in_phi_prepass = false;
                 entry = false;
             }
-            for (const Instruction &I : BB) {
-                inst(I);
-                T.n_llvm_insts++;
+            if (dw_on) {
+                for (const Instruction &I : BB) {
+                    dbg_records(I);
+                    inst(I);
+                    T.n_llvm_insts++;
+                }
+            } else {
+                for (const Instruction &I : BB) {
+                    inst(I);
+                    T.n_llvm_insts++;
+                }
             }
             b.n_inst = (uint32_t)T.insts.size() - b.first_inst;
             T.blocks.push_back(b);
@@ -2263,8 +2534,38 @@ struct Exporter {
         gf.n_blocks = (uint32_t)T.blocks.size() - gf.first_block;
         gf.n_inst = (uint32_t)T.insts.size() - gf.first_inst;
         gf.flags = fn_flags | ((uint32_t)Log2_64(falign) << GIR_FN_ALIGN_SHIFT);
+        if (fn_eh) eh_end(Fn, (uint32_t)T.funcs.size());
         T.funcs.push_back(gf);
+        if (dw_on) dwarf_function(Fn, (uint32_t)T.funcs.size() - 1);
         F = nullptr;
+    }
+
+    // The function's variables (addresses as GIR values) and labels, to the
+    // DIE builder.
+    void dwarf_function(const Function &Fn, uint32_t fi) {
+        std::vector<GirDwarfVar> vars;
+        vars.reserve(fvars.size());
+        for (const PendVar &P : fvars) {
+            uint32_t a = GIR_NONE;
+            const Value *v = P.addr;
+            bool mf = false;
+            // a null or undef address: the variable is dropped (FastISel's
+            // lowerDbgDeclare)
+            if (!v || isa<UndefValue>(v)) continue;
+            {
+                if (const auto *A = dyn_cast<Argument>(v)) {
+                    a = GIR_MK(GIR_V_ARG, A->getArgNo());
+                } else if (isa<Instruction>(v)) {
+                    if (uint32_t *p = vmap.find(v))
+                        if (!is_placeholder(*p) && GIR_KIND(*p) <= GIR_V_ARG) a = *p;
+                    if (const auto *AI = dyn_cast<AllocaInst>(v)) mf = AI->isStaticAlloca();
+                }
+            }
+            if (P.var && P.loc) vars.push_back(GirDwarfVar{P.var, P.expr, P.loc, a, mf});
+        }
+        dw->function(Fn, fi, vars, flabels);
+        fvars.clear();
+        flabels.clear();
     }
 
     // ---------------------------------------------------------- initializers
@@ -2368,23 +2669,38 @@ struct Exporter {
     void structors(const GlobalVariable &GV, bool ctors) {
         const auto *CA = dyn_cast<ConstantArray>(GV.getInitializer());
         if (!CA) return;  // zeroinitializer: empty list
-        std::vector<std::pair<unsigned, const Constant *>> ents;
+        // (priority, comdat key, function); an entry with a key (the data it
+        // initializes) goes into that key's group, as LLVM's AsmPrinter does
+        struct Ent {
+            unsigned prio;
+            uint32_t key;
+            const Constant *fn;
+        };
+        std::vector<Ent> ents;
         for (const Use &u : CA->operands()) {
             const auto *CS = dyn_cast<ConstantStruct>(u.get());
             if (!CS) fail_global(GV, "structor entry");
             const Constant *fn = CS->getOperand(1);
             if (fn->isNullValue()) continue;
             unsigned prio = (unsigned)cast<ConstantInt>(CS->getOperand(0))->getZExtValue();
-            ents.push_back({prio, fn});
+            uint32_t key = GIR_NONE;
+            if (CS->getNumOperands() > 2)
+                if (const auto *KG = dyn_cast<GlobalValue>(CS->getOperand(2)->stripPointerCasts())) {
+                    if (KG->isDeclarationForLinker()) continue;   // another TU initializes it
+                    key = comdat_named(KG->getName(), GIR_CD_ANY);
+                }
+            ents.push_back({prio, key, fn});
         }
-        std::stable_sort(ents.begin(), ents.end(), [](auto &a, auto &b) { return a.first < b.first; });
+        std::stable_sort(ents.begin(), ents.end(), [](const Ent &a, const Ent &b) {
+            return a.prio != b.prio ? a.prio < b.prio : (a.key != b.key && a.key < b.key);
+        });
         for (size_t i = 0; i < ents.size();) {
             size_t j = i;
-            while (j < ents.size() && ents[j].first == ents[i].first) j++;
+            while (j < ents.size() && ents[j].prio == ents[i].prio && ents[j].key == ents[i].key) j++;
             std::string sec = ctors ? ".init_array" : ".fini_array";
-            if (ents[i].first != 65535) {
+            if (ents[i].prio != 65535) {
                 char buf[16];
-                std::snprintf(buf, sizeof buf, ".%05u", ents[i].first);
+                std::snprintf(buf, sizeof buf, ".%05u", ents[i].prio);
                 sec += buf;
             }
             uint32_t s = section(sec, GIR_SF_WRITE, ctors ? 14 : 15);
@@ -2392,12 +2708,13 @@ struct Exporter {
                                     GIR_G_VAR, GIR_GF_INTERNAL | GIR_GF_DEFINED | GIR_GF_LOCALREF, 8);
             T.globals[g].section = s;
             T.globals[g].size = (uint32_t)(8 * (j - i));
+            if (ents[i].key != GIR_NONE) set_comdat(g, ents[i].key);
             uint32_t at = (uint32_t)T.data.size();
             T.data.resize(at + 8 * (j - i), 0);
             T.globals[g].data = at;
             for (size_t k = i; k < j; k++) {
                 APInt offs(64, 0);
-                const Value *base = ents[k].second->stripAndAccumulateConstantOffsets(DL, offs, true);
+                const Value *base = ents[k].fn->stripAndAccumulateConstantOffsets(DL, offs, true);
                 auto it = gmap.find(dyn_cast<GlobalValue>(base));
                 if (it == gmap.end()) fail_global(GV, "structor that is not an exported function");
                 reloc(g, (uint32_t)(8 * (k - i)), it->second, GIR_DR_ABS64, offs.getSExtValue());
@@ -2418,8 +2735,6 @@ struct Exporter {
         T.dscopes.push_back(GirDScope{0, 0, 0, 0, 0, 0});
         T.dfiles.push_back(GirDFile{0, 0});
         predefined_types();
-        if (!M.getModuleInlineAsm().empty())
-            throw GirUnsupported{"unsupported: module-level inline assembly"};
         if (!M.ifuncs().empty()) fail_global(*M.ifuncs().begin(), "ifunc");
         // Pass 1: global indices.
         std::vector<const GlobalVariable *> ctors, dtors;
@@ -2465,6 +2780,25 @@ struct Exporter {
             T.globals[g].aux = (uint32_t)(int32_t)offs.getSExtValue();
             gmap[&A] = g;
         }
+        // Comdats: every defined function and variable in one.
+        for (const GlobalObject &GO : M.global_objects()) {
+            const Comdat *C = GO.getComdat();
+            if (!C) continue;
+            auto it = gmap.find(&GO);
+            if (it == gmap.end() || !(T.globals[it->second].flags & GIR_GF_DEFINED)) continue;
+            uint32_t ci;
+            auto ci_it = cdmap.find(C);
+            if (ci_it != cdmap.end()) ci = ci_it->second;
+            else {
+                uint32_t kind = C->getSelectionKind() == Comdat::Any ? GIR_CD_ANY
+                                : C->getSelectionKind() == Comdat::NoDeduplicate ? GIR_CD_NODEDUP
+                                : ~0u;
+                if (kind == ~0u) fail_global(GO, "comdat selection kind other than any / nodeduplicate");
+                ci = cdmap[C] = comdat_named(C->getName(), kind);
+            }
+            set_comdat(it->second, ci);
+        }
+        if (!M.getModuleInlineAsm().empty()) module_asm();
         // Pass 2: initializers and sections.
         for (const GlobalVariable &GV : M.globals()) {
             auto it = gmap.find(&GV);
@@ -2504,13 +2838,43 @@ struct Exporter {
             if (it == gmap.end() || !Fn.hasSection()) continue;
             T.globals[it->second].section = section(Fn.getSection(), GIR_SF_EXEC, 1);
         }
+        // Debug information entries of the unit (globals, enums, retained types).
+        dw = std::make_unique<GirDwarfBuilder>(M, T, *this);
+        dw_on = dw->enabled();
+        if (dw_on) dw->begin_module();
         // Pass 3: function bodies.
         for (const Function &Fn : M.functions()) {
             auto it = gmap.find(&Fn);
             if (it == gmap.end() || !(T.globals[it->second].flags & GIR_GF_DEFINED)) continue;
             function(Fn, it->second);
         }
+        if (dw_on) dw->end_module();
         T.header.n_llvm_insts = (uint32_t)T.n_llvm_insts;
+        if (!T.gcomdat.empty()) T.gcomdat.resize(T.globals.size(), GIR_NONE);
+    }
+
+    // Module-level inline assembly, assembled with LLVM's MC layer: the
+    // symbols it declares become undefined globals (`.globl x` asks the
+    // linker for x), binding directives change the module's own symbols. Code
+    // or data defined in module asm is not supported.
+    void module_asm() {
+        std::vector<GirAsmSymbol> syms;
+        std::string err;
+        if (!gir_assemble_module(M.getTargetTriple(), M.getModuleInlineAsm(), syms, err))
+            throw GirUnsupported{"unsupported: module-level inline assembly: " + err};
+        for (const GirAsmSymbol &s : syms) {
+            uint32_t g = GIR_NONE;
+            if (const GlobalValue *G = M.getNamedValue(s.name)) {
+                auto it = gmap.find(G);
+                if (it != gmap.end()) g = it->second;
+            }
+            if (g == GIR_NONE) {
+                if (s.defined) throw GirUnsupported{"unsupported: module-level inline assembly that defines '" + s.name + "'"};
+                if (!s.global && !s.weak) continue;
+                g = add_global(s.name, s.func ? GIR_G_FUNC : GIR_G_VAR, 0, 1);
+            }
+            if (s.weak && !(T.globals[g].flags & GIR_GF_INTERNAL)) T.globals[g].flags |= GIR_GF_WEAK;
+        }
     }
 };
 
@@ -2539,7 +2903,7 @@ static const char *op_name(unsigned op) {
         "insertelt", "shuffle", "dynalloca", "stacksave", "stackrestore", "vastart", "memcpy", "memset", "ctlz",
         "cttz", "ctpop", "bswap", "bitreverse", "fshl", "fshr", "ovf", "scmp", "ucmp", "fabs", "copysign", "fsqrt",
         "isfpclass", "cmpxchg", "atomicrmw", "fence", "tlsaddr", "frameaddr", "retaddr", "sjlj_setjmp",
-        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm"};
+        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm", "landingpad"};
     static_assert(sizeof(names) / sizeof(names[0]) == GIR_OP_COUNT, "op names");
     return op < GIR_OP_COUNT ? names[op] : "?";
 }

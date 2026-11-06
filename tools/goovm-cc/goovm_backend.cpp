@@ -1,5 +1,5 @@
 // goovm-cc's bridge: llvm::Module -> GIR (tools/goovm-llc/gir_export.cpp)
-// -> the Goose back-end's exported gir_codegen (backend-goose/cg.goose).
+// -> the Goose back-end's exported gir_codegen_ex (backend-goose/cg.goose).
 // Compiled with -fexceptions: gir_export reports unsupported input by
 // throwing GirUnsupported, which never crosses LLVM frames.
 #include "goovm_backend.h"
@@ -15,6 +15,10 @@ static_assert(sizeof(Func_g) == sizeof(GirFunc), "Func layout");
 static_assert(sizeof(Const_g) == sizeof(GirConst), "Const layout");
 static_assert(sizeof(Global_g) == sizeof(GirGlobal), "Global layout");
 static_assert(sizeof(TypeDef_g) == sizeof(GirTypeDef), "TypeDef layout");
+static_assert(sizeof(Eh_g) == sizeof(GirEh), "Eh layout");
+static_assert(sizeof(Comdat_g) == sizeof(GirComdat), "Comdat layout");
+static_assert(sizeof(Die_g) == sizeof(GirDie), "Die layout");
+static_assert(sizeof(DAttr_g) == sizeof(GirDAttr), "DAttr layout");
 
 void goovm_backend_init(int argc, char **argv) { goose_init(argc, argv); }
 void goovm_backend_exit() { goose_exit(); }
@@ -33,7 +37,7 @@ int goovm_compile_module(llvm::Module &mod, std::vector<uint8_t> &obj, std::stri
     auto t1 = clk::now();
     GirModule m = tables.view();
     gs_i64 len = 0;
-    const uint8_t *p = gir_codegen(
+    const uint8_t *p = gir_codegen_ex(
         sl_Header_g{(Header_g *)m.header, 1},
         sl_TypeDef_g{(TypeDef_g *)m.types, (int64_t)m.n_types},
         sl_Func_g{(Func_g *)m.funcs, (int64_t)m.n_funcs},
@@ -50,7 +54,12 @@ int goovm_compile_module(llvm::Module &mod, std::vector<uint8_t> &obj, std::stri
         sl_DScope_g{(DScope_g *)m.dscopes, (int64_t)m.n_dscopes},
         sl_DFile_g{(DFile_g *)m.dfiles, (int64_t)m.n_dfiles},
         sl_u8{(uint8_t *)m.dstr, (int64_t)m.n_dstr},
-        sl_Asm_g{(Asm_g *)m.asms, (int64_t)m.n_asms}, &len);
+        sl_Asm_g{(Asm_g *)m.asms, (int64_t)m.n_asms},
+        sl_Eh_g{(Eh_g *)m.ehs, (int64_t)m.n_ehs},
+        sl_Comdat_g{(Comdat_g *)m.comdats, (int64_t)m.n_comdats},
+        sl_u32{(gs_u32 *)m.gcomdat, (int64_t)m.n_gcomdat},
+        sl_Die_g{(Die_g *)m.dies, (int64_t)m.n_dies},
+        sl_DAttr_g{(DAttr_g *)m.dattrs, (int64_t)m.n_dattrs}, &len);
     auto t2 = clk::now();
     if (export_us) *export_us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
     if (codegen_us) *codegen_us = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();

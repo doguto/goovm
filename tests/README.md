@@ -2,17 +2,27 @@
 
 | script | what |
 |---|---|
-| `run.py` | the small differential tests in `c/` (49 programs) |
-| `suite.py` | the llvm-test-suite C corpora through goovm-llc, against their reference outputs |
+| `run.py` | the small differential tests in `c/` (49 programs), `cxx/` and `mixed/` (C and C++ linked together) |
+| `suite.py` | the llvm-test-suite C and C++ corpora through goovm-llc (and goovm-cc), against their reference outputs |
+| `gdb_oracle.py` | the same scripted gdb session on a clang -O0 -g build and a goovm build, compared; `--unwind`: single-step every function checking the backtrace |
 | `realworld_mixed.py` | (v0) links SPASS and consumer-typeset from a mix of goovm and clang objects |
 | `suite_goosecc.py` | the same corpora compiled by goosecc (`frontend-goose/`, no LLVM) |
 | `bench_goosecc.py` | compile speed and memory of `goosecc -c` vs `clang-20 -O0 -c` and `tcc -c` on CTMark |
 
 ## run.py
 
-For each `c/*.c`: a reference build with `clang-20 -O0`, then goovm-llc
-builds from `-O0` bitcode and from `opt-20 -passes=mem2reg` bitcode; stdout
-and exit status must match the reference.
+Programs: `c/*.c`, `cxx/*.cpp` (exceptions, comdat templates, thread_local
+dynamic initialization, init priorities, virtual inheritance, RTTI,
+iostreams) and `mixed/<name>/` (several C and C++ files linked together).
+For each: a reference build with `clang-20 -O0` / `clang++-20 -O0`, then
+goovm-llc builds from `-O0` bitcode and from `opt-20 -passes=mem2reg`
+bitcode; stdout and exit status must match the reference. A mixed program
+is also built with only its C files (`c-goovm`) or only its C++ files
+(`cxx-goovm`) by goovm-llc, so that exceptions cross frames of the other
+compiler: `mixed/eh_through_c` throws C++ exceptions through goovm-compiled
+C frames (plain calls, `qsort` callbacks, function pointers, frames with
+dynamic allocas and stack arguments) and checks that the stack pointer is
+the same after each catch.
 
 ```
 tests/run.py --goovm build/tools/goovm-llc/goovm-llc -j3 [--opt-passes PASSES] [filter ...]
@@ -20,12 +30,13 @@ tests/run.py --goosecc frontend-goose/build/goosecc -j3 [filter ...]
 ```
 
 With `--goosecc`, the variants are `goosecc -c` and `goosecc -c -g` instead
-(no LLVM involved).
+(no LLVM involved; C programs only).
 
 ## suite.py
 
 ```
 tests/suite.py --goovm build/tools/goovm-llc/goovm-llc [--corpus a,b,...] [--variants O0,g,mem2reg]
+               [--cc build/tools/goovm-cc/goovm-cc] [--verify-dwarf]
                [-j 3] [--work DIR] [--fallback] [--report FILE] [--json FILE] [--rebaseline]
                [--time-run N] [filter ...]
 ```
@@ -42,11 +53,24 @@ Corpora (from the llvm-test-suite checkout, `--suite`, default
 | `regression` | SingleSource/Regression/C (+ SSE) | |
 | `benchmarks` | SingleSource/Benchmarks C programs (BenchmarkGame, CoyoteBench, Dhrystone, Linpack, McGill, Misc, Shootout, Stanford, Polybench) | per-directory flags, FP_TOLERANCE, HASH_PROGRAM_OUTPUT |
 | `ctmark` | sqlite3, SPASS, ClamAV, lencod, mafft, consumer-typeset | the MultiSource CMakeLists' flags, RUN_OPTIONS, inputs (sqlite3's are generated with `tclsh speedtest.tcl`) |
+| `unittests-cxx` | SingleSource/UnitTests C++ files (top level, C++11, EH, SignlessTypes, Vectorizer, X86) | per-directory flags |
+| `regression-cxx` | SingleSource/Regression/C++ (+ EH) | |
+| `benchmarks-cxx` | SingleSource/Benchmarks C++ programs (Misc-C++, Misc-C++-EH, Shootout-C++, Shootout-C++/EH, Adobe-C++, CoyoteBench, SmallPT, ...) | per-directory flags and tolerances |
+| `ctmark-cxx` | 7zip, Bullet, kimwitu++, tramp3d-v4 | the MultiSource CMakeLists' flags and inputs |
+
+The C++ corpora follow the same exclusion rule (a test that does not build
+or pass with plain `clang++-20 -O0` is excluded); C++ sources are compiled
+with `clang++-20` and the programs linked with it.
 
 Variants: `O0` (`clang-20 -O0 -emit-llvm`), `g` (with `-g`), `mem2reg`
-(`-Xclang -disable-O0-optnone`, then `opt-20 -passes=mem2reg`). Each source
-file becomes a goovm-llc object; the objects are linked by `clang-20` with
-the test's LDFLAGS.
+(`-Xclang -disable-O0-optnone`, then `opt-20 -passes=mem2reg`), and with
+`--cc` `cc` and `cc-g` (each file compiled by `goovm-cc -c`, clang's front
+end and the Goose back-end in one process, without and with `-g`). Each
+source file becomes a goovm object; the objects are linked by `clang-20` /
+`clang++-20` with the test's LDFLAGS. `--verify-dwarf` runs
+`llvm-dwarfdump-20 --verify` on every object of the `g` and `cc-g`
+variants; an error or warning fails the test, and the report gives the
+number of verified objects.
 
 Verification follows the llvm-test-suite:
 
@@ -80,6 +104,33 @@ when the numbers matter, e.g. the CTMark comparison:
 ```
 tests/suite.py --goovm build/tools/goovm-llc/goovm-llc --corpus ctmark --variants O0 -j 1 --time-run 3
 ```
+
+## gdb_oracle.py
+
+```
+tests/gdb_oracle.py --goovm build/tools/goovm-llc/goovm-llc [--cc goovm-cc] [--corpus c,sample]
+                    [-j 3] [--work DIR] [--stops N] [--unwind [--unwind-calls N]] [filter ...]
+```
+
+For every program (`c`: `tests/c`; `sample`: a sample of llvm-test-suite C
+and C++ programs), a reference build with `clang -O0 -g` and a goovm build
+from the same `-g` bitcode, and one scripted gdb session per build (batch
+mode, gdb's Python API): breakpoints on the program's functions and on a
+sample of the statement lines of the reference line table; at each stop
+(at most 3 per breakpoint) `bt`, `info args`, `info locals`, two `next`
+with the locals, and a `step` with the frame. Uninitialized locals read the
+same in both builds because the session fills the 8 KB below the stack
+pointer with one byte at every function entry. The transcripts are
+normalized (addresses, pids, directories, stack addresses printed as
+values, the length of runs of that poison byte past a buffer, glibc's
+`jmp_buf` in `__libc_start_call_main`) and compared line by line; the
+first differing blocks are printed.
+
+With `--unwind` the goovm build alone is checked: for each of the program's
+functions (its first `--unwind-calls` activations), break on its first
+instruction and single-step it (`stepi`, `nexti` over calls) until it has
+returned, checking at every instruction boundary that the backtrace is the
+function over the same callers as on entry.
 
 ## suite_goosecc.py
 

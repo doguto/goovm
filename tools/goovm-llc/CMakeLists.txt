@@ -1,4 +1,4 @@
-add_executable(goovm-llc goovm-llc.cpp gir_export.cpp gir_asm.cpp)
+add_executable(goovm-llc goovm-llc.cpp gir_export.cpp gir_dwarf.cpp gir_asm.cpp)
 target_include_directories(goovm-llc PRIVATE ${PROJECT_SOURCE_DIR}/gir)
 target_include_directories(goovm-llc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 separate_arguments(GOOVM_LLVM_DEFS NATIVE_COMMAND ${LLVM_DEFINITIONS})
