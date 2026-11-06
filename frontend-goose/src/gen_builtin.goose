@@ -891,6 +891,42 @@ recursive fn x86_builtin(name: const u8[:], n: u32) -> u32 {
         }
         return emit(GIR_X86, rt, k as! u32, 0, vtype(a), a, b, 0);
     }
+    // shufps / shufpd: a shufflevector with the mask in the immediate
+    if name == "ia32_shufps" || name == "ia32_shufpd" {
+        let a = ex_val(barg(n, 0));
+        let b = ex_val(barg(n, 1));
+        let ok, imm = fold_int(barg(n, 2));
+        let s = m_opnds.len as! u32;
+        if name == "ia32_shufps" {
+            op_imm((imm & 3) as! u32);
+            op_imm(((imm >> 2) & 3) as! u32);
+            op_imm((4 + ((imm >> 4) & 3)) as! u32);
+            op_imm((4 + ((imm >> 6) & 3)) as! u32);
+        } else {
+            op_imm((imm & 1) as! u32);
+            op_imm((2 + ((imm >> 1) & 1)) as! u32);
+        }
+        return emit(GIR_SHUFFLE, vtype(a), 0, 0, vtype(a), a, b, s);
+    }
+    // cmp<pred>ps / cmp<pred>pd: fcmp, sext to the integer lanes, bitcast back
+    if starts_with(name, "ia32_cmp") && name.len > 10 && (ends_with(name, "ps") || ends_with(name, "pd")) {
+        let pn = name[8..name.len - 2];
+        var p: i64 = -1;
+        if pn == "eq" { p = F_OEQ; } else if pn == "lt" { p = F_OLT; } else if pn == "le" { p = F_OLE; }
+        else if pn == "unord" { p = F_UNO; } else if pn == "neq" { p = F_UNE; } else if pn == "nlt" { p = F_UGE; }
+        else if pn == "nle" { p = F_UGT; } else if pn == "ord" { p = F_ORD; }
+        if p >= 0 {
+            let a = ex_val(barg(n, 0));
+            let b = ex_val(barg(n, 1));
+            let t = vtype(a);
+            let lanes = m_types[t].n;
+            let mt = ty_vec(lanes, GIR_T_I1);
+            let c = emit(GIR_FCMP, mt, p, 0, t, a, b, 0);
+            let it = ty_vec(lanes, ty_int(tsize(m_types[t].elems) * 8));
+            let x = emit(GIR_SEXT, it, 0, 0, mt, c, 0, 0);
+            return ins_bitcast(x, rt);
+        }
+    }
     if name == "ia32_vec_ext_v4si" || name == "ia32_vec_ext_v2di" || name == "ia32_vec_ext_v4sf" || name == "ia32_vec_ext_v8hi" ||
        name == "ia32_vec_ext_v16qi" {
         let v = ex_val(barg(n, 0));
