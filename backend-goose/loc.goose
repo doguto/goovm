@@ -284,7 +284,20 @@ fn ra_tierb_begin(all: bool) {
 fn ra_tierb_end() {
     tierb = false;
     if tb_id != RV_NONE {
-        ra_set(tb_id, tb_reg, false);
+        let t = vtype(tb_id);
+        let c = rc_of(t);
+        var r = tb_reg;
+        if c == RC_XMM && r < 16 {
+            // the bits of an f32/f64 result in a general register (copysign, ...)
+            let x = ra_alloc(XMM_ALL, XMM_ALL);
+            if t == GIR_T_F32 { movd_xr(x - 16, r); } else { movq_xr(x - 16, r); }
+            r = x;
+        } else if c == RC_GPR && r >= 16 {
+            let g = ra_alloc(GP_ALLOC, GP_CALLER);
+            if bits_of(t) <= 32 { movd_rx(g, r - 16); } else { movq_rx(g, r - 16); }
+            r = g;
+        }
+        ra_set(tb_id, r, false);
         tb_id = RV_NONE;
     }
 }
@@ -292,8 +305,8 @@ fn ra_tierb_end() {
 // Home memory of local instruction j (its slot or its alloca area): the
 // legacy lowering writes the result there.
 fn res_mem(j: u32) -> Mem {
-    v_st[j] |= ST_MEM;
-    v_reg[j] = NOREG;
+    vi[j].st |= ST_MEM;
+    vi[j].reg = NOREG;
     return ra_home(j);
 }
 
@@ -305,10 +318,10 @@ fn val_mem(v: u32) -> Mem {
     if k == GIR_V_CONST { return const_mem(gir_idx(v)); }
     let id = vid(v);
     ra_note(id);
-    let r: u32 = v_reg[id];
+    let r: u32 = vi[id].reg;
     if r == PEND { return ra_take_pend(id); }
-    if r < 32 && v_st[id] & ST_MEM == 0 { ra_store_home(id, r); }
-    if v_home[id] == H_STACK || v_home[id] == H_ALLOCA || v_home[id] == H_BYVAL { return m_rbp(v_off[id]); }
+    if r < 32 && vi[id].st & ST_MEM == 0 { ra_store_home(id, r); }
+    if vi[id].home == H_STACK || vi[id].home == H_ALLOCA || vi[id].home == H_BYVAL { return m_rbp(vi[id].off); }
     return ra_home(id);
 }
 
@@ -317,11 +330,11 @@ fn val_mem(v: u32) -> Mem {
 fn use_gpr(v: u32, r: u32) -> u32 {
     if is_val(v) {
         let id = vid(v);
-        let vr: u32 = v_reg[id];
+        let vr: u32 = vi[id].reg;
         if vr < 16 {
             ra_note(id);
             if vr != r { mov_rr64(r, vr); }
-            if v_st[id] & ST_EXT != 0 { zext_reg(r, bits_of(vtype(id))); }
+            if vi[id].st & ST_EXT != 0 { zext_reg(r, bits_of(vtype(id))); }
             return r;
         }
         if vr < 32 {
@@ -331,7 +344,7 @@ fn use_gpr(v: u32, r: u32) -> u32 {
             return r;
         }
         ra_note(id);
-        if rc_of(vtype(id)) == RC_XMM && v_home[id] == H_SLOT {
+        if rc_of(vtype(id)) == RC_XMM && vi[id].home == H_SLOT {
             let t = vtype(id);
             load_n(r, val_mem(v), store_of(t));
             return r;
@@ -365,7 +378,7 @@ fn use_xmm(v: u32, x: u32) -> u32 {
     }
     if is_val(v) {
         let id = vid(v);
-        let vr: u32 = v_reg[id];
+        let vr: u32 = vi[id].reg;
         ra_note(id);
         if vr >= 16 && vr < 32 {
             if vr - 16 != x { movaps_rr(x, vr - 16); }
@@ -411,8 +424,8 @@ fn addr_of(v: u32, scratch: u32) -> Mem {
     let k = gir_kind(v);
     if k <= GIR_V_ARG {
         let id = vid(v);
-        let h = v_home[id];
-        if h == H_ALLOCA || h == H_BYVAL { return m_rbp(v_off[id]); }
+        let h = vi[id].home;
+        if h == H_ALLOCA || h == H_BYVAL { return m_rbp(vi[id].off); }
     }
     if k == GIR_V_GLOBAL && is_local_ref(i) { return m_sym(g_sym[i], R_X86_64_PC32, 0); }
     use_gpr(v, scratch);

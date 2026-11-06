@@ -67,7 +67,7 @@ fn phi_copy(dst: Mem, v: u32, t: u32) {
         }
         if is_val(v) {
             let id = vid(v);
-            let r: u32 = v_reg[id];
+            let r: u32 = vi[id].reg;
             if r < 16 {
                 store_int(dst, r, bits);
                 return;
@@ -86,7 +86,7 @@ fn phi_copy(dst: Mem, v: u32, t: u32) {
         if is_const(v) && store_const(dst, M.consts[gir_idx(v)].lo, store_of(t)) { return; }
         if is_val(v) {
             let id = vid(v);
-            let r: u32 = v_reg[id];
+            let r: u32 = vi[id].reg;
             if r >= 16 && r < 32 {
                 if t == GIR_T_F32 { movss_store(dst, r - 16); } else { movsd_store(dst, r - 16); }
                 return;
@@ -100,7 +100,7 @@ fn phi_copy(dst: Mem, v: u32, t: u32) {
         if is_const(v) { load_n(phi_t, const_mem(gir_idx(v)), store_of(t)); }
         else {
             let id = vid(v);
-            load_int(phi_t, if v_home[id] == H_STACK { m_rbp(v_off[id]) } else { ra_home(id) }, bits_of(t));
+            load_int(phi_t, if vi[id].home == H_STACK { m_rbp(vi[id].off) } else { ra_home(id) }, bits_of(t));
         }
         store_int(dst, phi_t, bits_of(t));
         return;
@@ -123,7 +123,7 @@ fn phi_moves(from: u32, to: u32) {
         let I = M.insts[k];
         if I.op != GIR_PHI { break; }
         let j = k - f_first_inst;
-        if v_nuse[j] == 0 { continue; }
+        if vi[j].nuse == 0 { continue; }
         for p in 0..I.c {
             if M.opnds[I.b + 2 * p + 1] != from { continue; }
             phi_copy(phi_dst(to, j), M.opnds[I.b + 2 * p], I.ty);
@@ -134,7 +134,7 @@ fn phi_moves(from: u32, to: u32) {
 // A PHI at the start of its block: the value is in its home (copied there
 // from the temp slot first if the block uses temps).
 fn lower_phi(I: Inst, j: u32, b: u32) {
-    if v_nuse[j] == 0 { return; }
+    if vi[j].nuse == 0 { return; }
     if b_tag[b] == pp_epoch {
         if t_off[j] == 0 { t_off[j] = new_slot(val_slot_size(I.ty)); }
         let t = ra_temp();
@@ -142,8 +142,8 @@ fn lower_phi(I: Inst, j: u32, b: u32) {
     } else {
         ra_home(j);
     }
-    v_st[j] |= ST_MEM;
-    v_reg[j] = NOREG;
+    vi[j].st |= ST_MEM;
+    vi[j].reg = NOREG;
 }
 
 // ----------------------------------------------------------- terminators
@@ -300,10 +300,7 @@ fn gen_inst(gi: u32, cur: u32) {
     let j = gi - f_first_inst;
     let next = cur + 1;
     cur_pos = j;
-    let op: u32 = I.op;
-    let kd: u32 = if op < 83 { OP_KIND[op] & 15 } else { K_B };
-    var k = kd;
-    if k == K_T { k = inst_kind(I); }
+    let k: u32 = vi[j].kind;
     if k == K_A || k == K_CALL {
         match I.op {
             GIR_RET => lower_ret(I, j),
@@ -333,7 +330,7 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_ICMP => lower_icmp_a(I, j),
             GIR_FCMP => lower_fcmp_a(I, j),
             GIR_FADD, GIR_FSUB, GIR_FMUL, GIR_FDIV => lower_fbin_a(I, j),
-            GIR_FNEG, GIR_FABS, GIR_FSQRT => lower_funary_a(I, j),
+            GIR_FNEG, GIR_FABS, GIR_FSQRT, GIR_COPYSIGN => lower_funary_a(I, j),
             GIR_SELECT => lower_select_a(I, j),
             GIR_ZEXT, GIR_SEXT, GIR_TRUNC, GIR_PTRTOINT, GIR_INTTOPTR, GIR_BITCAST,
             GIR_FPEXT, GIR_FPTRUNC, GIR_FPTOSI, GIR_FPTOUI, GIR_SITOFP, GIR_UITOFP => lower_cast_a(I, j),
@@ -453,17 +450,17 @@ fn layout_alloca(I: Inst, j: u32) -> bool {
     let size: i64 = if I.a != 0 { I.a } else { 1 };
     if al <= 16 {
         lay_off = (lay_off + size + al - 1) & ~(al - 1);  // al is a power of two (no division)
-        v_off[j] = (-lay_off) as! i32;
-        v_home[j] = H_ALLOCA;
+        vi[j].off = (-lay_off) as! i32;
+        vi[j].home = H_ALLOCA;
         return false;
     }
     // area of size + al bytes, aligned at run time; the pointer gets a slot
     lay_off = (lay_off + size + al + 15) & ~15;
     t_off[j] = (-lay_off) as! i32;
     lay_off = ((lay_off + 7) & ~7) + 8;
-    v_off[j] = (-lay_off) as! i32;
-    v_home[j] = H_PTR;
-    v_st[j] |= ST_MEM;
+    vi[j].off = (-lay_off) as! i32;
+    vi[j].home = H_PTR;
+    vi[j].st |= ST_MEM;
     return true;
 }
 
@@ -493,12 +490,12 @@ fn emit_prologue(insts: const Inst[:], flags: u32) {
     prologue_args();
     if f_overaligned {
         for I, j in insts {
-            if I.op != GIR_ALLOCA || v_home[j] != H_PTR { continue; }
+            if I.op != GIR_ALLOCA || vi[j].home != H_PTR { continue; }
             let al: i64 = I.b;
             lea64(RAX, m_rbp(t_off[j]));
             grp1_ri64(G1_ADD, RAX, (al - 1) as! i32);
             grp1_ri64(G1_AND, RAX, (0 - al) as! i32);
-            store64(m_rbp(v_off[j]), RAX);
+            store64(m_rbp(vi[j].off), RAX);
         }
     }
 }
@@ -537,15 +534,8 @@ fn gen_function(fi: u32) {
     let insts = M.insts[f.first_inst..f.first_inst + f.n_inst];
     let blocks = M.blocks[f.first_block..f.first_block + f.n_blocks];
     let nv: i64 = f.n_inst as i64 + f.n_args;
-    if v_reg.len < nv {
-        v_reg.resize(nv, 0);
-        v_st.resize(nv, 0);
-        v_last.resize(nv, 0);
-        v_nuse.resize(nv, 0);
-        v_tag.resize(nv, 0);
-        v_ncl.resize(nv, 0);
-        v_off.resize(nv, 0);
-        v_home.resize(nv, 0);
+    if vi.len < nv {
+        vi.resize(nv, VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, spare: 0, last: 0, off: 0 });
     }
     if t_off.len < f.n_inst { t_off.resize(f.n_inst, 0); }
     if b_tag.len < f.n_blocks { b_tag.resize(f.n_blocks, 0); }

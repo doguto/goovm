@@ -38,7 +38,7 @@ fn cmp_imm(v: u32, bits: u32, sgn: bool) -> bool, i32 {
 fn v_ext(v: u32) -> bool {
     if !is_val(v) { return false; }
     let id = vid(v);
-    return v_reg[id] < 32 && v_st[id] & ST_EXT != 0;
+    return vi[id].reg < 32 && vi[id].st & ST_EXT != 0;
 }
 // The result register for j, taking over the register of operand a if a dies
 // here (else a copy of ra): the two-address form "rd = ra; rd op= ...".
@@ -393,11 +393,11 @@ fn emit_icmp(pred: u32, bits: u32, a0: u32, b0: u32) -> u32 {
 // Whether the compare j only feeds the next instruction's condition (a
 // CONDBR, or a SELECT on registers), so the flags can be used directly.
 fn fuse_flags(j: u32) -> bool {
-    if v_nuse[j] != 1 || v_st[j] & ST_GLOB != 0 || v_last[j] != j + 1 { return false; }
+    if vi[j].nuse != 1 || vi[j].st & ST_GLOB != 0 || vi[j].last != j + 1 { return false; }
     let N = M.insts[f_first_inst + j + 1];
     let r = inst_ref(j);
     if N.op == GIR_CONDBR { return N.a == r; }
-    if N.op == GIR_SELECT { return N.a == r && N.b != r && N.c != r && inst_kind(N) == K_A; }
+    if N.op == GIR_SELECT { return N.a == r && N.b != r && N.c != r && vi[j + 1].kind == K_A; }
     return false;
 }
 // Materializes a condition code as the 0/1 result of j.
@@ -705,8 +705,13 @@ fn lower_icast_a(I: Inst, j: u32, op: u32, sb: u32, db: u32) {
             rd = ra_def(j);
             mov_rr64(rd, rs);
         }
+        // (a narrowing copy keeps the source's upper bits, also at 32 bits)
         if widen { ra_set(j, rd, false); }
-        else { lower_int_done(j, rd, db, ext || db < sb); }
+        else if exact_width(db) { ra_set(j, rd, db < 64 && (ext || db < sb)); }
+        else {
+            zext_reg(rd, db);
+            ra_set(j, rd, false);
+        }
         return;
     }
     assert(false);
@@ -720,9 +725,9 @@ fn addr_is_static(v: u32) -> bool {
     if k == GIR_V_GLOBAL { return is_local_ref(gir_idx(v)); }
     if k > GIR_V_ARG { return false; }
     let id = vid(v);
-    let h = v_home[id];
+    let h = vi[id].home;
     if h == H_ALLOCA || h == H_BYVAL { return true; }
-    return v_reg[id] == PADDR && m_regs(paddr_m) == 0;
+    return vi[id].reg == PADDR && m_regs(paddr_m) == 0;
 }
 // Memory operand for pointer value v.
 fn ra_addr(v: u32) -> Mem {
@@ -730,13 +735,13 @@ fn ra_addr(v: u32) -> Mem {
     let i = gir_idx(v);
     if k <= GIR_V_ARG {
         let id = vid(v);
-        let r = v_reg[id];
+        let r = vi[id].reg;
         if r == PADDR {
-            v_reg[id] = NOREG;
+            vi[id].reg = NOREG;
             return paddr_m;
         }
-        let h = v_home[id];
-        if h == H_ALLOCA || h == H_BYVAL { return m_rbp(v_off[id]); }
+        let h = vi[id].home;
+        if h == H_ALLOCA || h == H_BYVAL { return m_rbp(vi[id].off); }
     }
     if k == GIR_V_GLOBAL && is_local_ref(i) { return m_sym(g_sym[i], R_X86_64_PC32, 0); }
     return m_reg(ra_gpr(v, false), 0);
@@ -744,8 +749,8 @@ fn ra_addr(v: u32) -> Mem {
 
 fn lower_load_a(I: Inst, j: u32) {
     let t: u32 = I.ty;
-    if I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && v_nuse[j] == 1
-       && v_st[j] & (ST_GLOB | ST_NODEF) == 0 && v_last[j] > j && addr_is_static(I.a) {
+    if I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && vi[j].nuse == 1
+       && vi[j].st & (ST_GLOB | ST_NODEF) == 0 && vi[j].last > j && addr_is_static(I.a) {
         ra_pend_add(j, ra_addr(I.a));
         return;
     }
@@ -842,9 +847,9 @@ fn gep_mem(I: Inst) -> Mem {
     var base: u32 = 32;
     var disp: i64 = 0;
     let ka = gir_kind(a);
-    if ka <= GIR_V_ARG && (v_home[vid(a)] == H_ALLOCA || v_home[vid(a)] == H_BYVAL) {
+    if ka <= GIR_V_ARG && (vi[vid(a)].home == H_ALLOCA || vi[vid(a)].home == H_BYVAL) {
         base = RBP;
-        disp = v_off[vid(a)];
+        disp = vi[vid(a)].off;
     } else if ka == GIR_V_GLOBAL && is_local_ref(gir_idx(a)) && nv == 0 && fits32(off) {
         return m_sym(g_sym[gir_idx(a)], R_X86_64_PC32, off as! i32);
     } else {
@@ -920,11 +925,11 @@ fn gep_index(idx: u32, sc: u32, own: bool) -> u32 {
 fn lower_gep_a(I: Inst, j: u32) {
     let m = gep_mem(I);
     // folded into the next load or store when that is its only use
-    if v_nuse[j] == 1 && v_st[j] & ST_GLOB == 0 && v_last[j] == j + 1 {
+    if vi[j].nuse == 1 && vi[j].st & ST_GLOB == 0 && vi[j].last == j + 1 {
         let N = M.insts[f_first_inst + j + 1];
         let r = inst_ref(j);
-        if (N.op == GIR_LOAD && N.a == r || N.op == GIR_STORE && N.b == r && N.a != r) && inst_kind(N) == K_A {
-            v_reg[j] = PADDR;
+        if (N.op == GIR_LOAD && N.a == r || N.op == GIR_STORE && N.b == r && N.a != r) && vi[j + 1].kind == K_A {
+            vi[j].reg = PADDR;
             paddr_m = m;
             ra_carry = true;
             return;
@@ -1009,6 +1014,17 @@ fn lower_funary_a(I: Inst, j: u32) {
     if x != xs {
         x = ra_xdef(j);
         movaps_rr(x, xs);
+    }
+    if op == GIR_COPYSIGN {
+        // (a & ~sign) | (b & sign)
+        let xb = ra_xmm(I.b);
+        let t = ra_xtemp();
+        movaps_rr(t, xb);
+        sse_packed_m(0x54, false, t, mask_mem(if dbl { 1 } else { 0 }));
+        sse_packed_m(0x54, false, x, mask_mem(if dbl { 3 } else { 2 }));
+        sse_packed(0x56, false, x, t);
+        ra_xset(j, x);
+        return;
     }
     var k: u32 = 0;
     if op != GIR_FNEG { k = 2; }

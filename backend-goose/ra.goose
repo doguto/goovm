@@ -60,19 +60,20 @@ var r_alloc: u32 = 0;    // the registers this function may allocate
 var r_cs_used: u32 = 0;  // callee-saved registers that were allocated (the prologue saves them)
 var ra_carry = false;    // the current instruction's registers stay locked into the next one
 
-// Per value (id: local instruction index, or f_nins + argument number).
-var v_reg: u8[>..] = [];
-var v_st: u8[>..] = [];
-var v_last: u32[>..] = [];
-var v_nuse: u8[>..] = [];
-var v_tag: u32[>..] = [];
-var v_ncl: u16[>..] = [];
-var v_off: i32[>..] = [];
-var v_home: u8[>..] = [];
+// Per value (id: local instruction index, or f_nins + argument number):
+//   reg   the register holding it (0..31), NOREG, PEND or PADDR
+//   st    ST_* state bits
+//   home  H_* kind of home; off: its rbp offset (0 = none yet)
+//   nuse  uses (saturating at 255)
+//   ncl   calls and legacy lowerings before it in its block (saturating)
+//   kind  for instructions: how it is lowered (K_*)
+//   last  last use (local position), for values used only in their block
+struct VInfo { reg: u8, st: u8, home: u8, nuse: u8, ncl: u8, kind: u8, spare: u16, last: u32, off: i32 }
+var vi: VInfo[>..] = [];
 var t_off: i32[>..] = [];       // PHI temp slots (blocks that need them)
 var b_tag: u32[>..] = [];       // per local block: == pp_epoch if its PHIs need temp slots
 var f_nins: u32 = 0;
-var pp_epoch: u32 = 0;
+var pp_epoch: u32 = 0;          // advances per function (b_tag)
 var cur_pos: u32 = 0;           // local index of the instruction being lowered
 var dying: u32[>..] = [];       // values whose last use is the current instruction
 
@@ -170,7 +171,7 @@ let OP_KIND: u8[83] = [
     1, 1, 1, 1, 2, 2, 2, 2,  // fptosi fptoui sitofp uitofp extractvalue insertvalue extractelt insertelt
     2, 2, 2, 2, 18, 16, 16, 2,  // shuffle dynalloca stacksave stackrestore vastart memcpy memset ctlz
     2, 2, 2, 2, 2, 2, 2, 2,  // cttz ctpop bswap bitreverse fshl fshr ovf scmp
-    2, 1, 2, 1, 2, 18, 18, 18,  // ucmp fabs copysign fsqrt isfpclass cmpxchg atomicrmw fence
+    2, 1, 1, 1, 2, 18, 18, 18,  // ucmp fabs copysign fsqrt isfpclass cmpxchg atomicrmw fence
     2, 2, 2, 20, 18, 0, 0, 0,  // tlsaddr frameaddr retaddr sjlj_setjmp sjlj_longjmp trap debugtrap indirectbr
     2, 2, 20,  // blockaddr x86 asm
 ];
@@ -184,32 +185,26 @@ fn inst_kind(I: Inst) -> u32 {
     // the type that decides: the compared / stored / cast source type, or the result
     var t: u32 = I.ty;
     if op == GIR_ICMP || op == GIR_FCMP || op == GIR_STORE { t = I.aux; }
-    let rc = rc_of(t);
+    let rc = t_rc[t];
     if rc == RC_MEM { return K_B; }
+    if op < GIR_ZEXT { return K_A; }   // binops, icmp
+    return inst_kind2(I, op, t, rc);
+}
+fn inst_kind2(I: Inst, op: u32, t: u32, rc: u8) -> u32 {
     if op >= GIR_ZEXT && op <= GIR_BITCAST || op >= GIR_FPEXT && op <= GIR_UITOFP {
         if rc_of(I.aux) == RC_MEM { return K_B; }
         return K_A;
     }
     if op == GIR_SELECT && rc_of(type_of(I.a)) == RC_MEM { return K_B; }  // vector condition
-    if op == GIR_LOAD && t > GIR_T_F64 && rc == RC_GPR { return K_B; }     // odd-size integer loads
-    if op == GIR_STORE && t > GIR_T_F64 && rc == RC_GPR { return K_B; }
+    if (op == GIR_LOAD || op == GIR_STORE) && t > GIR_T_F64 && rc == RC_GPR { return K_B; }  // odd-size integers
     return K_A;
 }
 
-inline fn pp_init(u: u32) {
-    v_tag[u] = pp_epoch;
-    v_nuse[u] = 0;
-    v_st[u] = 0;
-    v_last[u] = 0;
-    v_ncl[u] = 0;
-    v_reg[u] = NOREG;
-    v_off[u] = 0;
-    v_home[u] = H_NONE;
-}
 // A use at local position j of block [lo, j]; ncl = calls in the block
-// before j, mw = position of the last memory write before j in the block;
-// nodef: the user is a legacy lowering (it gets no deferred load).
-fn pp_use(v: u32, j: u32, lo: u32, ncl: u32, mw: u32, nodef: bool) {
+// before j, mw = 1 + position of the last memory write before j in the
+// block (0: none); nodef: the user is a legacy lowering (it gets no
+// deferred load).
+inline fn pp_use(v: u32, j: u32, lo: u32, ncl: u32, mw: u32, nodef: bool) {
     let k = gir_kind(v);
     if k > GIR_V_ARG { return; }
     var u: u32 = 0;
@@ -222,20 +217,22 @@ fn pp_use(v: u32, j: u32, lo: u32, ncl: u32, mw: u32, nodef: bool) {
         u = f_nins + gir_idx(v);
         local = lo == 0;
     }
-    if v_tag[u] != pp_epoch { pp_init(u); }
-    let n = v_nuse[u];
-    if n != 255 { v_nuse[u] = n + 1; }
+    pp_use2(u, j, local, ncl, nodef || mw > u);
+}
+fn pp_use2(u: u32, j: u32, local: bool, ncl: u32, nodef: bool) {
+    let n = vi[u].nuse;
+    if n != 255 { vi[u].nuse = n + 1; }
     if local {
-        v_last[u] = j;
-        var st = v_st[u];
-        if ncl > v_ncl[u] && st & ST_CS == 0 {
+        vi[u].last = j;
+        var st = vi[u].st;
+        if ncl > vi[u].ncl && st & ST_CS == 0 {
             st |= ST_CS;
             pp_ncs++;
         }
-        if nodef || mw != RV_NONE && (u >= f_nins || mw > u) { st |= ST_NODEF; }
-        v_st[u] = st;
+        if nodef { st |= ST_NODEF; }
+        vi[u].st = st;
     } else {
-        v_st[u] |= ST_GLOB;
+        vi[u].st |= ST_GLOB;
     }
 }
 // PHI incoming values of successor s for the edge from block b (used at b's
@@ -246,7 +243,8 @@ fn pp_phi_uses(s: u32, b: u32, j: u32, lo: u32, ncl: u32, mw: u32, all: bool) {
     let B = M.blocks[f_first_block + s];
     let slo = B.first_inst;
     let shi = B.first_inst + B.n_inst;
-    if all && shi > slo && M.insts[slo].op == GIR_PHI { b_tag[s] = pp_epoch; }
+    if shi == slo || M.insts[slo].op != GIR_PHI { return; }
+    if all { b_tag[s] = pp_epoch; }
     for k in slo..shi {
         let I = M.insts[k];
         if I.op != GIR_PHI { break; }
@@ -274,6 +272,18 @@ fn pp_runs(I: Inst, m: u32, j: u32, lo: u32, ncl: u32, mw: u32, nodef: bool) {
         for q in 0..A.n_in { pp_use(M.opnds[A.ops + 2 * q], j, lo, ncl, mw, true); }
     }
 }
+fn pp_term(I: Inst, op: u32, b: u32, j: u32, lo: u32, ncl: u32, mw: u32) {
+    if op == GIR_BR { pp_phi_uses(I.a, b, j, lo, ncl, mw, false); }
+    else if op == GIR_CONDBR {
+        pp_phi_uses(I.b, b, j, lo, ncl, mw, false);
+        pp_phi_uses(I.c, b, j, lo, ncl, mw, false);
+    } else if op == GIR_SWITCH {
+        pp_phi_uses(M.opnds[I.b], b, j, lo, ncl, mw, false);
+        for k in 0..I.c { pp_phi_uses(M.opnds[I.b + 2 + 2 * k], b, j, lo, ncl, mw, false); }
+    } else if op == GIR_INDIRECTBR {
+        for k in 0..I.c { pp_phi_uses(M.opnds[I.b + k], b, j, lo, ncl, mw, true); }
+    }
+}
 
 fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
     pp_epoch++;
@@ -281,11 +291,15 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
     f_call = false;
     f_rsp = false;
     f_asm = false;
+    let nv: i64 = f_nins as i64 + f_nargs;
+    assert(vi.len >= nv);
+    let z = VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, spare: 0, last: 0, off: 0 };
+    for q in 0..nv { vi[q] = z; }
     for B, b in blocks {
         let lo = B.first_inst - f_first_inst;
         let hi = lo + B.n_inst;
         var ncl: u32 = 0;
-        var mw: u32 = RV_NONE;
+        var mw: u32 = 0;
         var j = lo;
         while j < hi {
             let I = insts[j];
@@ -299,33 +313,21 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
             if m & U_B != 0 { pp_use(I.b, j, lo, ncl, mw, nodef); }
             if m & U_C != 0 { pp_use(I.c, j, lo, ncl, mw, nodef); }
             if m >= U_GEP { pp_runs(I, m, j, lo, ncl, mw, nodef); }
-            if op <= GIR_SWITCH || op == GIR_INDIRECTBR {
-                let bu = b as! u32;
-                if op == GIR_BR { pp_phi_uses(I.a, bu, j, lo, ncl, mw, false); }
-                else if op == GIR_CONDBR {
-                    pp_phi_uses(I.b, bu, j, lo, ncl, mw, false);
-                    pp_phi_uses(I.c, bu, j, lo, ncl, mw, false);
-                } else if op == GIR_SWITCH {
-                    pp_phi_uses(M.opnds[I.b], bu, j, lo, ncl, mw, false);
-                    for k in 0..I.c { pp_phi_uses(M.opnds[I.b + 2 + 2 * k], bu, j, lo, ncl, mw, false); }
-                } else if op == GIR_INDIRECTBR {
-                    for k in 0..I.c { pp_phi_uses(M.opnds[I.b + k], bu, j, lo, ncl, mw, true); }
-                }
-            }
+            if op <= GIR_SWITCH || op == GIR_INDIRECTBR { pp_term(I, op, b as! u32, j, lo, ncl, mw); }
             // the instruction itself
-            if kd & K_W != 0 { mw = j; }
+            if kd & K_W != 0 { mw = j + 1; }
             if k2 != K_A {
                 ncl++;
                 if k2 == K_CALL || op == GIR_TLSADDR { f_call = true; }
                 if k2 == K_ALL { f_asm = true; }
+                if op == GIR_DYNALLOCA || op == GIR_STACKRESTORE { f_rsp = true; }
             }
-            if op == GIR_DYNALLOCA || op == GIR_STACKRESTORE { f_rsp = true; }
+            vi[j].kind = k2 as! u8;
             if I.ty != GIR_T_VOID {
-                if v_tag[j] != pp_epoch { pp_init(j); }
-                v_last[j] = j;
-                v_ncl[j] = ncl as! u16;
+                vi[j].last = j;
+                vi[j].ncl = if ncl > 255 { 255 } else { ncl as! u8 };
                 if op == GIR_PHI {
-                    v_st[j] |= ST_PHI;
+                    vi[j].st |= ST_PHI;
                     t_off[j] = 0;
                 }
             }
@@ -358,11 +360,11 @@ inline fn val_slot_size(t: u32) -> i64 { if t > GIR_T_F64 { slot_size(t) } else 
 // The home slot of value id (allocated on first use). Local values reuse
 // slots of dead local values.
 fn ra_home_off(id: u32) -> i32 {
-    let o = v_off[id];
+    let o = vi[id].off;
     if o != 0 { return o; }
     let sz = val_slot_size(vtype(id));
     var n: i32 = 0;
-    if f_share && v_st[id] & (ST_GLOB | ST_PHI) == 0 {
+    if f_share && vi[id].st & (ST_GLOB | ST_PHI) == 0 {
         if sz == 8 && n_free8 != 0 {
             n_free8--;
             n = free8[n_free8];
@@ -372,13 +374,13 @@ fn ra_home_off(id: u32) -> i32 {
         }
     }
     if n == 0 { n = new_slot(sz); }
-    v_off[id] = n;
-    v_home[id] = H_SLOT;
+    vi[id].off = n;
+    vi[id].home = H_SLOT;
     return n;
 }
 inline fn ra_home(id: u32) -> Mem { m_rbp(ra_home_off(id)) }
 fn ra_free_slot(id: u32) {
-    let o = v_off[id];
+    let o = vi[id].off;
     let sz = val_slot_size(vtype(id));
     if sz == 8 {
         if n_free8 < free8.len { free8[n_free8] = o; } else { free8.push(o); }
@@ -387,7 +389,7 @@ fn ra_free_slot(id: u32) {
         if n_free16 < free16.len { free16[n_free16] = o; } else { free16.push(o); }
         n_free16++;
     }
-    v_off[id] = 0;
+    vi[id].off = 0;
 }
 
 // ------------------------------------------------- typed home loads/stores
@@ -429,7 +431,7 @@ fn ra_store_home(id: u32, r: u32) {
     } else {
         store_int(m, r, bits_of(t));
     }
-    v_st[id] |= ST_MEM;
+    vi[id].st |= ST_MEM;
 }
 // Loads value id from memory m into register r (marks nothing).
 fn ra_load_from(r: u32, m: Mem, t: u32) {
@@ -442,13 +444,13 @@ fn ra_load_from(r: u32, m: Mem, t: u32) {
 
 // --------------------------------------------------------------- allocation
 
-inline fn ra_live_after(id: u32) -> bool { v_st[id] & ST_GLOB != 0 || v_last[id] > cur_pos }
+inline fn ra_live_after(id: u32) -> bool { vi[id].st & ST_GLOB != 0 || vi[id].last > cur_pos }
 inline fn ra_note(id: u32) {
-    if v_st[id] & ST_GLOB == 0 && v_last[id] == cur_pos { dying.push(id); }
+    if vi[id].st & ST_GLOB == 0 && vi[id].last == cur_pos { dying.push(id); }
 }
 // Preferred registers for value id: callee-saved ones if it lives across a call.
 fn ra_pref(id: u32) -> u32 {
-    if v_st[id] & (ST_CS | ST_GLOB) == ST_CS { return GP_CALLEE; }
+    if vi[id].st & (ST_CS | ST_GLOB) == ST_CS { return GP_CALLEE; }
     return GP_CALLER;
 }
 
@@ -483,11 +485,11 @@ fn ra_evict(xm: u32) -> u32 {
         m &= m - 1;
         let id = r_val[r];
         if id >= RV_TEMP { continue; }
-        if v_st[id] & ST_MEM != 0 {
+        if vi[id].st & ST_MEM != 0 {
             best = r;
             break;
         }
-        let l = v_last[id];
+        let l = vi[id].last;
         if best == 32 || l > best_last {
             best = r;
             best_last = l;
@@ -495,8 +497,8 @@ fn ra_evict(xm: u32) -> u32 {
     }
     if best == 32 { assert(false); }
     let id = r_val[best];
-    if v_st[id] & ST_MEM == 0 { ra_store_home(id, best); }
-    v_reg[id] = NOREG;
+    if vi[id].st & ST_MEM == 0 { ra_store_home(id, best); }
+    vi[id].reg = NOREG;
     r_val[best] = RV_NONE;
     return best;
 }
@@ -526,11 +528,11 @@ fn ra_evacuate(id: u32, from: u32) {
         r_free &= ~bit(to);
         if bit(to) & GP_CALLEE != 0 { r_cs_used |= bit(to); }
         r_val[to] = id;
-        v_reg[id] = to as! u8;
+        vi[id].reg = to as! u8;
         if r_lock & bit(from) != 0 { r_lock |= bit(to); }
     } else {
-        if v_st[id] & ST_MEM == 0 { ra_store_home(id, from); }
-        v_reg[id] = NOREG;
+        if vi[id].st & ST_MEM == 0 { ra_store_home(id, from); }
+        vi[id].reg = NOREG;
     }
     r_val[from] = RV_NONE;
     r_free |= bit(from);
@@ -555,8 +557,8 @@ fn ra_flush(mask: u32) {
         m &= m - 1;
         let id = r_val[r];
         if id >= RV_TEMP { continue; }
-        if v_st[id] & ST_MEM == 0 { ra_store_home(id, r); }
-        v_reg[id] = NOREG;
+        if vi[id].st & ST_MEM == 0 { ra_store_home(id, r); }
+        vi[id].reg = NOREG;
         ra_release(r);
     }
 }
@@ -564,14 +566,14 @@ fn ra_flush(mask: u32) {
 // Normalizes the register copy of value id (zero-extends it).
 fn ra_norm(id: u32, r: u32) {
     zext_reg(r, bits_of(vtype(id)));
-    v_st[id] &= ~ST_EXT;
+    vi[id].st &= ~ST_EXT;
 }
 
 // ------------------------------------------------------ deferred loads
 
 fn ra_pend_add(id: u32, m: Mem) {
     pend.push(Pend { id: id, m: m });
-    v_reg[id] = PEND;
+    vi[id].reg = PEND;
 }
 // The memory of deferred load id (removes it).
 fn ra_take_pend(id: u32) -> Mem {
@@ -585,7 +587,7 @@ fn ra_take_pend(id: u32) -> Mem {
     let m = pend[k].m;
     pend[k] = pend[n - 1];
     pend.resize(n - 1, Pend { id: 0, m: m });
-    v_reg[id] = NOREG;
+    vi[id].reg = NOREG;
     return m;
 }
 
@@ -607,15 +609,15 @@ fn ra_mat_gpr(v: u32, r: u32) {
         return;
     }
     let id = vid(v);
-    let h = v_home[id];
+    let h = vi[id].home;
     if h == H_ALLOCA || h == H_BYVAL {
-        lea64(r, m_rbp(v_off[id]));
+        lea64(r, m_rbp(vi[id].off));
         return;
     }
     let t = vtype(id);
-    if v_reg[id] == PEND { load_int(r, ra_take_pend(id), bits_of(t)); return; }
+    if vi[id].reg == PEND { load_int(r, ra_take_pend(id), bits_of(t)); return; }
     if h == H_STACK {
-        load_int(r, m_rbp(v_off[id]), bits_of(t));
+        load_int(r, m_rbp(vi[id].off), bits_of(t));
         if !exact_width(bits_of(t)) { zext_reg(r, bits_of(t)); }
         return;
     }
@@ -626,24 +628,25 @@ fn ra_mat_gpr(v: u32, r: u32) {
 fn ra_gpr(v: u32, clean: bool) -> u32 {
     if is_val(v) {
         let id = vid(v);
-        let r: u32 = v_reg[id];
+        let r: u32 = vi[id].reg;
         if r < 32 {
+            if r >= 16 { assert(false); }   // an xmm value: a register class mix-up
             r_lock |= bit(r);
             ra_note(id);
-            if clean && v_st[id] & ST_EXT != 0 { ra_norm(id, r); }
+            if clean && vi[id].st & ST_EXT != 0 { ra_norm(id, r); }
             return r;
         }
-        let h = v_home[id];
+        let h = vi[id].home;
         if h == H_ALLOCA || h == H_BYVAL {
             let t = ra_temp();
-            lea64(t, m_rbp(v_off[id]));
+            lea64(t, m_rbp(vi[id].off));
             return t;
         }
         let n = ra_alloc(GP_ALLOC, ra_pref(id));
-        if r == PEND { v_st[id] &= ~ST_MEM; }
+        if r == PEND { vi[id].st &= ~ST_MEM; }
         ra_mat_gpr(v, n);
         r_val[n] = id;
-        v_reg[id] = n as! u8;
+        vi[id].reg = n as! u8;
         ra_note(id);
         return n;
     }
@@ -658,7 +661,7 @@ fn ra_gpr_into(v: u32, r: u32, clean: bool) {
     var id: u32 = RV_NONE;
     if is_val(v) {
         id = vid(v);
-        let vr: u32 = v_reg[id];
+        let vr: u32 = vi[id].reg;
         if vr < 32 { src = vr; }
     }
     let occ = r_val[r];
@@ -672,9 +675,9 @@ fn ra_gpr_into(v: u32, r: u32, clean: bool) {
         }
         r_lock |= bit(r);
         ra_note(id);
-        if clean && v_st[id] & ST_EXT != 0 {
+        if clean && vi[id].st & ST_EXT != 0 {
             zext_reg(r, bits_of(vtype(id)));
-            if v_reg[id] == r as! u8 { v_st[id] &= ~ST_EXT; }
+            if vi[id].reg == r as! u8 { vi[id].st &= ~ST_EXT; }
         }
         return;
     }
@@ -687,7 +690,7 @@ fn ra_gpr_into(v: u32, r: u32, clean: bool) {
         mov_rr64(r, src);
         r_lock |= bit(src);
         ra_note(id);
-        if clean && v_st[id] & ST_EXT != 0 { zext_reg(r, bits_of(vtype(id))); }
+        if clean && vi[id].st & ST_EXT != 0 { zext_reg(r, bits_of(vtype(id))); }
         return;
     }
     if id != RV_NONE { ra_note(id); }
@@ -700,9 +703,9 @@ fn ra_def(j: u32) -> u32 { ra_alloc(GP_ALLOC, ra_pref(j)) }
 fn ra_reuse(v: u32) -> u32 {
     if !is_val(v) { return 32; }
     let id = vid(v);
-    let r: u32 = v_reg[id];
+    let r: u32 = vi[id].reg;
     if r >= 32 { return 32; }
-    if v_st[id] & ST_GLOB != 0 || v_last[id] != cur_pos { return 32; }
+    if vi[id].st & ST_GLOB != 0 || vi[id].last != cur_pos { return 32; }
     return r;
 }
 // The result of j is in register r (a general or an xmm register, 0..31);
@@ -710,20 +713,20 @@ fn ra_reuse(v: u32) -> u32 {
 // home at once; a result nobody uses is dropped.
 fn ra_set(j: u32, r: u32, ext: bool) {
     let old = r_val[r];
-    if old < RV_TEMP && old != j { v_reg[old] = NOREG; }
+    if old < RV_TEMP && old != j { vi[old].reg = NOREG; }
     r_temp &= ~bit(r);
     r_free &= ~bit(r);
     r_lock |= bit(r);
     r_val[r] = j;
-    v_reg[j] = r as! u8;
-    var st = v_st[j] & ~(ST_MEM | ST_EXT);
+    vi[j].reg = r as! u8;
+    var st = vi[j].st & ~(ST_MEM | ST_EXT);
     if ext { st |= ST_EXT; }
-    v_st[j] = st;
+    vi[j].st = st;
     if st & ST_GLOB != 0 {
         ra_store_home(j, r);
-    } else if v_nuse[j] == 0 {
+    } else if vi[j].nuse == 0 {
         r_val[r] = RV_NONE;
-        v_reg[j] = NOREG;
+        vi[j].reg = NOREG;
         r_free |= bit(r);
     }
 }
@@ -741,25 +744,26 @@ fn ra_mat_xmm(v: u32, x: u32) {
     let id = vid(v);
     let t = vtype(id);
     var m = Mem { M_REG, 0, 0, 0, 0 };
-    if v_reg[id] == PEND { m = ra_take_pend(id); }
-    else if v_home[id] == H_STACK { m = m_rbp(v_off[id]); }
+    if vi[id].reg == PEND { m = ra_take_pend(id); }
+    else if vi[id].home == H_STACK { m = m_rbp(vi[id].off); }
     else { m = ra_home(id); }
     if t == GIR_T_F32 { movss_load(x, m); } else { movsd_load(x, m); }
 }
 fn ra_xmm(v: u32) -> u32 {
     if is_val(v) {
         let id = vid(v);
-        let r: u32 = v_reg[id];
+        let r: u32 = vi[id].reg;
         if r < 32 {
+            if r < 16 { assert(false); }    // a general-register value: a class mix-up
             r_lock |= bit(r);
             ra_note(id);
             return r - 16;
         }
         let n = ra_alloc(XMM_ALL, XMM_ALL);
-        if r == PEND { v_st[id] &= ~ST_MEM; }
+        if r == PEND { vi[id].st &= ~ST_MEM; }
         ra_mat_xmm(v, n - 16);
         r_val[n] = id;
-        v_reg[id] = n as! u8;
+        vi[id].reg = n as! u8;
         ra_note(id);
         return n - 16;
     }
@@ -773,7 +777,7 @@ fn ra_xmm_into(v: u32, x: u32) {
     var id: u32 = RV_NONE;
     if is_val(v) {
         id = vid(v);
-        let vr: u32 = v_reg[id];
+        let vr: u32 = vi[id].reg;
         if vr < 32 { src = vr; }
     }
     if src == r {
@@ -824,7 +828,7 @@ fn ra_mem_opnd(v: u32, n: u32) -> bool, Mem {
     let z = Mem { M_REG, 0, 0, 0, 0 };
     if !is_val(v) { return false, z; }
     let id = vid(v);
-    let r = v_reg[id];
+    let r = vi[id].reg;
     if r < 32 { return false, z; }
     let t = vtype(id);
     let c = rc_of(t);
@@ -833,10 +837,10 @@ fn ra_mem_opnd(v: u32, n: u32) -> bool, Mem {
         ra_note(id);
         return true, ra_take_pend(id);
     }
-    let h = v_home[id];
-    if h == H_SLOT && v_st[id] & ST_MEM != 0 {
+    let h = vi[id].home;
+    if h == H_SLOT && vi[id].st & ST_MEM != 0 {
         ra_note(id);
-        return true, m_rbp(v_off[id]);
+        return true, m_rbp(vi[id].off);
     }
     return false, z;
 }
@@ -862,7 +866,7 @@ fn ra_block_start() {
         let r = ctz32(m);
         m &= m - 1;
         let id = r_val[r];
-        if id < RV_TEMP { v_reg[id] = NOREG; }
+        if id < RV_TEMP { vi[id].reg = NOREG; }
         r_val[r] = RV_NONE;
     }
     r_free = r_alloc;
@@ -881,12 +885,12 @@ fn ra_end_inst() {
         return;
     }
     for id in dying {
-        let r: u32 = v_reg[id];
+        let r: u32 = vi[id].reg;
         if r < 32 && r_val[r] == id {
-            v_reg[id] = NOREG;
+            vi[id].reg = NOREG;
             ra_release(r);
         }
-        if f_share && v_off[id] != 0 && v_home[id] == H_SLOT && v_st[id] & (ST_GLOB | ST_PHI) == 0 {
+        if f_share && vi[id].off != 0 && vi[id].home == H_SLOT && vi[id].st & (ST_GLOB | ST_PHI) == 0 {
             ra_free_slot(id);
         }
     }
