@@ -301,8 +301,18 @@ fn build_lines(f: i64) {
     files[f].lines_count = (line_starts.len - first) as! i32;
 }
 
-// memchr: the index of the first c in s, or -1.
-extern fn find_byte(s: const u8[:], c: u8) -> i64 = "goosecc_find_byte";
+// The index of the first c in s, or -1: std's find_any, which scans 16
+// bytes at a time (with SSE2), whatever the C library's memchr does.
+let BS_NL = byte_set("\n");
+let BS_SLASH = byte_set("/");
+let BS_STAR = byte_set("*");
+fn find_byte(s: const u8[:], c: u8) -> i64 {
+    if c == '\n' { return find_any(s, BS_NL); }
+    if c == '/' { return find_any(s, BS_SLASH); }
+    if c == '*' { return find_any(s, BS_STAR); }
+    for x, i in s { if x == c { return i; } }
+    return -1;
+}
 
 // The file holding source offset `off`, or -1 (scratch text).
 var last_file_hit: i64 = 0;
