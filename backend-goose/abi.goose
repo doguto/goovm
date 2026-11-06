@@ -236,9 +236,58 @@ fn ret_result(j: u32, t: u32) {
 
 // ----------------------------------------------------------------- calls
 
+// Emits the call instruction itself (the callee is in R11 if indirect).
+fn emit_call_insn(callee: u32, direct: bool) {
+    if direct {
+        b1(0xE8);  // call rel32
+        rela(here(), g_sym[gir_idx(callee)], R_X86_64_PLT32, -4);
+        b4(0);
+    } else {
+        call_r(R11);
+    }
+}
+
 fn lower_call(I: Inst, j: u32) {
     let n = I.c;
     let s = I.b;
+    let args = M.opnds[s..s + 2 * n];
+    let callee = I.a;
+    let direct = gir_kind(callee) == GIR_V_GLOBAL && M.globals[gir_idx(callee)].kind == G_FUNC;
+    // Fast path (most calls): every argument is a plain INT or FP value
+    // that gets a register, so there is no stack area to build.
+    var ngp: u32 = 0;
+    var nfp: u32 = 0;
+    var isfp: bool[14] = [false; 14];
+    var k: i64 = 0;
+    while k < args.len && k < 28 {
+        let t = type_of(args[k]);
+        let c = cls_of(t);
+        if args[k + 1] != 0 || (c != C_INT && c != C_FP) { break; }
+        if c == C_INT { ngp++; } else { nfp++; }
+        isfp[(k >> 1) % 14] = c == C_FP;
+        k += 2;
+    }
+    if k == args.len && ngp <= 6 && nfp <= 8 {
+        if !direct { use_fixed(callee, R11); }
+        var gp: u32 = 0;
+        var fp: u32 = 0;
+        k = 0;
+        while k < args.len {
+            let v = args[k];
+            if !isfp[(k >> 1) % 14] {
+                use_fixed(v, ARG_GPR[gp % 6]);
+                gp++;
+            } else {
+                use_xmm(v, fp);
+                fp++;
+            }
+            k += 2;
+        }
+        if I.flags & IF_VARARG != 0 { mov_ri(RAX, fp); }  // al = number of vector registers used
+        emit_call_insn(callee, direct);
+        if I.ty != GIR_T_VOID { ret_result(j, I.ty); }
+        return;
+    }
     classify_reset();
     arg_locs.clear();
     for k in 0..n {
@@ -265,8 +314,6 @@ fn lower_call(I: Inst, j: u32) {
             copy_mem(m_rsp(l.off as! i32), m_reg(RSI, 0), l.n);
         }
     }
-    let callee = I.a;
-    let direct = gir_kind(callee) == GIR_V_GLOBAL && M.globals[gir_idx(callee)].kind == G_FUNC;
     if !direct { use_fixed(callee, R11); }
     for l, k in arg_locs {
         let v = M.opnds[s + 2 * k as! u32];
@@ -291,13 +338,7 @@ fn lower_call(I: Inst, j: u32) {
         }
     }
     if I.flags & IF_VARARG != 0 { mov_ri(RAX, cl_fp); }  // al = number of vector registers used
-    if direct {
-        b1(0xE8);  // call rel32
-        rela(here(), g_sym[gir_idx(callee)], R_X86_64_PLT32, -4);
-        b4(0);
-    } else {
-        call_r(R11);
-    }
+    emit_call_insn(callee, direct);
     if sbytes != 0 { grp1_ri64(G1_ADD, RSP, sbytes as! i32); }
     if I.ty != GIR_T_VOID { ret_result(j, I.ty); }
 }

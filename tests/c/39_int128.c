@@ -9,6 +9,15 @@ static void p128(const char *s, u128 x) {
     printf("%s %016llx%016llx\n", s, (unsigned long long)(x >> 64), (unsigned long long)x);
 }
 static i128 mul(i128 a, i128 b) { return a * b; }
+static int sw(u128 x) {
+    switch (x) {
+    case 0: return 1;
+    case 5: return 2;
+    case (u128)1 << 100: return 3;
+    case ~(u128)0: return 4;
+    default: return 5;
+    }
+}
 
 struct __attribute__((packed)) B {
     unsigned a : 20, b : 4;
@@ -39,5 +48,6 @@ int main(void) {
     s.c ^= 0xffffffffffull;
     s.d -= 5;
     printf("%x %x %llx %lld %d\n", s.a, s.b, (unsigned long long)s.c, (long long)s.d, s.e);
+    printf("%d %d %d %d %d %d\n", sw(0), sw(5), sw((u128)1 << 100), sw(~(u128)0), sw(6), sw((u128)5 << 64));
     return 0;
 }

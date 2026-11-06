@@ -1230,12 +1230,37 @@ fn lower_select(I: Inst, j: u32) {
     patch_here(done);
 }
 
+// Zero-extending load / store of a predefined integer type (i1..i64, ptr).
+checkfree fn load_small(r: u32, m: Mem, t: u32) {
+    if t == GIR_T_I1 || t == GIR_T_I8 { load8z(r, m); }
+    else if t == GIR_T_I16 { load16z(r, m); }
+    else if t == GIR_T_I32 { load32(r, m); }
+    else { load64(r, m); }
+}
+checkfree fn store_small(m: Mem, r: u32, t: u32) {
+    if t == GIR_T_I1 || t == GIR_T_I8 { store8(m, r); }
+    else if t == GIR_T_I16 { store16(m, r); }
+    else if t == GIR_T_I32 { store32(m, r); }
+    else { store64(m, r); }
+}
 fn lower_load(I: Inst, j: u32) {
     let m = addr_of(I.a, RCX);
-    load_to_result(j, I.ty, m);
+    let t: u32 = I.ty;
+    if t >= GIR_T_I1 && t <= GIR_T_PTR {  // the common case, without the type table
+        load_small(RAX, m, t);
+        if t == GIR_T_I1 { and_ri32(RAX, 1); }
+        put_gpr(j, RAX);
+        return;
+    }
+    load_to_result(j, t, m);
 }
 fn lower_store(I: Inst) {
     let t: u32 = I.aux;
+    if t >= GIR_T_I1 && t <= GIR_T_PTR && I.flags & IF_ORD_MASK != ORD_SEQ_CST << IF_ORD_SHIFT {
+        use_fixed(I.a, RAX);
+        store_small(addr_of(I.b, RCX), RAX, t);
+        return;
+    }
     let d = M.types[t];
     let c: u32 = d.cls;
     let seq = (I.flags & IF_ORD_MASK) >> IF_ORD_SHIFT == ORD_SEQ_CST;

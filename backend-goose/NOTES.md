@@ -1,9 +1,18 @@
-# The Goose back-end: port notes
+# The Goose back-end: notes
 
-`cg.goose` is a 1:1 port of `backend-cpp/gir_codegen_cpp.cpp` (see
+Sections 1-7 are the record of the **v0 port** (GIR v0, commit 8f55b18):
+`cg.goose` was then a 1:1 port of `backend-cpp/gir_codegen_cpp.cpp` (see
 [`../backend-cpp/DESIGN.md`](../backend-cpp/DESIGN.md)) to Goose (compiler
-commit 335fddc). It writes **byte-identical** objects: 79/79 inputs, see
-[Results](#results). This page covers:
+commit 335fddc), writing **byte-identical** objects (79/79 inputs). They
+describe that version; file and function names there are v0's.
+
+Section 8 is milestone **A1**: the v1 back-end for GIR v2 (all of C at -O0),
+now split into `cg.goose`, `gir.goose`, `x86.goose`, `loc.goose`,
+`abi.goose`, `lower.goose` and `elf.goose` and described in
+[`DESIGN.md`](DESIGN.md). It records the new Goose pain points (with the
+compiler's messages) and the speed against v0.
+
+v0 page contents:
 
 - the structure of the port;
 - every place where it differs from the C++, and why;
@@ -11,11 +20,11 @@ commit 335fddc). It writes **byte-identical** objects: 79/79 inputs, see
 - what the measurements say about the speed;
 - the Goose pain points met on the way.
 
-| file | what |
+| file (v0) | what |
 |---|---|
 | `cg.goose` | the back-end: `export fn gir_codegen(...) -> const u8[:]` |
-| `build.sh` | generates `build/cg.c` + `build/cg.h` and builds goovm-llc with `-DGOOVM_WITH_GOOSE=ON` |
-| `check_identical.py` | `cmp`s `--backend=cpp` and `--backend=goose` objects over all tests and benchmark inputs |
+| `build.sh` | generated `build/cg.c` + `build/cg.h` and built goovm-llc with `-DGOOVM_WITH_GOOSE=ON` (now: configures CMake, which runs goose) |
+| `check_identical.py` | `cmp`s `--backend=cpp` and `--backend=goose` objects over all tests and benchmark inputs (v0 only) |
 
 ## 1. Structure
 

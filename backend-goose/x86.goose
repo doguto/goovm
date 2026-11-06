@@ -172,6 +172,21 @@ checkfree fn modrm_mem(reg: u32, x: Mem, tail: u32) {
 // byte_reg: `reg` is an 8-bit register.
 checkfree fn op_mem_t(pfx: u32, w: u32, op: u32, reg: u32, x: Mem, byte_reg: bool, tail: u32) {
     if pfx != 0 { b1(pfx); }
+    if x.kind == M_REG && x.reg == RBP {
+        // Fast path for frame slots, by far the most common operand.
+        let rx: u32 = 0x40 | (w << 3) | ((reg >> 3) << 2);
+        if rx != 0x40 || (byte_reg && reg >= 4 && reg < 8) { b1(rx); }
+        opc(op);
+        let r: u32 = (reg & 7) << 3;
+        if fits8(x.disp) {
+            b1(0x45 | r);
+            b1(x.disp as! u32);
+        } else {
+            b1(0x85 | r);
+            b4(x.disp as! u32);
+        }
+        return;
+    }
     rex(w, reg, if x.kind == M_REG { x.reg } else { 0 }, byte_reg && reg >= 4 && reg < 8);
     opc(op);
     modrm_mem(reg, x, tail);

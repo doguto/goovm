@@ -48,12 +48,12 @@ var c_pool: u32[>..] = [];
 
 // --------------------------------------------------------------- types
 
-fn tdef(t: u32) -> TypeDef { M.types[t] }
-fn cls_of(t: u32) -> u32 { M.types[t].cls }
-fn bits_of(t: u32) -> u32 { M.types[t].bits }
-fn size_of(t: u32) -> u32 { M.types[t].size }
-fn store_of(t: u32) -> u32 { M.types[t].store }
-fn type_of(v: u32) -> u32 {
+inline fn tdef(t: u32) -> TypeDef { M.types[t] }
+inline fn cls_of(t: u32) -> u32 { M.types[t].cls }
+inline fn bits_of(t: u32) -> u32 { M.types[t].bits }
+inline fn size_of(t: u32) -> u32 { M.types[t].size }
+inline fn store_of(t: u32) -> u32 { M.types[t].store }
+inline fn type_of(v: u32) -> u32 {
     let i = gir_idx(v);
     let k = gir_kind(v);
     if k == GIR_V_INST { return M.insts[i].ty; }
