@@ -561,7 +561,142 @@ recursive fn build(t: u32, lo: i64, hi: i64, depth: i64, loc: u32) -> u32 {
 recursive fn parse_initializer_for(s: i64, t: u32, is_static: bool) -> u32 {
     let loc = tloc();
     let syn = parse_init_syntax();
-    return init_value(s, t, syn, loc);
+    let r = init_value(s, t, syn, loc);
+    if is_static && !is_error(r) {
+        nc_node = 0;
+        if !const_init(r) {
+            err_at(if nc_node != 0 { nodes[nc_node].loc } else { loc }, "initializer element is not a compile-time constant");
+        }
+    }
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// Constant initializers (C11 6.6p7-9, with clang's extensions): every
+// element of the initializer of an object with static storage must be an
+// arithmetic constant, an address constant (plus or minus an integer
+// constant), or a null pointer. Lowering evaluates these trees itself; this
+// only checks them (it errs on the side of accepting).
+
+var nc_node: u32 = 0;      // the first element found not to be constant
+
+recursive fn const_init(n: u32) -> bool {
+    let nd = nodes[n];
+    if nd.kind == N_INITLIST {
+        for i in nd.c { if !const_init(nlist[nd.v + i]) { return false; } }
+        if nd.b != 0 && !const_init(nd.b) { return false; }
+        return true;
+    }
+    if const_value(n) { return true; }
+    if nc_node == 0 { nc_node = n; }
+    return false;
+}
+
+// A constant value (arithmetic, pointer, or an aggregate rvalue made of
+// constants).
+recursive fn const_value(n: u32) -> bool {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_INT || k == N_FLOAT || k == N_STRING || k == N_ZEROINIT || k == N_LABELADDR || k == N_OFFSETOF { return true; }
+    if k == N_SIZEOF { return nd.v >= 0; }
+    if k == N_INITLIST { return const_init(n); }
+    if k == N_COMPLIT { return const_init(nd.a); }
+    if is_integer(nd.ty) {
+        let ok, v = fold_int(n);
+        if ok { return true; }
+    }
+    if is_real_float(nd.ty) {
+        let ok, f = fold_float(n);
+        if ok { return true; }
+    }
+    if k == N_ICAST || k == N_CAST {
+        let op = nd.op as i64;
+        let a = nd.a;
+        if op == CK_LVAL2RVAL {
+            let an = nodes[a];
+            // an aggregate copied from a compound literal (GNU)
+            if an.kind == N_COMPLIT { return const_init(an.a); }
+            // clang folds reads of const-qualified arithmetic variables
+            if an.kind == N_DECLREF && syms[an.a].kind == SK_VAR && quals(an.ty) & Q_CONST != 0 &&
+               quals(an.ty) & Q_VOLATILE == 0 && is_arith(an.ty) { return true; }
+            return false;
+        }
+        if op == CK_ARRAY2PTR || op == CK_FUNC2PTR { return const_designator(a); }
+        if op == CK_PTR2INT {
+            // only to an integer that holds the whole address
+            if type_size(nd.ty) < 8 { return false; }
+            return const_value(a);
+        }
+        if op == CK_TOVOID { return false; }
+        return const_value(a);
+    }
+    if k == N_UNARY {
+        let op = nd.op as i64;
+        if op == U_ADDR { return const_designator(nd.a); }
+        if op == U_DEREF || op == U_PREINC || op == U_PREDEC || op == U_POSTINC || op == U_POSTDEC { return false; }
+        return const_value(nd.a);
+    }
+    if k == N_BINARY {
+        if nd.op as i64 == B_LAND || nd.op as i64 == B_LOR {
+            let ok, c = fold_bool(nd.a);
+            if ok {
+                if (nd.op as i64 == B_LAND && !c) || (nd.op as i64 == B_LOR && c) { return true; }
+                return const_value(nd.b);
+            }
+            return false;
+        }
+        return const_value(nd.a) && const_value(nd.b);
+    }
+    if k == N_COND {
+        let ok, c = fold_bool(nd.a);
+        if !ok { return false; }
+        if nd.b == 0 { return if c { const_value(nd.a) } else { const_value(nd.c) }; }
+        return if c { const_value(nd.b) } else { const_value(nd.c) };
+    }
+    if k == N_BUILTIN {
+        let op = nd.op as i64;
+        if op == BI_IMAG_CONST || op == BI_BITCAST || op == BI_CONVERTVECTOR { return const_value(nd.a); }
+        if op == BI_CALL {
+            // clang folds builtins such as __builtin_inf() or
+            // __builtin_bswap32(constant); a few never are constant
+            let name = sym_name(nd.a as i64);
+            if name == "__builtin_alloca" || name == "__builtin_frame_address" || name == "__builtin_return_address" ||
+               starts_with(name, "__sync_") || starts_with(name, "__atomic_") || name == "__builtin_va_arg_pack" {
+                return false;
+            }
+            for i in nd.c { if !const_value(nlist[nd.v + i]) { return false; } }
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+// An lvalue whose address is constant: an object with static storage, a
+// function, a string literal, a file-scope compound literal, or a member or
+// element of one.
+recursive fn const_designator(n: u32) -> bool {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_DECLREF {
+        let s = nd.a as i64;
+        let sk = syms[s].kind as i64;
+        if sk == SK_FUNC || sk == SK_BUILTIN { return true; }
+        if sk != SK_VAR { return false; }
+        return syms[s].flags & (SF_FILESCOPE | SF_LOCALLINK) != 0 || syms[s].sc == SC_STATIC || syms[s].sc == SC_EXTERN;
+    }
+    if k == N_STRING { return true; }
+    if k == N_COMPLIT { return syms[nd.b].sc == SC_STATIC; }
+    if k == N_MEMBER {
+        if nd.flags & NF_BITFIELD != 0 { return false; }
+        if nd.op != 0 { return const_value(nd.a); }
+        return const_designator(nd.a);
+    }
+    if k == N_INDEX { return const_value(nd.a) && const_value(nd.b); }
+    if k == N_UNARY && nd.op as i64 == U_DEREF { return const_value(nd.a); }
+    if k == N_UNARY && nd.op as i64 == U_EXTENSION { return const_designator(nd.a); }
+    if k == N_ICAST || k == N_CAST { return const_designator(nd.a); }
+    return false;
 }
 
 recursive fn init_value(s: i64, t: u32, syn: u32, loc: u32) -> u32 {

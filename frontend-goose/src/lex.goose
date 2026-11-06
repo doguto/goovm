@@ -282,18 +282,49 @@ fn lex_slow(p0: i64) -> i64, i64, u8 {
 }
 
 // The position after the block comment starting at p ("/*").
-fn skip_block_comment(p0: i64) -> i64 {
+// With trigraphs a splice may also be "??/" + newline: search for '*' and
+// let splice_at decide.
+fn skip_block_comment_tri(p0: i64) -> i64 {
     var q = p0 + 2;
     loop {
         let r = find_byte(src[q..lx_end], '*');
         if r < 0 { return lx_end; }
         q = q + r + 1;
         if src[q] == '/' { return q + 1; }
-        if src[q] == '\\' {
-            var t = q;
-            loop { let s = splice_at(t); if s == 0 { break; } t += s; }
-            if src[t] == '/' { return t + 1; }
+        var t = q;
+        loop { let s = splice_at(t); if s == 0 { break; } t += s; }
+        if t > q && src[t] == '/' { return t + 1; }
+    }
+}
+
+// It searches for the '/' (rare inside comments, unlike the '*' that
+// starts every line of a boxed comment) and looks back for the '*'.
+fn skip_block_comment(p0: i64) -> i64 {
+    if opt_trigraphs { return skip_block_comment_tri(p0); }
+    var q = p0 + 2;
+    loop {
+        let r = find_byte(src[q..lx_end], '/');
+        if r < 0 { return lx_end; }
+        q = q + r;
+        var b = q - 1;
+        if b >= p0 + 2 && src[b] == '*' { return q + 1; }
+        // "*\<newline>/": backslash-newline splices between '*' and '/'
+        if src[b] == '\n' || src[b] == '\r' {
+            var ok = true;
+            loop {
+                if b < p0 + 2 { ok = false; break; }
+                if src[b] == '*' { break; }
+                if src[b] != '\n' && src[b] != '\r' { ok = false; break; }
+                // a line end: it must follow a backslash (and optional spaces)
+                if src[b] == '\n' && b > 0 && src[b - 1] == '\r' { b--; }
+                b--;
+                while b >= p0 + 2 && (src[b] == ' ' || src[b] == '\t') { b--; }
+                if b < p0 + 2 || src[b] != '\\' { ok = false; break; }
+                b--;
+            }
+            if ok { return q + 1; }
         }
+        q++;
     }
 }
 
