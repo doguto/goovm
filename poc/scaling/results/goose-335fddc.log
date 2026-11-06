@@ -1,0 +1,36 @@
+   1154 lines  check:     0.02s        11 MB  rc=0
+   1154 lines   emit:     0.02s        13 MB  rc=0
+   1154 lines    jit:     0.02s        14 MB  rc=0
+   1154 lines  cc-O0:     0.14s       113 MB  rc=0
+   1154 lines  cc-O2:     0.47s       121 MB  rc=0
+  11506 lines  check:     0.19s        53 MB  rc=0
+  11506 lines   emit:     0.24s        62 MB  rc=0
+  11506 lines    jit:     0.25s        64 MB  rc=0
+  11506 lines  cc-O0:     0.78s       168 MB  rc=0
+  11506 lines  cc-O2:     3.57s       215 MB  rc=0
+  57504 lines  check:     1.14s       236 MB  rc=0
+  57504 lines   emit:     1.39s       271 MB  rc=0
+  57504 lines    jit:     1.58s       300 MB  rc=0
+  57504 lines  cc-O0:     3.64s       417 MB  rc=0
+  57504 lines  cc-O2:    22.40s       612 MB  rc=0
+ 114997 lines  check:     2.18s       466 MB  rc=0
+ 114997 lines   emit:     2.68s       536 MB  rc=0
+ 114997 lines    jit:     3.02s       569 MB  rc=0
+ 114997 lines  cc-O0:     6.65s       728 MB  rc=0
+ 114997 lines  cc-O2:    59.22s      1124 MB  rc=0
+ 229999 lines  check:     5.13s       926 MB  rc=0
+ 229999 lines   emit:     6.09s      1085 MB  rc=0
+ 229999 lines    jit:     7.05s      1127 MB  rc=0
+ 229999 lines  cc-O0:    14.34s      1350 MB  rc=0
+ 229999 lines  cc-O2:   210.65s      2205 MB  rc=0
+nested depth   8: check     0.00s rc=0
+nested depth  12: check     0.01s rc=0
+nested depth  16: check     0.11s rc=0
+nested depth  18: check     0.44s rc=0
+nested depth  20: check     1.72s rc=0
+nested depth  22: check     7.21s rc=0
+sum of   250 terms: emit rc=0 cc rc=0 
+sum of   500 terms: emit rc=0 cc rc=0 
+sum of  1000 terms: emit rc=0 cc rc=0 
+sum of  1500 terms: emit rc=0 cc rc=0 
+sum of  3000 terms: emit rc=0 cc rc=0 
