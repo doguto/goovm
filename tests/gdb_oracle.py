@@ -165,6 +165,35 @@ def returned(c, entry):
     if entry[0] == "main":
         return "main" not in c
     return c == callers or (len(c) == len(callers) and c[1:] == callers[1:])
+def suffix(a, b):
+    return len(a) <= len(b) and b[len(b) - len(a):] == a
+def unwound(c, entry):
+    # a call threw: the frame (and maybe some callers) are gone, and the
+    # landing pad or a handler the runtime called runs over the rest
+    callers = entry[1:]
+    return suffix(c, callers) or suffix(c[1:], callers)
+srcs = set(cfg["srcs"])
+def in_program():
+    try:
+        f = gdb.selected_frame()
+        while f is not None and f.type() == gdb.INLINE_FRAME:
+            f = f.older()   # inlined code (a libstdc++ header) is the caller's
+        if f is None:
+            return False
+        sal = f.find_sal()
+    except gdb.error:
+        return False
+    return sal.symtab is not None and sal.symtab.filename.split("/")[-1] in srcs
+def leave_library():
+    # a callback returned into library code (qsort): run back to the program
+    for i in range(64):
+        if in_program():
+            return True
+        try:
+            gdb.execute("finish", to_string=True)
+        except gdb.error:
+            return False
+    return in_program()
 while checked < cfg["max_checks"] and steps < cfg["max_steps"]:
     try:
         gdb.selected_frame()
@@ -180,9 +209,21 @@ while checked < cfg["max_checks"] and steps < cfg["max_steps"]:
         if n >= 20000:
             stack.pop()
             continue
+        if not in_program():
+            if not leave_library():
+                stack = []
+                break
+            c = chain()
+            if c != entry:
+                if returned(c, entry) or unwound(c, entry):
+                    stack.pop()
+                    continue
+                stack = []
+                break
         insn = gdb.execute("x/i $pc", to_string=True)
+        is_call = "call" in insn.split(":", 1)[-1]
         try:
-            if "call" in insn.split(":", 1)[-1]:
+            if is_call:
                 gdb.execute("nexti", to_string=True)
             else:
                 gdb.execute("stepi", to_string=True)
@@ -201,7 +242,10 @@ while checked < cfg["max_checks"] and steps < cfg["max_steps"]:
         if returned(c, entry):
             stack.pop()
             continue
-        if len(c) > len(entry) and c[-len(entry):] == entry:
+        if is_call and unwound(c, entry):
+            stack = []
+            break
+        if len(c) > len(entry) and c[-len(entry):] == entry and in_program():
             # nexti stopped at a breakpoint in a callee: check it too
             for b in bps.values():
                 if b.is_valid() and b.enabled and b.hit_count >= cfg["calls"]:
@@ -423,10 +467,11 @@ def unwind_test(p, args):
     out = os.path.join(wd, "unwind.txt")
     cfgf = os.path.join(wd, "unwind.json")
     json.dump({"out": out, "funcs": funcs, "args": p.args, "calls": args.unwind_calls,
+               "srcs": [os.path.basename(x) for x in p.srcs],
                "max_checks": 400, "max_steps": 200000}, open(cfgf, "w"))
     scr = os.path.join(wd, "unwind.py")
     open(scr, "w").write(f"CFG = {cfgf!r}\n" + UNWIND_SCRIPT)
-    sh(["gdb", "-nx", "-batch", "-x", scr, goo], timeout=1200, cwd=p.rundir or wd, stdin=subprocess.DEVNULL)
+    sh(["gdb", "-nx", "-batch", "-x", scr, goo], timeout=3000, cwd=p.rundir or wd, stdin=subprocess.DEVNULL)
     if not os.path.exists(out):
         return p.name, "error", "no unwind transcript", 0
     t = open(out).read().strip().splitlines()
