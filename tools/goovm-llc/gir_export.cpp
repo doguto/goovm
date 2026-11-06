@@ -14,6 +14,7 @@
 
 #include "gir_export.h"
 #include "gir_asm.h"
+#include "gir_dwarf.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +31,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DebugProgramInstruction.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
@@ -152,7 +154,7 @@ struct PtrMap {
 // call libc.
 constexpr uint64_t MAX_INLINE_MEM = 256;
 
-struct Exporter {
+struct Exporter : GirDwarfHost {
     const Module &M;
     const DataLayout &DL;
     GirTables &T;
@@ -199,9 +201,46 @@ struct Exporter {
     std::map<std::vector<uint32_t>, int32_t> eh_specmap;
     DenseMap<const PHINode *, uint32_t> lp_slot;    // landing-pad PHI -> its alloca (demoted)
     uint32_t cur_invoke_lp = GIR_NONE;              // landing pad block of the invoke being lowered
+    // Debug information entries (gir_dwarf.cpp); the function's declares and labels.
+    std::unique_ptr<GirDwarfBuilder> dw;
+    bool dw_on = false;
+    struct PendVar {
+        const DILocalVariable *var;
+        const DIExpression *expr;
+        const DILocation *loc;
+        const Value *addr;
+    };
+    std::vector<PendVar> fvars;
+    std::vector<GirDwarfLabel> flabels;
 
     Exporter(const Module &m, GirTables &t)
         : M(m), DL(m.getDataLayout()), T(t), TLII(Triple(m.getTargetTriple())), TLI(TLII) {}
+
+    // GirDwarfHost
+    uint32_t dw_str(StringRef s) override { return dstring(s); }
+    uint32_t dw_bytes(const uint8_t *p, size_t n) override {
+        uint32_t off = (uint32_t)T.dstr.size();
+        T.dstr.insert(T.dstr.end(), p, p + n);
+        return off;
+    }
+    uint32_t dw_file(const DIFile *f) override { return dfile(f); }
+    uint32_t dw_scope(const DIScope *s) override { return dscope(s); }
+    uint32_t dw_global(const GlobalValue *g) override {
+        auto it = gmap.find(g);
+        return it == gmap.end() ? GIR_NONE : it->second;
+    }
+    // A #dbg_declare / #dbg_label attached to the instruction being exported.
+    void dbg_records(const Instruction &I) {
+        for (const DbgRecord &R : I.getDbgRecordRange()) {
+            if (const auto *V = dyn_cast<DbgVariableRecord>(&R)) {
+                if (V->isDbgDeclare())
+                    fvars.push_back(PendVar{V->getVariable(), V->getExpression(), V->getDebugLoc().get(),
+                                            V->getVariableLocationOp(0)});
+            } else if (const auto *L = dyn_cast<DbgLabelRecord>(&R)) {
+                flabels.push_back(GirDwarfLabel{L->getLabel(), L->getDebugLoc().get(), (uint32_t)T.insts.size()});
+            }
+        }
+    }
 
     // ---------------------------------------------------------------- errors
     [[noreturn]] void fail(const std::string &why) {
@@ -554,7 +593,7 @@ struct Exporter {
             d.kind = GIR_DS_SUBPROGRAM;
             d.parent = dscope(SP->getUnit());
             d.file = dfile(SP->getFile());
-            d.line = SP->getLine();
+            d.line = SP->getScopeLine() ? SP->getScopeLine() : SP->getLine();
             d.name = dstring(SP->getName());
             d.extra = dstring(SP->getLinkageName());
         } else if (auto *LB = dyn_cast<DILexicalBlock>(s)) {
@@ -1218,11 +1257,21 @@ struct Exporter {
         case Intrinsic::memset:
         case Intrinsic::memset_inline:
             return mem_intrinsic(CB, id);
+        case Intrinsic::dbg_declare:
+            if (dw_on) {
+                const auto &D = cast<DbgDeclareInst>(CB);
+                fvars.push_back(PendVar{D.getVariable(), D.getExpression(), D.getDebugLoc().get(), D.getAddress()});
+            }
+            return;
+        case Intrinsic::dbg_label:
+            if (dw_on) {
+                const auto &D = cast<DbgLabelInst>(CB);
+                flabels.push_back(GirDwarfLabel{D.getLabel(), D.getDebugLoc().get(), (uint32_t)T.insts.size()});
+            }
+            return;
         case Intrinsic::lifetime_start:
         case Intrinsic::lifetime_end:
-        case Intrinsic::dbg_declare:
         case Intrinsic::dbg_value:
-        case Intrinsic::dbg_label:
         case Intrinsic::dbg_assign:
         case Intrinsic::experimental_noalias_scope_decl:
         case Intrinsic::assume:
@@ -2448,9 +2497,17 @@ struct Exporter {
                 in_phi_prepass = false;
                 entry = false;
             }
-            for (const Instruction &I : BB) {
-                inst(I);
-                T.n_llvm_insts++;
+            if (dw_on) {
+                for (const Instruction &I : BB) {
+                    dbg_records(I);
+                    inst(I);
+                    T.n_llvm_insts++;
+                }
+            } else {
+                for (const Instruction &I : BB) {
+                    inst(I);
+                    T.n_llvm_insts++;
+                }
             }
             b.n_inst = (uint32_t)T.insts.size() - b.first_inst;
             T.blocks.push_back(b);
@@ -2472,7 +2529,33 @@ struct Exporter {
         gf.flags = fn_flags | ((uint32_t)Log2_64(falign) << GIR_FN_ALIGN_SHIFT);
         if (fn_eh) eh_end(Fn, (uint32_t)T.funcs.size());
         T.funcs.push_back(gf);
+        if (dw_on) dwarf_function(Fn, (uint32_t)T.funcs.size() - 1);
         F = nullptr;
+    }
+
+    // The function's variables (addresses as GIR values) and labels, to the
+    // DIE builder.
+    void dwarf_function(const Function &Fn, uint32_t fi) {
+        std::vector<GirDwarfVar> vars;
+        vars.reserve(fvars.size());
+        for (const PendVar &P : fvars) {
+            uint32_t a = GIR_NONE;
+            const Value *v = P.addr;
+            bool mf = false;
+            if (v) {
+                if (const auto *A = dyn_cast<Argument>(v)) {
+                    a = GIR_MK(GIR_V_ARG, A->getArgNo());
+                } else if (isa<Instruction>(v)) {
+                    if (uint32_t *p = vmap.find(v))
+                        if (!is_placeholder(*p) && GIR_KIND(*p) <= GIR_V_ARG) a = *p;
+                    if (const auto *AI = dyn_cast<AllocaInst>(v)) mf = AI->isStaticAlloca();
+                }
+            }
+            if (P.var && P.loc) vars.push_back(GirDwarfVar{P.var, P.expr, P.loc, a, mf});
+        }
+        dw->function(Fn, fi, vars, flabels);
+        fvars.clear();
+        flabels.clear();
     }
 
     // ---------------------------------------------------------- initializers
@@ -2745,12 +2828,17 @@ struct Exporter {
             if (it == gmap.end() || !Fn.hasSection()) continue;
             T.globals[it->second].section = section(Fn.getSection(), GIR_SF_EXEC, 1);
         }
+        // Debug information entries of the unit (globals, enums, retained types).
+        dw = std::make_unique<GirDwarfBuilder>(M, T, *this);
+        dw_on = dw->enabled();
+        if (dw_on) dw->begin_module();
         // Pass 3: function bodies.
         for (const Function &Fn : M.functions()) {
             auto it = gmap.find(&Fn);
             if (it == gmap.end() || !(T.globals[it->second].flags & GIR_GF_DEFINED)) continue;
             function(Fn, it->second);
         }
+        if (dw_on) dw->end_module();
         T.header.n_llvm_insts = (uint32_t)T.n_llvm_insts;
         if (!T.gcomdat.empty()) T.gcomdat.resize(T.globals.size(), GIR_NONE);
     }

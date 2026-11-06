@@ -307,7 +307,7 @@ fn eh_lsda(e: u32, sec: u32, prolen: u32, fsize: u32) -> u32 {
         while k > 0 {
             let g = M.opnds[E.ttypes + k - 1];
             if g != GIR_NONE {
-                xrel(sec, (base as i64 + s_lsda.len - lbase) as! u64, g_sym[g], R_X86_64_PC32, 0);
+                xrel(sec, (base + s_lsda.len - lbase) as! u64, g_sym[g], R_X86_64_PC32, 0);
             }
             o4(s_lsda, 0);
             k--;

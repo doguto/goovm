@@ -603,6 +603,18 @@ def emit_bc(t, s, i, wd, variant, args):
     return base, bc
 
 
+def verify_dwarf(o, s, args, info):
+    """--verify-dwarf: llvm-dwarfdump --verify on a -g object; a failure fails the test."""
+    if not args.verify_dwarf:
+        return
+    r = sh([args.dwarfdump, "--verify", o], timeout=600)
+    out = (r.stdout + r.stderr).decode(errors="replace")
+    bad = [l for l in out.splitlines() if l.startswith(("error:", "warning:"))]
+    if r.returncode != 0 or bad:
+        raise Fail("fail", f"llvm-dwarfdump --verify on {os.path.basename(s)}: {(bad or out.splitlines()[-1:] or [''])[0][:300]}")
+    info["dwarf_verified"] = info.get("dwarf_verified", 0) + 1
+
+
 def build_goovm_cc(t, wd, variant, args, info):
     exe = os.path.join(wd, variant + ".exe")
     objs = []
@@ -619,6 +631,8 @@ def build_goovm_cc(t, wd, variant, args, info):
         if "goovm-cc: falling back to LLVM:" in err:
             info.setdefault("fallback", []).append(
                 f"{os.path.basename(s)}: {err.split('goovm-cc: falling back to LLVM:', 1)[1].strip().splitlines()[0]}")
+        if variant == "cc-g":
+            verify_dwarf(o, s, args, info)
         objs.append(o)
     r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
     if r.returncode:
@@ -644,6 +658,8 @@ def build_goovm(t, wd, variant, args, info):
         if "goovm-llc: fallback:" in err:
             info.setdefault("fallback", []).append(
                 f"{os.path.basename(s)}: {err.split('goovm-llc: fallback:', 1)[1].strip().splitlines()[0]}")
+        if variant == "g":
+            verify_dwarf(o, s, args, info)
         objs.append(o)
     r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
     if r.returncode:
@@ -735,6 +751,11 @@ def report(results, tests, args):
     lines.append("")
     lines.append("pass includes fallback; fallback counts tests in which at least one file was compiled by "
                  "LLVM's code generator (goovm-llc --fallback).")
+    if args.verify_dwarf:
+        nv = sum(r.get(v, {}).get("dwarf_verified", 0) for r in results.values() for v in args.variants)
+        lines.append("")
+        lines.append(f"llvm-dwarfdump --verify passed on {nv} objects (variants g / cc-g of the passing tests; "
+                     "a failure counts as a failed test).")
     lines.append("")
     if args.time_run:
         lines.append(f"## Run times (best of {args.time_run}, seconds; ratio to clang -O0)")
@@ -808,6 +829,9 @@ def main():
     ap.add_argument("--work", default=os.path.join(ROOT, "build-suite"))
     ap.add_argument("--fallback", action="store_true", help="pass --fallback to goovm-llc")
     ap.add_argument("--keep", action="store_true", help="keep build products of passing tests")
+    ap.add_argument("--verify-dwarf", action="store_true",
+                    help="run llvm-dwarfdump --verify on every object of the g and cc-g variants")
+    ap.add_argument("--dwarfdump", default="llvm-dwarfdump-20")
     ap.add_argument("--rebaseline", action="store_true", help="recompute the clang -O0 baseline")
     ap.add_argument("--baseline-only", action="store_true")
     ap.add_argument("--emit-bc", action="store_true", help="only write the bitcode of each variant (for analysis)")

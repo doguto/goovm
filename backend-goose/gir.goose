@@ -311,6 +311,7 @@ let DF_STMT_LIST = 0x7F08;
 let DF_STR_BASE = 0x7F09;
 let DF_CU_PC = 0x7F0A;
 let DF_ADDR_BASE = 0x7F0B;
+let DF_LABEL = 0x7F0C;
 
 // Debug scope kinds.
 let DS_CU = 1;

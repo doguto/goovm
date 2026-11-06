@@ -725,7 +725,7 @@ fn gen_function(fi: u32) {
             if b == 0 { ra_entry_state(); } else { ra_block_start(); }
             dbg_block_start();
             for k in B.first_inst..B.first_inst + B.n_inst {
-                dbg_inst(M.insts[k].dbg);
+                dbg_inst(k);
                 gen_inst(k, b as! u32);
             }
             dbg_block_end();

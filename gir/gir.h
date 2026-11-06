@@ -564,6 +564,7 @@ typedef struct GirDie {          /* 16 bytes */
 #define GIR_DF_STR_BASE   0x7F09u /* DW_AT_str_offsets_base */
 #define GIR_DF_CU_PC      0x7F0Au /* the unit's code: low_pc + high_pc, or low_pc 0 + ranges */
 #define GIR_DF_ADDR_BASE  0x7F0Bu /* DW_AT_addr_base (and DW_AT_rnglists_base if needed) */
+#define GIR_DF_LABEL      0x7F0Cu /* DW_AT_low_pc: the code of instruction val (insts index) */
 typedef struct GirDAttr {        /* 16 bytes */
     uint16_t at;                 /* DW_AT_* */
     uint16_t form;               /* DW_FORM_* or GIR_DF_* */
