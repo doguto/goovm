@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 #include "gir.h"
@@ -14,23 +15,34 @@ class Module;
 
 // The GIR tables of one module, owned by the host.
 struct GirTables {
+    GirHeader header{};
+    std::vector<GirTypeDef> types;
     std::vector<GirFunc> funcs;
     std::vector<GirBlock> blocks;
     std::vector<GirInst> insts;
     std::vector<uint32_t> opnds;
     std::vector<GirConst> consts;
     std::vector<GirGlobal> globals;
+    std::vector<GirSection> sections;
     std::vector<uint8_t> data;
     std::vector<GirDataReloc> drelocs;
     std::vector<uint8_t> strtab;
+    std::vector<GirDLoc> dlocs;
+    std::vector<GirDScope> dscopes;
+    std::vector<GirDFile> dfiles;
+    std::vector<uint8_t> dstr;
     uint64_t n_llvm_insts = 0;  // statistics: LLVM instructions in defined functions
 
     GirModule view() const;
 };
 
-// Fills `out` from `m`. On an unsupported construct prints a message naming
-// the function (or global) and the instruction to stderr and exits with
-// status 2.
+// Thrown by gir_export for a construct outside what GIR can express; `msg`
+// names the construct, the function (or global) and the instruction.
+struct GirUnsupported {
+    std::string msg;
+};
+
+// Fills `out` from `m`; throws GirUnsupported. The module is not modified.
 void gir_export(const llvm::Module &m, GirTables &out);
 
 // Prints the tables in a readable text form (for debugging and for checking

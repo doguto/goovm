@@ -110,7 +110,7 @@ def test_one(src, args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--goovm", default=os.environ.get("GOOVM_LLC", os.path.join(ROOT, "build/tools/goovm-llc/goovm-llc")))
-    ap.add_argument("--backend", default="cpp")
+    ap.add_argument("--backend", default="goose")
     ap.add_argument("--clang", default="clang-20")
     ap.add_argument("--opt", default="opt-20")
     ap.add_argument("--opt-passes", dest="opt_passes", default="")
