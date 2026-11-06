@@ -159,12 +159,19 @@ fn ty_struct() -> u32 {
 }
 
 // { a @0, b @off }
+var pair_types = dictionary<u64, u32> {};
+
 fn ty_pair(a: u32, b: u32, off: u32) -> u32 {
+    let key = (a as u64) | ((b as u64) << 16) | ((off as u64) << 32);
+    let r = pair_types.get(key);
+    if r { return r; }
     sfields.push(a);
     sfields.push(0);
     sfields.push(b);
     sfields.push(off);
-    return ty_struct();
+    let t = ty_struct();
+    pair_types.insert(key, t);
+    return t;
 }
 
 fn ty_array(n: u32, elem: u32) -> u32 {

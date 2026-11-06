@@ -15,10 +15,16 @@ import .ast;
 
 var vec_cache = dictionary<u32, u32> {};    // C type index -> GIR vector type
 
+// GIR types of the scalar C type kinds (TY_*; 255 = look closer).
+let KIND_GIR: u8[32] = [0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 10, 10,     // -, void, bool, chars, shorts, ints, longs, i128
+                         11, 3, 7, 8, 9, 0, 0, 6, 0, 0, 0, 0, 0, 255, 255, 255]; // f16 bf16 float double ldouble f128 complex ptr ...
+
 // The GIR type of a value of scalar C type q (VOID for aggregates and void).
 recursive fn vty(q: u32) -> u32 {
     let t = types[q >> 4];
     let k = t.kind as i64;
+    let g = KIND_GIR[k & 31];
+    if g != 255 { return g as u32; }
     if k == TY_INT || k == TY_UINT { return GIR_T_I32; }
     if k == TY_POINTER { return GIR_T_PTR; }
     if k == TY_LONG || k == TY_ULONG || k == TY_LLONG || k == TY_ULLONG { return GIR_T_I64; }

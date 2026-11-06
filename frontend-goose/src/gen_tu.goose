@@ -91,6 +91,24 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             err_at(nd.loc, "goosecc: file-scope asm is not supported");
         }
     }
+    // the targets of aliases are used
+    for i in cnt {
+        let nd = nodes[nlist[tu.v + i]];
+        if nd.kind != N_DECL && nd.kind != N_FUNCDEF { continue; }
+        let a = syms[nd.a].attr;
+        if a == 0 || sym_attrs[a].alias_len == 0 { continue; }
+        let off = sym_attrs[a].alias_off as i64;
+        let tid = intern(strbytes[off..off + sym_attrs[a].alias_len]);
+        for j in cnt {
+            let it = nlist[tu.v + j];
+            let td = nodes[it];
+            if td.kind != N_DECL && td.kind != N_FUNCDEF { continue; }
+            let ts = td.a as i64;
+            if link_name(ts) != tid { continue; }
+            if syms[ts].kind == SK_FUNC && syms[ts].def >= 0 { func_global(ts); }
+            else if syms[ts].kind == SK_VAR && syms[ts].flags & (SF_DEFINED | SF_TENTATIVE) != 0 { var_global(ts); }
+        }
+    }
     // emit, following references
     var wi = 0;
     while wi < work.len {

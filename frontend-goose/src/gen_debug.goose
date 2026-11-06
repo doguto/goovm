@@ -136,7 +136,9 @@ fn dbg_cur_scope() -> u32 {
     return dbg_scopes[k];
 }
 
-fn set_loc(loc: u32) {
+inline fn set_loc(loc: u32) { if opt_debug && f_sym >= 0 { set_loc_dbg(loc); } }
+
+fn set_loc_dbg(loc: u32) {
     if !opt_debug || f_sym < 0 { return; }
     let f = file_of(loc as i64);
     if f < 0 { return; }

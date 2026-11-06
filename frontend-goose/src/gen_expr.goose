@@ -875,8 +875,8 @@ recursive fn ex_bool(n: u32) -> u32 {
     let k = nd.kind as i64;
     if k == N_BINARY && (nd.op == B_LAND || nd.op == B_LOR) {
         let land = nd.op == B_LAND;
-        let ok, cv = fold_bool(nd.a);
-        if ok && !has_label_or_side(nd.a) {
+        let ok, cv = const_bool(nd.a);
+        if ok {
             // constant left operand
             if land && !cv { return c_false(); }
             if !land && cv { return c_true(); }
@@ -926,8 +926,8 @@ fn has_label_or_side(n: u32) -> bool { has_side_effects(n) && nkind(n) != N_INT 
 recursive fn ex_cond(n: u32, t: u32, f: u32) {
     let nd = nodes[n];
     let k = nd.kind as i64;
-    let ok, cv = fold_bool(n);
-    if ok && nkind(n) != N_STMTEXPR && pure_const(n) {
+    let ok, cv = const_bool(n);
+    if ok {
         br(if cv { t } else { f });
         return;
     }
@@ -961,6 +961,12 @@ recursive fn ex_cond(n: u32, t: u32, f: u32) {
     }
     if cur_blk < 0 { return; }
     condbr(b, t, f);
+}
+
+// The value of a condition that is a constant without side effects.
+fn const_bool(n: u32) -> bool, bool {
+    if !pure_const(n) { return false, false; }
+    return fold_bool(n);
 }
 
 // A constant without side effects (fold_int / fold_float accepted it).
@@ -1003,8 +1009,8 @@ recursive fn ex_condexpr(n: u32, dst: u32) -> u32 {
         if vk == VK_VOID { return NONE; }
         return phi2(vtype(cv), cv, pt, w, pf);
     }
-    let ok, cv = fold_bool(nd.a);
-    if ok && pure_const(nd.a) && !contains_label(nd.b) && !contains_label(nd.c) {
+    let ok, cv = const_bool(nd.a);
+    if ok && !contains_label(nd.b) && !contains_label(nd.c) {
         let arm = if cv { nd.b } else { nd.c };
         if vk == VK_AGG { ex_agg(arm, dst); return NONE; }
         if vk == VK_VOID { ex_ignore(arm); return NONE; }

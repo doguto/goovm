@@ -241,8 +241,8 @@ fn scope_leave() { dbg_scope_leave(); }
 
 recursive fn gen_if(n: u32) {
     let nd = nodes[n];
-    let ok, cv = fold_bool(nd.a);
-    if ok && pure_const(nd.a) {
+    let ok, cv = const_bool(nd.a);
+    if ok {
         // a constant condition: only the arm that runs (unless the other has labels)
         let live = if cv { nd.b } else { nd.c };
         let dead = if cv { nd.c } else { nd.b };
@@ -764,6 +764,8 @@ fn gen_function(fd: u32) {
     glob_state[g] = 2;
     m_globals[g].kind = G_FUNC;
     m_globals[g].flags = link_flags(s, true) | GF_DEFINED;
+    let sec = sym_section(s);
+    if sec != 0 { m_globals[g].section = get_section(strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len], SF_EXEC, 1); }
     let ft = syms[s].ty;
     let fty = types[ft >> 4];
     let ai = fn_abi(ft);
