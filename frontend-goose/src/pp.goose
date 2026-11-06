@@ -266,19 +266,25 @@ recursive fn file_token(t0: Tok, ci: i64) -> bool, Tok {
         let ms = ctxs[ci].mi_state;
         if ms != MI_INVALID && ms != MI_GUARD { ctxs[ci].mi_state = MI_INVALID; }
     }
-    // as in pp_lex
-    if t.kind == TK_IDENT {
-        let m = idents[t.val].macro;
-        if m >= 0 && pp_noexpand == 0 {
-            if t.flags & F_NOEXP == 0 && macros[m].enabled {
-                if macros[m].flags & M_FUNC == 0 || next_is_lparen() {
-                    let r = enter_macro(t, m);
-                    if r == 1 { return false, t; }
-                    if r == 2 { return true, builtin_result; }
-                }
-            } else {
-                t.flags = t.flags | F_NOEXP;
+    if t.kind == TK_IDENT { return macro_token(t); }
+    return true, t;
+}
+
+// The end of pp_lex for an identifier token t that may be expanded (not from
+// a context entered with expansion disabled): true and the token to return,
+// or false when a macro was entered (lex again).
+recursive fn macro_token(t0: Tok) -> bool, Tok {
+    var t = t0;
+    let m = idents[t.val].macro;
+    if m >= 0 && pp_noexpand == 0 {
+        if t.flags & F_NOEXP == 0 && macros[m].enabled {
+            if macros[m].flags & M_FUNC == 0 || next_is_lparen() {
+                let r = enter_macro(t, m);
+                if r == 1 { return false, t; }
+                if r == 2 { return true, builtin_result; }
             }
+        } else {
+            t.flags = t.flags | F_NOEXP;
         }
     }
     return true, t;

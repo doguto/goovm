@@ -62,18 +62,156 @@ fn add_dir(d: const u8[:], sys: bool) {
 
 // The translation unit's tokens to tu_toks, the EOF included (with -E to
 // the printer, without the EOF): what calling pp_lex until the EOF gives,
-// with a fast path for the runs of file tokens that need no preprocessing
-// (not a directive, not the end of a file, not a macro's name), which
-// pp_lex would return as they come. Only the first token of a run can
-// change the file's include-guard state.
+// with pp_lex's steps done here for the common tokens:
+//  * from a file, the tokens that need no preprocessing (not a directive,
+//    not the end of a file, not a macro's name) are returned as they come;
+//    identifiers and one-character punctuators are lexed here, as
+//    lex_file_token would lex them, without a call per token, and anything
+//    else (comments, literals, splices, the end of the file) is left to
+//    it. Only the first token of a run can change the file's include-guard
+//    state;
+//  * from a macro expansion (or another token context), ctx_next's tokens
+//    are returned unless they name a macro.
 fn pp_fill() {
     loop {
         let ci = ctxs.len - 1;
-        if ctxs[ci].kind == CTX_FILE {
-            let ms = ctxs[ci].mi_state;
-            var mi = ms != MI_INVALID && ms != MI_GUARD;
-            loop {
-                let t = lex_file_token();
+        let ck = ctxs[ci].kind;
+        if ck == CTX_MACRO && (ctxs[ci].buf == BUF_MTOKS || ctxs[ci].buf == BUF_XBUF) {
+            // A macro's expansion: ctx_next's steps for the run of tokens
+            // up to the next one that names a macro, the next paste (left
+            // to ctx_next) or the end of the context.
+            let b = ctxs[ci].buf;
+            let lim = ctxs[ci].lim as i64;
+            let start = ctxs[ci].start as i64;
+            let stamp = ctxs[ci].stamp;
+            let xl = ctxs[ci].xloc;
+            let noexp = ctxs[ci].noexp;
+            var cur = ctxs[ci].cur as i64;
+            var pend = ctxs[ci].pend;
+            var done = false;
+            while cur < lim {
+                if cur + 1 < lim {
+                    let nk = if b == BUF_MTOKS { mtoks[cur + 1].kind } else { xbuf[cur + 1].kind };
+                    if nk == TK_HASHHASH { break; }
+                }
+                var t = if b == BUF_MTOKS { mtoks[cur] } else { xbuf[cur] };
+                if stamp {
+                    t.xloc = xl;
+                    t.flags = t.flags | F_MACRO;
+                }
+                if cur == start {
+                    t.flags = (t.flags & ~(F_BOL | F_LSPACE)) | (pend & (F_BOL | F_LSPACE));
+                } else {
+                    t.flags = t.flags | (pend & (F_BOL | F_LSPACE));
+                }
+                pend = 0;
+                cur++;
+                if t.kind == TK_IDENT && !noexp && idents[t.val].macro >= 0 {
+                    ctxs[ci].cur = cur as! u32;
+                    ctxs[ci].pend = 0;
+                    done = true;
+                    let ok, m = macro_token(t);
+                    if ok {
+                        if m.kind == TK_EOF {
+                            if !mode_E { tu_toks.push(m); }
+                            return;
+                        }
+                        if mode_E { pr_token(m); } else { tu_toks.push(m); }
+                    }
+                    break;
+                }
+                if t.kind == TK_EOF {
+                    ctxs[ci].cur = cur as! u32;
+                    ctxs[ci].pend = 0;
+                    if !mode_E { tu_toks.push(t); }
+                    return;
+                }
+                if mode_E { pr_token(t); } else { tu_toks.push(t); }
+            }
+            if done { continue; }
+            // a paste or the end of the context: ctx_next's, below
+            ctxs[ci].cur = cur as! u32;
+            ctxs[ci].pend = pend;
+        }
+        if ck != CTX_FILE {
+            let t = ctx_next(ci);
+            if t.kind == TK_CTX_END {
+                pop_tok_ctx(t.flags);
+                continue;
+            }
+            var r = t;
+            if t.kind == TK_IDENT && !ctxs[ci].noexp {
+                let ok, m = macro_token(t);
+                if !ok { continue; }
+                r = m;
+            }
+            if r.kind == TK_EOF {
+                if !mode_E { tu_toks.push(r); }
+                return;
+            }
+            if mode_E { pr_token(r); } else { tu_toks.push(r); }
+            continue;
+        }
+        let ms = ctxs[ci].mi_state;
+        var mi = ms != MI_INVALID && ms != MI_GUARD;
+        // The lexer's position and pending flags, in locals while the fast
+        // path runs (lx_dir is false: pp_fill is not inside a directive).
+        var p = lx_pos;
+        var flags = lx_flags;
+        let sys = lx_sys;
+        loop {
+            var c = src[p];
+            if cc[c] & CC_HSPACE != 0 {
+                p++;
+                while cc[src[p]] & CC_HSPACE != 0 { p++; }
+                flags |= F_LSPACE;
+                c = src[p];
+            }
+            if c == '\n' {
+                p++;
+                flags = F_BOL;
+                continue;
+            }
+            let cl = lxc[c];
+            var t = Tok { kind: 0, flags: 0, aux: 0, spell: 0, val: 0, xloc: 0 };
+            var have = false;
+            if cl == LX_IDENT || (cl == LX_IDPREFIX && !quote_follows(p)) {
+                var h: u32 = 2166136261;
+                var q = p;
+                while cc[src[q]] & CC_IDCONT != 0 {
+                    h = (h ^ src[q]) * 16777619;
+                    q++;
+                }
+                if src[q] != '\\' {
+                    let id = ident_lookup(p, q - p, h);
+                    t = Tok { kind: TK_IDENT, flags: flags | sys, aux: 0, spell: p as! u32, val: id, xloc: p as! u32 };
+                    p = q;
+                    flags = 0;
+                    if idents[id].macro < 0 {
+                        if mi {
+                            ctxs[ci].mi_state = MI_INVALID;
+                            mi = false;
+                        }
+                        if mode_E { pr_token(t); } else { tu_toks.push(t); }
+                        continue;
+                    }
+                    have = true;
+                }
+            } else if cl == LX_PUNCT1 && src[p + 1] != '\\' {
+                if mi {
+                    ctxs[ci].mi_state = MI_INVALID;
+                    mi = false;
+                }
+                t = Tok { kind: PUNCT1[c], flags: flags | sys, aux: 0, spell: p as! u32, val: 0, xloc: p as! u32 };
+                if mode_E { pr_token(t); } else { tu_toks.push(t); }
+                p++;
+                flags = 0;
+                continue;
+            }
+            lx_pos = p;
+            lx_flags = flags;
+            if !have {
+                t = lex_file_token();
                 if t.kind != TK_EOF && !(t.kind == TK_HASH && t.flags & F_BOL != 0) &&
                         !(t.kind == TK_IDENT && idents[t.val].macro >= 0) {
                     if mi {
@@ -81,26 +219,21 @@ fn pp_fill() {
                         mi = false;
                     }
                     if mode_E { pr_token(t); } else { tu_toks.push(t); }
+                    p = lx_pos;
+                    flags = lx_flags;
                     continue;
                 }
-                let ok, r = file_token(t, ci);
-                if ok {
-                    if r.kind == TK_EOF {
-                        if !mode_E { tu_toks.push(r); }
-                        return;
-                    }
-                    if mode_E { pr_token(r); } else { tu_toks.push(r); }
-                }
-                break;
             }
-            continue;
+            let ok, r = file_token(t, ci);
+            if ok {
+                if r.kind == TK_EOF {
+                    if !mode_E { tu_toks.push(r); }
+                    return;
+                }
+                if mode_E { pr_token(r); } else { tu_toks.push(r); }
+            }
+            break;
         }
-        let t = pp_lex();
-        if t.kind == TK_EOF {
-            if !mode_E { tu_toks.push(t); }
-            return;
-        }
-        if mode_E { pr_token(t); } else { tu_toks.push(t); }
     }
 }
 

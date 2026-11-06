@@ -354,7 +354,14 @@ fn lex_file_token() -> Tok {
     var p = lx_pos;
     var flags = lx_flags;
     loop {
-        let c = src[p];
+        var c = src[p];
+        if cc[c] & CC_HSPACE != 0 {
+            // a run of spaces (indentation)
+            p++;
+            while cc[src[p]] & CC_HSPACE != 0 { p++; }
+            flags |= F_LSPACE;
+            c = src[p];
+        }
         let cl = lxc[c];
         if cl == LX_IDENT || (cl == LX_IDPREFIX && !quote_follows(p)) {
             // Identifier fast path.
@@ -373,7 +380,6 @@ fn lex_file_token() -> Tok {
             lx_flags = 0;
             return Tok { kind: TK_IDENT, flags: flags | lx_sys, aux: 0, spell: p as! u32, val: id, xloc: p as! u32 };
         }
-        if cl == LX_SPACE { p++; flags |= F_LSPACE; continue; }
         // A punctuator that is always one character: what scan_token
         // returns, unless a splice follows it.
         if cl == LX_PUNCT1 && src[p + 1] != '\\' {
