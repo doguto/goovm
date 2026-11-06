@@ -53,7 +53,7 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             // its global is made when it is emitted or referenced: an unused
             // static or inline function leaves no symbol, as in clang
             let s = nd.a as i64;
-            def_by_name.insert(link_name(s), s);
+            gmap.insert(gk(GM_DEFBY, link_name(s)), s as! u32);
         } else if nd.kind == N_DECL {
             let s = nd.a as i64;
             if syms[s].kind == SK_VAR {
@@ -163,7 +163,7 @@ fn emit_aliases() {
         let off = sym_attrs[a].alias_off as i64;
         let tname = strbytes[off..off + sym_attrs[a].alias_len];
         let tid = intern(tname);
-        let r = name_glob.get(tid);
+        let r = gmap.get(gk(GM_NAMEGLOB, tid));
         if !r {
             err_at(nd.loc, str("alias must point to a defined variable or function ('", tname, "')"));
             continue;

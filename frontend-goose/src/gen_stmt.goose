@@ -26,13 +26,18 @@ struct Cleanup { kind: u8, val: u32, sym: i64, fsym: i64 }
 var cleanups: Cleanup[>..<] = [];
 var cleanup_marks: u32[>..<] = [];
 
-var case_blk = dictionary<u32, u32> {};     // N_CASE / N_DEFAULT node -> block
+// Per function: N_CASE / N_DEFAULT node -> its block (fk(FM_CASE, node)),
+// label -> the cleanup depth where it is defined (fk(FM_LABEL, label)).
+let FM_CASE = 1;
+let FM_LABEL = 2;
+var fmap = dictionary<u64, u32> {};
+fn fk(table: u64, key: u32) -> u64 { (table << 32) | (key as u64) }
 var f_addr_labels: u32[>..<] = [];          // labels whose address is taken
 var f_igoto: u32 = NONE;                    // the indirect-goto block
 var f_igoto_vals: u32[>..<] = [];           // (address, predecessor block) pairs
 
 fn case_block(n: u32) -> u32 {
-    let r = case_blk.get(n);
+    let r = fmap.get(fk(FM_CASE, n));
     if r { return r; }
     return NONE;
 }
@@ -132,12 +137,11 @@ recursive fn contains_label_noswitch(n: u32) -> bool {
     return false;
 }
 
-var label_depth = dictionary<u32, u32> {};   // label -> cleanup depth where it is defined
 
 fn gen_label(l: i64) {
     let b = label_block(l);
     start_block(b);
-    label_depth.insert(l as! u32, cleanups.len as! u32);
+    fmap.insert(fk(FM_LABEL, l as! u32), cleanups.len as! u32);
 }
 
 recursive fn gen_stmt(n: u32) {
@@ -186,7 +190,7 @@ recursive fn gen_stmt(n: u32) {
     if k == N_FOR { gen_for(n); return; }
     if k == N_SWITCH { gen_switch(n); return; }
     if k == N_CASE || k == N_DEFAULT {
-        let r = case_blk.get(n);
+        let r = fmap.get(fk(FM_CASE, n));
         if r { start_block(r); }
         if k == N_CASE && nd.c != 0 {
             // GNU range expanded into blocks of its own: same block
@@ -201,7 +205,7 @@ recursive fn gen_stmt(n: u32) {
     }
     if k == N_GOTO {
         // a jump back to before a VLA (or a cleanup variable) leaves its scope
-        let d = label_depth.get(nd.a);
+        let d = fmap.get(fk(FM_LABEL, nd.a));
         if d && (d as i64) < cleanups.len { run_cleanups(d as i64); }
         br(label_block(nd.a as i64));
         return;
@@ -374,7 +378,7 @@ recursive fn gen_switch(n: u32) {
     for i in ncases {
         let cn = nlist[nd.v + i];
         let b = new_block();
-        case_blk.insert(cn, b);
+        fmap.insert(fk(FM_CASE, cn), b);
         if nkind(cn) == N_DEFAULT { dflt = b; }
         else if nodes[cn].c != 0 {
             let lo = nodes[cn].v;
@@ -814,8 +818,7 @@ fn gen_function(fd: u32) {
     f_igoto = NONE;
     f_igoto_vals.clear();
     f_arg_types.clear();
-    case_blk.clear();
-    label_depth.clear();
+    fmap.clear();
     cleanups.clear();
     cleanup_marks.clear();
     dbg_function_begin(s, nd.loc);

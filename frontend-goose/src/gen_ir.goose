@@ -161,6 +161,19 @@ fn ty_struct() -> u32 {
 // { a @0, b @off }
 var pair_types = dictionary<u64, u32> {};
 
+// The lowering's maps keyed by a u32 (one dictionary, so one data stack):
+// gk(table, key).
+let GM_VEC = 1;        // C type index -> GIR vector type
+let GM_FABI = 2;       // C function type -> its first Abi record
+let GM_NOBUILTIN = 3;  // -fno-builtin-NAME identifiers (value 1)
+let GM_DSTR = 4;       // interned string -> offset in m_dstr
+let GM_NAMEGLOB = 5;   // linkage name (ident) -> global
+let GM_DEFBY = 6;      // linkage name -> the symbol of the function defined under it
+let GM_SECNAME = 7;    // interned section name -> section index
+let GM_LIBFN = 8;      // interned library function name -> global
+var gmap = dictionary<u64, u32> {};
+fn gk(table: u64, key: u32) -> u64 { (table << 32) | (key as u64) }
+
 fn ty_pair(a: u32, b: u32, off: u32) -> u32 {
     let key = (a as u64) | ((b as u64) << 16) | ((off as u64) << 32);
     let r = pair_types.get(key);
@@ -261,11 +274,10 @@ fn new_global(name: const u8[:], kind: u32, flags: u32, align: u32) -> u32 {
 
 fn gref(g: u32) -> u32 { KGLOBAL | g }
 
-var sec_names = dictionary<u32, u32> {};   // interned name -> section index
 
 fn get_section(name: const u8[:], flags: u32, typ: u32) -> u32 {
     let id = intern(name);
-    let r = sec_names.get(id);
+    let r = gmap.get(gk(GM_SECNAME, id));
     if r {
         m_sections[r].flags = m_sections[r].flags | flags;
         return r;
@@ -273,7 +285,7 @@ fn get_section(name: const u8[:], flags: u32, typ: u32) -> u32 {
     let off = add_name(name);
     let s = m_sections.len as! u32;
     m_sections.push(Section { name: off, name_len: name.len as! u32, flags: flags, typ: typ });
-    sec_names.insert(id, s);
+    gmap.insert(gk(GM_SECNAME, id), s);
     return s;
 }
 

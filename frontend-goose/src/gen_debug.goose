@@ -13,7 +13,6 @@ import .common;
 import .types;
 import .ast;
 
-var dstr_map = dictionary<u32, u32> {};    // interned string -> offset in m_dstr
 var dfile_of: i32[>..] = [];               // frontend file -> dfiles index (-1 not yet)
 var dbg_cu: u32 = 0;
 var dbg_sp: u32 = 0;                       // the current subprogram
@@ -29,12 +28,12 @@ var dbg_lang: u32 = 0x1d;
 fn dstring(s: const u8[:]) -> u32 {
     if s.len == 0 { return 0; }
     let id = intern(s);
-    let r = dstr_map.get(id);
+    let r = gmap.get(gk(GM_DSTR, id));
     if r { return r; }
     let off = m_dstr.len as! u32;
     m_dstr.append(s);
     m_dstr.push(0);
-    dstr_map.insert(id, off);
+    gmap.insert(gk(GM_DSTR, id), off);
     return off;
 }
 

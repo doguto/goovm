@@ -17,16 +17,14 @@ import .ast;
 import .sema;
 import .parse;
 
-var name_glob = dictionary<u32, u32> {};   // linkage name (ident) -> global
 // Per global: the symbol (-1 for others), and 0 declared, 1 queued, 2 emitted.
 struct GlobGen { sym: i64, state: u8 }
 var glob_gen: GlobGen[>..] = [];
 var work: u32[>..<] = [];                  // globals whose definitions are to be emitted
-var def_by_name = dictionary<u32, i64> {};  // linkage name -> the symbol of the function defined under it
 
 // The symbol whose definition has linkage name id, or -1.
 fn defining_sym(id: u32) -> i64 {
-    let r = def_by_name.get(id);
+    let r = gmap.get(gk(GM_DEFBY, id));
     if r { return r; }
     return -1;
 }
@@ -66,10 +64,10 @@ fn is_internal_sym(s: i64) -> bool {
 }
 
 fn global_by_name(id: u32, is_func: bool) -> u32 {
-    let r = name_glob.get(id);
+    let r = gmap.get(gk(GM_NAMEGLOB, id));
     if r { return r; }
     let g = new_global(ident_text(id as i64), if is_func { G_FUNC } else { G_VAR }, 0, if is_func { 16 } else { 1 });
-    name_glob.insert(id, g);
+    gmap.insert(gk(GM_NAMEGLOB, id), g);
     ensure_glob_tables();
     return g;
 }

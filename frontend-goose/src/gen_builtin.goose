@@ -26,21 +26,20 @@ fn strip_builtin(name: const u8[:]) -> const u8[:] {
 // A call of a library function that clang lowers itself; KEEP_CALL to
 // emit an ordinary call.
 var opt_no_builtin: bool = false;
-var no_builtin_names = dictionary<u32, bool> {};
 var no_builtin_opts: u32[>..] = [];      // -fno-builtin-X: (offset, length) in names
 
 fn init_no_builtin() {
     var k = 0;
     while k + 1 < no_builtin_opts.len {
         let o = no_builtin_opts[k] as i64;
-        no_builtin_names.insert(intern(names[o..o + no_builtin_opts[k + 1]]), true);
+        gmap.insert(gk(GM_NOBUILTIN, intern(names[o..o + no_builtin_opts[k + 1]])), 1);
         k += 2;
     }
 }
 
 recursive fn builtin_lib_call(s: i64, n: u32, dst: u32) -> u32 {
     if is_internal_sym(s) || opt_no_builtin { return KEEP_CALL; }
-    if no_builtin_names.contains(syms[s].name) { return KEEP_CALL; }
+    if gmap.contains(gk(GM_NOBUILTIN, syms[s].name)) { return KEEP_CALL; }
     let a = syms[s].attr;
     if a != 0 && sym_attrs[a].asm_len != 0 { return KEEP_CALL; }
     let id = syms[s].name;

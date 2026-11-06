@@ -412,14 +412,13 @@ fn mem_copy_dyn(dst: u32, src: u32, n: u32) {
 
 // ------------------------------------------------------- library calls
 
-var libfn_ids = dictionary<u32, u32> {};    // interned name -> global
 
 fn libfn(name: const u8[:]) -> u32 {
     let id = intern(name);
-    let r = libfn_ids.get(id);
+    let r = gmap.get(gk(GM_LIBFN, id));
     if r { return r; }
     let g = global_by_name(id, true);
-    libfn_ids.insert(id, g);
+    gmap.insert(gk(GM_LIBFN, id), g);
     return g;
 }
 

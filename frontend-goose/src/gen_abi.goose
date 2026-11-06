@@ -13,7 +13,6 @@ import .ast;
 
 // ------------------------------------------------------- scalar GIR types
 
-var vec_cache = dictionary<u32, u32> {};    // C type index -> GIR vector type
 
 // GIR types of the scalar C type kinds (TY_*; 255 = look closer).
 let KIND_GIR: u8[32] = [0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 10, 10,     // -, void, bool, chars, shorts, ints, longs, i128
@@ -47,12 +46,12 @@ recursive fn vty(q: u32) -> u32 {
     if k == TY_ENUM { return vty(enum_underlying(q)); }
     if k == TY_VECTOR || k == TY_EXTVECTOR {
         let ti = (q >> 4) as! u32;
-        let r = vec_cache.get(ti);
+        let r = gmap.get(gk(GM_VEC, ti));
         if r { return r; }
         let e = mty(t.base);
         var n = t.n as! u32;
         let v = ty_vec(n, e);
-        vec_cache.insert(ti, v);
+        gmap.insert(gk(GM_VEC, ti), v);
         return v;
     }
     return GIR_T_VOID;
@@ -409,7 +408,6 @@ fn ret_abi(q: u32) -> Abi {
 
 // Per function: abis[first] is the return, abis[first + 1 + i] parameter i.
 var abis: Abi[>..] = [];
-var fabi_cache = dictionary<u32, u32> {};
 
 var abi_free_int: i64 = 0;
 var abi_free_sse: i64 = 0;
@@ -454,7 +452,7 @@ fn arg_abi(q0: u32) -> Abi {
 // The ABI of function type ft (prototyped parameters only).
 fn fn_abi(ft: u32) -> u32 {
     let ti = (ft >> 4) as! u32;
-    let r = fabi_cache.get(ti);
+    let r = gmap.get(gk(GM_FABI, ti));
     if r { return r; }
     let t = types[ti];
     let first = abis.len as! u32;
@@ -462,6 +460,6 @@ fn fn_abi(ft: u32) -> u32 {
     abis.push(ra);
     abi_start(ra);
     for i in t.n { abis.push(arg_abi(tparams[t.extra + i])); }
-    fabi_cache.insert(ti, first);
+    gmap.insert(gk(GM_FABI, ti), first);
     return first;
 }
