@@ -34,7 +34,7 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 | `tools/goovm-llc/` | LLVM 20 のビットコードを GIR に書き出し、Goose 版バックエンドで ELF にするドライバ |
 | `backend-goose/` | Goose で書いた x86-64 `-O0` バックエンド（設計は `DESIGN.md`、移植と開発の記録は `NOTES.md`） |
 | `backend-cpp/` | v0 の C++ 版バックエンド。`8f55b18` で凍結し、ビルドしない |
-| `tests/` | `suite.py`（各コーパスでの正しさの検証）と、C テストプログラム43本（`run.py`） |
+| `tests/` | `suite.py`（各コーパスでの正しさの検証）と、C テストプログラム44本（`run.py`） |
 | `bench/` | CTMark、LLVM 自身のビルド、バックエンド、要因の切り分け、出力コードの質、全体への効果の計測 |
 | `poc/` | Goose コンパイラの伸び方、C++ との接続、変更可能な IR グラフの試作 |
 

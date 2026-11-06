@@ -250,6 +250,7 @@ let FN_VARARG = 2;
 let FN_INTERNAL = 4;
 let FN_VASTART = 8;
 let FN_SJLJ = 16;
+let FN_RETURNS_TWICE = 32;
 let FN_ALIGN_SHIFT = 24;
 
 // Globals.

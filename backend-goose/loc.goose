@@ -33,6 +33,13 @@ var f_index: u32 = 0;           // funcs index of the current function
 var v_off: i32[>..] = [];
 var v_home: u8[>..] = [];
 var t_off: i32[>..] = [];       // rbp offset of a PHI's temp slot
+// Liveness for slot sharing (layout_shared in cg.goose): v_span[j] = (last
+// use of j) - j when every use of j is in j's block, else SPAN_ALL (used in
+// other blocks). Only valid when f_shared (else every value has its slot).
+var f_shared = false;
+var v_span: u32[>..] = [];
+var cur_pos: u32 = 0;           // local index of the instruction being lowered
+let SPAN_ALL: u32 = 0xFFFFFFFF;
 var a_off: i32[>..] = [];
 var a_home: u8[>..] = [];
 var block_off: u32[>..] = [];   // code offset of each local block
@@ -268,6 +275,13 @@ fn global_addr(r: u32, g: u32) {
 
 // ================================================ value-location interface
 
+// A local value is read only between its definition and its last use: its
+// slot may hold another value outside that range. A use that the liveness
+// scan in gen_function missed stops here instead of reading a stale slot.
+inline fn live_check(j: u32) {
+    if f_shared && cur_pos - j > v_span[j] { assert(false); }  // (u32: also catches cur_pos < j)
+}
+
 // Home memory of local instruction j (H_SLOT or the alloca area).
 inline fn res_mem(j: u32) -> Mem { m_rbp(v_off[j]) }
 
@@ -276,7 +290,11 @@ inline fn res_mem(j: u32) -> Mem { m_rbp(v_off[j]) }
 fn val_mem(v: u32) -> Mem {
     let i = gir_idx(v);
     let k = gir_kind(v);
-    if k == GIR_V_INST { return m_rbp(v_off[i - f_first_inst]); }
+    if k == GIR_V_INST {
+        let j = i - f_first_inst;
+        live_check(j);
+        return m_rbp(v_off[j]);
+    }
     if k == GIR_V_ARG { return m_rbp(a_off[i]); }
     return const_mem(i);
 }
@@ -290,7 +308,10 @@ fn use_gpr(v: u32, r: u32) -> u32 {
         let j = i - f_first_inst;
         let h = v_home[j];
         if h == H_ALLOCA { lea64(r, m_rbp(v_off[j])); }
-        else { load64(r, m_rbp(v_off[j])); }
+        else {
+            live_check(j);
+            load64(r, m_rbp(v_off[j]));
+        }
     } else if k == GIR_V_ARG {
         if a_home[i] == A_BYVAL { lea64(r, m_rbp(a_off[i])); }
         else { load64(r, m_rbp(a_off[i])); }

@@ -44,7 +44,7 @@ gir_codegen(tables):
 ```
 
 `gen_function` is the per-function pass: a frame-layout loop over the
-instructions (one home per result, alloca areas, PHI temp slots), the
+instructions (homes of results, alloca areas, PHI temp slots; §5), the
 prologue, then `gen_inst` for every instruction of every block in layout
 order, then the branch fixups. Nothing walks the IR twice except the
 frame-layout loop; there are no hash maps; all state is flat arrays indexed
@@ -119,6 +119,9 @@ Rules the lowerings follow, which a register allocator can rely on:
   A2 must treat them as clobbered by the lowering (or reserve them).
 - Calls clobber all caller-saved registers; under A1 nothing is live in a
   register across an instruction, so nothing is saved.
+- A local value's slot is only valid between its definition and its last
+  use (`v_span`, §5): the backward layout pass is the liveness A2 can build
+  on (last use per value, local vs. used across blocks).
 - The x87 stack is empty between instructions.
 
 To plug in a register allocator, A2 changes `use_gpr`/`use_xmm` to return
@@ -143,6 +146,26 @@ rbp-8..-40      rbx, r12..r15        only if the function calls __builtin_setjmp
                 result slots, PHI temp slots, alloca areas (each at its alignment)
 rsp             16-byte aligned; dynamic allocas and outgoing call areas below
 ```
+
+**Slot sharing.** Functions of more than 256 instructions are laid out by
+one backward pass (`layout_shared` in `cg.goose`) that also finds each
+value's last use: scanning backward, the first use seen is the last one, so
+the value takes a slot there and gives it back at its definition. A value
+whose uses are all in its own block ("local"; a PHI's incoming value is used
+by the predecessor's terminator) shares 8- and 16-byte slots with other local
+values; a value used in another block keeps its own slot. Local values of
+different blocks are never live at the same time, so this needs no liveness
+across blocks. A use above its definition in layout order is detected and
+the function is laid out again with one slot per value, as are functions
+that call `setjmp` or another `returns_twice` function (`GIR_FN_RETURNS_TWICE`,
+`GIR_FN_SJLJ`) and functions of at most 256 instructions (whose value slots
+are at most ~2 KB; the backward pass costs about as much as the rest of the
+layout). One slot per value made consumer-typeset's recursive `Manifest`
+(16 000 instructions) take a 97 KB frame and overflow the 8 MB stack; with
+sharing it is 2.9 KB (clang -O0: 2.1 KB). `v_span[j]` records the last use;
+`live_check` in the value-location interface aborts if a lowering reads a
+local value outside [definition, last use], so a use that the layout's
+operand table (`OP_USES`) missed cannot silently read another value.
 
 `frame = align_up(off, 16)`; the prologue is `push rbp; mov rbp, rsp; sub
 rsp, frame`, then the callee-saved and va register saves, the argument

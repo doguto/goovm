@@ -107,6 +107,7 @@ fn gen_inst(gi: u32, cur: u32) {
     let I = M.insts[gi];
     let j = gi - f_first_inst;
     let next = cur + 1;
+    cur_pos = j;
     match I.op {
         GIR_RET => {
             if I.a != GIR_NONE { ret_value(I.a, type_of(I.a)); }
@@ -277,6 +278,254 @@ fn gen_inst(gi: u32, cur: u32) {
     }
 }
 
+// ----------------------------------------------------------- frame layout
+
+// Homes are laid out by one backward pass over the function that also finds
+// each value's last use, so that values can share frame slots: one slot per
+// value overflowed the stack in consumer-typeset's recursive Manifest (a
+// 97 KB frame per call; clang -O0: 2 KB). Scanning backward, the first use
+// of a value that is seen is its last one: the value gets its slot there and
+// gives it back at its definition. A value whose uses are all in its own
+// block ("local") shares 8- and 16-byte slots with other local values; a
+// value used in another block keeps its own slot. Local values of different
+// blocks are never live at the same time, so no liveness across blocks is
+// needed. A use above its definition in layout order (a block that comes
+// before the defining one) is detected and the function is laid out again
+// with one slot per value, as are functions that call a returns_twice
+// function (the second return from setjmp sees the slots as they were).
+// The pass costs about as much again as the forward layout it replaces, so
+// functions of at most SHARE_MIN_INSTS instructions (value slots of at most
+// ~2 KB) keep one slot per value.
+
+let SHARE_MIN_INSTS = 256;
+
+var v_mark: u32[>..] = [];      // per value: lay_epoch + MK_*
+var lay_epoch: u32 = 0;         // advances by 4 per function
+let MK_SLOT = 0;                // has its slot (a later use was seen)
+let MK_DEF = 1;                 // definition passed
+let MK_ALLOCA = 2;              // alloca (homed by the entry-block pass)
+var lay_off: i64 = 0;           // bytes below rbp so far
+var lay_lo: u32 = 0;            // current block [lay_lo, lay_hi) (module indices)
+var lay_conflict = false;
+var f_end_inst: u32 = 0;
+var free8: i32[>..] = [];       // free shared slots (rbp offsets), 8 and 16 bytes
+var free16: i32[>..] = [];
+var n_free8: i64 = 0;
+var n_free16: i64 = 0;
+
+// Value operands per opcode: U_A/U_B/U_C for the fields a, b, c, plus the
+// operand runs of GEP, CALL and ASM (PHI incoming values are uses of the
+// predecessor's terminator). Immediates are not listed: taking one for a
+// value only limits sharing, while a missed use would be a miscompile,
+// which live_check turns into an abort.
+let U_A = 1;
+let U_B = 2;
+let U_C = 4;
+let U_GEP = 8;
+let U_CALL = 16;
+let U_ASM = 64;
+let OP_USES: u8[83] = [
+    1, 0, 1, 1, 0, 3, 3, 3,  // ret br condbr switch unreachable add sub mul
+    3, 3, 3, 3, 3, 3, 3, 3,  // sdiv udiv srem urem and or xor shl
+    3, 3, 3, 7, 1, 1, 1, 1,  // lshr ashr icmp select zext sext trunc ptrtoint
+    1, 1, 0, 1, 3, 9, 17, 0,  // inttoptr bitcast alloca load store gep call phi
+    3, 3, 3, 3, 1, 3, 1, 1,  // fadd fsub fmul fdiv fneg fcmp fpext fptrunc
+    1, 1, 1, 1, 1, 3, 3, 7,  // fptosi fptoui sitofp uitofp extractvalue insertvalue extractelt insertelt
+    3, 1, 0, 1, 1, 3, 3, 1,  // shuffle dynalloca stacksave stackrestore vastart memcpy memset ctlz
+    1, 1, 1, 1, 7, 7, 3, 3,  // cttz ctpop bswap bitreverse fshl fshr ovf scmp
+    3, 1, 3, 1, 1, 7, 3, 0,  // ucmp fabs copysign fsqrt isfpclass cmpxchg atomicrmw fence
+    0, 0, 0, 1, 1, 0, 0, 1,  // tlsaddr frameaddr retaddr sjlj_setjmp sjlj_longjmp trap debugtrap indirectbr
+    0, 3, 64,  // blockaddr x86 asm
+];
+
+// A fresh slot of sz bytes (16-aligned from 16 bytes on).
+inline fn new_slot(sz: i64) -> i32 {
+    lay_off += sz;
+    if sz >= 16 { lay_off = (lay_off + 15) & ~15; }
+    return (-lay_off) as! i32;
+}
+inline fn val_slot_size(t: u32) -> i64 { if t > GIR_T_F64 { slot_size(t) } else { 8 } }
+
+// Home of alloca j; true if it is over-aligned (aligned at run time).
+fn layout_alloca(I: Inst, j: u32) -> bool {
+    let al: i64 = if I.b != 0 { I.b } else { 1 };
+    let size: i64 = if I.a != 0 { I.a } else { 1 };
+    if al <= 16 {
+        lay_off = (lay_off + size + al - 1) & ~(al - 1);  // al is a power of two (no division)
+        v_off[j] = (-lay_off) as! i32;
+        v_home[j] = H_ALLOCA;
+        return false;
+    }
+    // area of size + al bytes, aligned at run time; the pointer gets a slot
+    lay_off = (lay_off + size + al + 15) & ~15;
+    t_off[j] = (-lay_off) as! i32;
+    lay_off = ((lay_off + 7) & ~7) + 8;
+    v_off[j] = (-lay_off) as! i32;
+    v_home[j] = H_PTR;
+    return true;
+}
+
+// One slot per value. Returns whether there are over-aligned allocas.
+fn layout_unique(insts: const Inst[:]) -> bool {
+    var overaligned = false;
+    for I, j in insts {
+        if I.op == GIR_ALLOCA {
+            if layout_alloca(I, j as! u32) { overaligned = true; }
+        } else if I.ty != GIR_T_VOID {
+            let sz = val_slot_size(I.ty);
+            v_off[j] = new_slot(sz);
+            v_home[j] = H_SLOT;
+            if I.op == GIR_PHI { t_off[j] = new_slot(sz); }
+        } else {
+            v_home[j] = H_NONE;
+        }
+    }
+    return overaligned;
+}
+
+// The last use of value v (module reference) is at local position pos of
+// the current block: give v its slot.
+inline fn lay_use(v: u32, pos: u32) {
+    if v >= f_first_inst && v < f_end_inst {  // an instruction of this function
+        let mk = v_mark[v - f_first_inst] - lay_epoch;
+        if mk != MK_SLOT && mk != MK_ALLOCA { lay_last_use(v, pos, mk); }
+    }
+}
+// (v has no slot yet: this is its last use)
+fn lay_last_use(v: u32, pos: u32, mk: u32) {
+    let u = v - f_first_inst;
+    if mk == MK_DEF {
+        lay_conflict = true;  // used above its definition
+        return;
+    }
+    v_mark[u] = lay_epoch + MK_SLOT;
+    let sz = val_slot_size(M.insts[v].ty);
+    if v < lay_lo {
+        v_span[u] = SPAN_ALL;
+        v_off[u] = new_slot(sz);
+        return;
+    }
+    v_span[u] = pos - u;
+    if sz == 8 && n_free8 != 0 {
+        n_free8--;
+        v_off[u] = free8[n_free8];
+    } else if sz == 16 && n_free16 != 0 {
+        n_free16--;
+        v_off[u] = free16[n_free16];
+    } else {
+        v_off[u] = new_slot(sz);
+    }
+}
+
+// The definition of local value j: its slot is free above it.
+fn lay_free(j: u32, sz: i64) {
+    let o = v_off[j];
+    if sz == 8 {
+        if n_free8 < free8.len { free8[n_free8] = o; } else { free8.push(o); }
+        n_free8++;
+    } else if sz == 16 {
+        if n_free16 < free16.len { free16[n_free16] = o; } else { free16.push(o); }
+        n_free16++;
+    }
+}
+
+// PHI incoming values of successor s for the edge from block `from`: read by
+// phi_moves at from's terminator (position pos).
+fn lay_phi_uses(s: u32, from: u32, pos: u32) {
+    let B = M.blocks[f_first_block + s];
+    for k in B.first_inst..B.first_inst + B.n_inst {
+        let I = M.insts[k];
+        if I.op != GIR_PHI { break; }
+        for p in 0..I.c {
+            if M.opnds[I.b + 2 * p + 1] == from {
+                lay_use(M.opnds[I.b + 2 * p], pos);
+                break;
+            }
+        }
+    }
+}
+
+fn lay_runs(I: Inst, m: u32, pos: u32) {
+    if m & U_GEP != 0 {
+        for k in 0..I.c { lay_use(M.opnds[I.b + 2 + 2 * k], pos); }
+    } else if m & U_CALL != 0 {
+        for k in 0..I.c { lay_use(M.opnds[I.b + 2 * k], pos); }
+    } else {
+        let A = M.asms[I.a];
+        for q in 0..A.n_in { lay_use(M.opnds[A.ops + 2 * q], pos); }
+    }
+}
+
+// Slot-sharing layout. Returns (ok, overaligned); not ok: a use above its
+// definition was found (the caller lays the function out again).
+fn layout_shared(insts: const Inst[:], blocks: const Block[:]) -> bool, bool {
+    lay_epoch += 4;
+    lay_conflict = false;
+    n_free8 = 0;
+    n_free16 = 0;
+    // allocas first (entry block only), so that their uses are ignored
+    var overaligned = false;
+    let E = blocks[0];
+    for gi in E.first_inst..E.first_inst + E.n_inst {
+        let I = M.insts[gi];
+        if I.op != GIR_ALLOCA { continue; }
+        let j = gi - f_first_inst;
+        if layout_alloca(I, j) { overaligned = true; }
+        v_mark[j] = lay_epoch + MK_ALLOCA;
+        v_span[j] = SPAN_ALL;
+    }
+    var b = blocks.len;
+    while b > 0 {
+        b--;
+        let B = blocks[b];
+        lay_lo = B.first_inst;
+        var gi = B.first_inst + B.n_inst;
+        while gi > B.first_inst {
+            gi--;
+            let I = M.insts[gi];
+            let j = gi - f_first_inst;
+            let op: u32 = I.op;
+            // uses first: an operand never shares the result's slot
+            let m: u32 = if op < 83 { OP_USES[op] } else { U_A | U_B | U_C };
+            if m & U_A != 0 { lay_use(I.a, j); }
+            if m & U_B != 0 { lay_use(I.b, j); }
+            if m & U_C != 0 { lay_use(I.c, j); }
+            if m >= U_GEP { lay_runs(I, m, j); }
+            if op <= GIR_SWITCH || op == GIR_INDIRECTBR {
+                let bu = b as! u32;
+                if op == GIR_BR { lay_phi_uses(I.a, bu, j); }
+                else if op == GIR_CONDBR {
+                    lay_phi_uses(I.b, bu, j);
+                    lay_phi_uses(I.c, bu, j);
+                } else if op == GIR_SWITCH {
+                    lay_phi_uses(M.opnds[I.b], bu, j);
+                    for k in 0..I.c { lay_phi_uses(M.opnds[I.b + 2 + 2 * k], bu, j); }
+                } else if op == GIR_INDIRECTBR {
+                    for k in 0..I.c { lay_phi_uses(M.opnds[I.b + k], bu, j); }
+                }
+            }
+            // the definition
+            if op == GIR_ALLOCA {
+                if v_mark[j] != lay_epoch + MK_ALLOCA { lay_conflict = true; }  // not in the entry block
+            } else if I.ty != GIR_T_VOID {
+                let sz = val_slot_size(I.ty);
+                if v_mark[j] != lay_epoch + MK_SLOT {
+                    // never used: a slot for the store only
+                    lay_lo = B.first_inst;
+                    lay_use(gi, j);
+                }
+                if v_span[j] != SPAN_ALL { lay_free(j, sz); }
+                v_mark[j] = lay_epoch + MK_DEF;
+                v_home[j] = H_SLOT;
+                if op == GIR_PHI { t_off[j] = new_slot(sz); }
+            } else {
+                v_home[j] = H_NONE;
+            }
+        }
+    }
+    return !lay_conflict, overaligned;
+}
+
 // --------------------------------------------------------------- functions
 
 
@@ -322,43 +571,26 @@ fn gen_function(fi: u32) {
         v_off.resize(f.n_inst, 0);
         v_home.resize(f.n_inst, 0);
         t_off.resize(f.n_inst, 0);
+        v_span.resize(f.n_inst, 0);
+        v_mark.resize(f.n_inst, 0);
     }
     assert(v_off.len >= insts.len && v_home.len >= insts.len && t_off.len >= insts.len);
+    assert(v_span.len >= insts.len && v_mark.len >= insts.len);
+    f_end_inst = f.first_inst + f.n_inst;
+    lay_off = off;
+    var ok = false;
     var overaligned = false;
-    for I, j in insts {
-        if I.op == GIR_ALLOCA {
-            let al: i64 = if I.b != 0 { I.b } else { 1 };
-            let size: i64 = if I.a != 0 { I.a } else { 1 };
-            if al <= 16 {
-                off = (off + size + al - 1) & ~(al - 1);
-                v_off[j] = (-off) as! i32;
-                v_home[j] = H_ALLOCA;
-            } else {
-                // area of size + al bytes, aligned at run time; the pointer gets a slot
-                off = (off + size + al + 15) & ~15;
-                t_off[j] = (-off) as! i32;
-                off = ((off + 7) & ~7) + 8;
-                v_off[j] = (-off) as! i32;
-                v_home[j] = H_PTR;
-                overaligned = true;
-            }
-        } else if I.ty != GIR_T_VOID {
-            // INT and FP values (the common case) take 8 bytes; offsets stay 8-aligned.
-            var sz: i64 = 8;
-            if I.ty > GIR_T_F64 || I.ty == GIR_T_VOID { sz = slot_size(I.ty); }
-            off += sz;
-            if sz >= 16 { off = (off + 15) & ~15; }  // slot start 16-aligned
-            v_off[j] = (-off) as! i32;
-            v_home[j] = H_SLOT;
-            if I.op == GIR_PHI {
-                off += sz;
-                if sz >= 16 { off = (off + 15) & ~15; }
-                t_off[j] = (-off) as! i32;
-            }
-        } else {
-            v_home[j] = H_NONE;
-        }
+    if f.n_inst > SHARE_MIN_INSTS && f.flags & (FN_SJLJ | FN_RETURNS_TWICE) == 0 {
+        let ok1, ov1 = layout_shared(insts, blocks);
+        ok = ok1;
+        overaligned = ov1;
     }
+    f_shared = ok;
+    if !ok {
+        lay_off = off;
+        overaligned = layout_unique(insts);
+    }
+    off = lay_off;
     let frame: i64 = (off + 15) & ~15;
     if frame > 0x7FFFFFF0 { assert(false); }
 

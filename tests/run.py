@@ -3,12 +3,12 @@
 
 For every tests/c/*.c program:
   reference:  clang-20 -O0 x.c -o ref                      (run, record stdout + exit code)
-  O0:         clang-20 -O0 -emit-llvm -> goovm-llc --backend=cpp -> clang-20 link -> run, compare
+  O0:         clang-20 -O0 -emit-llvm -> goovm-llc --backend=goose -> clang-20 link -> run, compare
   mem2reg:    clang-20 -O0 -Xclang -disable-O0-optnone -emit-llvm
               -> opt-20 -passes=mem2reg -> goovm-llc -> link -> run, compare (PHI-heavy input)
 Optional extra variants:
-  --opt PASSES   also run opt-20 -passes=PASSES on the mem2reg input (e.g. "sroa,instcombine,simplifycfg")
-  --backend B    goovm-llc back-end to test (cpp, goose, llvm)
+  --opt-passes P also run opt-20 -passes=P on the mem2reg input (e.g. "sroa,instcombine,simplifycfg")
+  --backend B    goovm-llc back-end to test (goose, llvm)
   --tpde PATH    also compile the O0 bitcode with tpde-llc and compare
 
 usage: tests/run.py [--goovm PATH] [-j N] [--work DIR] [--keep] [filter ...]

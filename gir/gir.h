@@ -320,6 +320,8 @@ typedef struct GirBlock {
 #define GIR_FN_INTERNAL 4u     /* local linkage */
 #define GIR_FN_VASTART  8u     /* contains VASTART: needs a register save area */
 #define GIR_FN_SJLJ     16u    /* contains SJLJ_SETJMP: preserve all callee-saved registers */
+#define GIR_FN_RETURNS_TWICE 32u /* calls a returns_twice function (setjmp, vfork, ...): */
+                               /*   a frame slot must not be shared between values */
 #define GIR_FN_ALIGN_SHIFT 24  /* bits 24..31: log2 of the function alignment (>= 4) */
 
 /* 40 bytes. Functions are also globals (Func.global is their entry in the

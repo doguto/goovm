@@ -2036,7 +2036,8 @@ struct Exporter {
 
         GirFunc gf{};
         gf.global = g;
-        fn_flags = (Fn.hasLocalLinkage() ? GIR_FN_INTERNAL : 0) | (FT->isVarArg() ? GIR_FN_VARARG : 0);
+        fn_flags = (Fn.hasLocalLinkage() ? GIR_FN_INTERNAL : 0) | (FT->isVarArg() ? GIR_FN_VARARG : 0) |
+                   (Fn.callsFunctionThatReturnsTwice() ? GIR_FN_RETURNS_TWICE : 0);
         uint64_t falign = Fn.getAlign() ? Fn.getAlign()->value() : 16;
         if (falign < 16) falign = 16;
         gf.first_block = (uint32_t)T.blocks.size();

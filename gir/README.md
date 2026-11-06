@@ -163,6 +163,12 @@ types to the back-end, plus three things the types cannot say:
   (the pointee is copied to the stack argument area, aligned to
   `max(8, align)`); `GIR_ABI_SRET` marks the sret pointer for information.
 - `GIR_IF_VARARG` on a `CALL` (set `al` to the number of vector registers).
+- Function flags (`GirFunc.flags`): `VARARG`, `INTERNAL`, `VASTART` (needs a
+  register save area), `SJLJ` (contains `SJLJ_SETJMP`), `RETURNS_TWICE`
+  (calls `setjmp`, `vfork` or another `returns_twice` function: a back-end
+  must not let two values share a frame slot, because the second return
+  resumes with the frame as it was then), and the log2 of the alignment in
+  bits 24..31.
 - The exporter lowers what is not a calling-convention matter: `signext`
   arguments narrower than 32 bits are an explicit `SEXT` to i32, a `signext`
   return is an explicit `SEXT` (so `RET`'s operand may be wider than

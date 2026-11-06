@@ -427,7 +427,7 @@ E1-E8 variants and the script that relinks them are in
 
 ## 8. Milestone A1: the v1 back-end
 
-v1 compiles all of C at -O0 (GIR v2): 3,964 lines of Goose in seven files
+v1 compiles all of C at -O0 (GIR v2): 4,299 lines of Goose in seven files
 (v0: 1,087 in one), described in [`DESIGN.md`](DESIGN.md). Everything below
 was found while writing and testing it; the messages are verbatim from
 `goose check` (compiler commit 335fddc) or from the generated program.
@@ -474,6 +474,17 @@ was found while writing and testing it; the messages are verbatim from
    do less work (section "Speed").
 7. **Keywords keep colliding**: `type` again (`GirSection.type` is `typ` in
    the Goose mirror), and `loop`/`in` had to be avoided as names.
+8. **Simple loops are expensive in the generated C.** The slot-sharing
+   layout pass (a backward walk: load the 24-byte instruction, look up an
+   operand mask, for each operand a range check, a mark check and maybe a
+   free-list pop) executes about 150 x86 instructions per GIR instruction
+   (callgrind, line-level on the generated C): every array access keeps its
+   bounds check (`GS_IDX(...)`), every `i64` add its overflow check
+   (`gs_add_i64(..., file, line)`), each record is copied by value, and the
+   stores into `u32` arrays may alias the module globals (`GS_GL->...`), so
+   clang reloads them after each store. The same loop in C would be a third
+   of that. I limited the pass to functions where it matters (more than 256
+   instructions) instead of fighting the code shape.
 
 What went well: the seven files typechecked after fixing the four errors
 above; the first build passed the 35 v0 tests (70/70); bounds checks turned
@@ -501,6 +512,10 @@ type had been appended into, which the abort pointed at directly);
   ("TLS definition in b.o section .tdata mismatches non-TLS reference").
 - `floor(2.5)` etc. on constants must be folded: LLVM's code generator does,
   and a test links without `-lm`.
+- CTMark consumer-typeset crashed (SIGSEGV, stack overflow): with one slot per
+  value its recursive `Manifest` (16,000 GIR instructions) had a 97 KB frame
+  (clang -O0: 2.1 KB). Large functions now share slots between values that
+  die in their block (DESIGN.md §5): 2.9 KB.
 
 ### Speed
 
