@@ -16,6 +16,7 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 
 - [初期調査（2026-11-05）](docs/research/2026-11-05-goose-llvm-investigation.md)
 - [検証結果：フェーズ0〜2（2026-11-06）](docs/research/2026-11-06-results.md)
+- [Goose で作ったコンパイラの実装結果（2026-11-07）](docs/research/2026-11-07-goose-compilers.md)
 
 ## 現在の状態（マイルストーン A3）
 
