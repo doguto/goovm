@@ -5,6 +5,8 @@
 | `run.py` | the small differential tests in `c/` (44 programs) |
 | `suite.py` | the llvm-test-suite C corpora through goovm-llc, against their reference outputs |
 | `realworld_mixed.py` | (v0) links SPASS and consumer-typeset from a mix of goovm and clang objects |
+| `suite_goosecc.py` | the same corpora compiled by goosecc (`frontend-goose/`, no LLVM) |
+| `bench_goosecc.py` | compile speed and memory of `goosecc -c` vs `clang-20 -O0 -c` and `tcc -c` on CTMark |
 
 ## run.py
 
@@ -14,7 +16,11 @@ and exit status must match the reference.
 
 ```
 tests/run.py --goovm build/tools/goovm-llc/goovm-llc -j3 [--opt-passes PASSES] [filter ...]
+tests/run.py --goosecc frontend-goose/build/goosecc -j3 [filter ...]
 ```
+
+With `--goosecc`, the variants are `goosecc -c` and `goosecc -c -g` instead
+(no LLVM involved).
 
 ## suite.py
 
@@ -64,3 +70,31 @@ link error); `unsupported` (goovm-llc exit 2 on some file); `fallback` (with
 `--fallback`, some file went through LLVM's code generator; counted as
 passing if the output is right, and counted separately); `error` (another
 tool failed).
+
+## suite_goosecc.py
+
+The same corpora, tests, flags, inputs, verification and baseline as
+`suite.py`, with every source file compiled by goosecc (milestone B2)
+instead of clang + goovm-llc; clang-20 links the objects.
+
+```
+tests/suite_goosecc.py --goosecc frontend-goose/build/goosecc [--corpus a,b,...] [--variants O0,g]
+                       [-j 3] [--work DIR] [--report FILE] [--json FILE] [--rebaseline] [filter ...]
+```
+
+Variants: `O0` (`goosecc -c`) and `g` (`goosecc -c -g`). Results: `pass`,
+`fail` (wrong output, crash, timeout, link error), `error` (goosecc exited
+non-zero or crashed; the report gives the first line of its message). The
+baseline cache (`<work>/baseline.json`) has `suite.py`'s format, so a work
+directory of `suite.py` can be reused.
+
+## bench_goosecc.py
+
+Compile speed of `goosecc -c` against `clang-20 -O0 -c` and TinyCC
+(`tcc -c`, when installed) on every C file of the six CTMark programs, with
+`suite.py`'s flags: best of N wall-clock runs, each compile alone, peak RSS
+(`ru_maxrss`), and goosecc's phases from `--time`.
+
+```
+tests/bench_goosecc.py --goosecc frontend-goose/build/goosecc -n 3 [--md out.md] [--json out.json] [program ...]
+```

@@ -11,7 +11,7 @@ import .types;
 
 // Node kinds: expressions
 let N_INT = 1;          // v = value (two's complement bits)
-let N_FLOAT = 2;        // v = f64 bits; ldouble/float128 are kept as f64 here
+let N_FLOAT = 2;        // v = f64 bits; ldouble/float128 are kept as f64 here; b, c = the spelling (offset in src, length without suffix)
 let N_STRING = 3;       // a = index in strs
 let N_DECLREF = 4;      // a = symbol
 let N_UNARY = 5;        // op = U_*, a = operand
@@ -39,8 +39,8 @@ let N_SWIZZLE = 26;     // ext_vector_type element access: a = vector (op = 1: p
                         // c = count, v = element indices (4 bits each, the first lowest)
 
 // statements
-let N_COMPOUND = 40;    // v = first in nlist, c = count
-let N_DECL = 41;        // a = symbol, b = initializer (0 none)
+let N_COMPOUND = 40;    // v = first in nlist, c = count, b = location of the '}' (0: made up)
+let N_DECL = 41;        // a = symbol, b = initializer (0 none), c = location of the declaration's first token
 let N_IF = 42;          // a = cond, b = then, c = else (0 none)
 let N_WHILE = 43;       // a = cond, b = body
 let N_DO = 44;          // a = body, b = cond
@@ -220,6 +220,7 @@ let SF_KR = 8192;       // a K&R parameter given its type by the declaration lis
 let SF_LOCALLINK = 16384; // block-scope extern
 let SF_KRDEF = 32768;   // the latest declaration is a definition without a prototype
 let SF_GNU_EXTERN_INLINE = 65536; // defined as a GNU extern inline function (may be redefined)
+let SF_FORCE_DEF = 131072;  // a file-scope declaration without inline or with extern (C99 6.7.4p7)
 
 struct Sym {
     kind: u8,
@@ -239,7 +240,12 @@ struct Sym {
 var syms: Sym[>..] = [];
 
 // Extra declaration attributes (asm label, alias, section, cleanup, ...).
-struct SymAttr { asm_label: u32, asm_len: u32, cleanup: i32, align: u32, flags: u32 }
+struct SymAttr { asm_label: u32, asm_len: u32, cleanup: i32, align: u32, flags: u32,
+    sec_off: u32 = 0, sec_len: u32 = 0,        // section("...") (in strbytes)
+    alias_off: u32 = 0, alias_len: u32 = 0,    // alias("...")
+    vis: u8 = 0,                               // visibility: 0 default, 1 hidden, 2 protected
+    rsv: u8 = 0,
+    ctor_prio: u16 = 65535, dtor_prio: u16 = 65535 }
 var sym_attrs: SymAttr[>..] = [];
 
 // Per identifier: the innermost ordinary / tag binding (-1 none).

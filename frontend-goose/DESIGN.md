@@ -1,9 +1,11 @@
 # goosecc: design
 
-goosecc is a C17 + GNU front end written in Goose: preprocessor, parser and
-type checker, producing a typed AST from which B2 will lower to GIR at -O0.
-It follows clang-20 closely enough that three oracles can hold it to clang
-on every corpus file (README.md, "Results"):
+goosecc is a C17 + GNU compiler written in Goose: preprocessor, parser and
+type checker (milestone B1), and a lowering of the typed AST to GIR at -O0
+that the Goose back-end (`backend-goose/`) compiles to an ELF object in the
+same process (milestone B2). The front end follows clang-20 closely enough
+that three oracles can hold it to clang on every corpus file (README.md,
+"Results"):
 
 - `goosecc -E` produces the same token stream as `clang-20 -E`;
 - `goosecc --layout-check` emits `_Static_assert`s on goosecc's sizes,
@@ -12,9 +14,14 @@ on every corpus file (README.md, "Results"):
   `tests/cmp_ast.py` compares them node by node (kinds, types, implicit
   casts and their cast kinds) with `clang-20 -Xclang -ast-dump=json`.
 
+The lowering is held to clang by running the programs: every test of the
+corpora is compiled by goosecc, linked with clang-20 and run
+(`tests/suite_goosecc.py`).
+
 This page covers the structure (1), the data (2), the preprocessor (3), the
 parser and semantic analysis (4), how the code fits Goose's recursion rule
-(5), the AST contract for B2 (6), and what is not supported (7).
+(5), the AST contract (6), the lowering to GIR (7), and what is not
+supported (8).
 
 ## 1. Structure
 
@@ -43,11 +50,14 @@ With `-E` the tokens go to the printer instead.
 | `src/init.goose` | 783 | initializers: designators, brace elision, the dense semantic form; constant initializers |
 | `src/layout.goose` | 373 | `--layout-check` |
 | `src/dump.goose` | 374 | `--dump-ast` |
-| `src/main.goose` | 195 | options, search directories, the driver |
-| `src/goosecc_rt.h` | 12 | four C helpers (memchr, f64 bit casts, rounding to float) |
+| `src/main.goose` | 265 | options, search directories, the driver |
+| `src/gen_*.goose` | 8111 | the lowering to GIR (section 7) |
+| `src/goosecc_rt.h` | 113 | C helpers: memchr, f64/f32/f16 bit casts and rounding, `long double` arithmetic and conversions, `strtod`/`strtold` of literals, constant folding of libm functions |
 
-11,400 hand-written lines of Goose (10,000 without comments and blank
-lines); the two generated tables add 5,100.
+11,500 hand-written lines of Goose in the front end and 8,100 in the
+lowering (17,600 together without comments and blank lines); the two
+generated tables add 5,100. The back-end (`backend-goose/`, 4,300 lines)
+is imported as a package.
 
 ## 2. Data
 
@@ -238,7 +248,7 @@ only ever hold fixed-size locals:
 The cost of this style is the number of global arrays (one data stack
 each); NOTES.md has the details.
 
-## 6. The AST contract (for B2)
+## 6. The AST contract
 
 The AST is meant to be lowered to -O0 IR without any further semantic
 analysis: every conversion is explicit, every node has its type, value
@@ -294,7 +304,7 @@ information.
 | node | fields | notes |
 |---|---|---|
 | `N_INT` | v | the value, two's complement, already truncated to `ty` |
-| `N_FLOAT` | v | f64 bits (`long double`/`_Float128` literals are held as f64) |
+| `N_FLOAT` | v, b/c | v = f64 bits (`long double`/`_Float128` literals are held as f64 for folding); b = offset of the spelling in the source arena, c = its length (the lowering converts the spelling exactly) |
 | `N_STRING` | a = index in `strs` | decoded bytes with the terminating NUL in `strbytes`; type `char[N]` etc.; when it initializes an array (`NF_STRINIT`) its type is that array's |
 | `N_DECLREF` | a = symbol | lvalue for objects; a function designator otherwise |
 | `N_UNARY` | op = `U_*`, a | `U_DEREF` gives an lvalue; `U_ADDR` takes one; `++`/`--` on an lvalue of any scalar type (pointers step by the pointee size); `U_NOT` yields `int`; `U_EXTENSION` is a no-op wrapper; `U_REAL`/`U_IMAG` |
@@ -372,7 +382,251 @@ promoted value and converts it to the declared type, as clang's codegen does.
 `syms[s].flags & SF_KRDEF` marks a function whose latest declaration is such a
 definition. Labels are symbols in the function's label scope.
 
-## 7. Not supported
+## 7. Lowering to GIR (B2)
+
+`goosecc -c` lowers the typed AST of section 6 to GIR version 2
+([`../gir/README.md`](../gir/README.md)) and hands the tables to the Goose
+back-end in the same process: `main.goose` imports `backend-goose` as a
+package (`import cg from "../../backend-goose"`), and `gen::codegen()`
+calls `gir_codegen` with slices of the lowering's global arrays and writes
+the bytes it returns. There is no LLVM anywhere: one Goose program
+preprocesses, parses, checks, lowers and generates machine code. The
+semantics are clang-20's at -O0 (its CodeGen as the C++ exporter sees it in
+LLVM IR), so `tools/goovm-llc/gir_export.cpp` is the reference for how each
+construct is written in GIR.
+
+The lowering lives in namespace `gen` (so that its names cannot collide
+with the front end's or the back-end's), in these files:
+
+| file | content |
+|---|---|
+| `gen_ir.goose` | the GIR tables, type interning, constants, instruction emission, blocks, the function layout (`fn_finish`) |
+| `gen_abi.goose` | C types as GIR types; the SysV classification and clang's coerced types (`Abi` records) |
+| `gen_ops.goose` | instruction helpers with constant folding, C scalar conversions, loads/stores, GEPs, block copies, library calls |
+| `gen_expr.goose` | expressions: lvalues, scalars, complex values, aggregates, conditions, assignments, compound literals, statement expressions |
+| `gen_call.goose` | calls, returns, `va_arg` |
+| `gen_stmt.goose` | statements, local declarations and initializers, switch, labels and gotos, cleanups, function bodies |
+| `gen_glob.goose` | linkage, deferred definitions, string literals, static initializers (bytes and data relocations), address constants |
+| `gen_builtin.goose` | builtins, library builtins, overflow checks, FP classification, atomics |
+| `gen_asm.goose` | inline assembly: operand binding and a small AT&T assembler |
+| `gen_debug.goose` | `-g`: the debug tables (compile unit, subprograms, lexical blocks, locations) |
+| `gen_tu.goose` | the driver, constructors/destructors, aliases, `--emit-gir` |
+
+### 7.1 The builder
+
+The module tables (`m_types`, `m_insts`, `m_consts`, `m_globals`, `m_data`,
+...) are global grow-only arrays of the back-end's own record structs
+(`backend-goose/gir.goose`), so handing them over costs nothing. Since
+`gir_codegen` stores the slices in its global `M`, Goose's aliasing check
+then forbids `resize`/`clear` on them anywhere in the program (NOTES.md):
+the tables only ever grow (`data_grow` appends zero pages).
+
+A function's instructions are emitted into `f_insts` with local indices,
+its static allocas into `f_allocas` (a local ref `ATAG + k`), and blocks
+are numbers handed out by `new_block` and placed when `start_block` starts
+them. Because a block, once started, is filled until its terminator, every
+block is a contiguous run of `f_insts`, in start order. `fn_finish` lays
+the function out in one pass: the allocas first (the entry block), then
+the instructions, rewriting the value and block fields of each by the
+opcode's operand mask (`OPM`) and the positions in `m_opnds` recorded by
+`op_ref` / `op_blk`. Nothing is sorted or searched; a forward branch is
+just a block number that is resolved when the function is finished.
+
+Code after a terminator (`return`, `break`, a noreturn call) has no
+insertion point; a statement without a label in it is then skipped, as
+clang skips it, and anything that still needs code there gets a block
+without predecessors.
+
+Operations on constants fold (integer arithmetic, compares, casts, f32/f64
+arithmetic), as LLVM's IRBuilder folds them for clang, so `x = 2 + 3`
+stores 5. FP constants are deduplicated, as the exporter does, because the
+back-end pools them by index.
+
+### 7.2 Values
+
+As in clang's CodeGen, every object lives in memory: locals and
+parameters get allocas (at the alignment clang gives them: 16 for arrays of
+16 bytes or more), and expressions are lowered by kind of value:
+
+- `ex_val` gives a scalar GIR value (integers, pointers, f16/f32/f64/f80,
+  vectors); `_Bool` is `i1` as a value and a byte in memory;
+- `ex_cplx` gives the two parts of a complex value;
+- `ex_agg(n, dst)` evaluates a struct, union or array into `dst`;
+- `ex_lv` gives an `LV`: an address, a bit-field (the record address and
+  the field), volatility.
+
+Loads are explicit in the AST (`CK_LVAL2RVAL`), so every load the program
+does is one GIR `LOAD`. Bit-fields are read and written through the
+smallest integer covering their bytes (an `i24` for a field spanning three
+bytes), with shifts and masks, so an access never touches a byte the field
+does not use (clang loads the whole storage unit of the bit-field run).
+Conditions are branched on directly (`&&`, `||`, `!` and compares become
+branches, constant conditions fold), as clang does for `if` and `?:`
+(for loop conditions it computes the value first), and the values of
+`&&`, `||` and `?:` are PHIs. Complex multiplication and division follow
+clang: the inline formula with a NaN check and the `__mul?c3` call,
+`__div?c3`. `_Float16` arithmetic is done in float through the
+`__extendhfsf2` / `__truncsfhf2` helpers, `__int128` division and FP
+conversions are the compiler-rt calls (`__divti3`, `__floattidf`, ...).
+VLA sizes are evaluated where the declaration (or the parameter list, or
+the `sizeof`) is, kept per VLA type, and a scope with a VLA saves and
+restores the stack pointer (also on `break`, `continue` and a jump back
+before the declaration).
+
+### 7.3 The calling convention
+
+`gen_abi.goose` ports clang's `X86_64ABIInfo`: `classify` merges the
+classes of the fields of each eightbyte (bit-fields, unaligned members,
+unions, arrays, complex, `long double`, vectors of every size), with the
+post-merge rules, and `arg_abi` keeps the register budget across the
+arguments (a struct that does not fit in the remaining registers goes in
+memory, as a whole). The result is one `Abi` record per argument and
+return:
+
+| kind | GIR |
+|---|---|
+| direct | the value; `signed char`/`short` arguments and returns are `SEXT`ed to `i32` (clang's `signext`, which the exporter makes explicit) |
+| coerced | one or two parts (`i8`..`i64`, `iN` for a 3-byte tail, `f32`/`f64`, a vector) loaded from the object at offsets 0 and 8; a two-part return is a GIR struct `{t0, t1}` |
+| byval | a pointer to a copy, with the size and alignment in the ABI word |
+| sret | a hidden first argument; the function returns it |
+| ignore | empty structs |
+
+The parts' types need not be clang's own (an SSE eightbyte holding two
+floats is a `double` where clang writes `<2 x float>`): the registers they
+occupy and the bytes they carry are the same. Calls of
+unprototyped functions are variadic calls (`al` is set), as clang makes
+them. `va_arg` is lowered inline as clang does it (register save area
+with `gp_offset`/`fp_offset`, or the overflow area, PHI of the two
+addresses). `tests/c` and a randomized cross test (`tests/abi_cross.py`:
+struct, union, complex, `__int128`, `long double` and variadic
+signatures; callee and caller compiled by clang and goosecc in all four
+combinations) check it against clang-20.
+
+### 7.4 Globals and data
+
+An entity with linkage is one GIR global, found by its linkage name (the
+asm label, else the identifier); static locals (`f.x`), compound literals
+at file scope, string literals (`.L.str.N`, identical ones shared) and
+local constant initializers (`__const.f.N`, copied with one `MEMCPY`) get
+private globals. Definitions are emitted as clang emits them:
+
+- external definitions always, in source order;
+- `static` functions and variables, and inline functions that are
+  emitted, when something emitted refers to them (clang's deferred
+  declarations: an unused static inline function in a header costs
+  nothing and references nothing);
+- C99 inline definitions (every file-scope declaration `inline` and none
+  `extern`) not at all, GNU `extern inline` not at all, except that
+  `always_inline` ones are emitted as local functions (clang inlines them
+  even at -O0);
+- tentative definitions as zero-filled definitions, or common symbols
+  with `-fcommon`; `extern` declarations only when referenced.
+
+Attributes that change the object: `weak`, `alias`, `visibility`,
+`section` (variables and functions), `aligned`, `used`,
+`constructor`/`destructor` with priorities (`.init_array.NNNNN` arrays, as
+the exporter builds them), `cleanup`, `nocommon`; thread-local variables
+are `TLS` globals reached through `TLSADDR`. With `-fPIC`, definitions
+are preemptible (no `LOCALREF`).
+
+A static initializer is written into the global's bytes in `m_data` by
+`sinit`, which walks the dense initializer of section 6.5: integers by
+`fold_int` (128-bit ones by `fold_int128`), floating-point values exactly
+in their type (`static_f80` folds in long double and rounds per
+operation, through C helpers; literals are converted from their spelling
+with `strtod`/`strtof`/`strtold`), bit-fields by bits, strings truncated
+or padded, compound literals by their initializers, flexible array members
+by extending the object. Address constants (`eval_addr`) are a global plus
+an addend (`&a[3].f`, `"str" + 1`, a compound literal, a function), an
+integer, or label addresses: `&&l` is a `BLOCK` relocation and `&&a - &&b`
+a `BLOCKDIFF32` one, whose block numbers are rewritten when the function is
+laid out (that is why static locals are defined where they are declared,
+inside the function being lowered). The relocations of one global are
+contiguous and sorted by offset.
+
+### 7.5 Builtins
+
+`gen_builtin.goose` follows CGBuiltin.cpp at -O0. Library functions that
+clang lowers itself are lowered when they are called by their names too
+(unless the declaration is `static`, has an asm label, or `-fno-builtin`
+says otherwise): `memcpy`/`memset` (inline `MEMCPY`/`MEMSET` up to 256
+bytes, else the call), `memmove`, `abs`/`labs`/`llabs`, `fabs`,
+`copysign`, `floor` and the other `const` math functions (folded for
+constant arguments, as LLVM folds them), `alloca`, and `strlen`, `strcmp`,
+`strncmp`, `memcmp` of compile-time strings (clang's constant evaluator).
+The `__builtin_` operations map to GIR: bit counting (`CTLZ`, `CTTZ`,
+`CTPOP`, `BSWAP`, `BITREVERSE`, `FSHL`/`FSHR`), `*_overflow` (`OVF` when
+the types agree, else exact arithmetic in a wider type and a range check,
+`__muloti4` for 128-bit operands), FP classification (`ISFPCLASS`),
+`__builtin_setjmp`/`longjmp` (`SJLJ_*`), `va_start`/`va_copy`,
+`return_address`/`frame_address`, `trap`, `unreachable`, `expect`,
+`object_size` (folded for a declared object plus a constant, as clang's
+constant evaluator does; else -1/0), `shufflevector`, `convertvector`, the
+`_chk` functions, the SSE builtins clang's headers leave as builtins
+(`maxps`, `minps`, `movmskps`, `packssdw128` and the immediate shifts as the
+GIR `X86` op; `shufps`/`shufpd` as `SHUFFLE`; `cmp*ps`/`cmp*pd` as `FCMP`,
+`SEXT`, `BITCAST`, as clang emits them), and
+every `__sync_*`, `__atomic_*` and `__c11_atomic_*` function (`LOAD`/`STORE`
+with orderings, `ATOMICRMW`, `CMPXCHG`, `FENCE`; compare-exchange loops for
+the rest). `_Atomic` objects are loaded and stored atomically, and their
+compound assignments are read-modify-writes.
+
+### 7.6 Inline assembly
+
+An empty template only evaluates its operands (an output tied to an input
+gets the input's value). Any other template is bound as the exporter binds
+it: fixed-register constraints (`a`, `d`, `S`, `t`, `u`, ...) as given,
+`r`/`q`/`g` from the caller-saved pool, `m` as `(%reg)`, constant `i` as an
+immediate, tied inputs to their outputs, symbolic names; the operands are
+substituted into the template (`%0`, `%[name]`, `%k1`, `%c2`, ...) and the
+result is assembled by a small AT&T assembler in Goose, which knows the
+instructions the corpora use (integer moves and ALU operations with
+register, memory and immediate operands, shifts, `lea`, `bsr`, `mul`,
+`bswap`, SSE scalar arithmetic, x87 `fsqrt`/`fpatan`/..., `rdtsc`,
+`cpuid`, fences). The machine code and the bindings become a `GirAsm`
+record, exactly what the exporter produces with LLVM's MC layer. A
+template outside that subset is an error with the text that could not be
+assembled. File-scope `asm` is not supported (the exporter rejects module
+assembly too).
+
+### 7.7 Debug locations
+
+With `-g` the debug tables are filled as the exporter fills them from
+clang's metadata: one compile unit (the main file and the compilation
+directory), a subprogram per function (name, file, line), a lexical block
+per nested compound statement (made the first time an instruction needs
+it), and for every instruction a (line, column, scope).
+
+The locations follow clang's CodeGen rules (`gen_debug.goose`):
+
+- every statement except compound statements, labels and `case` labels
+  sets a stop point at its first token (a declaration at its first
+  token, the store of an initializer at the variable's name);
+- every expression the lowering visits (`ex_val`, `ex_lv`, `ex_cplx`,
+  `ex_agg`, `ex_bool`) sets the location to clang's `getExprLoc()` and
+  restores the previous one when it is done, as `ApplyDebugLocation`
+  does: an operation is at its operator, a member access at the member, a
+  subscript at its base, a call at its first token, a load at what is
+  loaded; what a statement emits after its operands (a store, a branch, a
+  `ret`) is at the statement;
+- after a compound statement the location is its `}` (cleanups and the
+  branch out of it), loop back-edges are at the loop, the condition of an
+  `if` branches at the condition, the branch out of an `else` arm has no
+  location, the prologue has none;
+- a location inside a macro expansion, its arguments included, is the
+  outermost invocation's name (clang's expansion location; the
+  preprocessor records the extent of each function-like invocation).
+
+Comparing the locations with clang-20's (through `goovm-llc --dump-gir`
+of `clang -g` bitcode, instructions aligned per function) gives the same
+line for 99.3% of sqlite3.c's 98,000 instructions and the same line and
+column for 98.6%; what differs comes from code shape (clang's single
+return block, the value-context `&&` of loop conditions) and from
+parentheses, which the AST does not keep. The A1 back-end does not emit
+DWARF from these tables yet (`gir/README.md`), so the objects of `-g` and
+of `-O0` are the same code.
+
+## 8. Not supported
 
 - `_BitInt(N)` (a clang extension in C17; no corpus file uses it) and C23
   syntax beyond what clang accepts in C17 mode (`#embed`, `constexpr`,
@@ -384,4 +638,13 @@ definition. Labels are symbols in the function's label scope.
   need them are skipped by the corpus definition).
 - Warnings: only the diagnostics needed for clang's errors are implemented;
   the warnings goosecc prints (with `-Wall`) are a small subset of clang's.
-- Long double and `_Float128` constants are folded in double precision.
+- Long double constants are folded in double precision by the front end
+  (array sizes, `#if`, `_Static_assert`); the lowering evaluates the static
+  initializers of `long double` objects in long double (7.4).
+- In the lowering: `__float128` values (GIR has no fp128 type; an error),
+  file-scope `asm`, inline assembly outside the assembler's subset, the
+  SSE/AVX builtins that clang's headers leave as builtins other than those
+  listed in 7.5 (`__builtin_ia32_cmpltss` and the other scalar compares,
+  most AVX ones: an error naming the builtin), `-O1` and higher (accepted,
+  code is -O0's), `__builtin_dynamic_object_size` (folded like
+  `__builtin_object_size`, never computed at run time).

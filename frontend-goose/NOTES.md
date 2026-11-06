@@ -1,8 +1,11 @@
-# goosecc: notes on writing a C front end in Goose
+# goosecc: notes on writing a C compiler in Goose
 
-goosecc is about 10,000 lines of Goose (compiler commit 335fddc, runtime
-d22ae129d92b), compiled with `goose --standalone` to one 2.5 MB C file and
-then with `clang-20 -O2` (about 10 s for both). This page records what was
+goosecc is about 17,600 lines of Goose without comments and blank lines
+(compiler commit 335fddc, runtime d22ae129d92b): the front end of milestone
+B1 (sections 1-8) and the lowering to GIR of B2 (section 9), plus the
+Goose back-end imported as a package. It is compiled with `goose
+--standalone` to one 5.1 MB C file and then with `clang-20 -O2`
+(2 s and 18 s). This page records what was
 hard or surprising, with the compiler's own messages, and what was done about
 it. Most of it is the price of Goose's memory model, which is also why the
 result is fast and small (README.md, "Results").
@@ -175,3 +178,163 @@ the printer, with no single hot spot.
   it fold, and to what" style.
 - Generated tables as Goose source (`predef_gen.goose`, `builtins_gen.goose`,
   multi-line string literals parsed at start-up) needed nothing special.
+
+## 9. Milestone B2: the lowering
+
+B2 added about 8,100 lines of Goose (`gen_*.goose`, namespace `gen`)
+and made goosecc a compiler: the typed AST is lowered to GIR v2 and the
+back-end (`backend-goose/`, imported as a package) runs in the same
+program. This section records what that was like; the messages are
+verbatim from `goose check` (compiler commit 335fddc).
+
+### Putting two Goose programs together
+
+- **The package import worked at once.** `import cg from
+  "../../backend-goose";` in the root file declares the back-end as a
+  package whose entry is `cg.goose`; its own `import gir;` lines resolve
+  inside the package. The front end and the back-end had no name in
+  common, but the lowering was put in `namespace gen;` anyway, so that new
+  names in either cannot collide later (an unqualified name resolves in
+  `gen` first, then globally; `::name` would reach a shadowed global).
+- **An export fn called from Goose checks its argument roots.**
+  `gir_codegen` stores its parameters (slices) in the global `M`. Called
+  from C that is allowed; called from Goose with a local array or a
+  literal it is not:
+
+  ```
+  backend-goose/cg.goose:675: error: storing a reference rooted at header, which does not outlive the destination (§9.2)
+  ```
+
+  So the GIR tables are globals. The other side of the same coin: once `M`
+  may hold views of them, nothing anywhere may shrink them:
+
+  ```
+  zz_test.goose:213: error: cannot clear hh: global M may hold a reference into it, stored at backend-goose/cg.goose:675 (§5.1)
+  gen_tu.goose:223: error: cannot resize m_data: global M may hold a reference into it, stored at backend-goose/cg.goose:676 (§5.1)
+  ```
+
+  Even a `resize` that grows is refused (the checker does not know the
+  direction); `data_grow` appends zero pages instead. For a compiler that
+  handles one translation unit per process the tables never need to
+  shrink, so this costs nothing, but the error is reported at the
+  `resize`, far from the store that causes it.
+- **A cascading error looks like a real one.** While other errors were
+  pending, the check also reported
+
+  ```
+  backend-goose/cg.goose:669: error: export fn gir_codegen: could not resolve one concrete function signature
+  ```
+
+  which disappeared with them; it does not mean what it says.
+- **C helpers against generated names.** The long double helpers take and
+  return a Goose struct `F80 { lo: u64, hi: u64 }` by value. In namespace
+  `gen` its C name is `gen_F80_g3` with fields `lo_g` and `hi_g`
+  (spec §7.10), and `goosecc_rt.h` is written against those names; it
+  works, but the header now depends on the mangling scheme.
+
+### Recursion and aliasing, again
+
+The expression lowering is one recursive cycle of about 60 functions
+(`ex_val`, `ex_lv`, `ex_agg`, `ex_cplx`, `gen_stmt` through statement
+expressions, the builtins, the static initializer walk). As in B1, all
+growable state is global, and the compiler found the cycle members one by
+one:
+
+```
+gen_ir.goose:317: error: recursive call cycle through emit, which is not declared `recursive fn` (§7.8)
+gen_abi.goose:264: error: recursive call cycle through is_promotable, which is not declared `recursive fn` (§7.8)
+gen_stmt.goose:698: error: const_init_global calls into its recursive cycle while non-fixed-size local nm (declared at gen_stmt.goose:684) is in scope (§7.8): end its scope before the call
+```
+
+The first was a real design point: `emit` starts a block when there is no
+insertion point, `start_block` falls through with `br`, and `br` calls
+`emit`. Starting the dead block inline in `emit` broke the cycle instead
+of making the hottest function recursive. The third is fixed with a block
+`{ var nm ...; g = new_global(nm, ...); }` that ends the name's scope
+before the recursive call.
+
+The aliasing checker refused a slice parameter held across a recursive
+call, because some function deep in the cycle clears a global buffer:
+
+```
+gen_builtin.goose:995: error: cannot call ex_val, which shrinks err_out while name is still used: it may hold a reference or slice into it (§5.1)
+```
+
+`name` was a builtin's name (a slice of the identifier arena), and the
+callee chain reaches `error_at`, which clears the diagnostic buffer. The
+checker cannot tell the two apart through a parameter of a recursive
+function. The atomic builtins now decode their name into integer codes
+before the first call into the cycle (`atomic_code`), which is also
+faster than comparing strings after every operand.
+
+### Typing papercuts
+
+- `match` over named constants yields `i64`, so its result cannot be
+  passed to a `u32` parameter:
+  `error: no matching overload for call to ins_fcmp ... argument 1: cannot pass i64 as u32`.
+  The emission helpers take `op: i64` now.
+- `if c { 0xFFFFFFFFFFFFFFFF } else { 0 }`:
+  `error: branches have mismatched types: u64 vs i64` (the literal above
+  i64.max is `u64`, the `0` is not); written `0 as u64`.
+- `0x40 | (if w { 8 } else { 0 })` passed as a byte:
+  `error: expected a value of type u8, got i64 (narrowing and sign changes require an explicit `as`)`.
+- A local that shadows a function: `let br, bi = ...` followed by
+  `br(cont)` gives `error: br is a variable, not a function` (clear,
+  but `br` is a common name for both a branch and a real part).
+- `dictionary.get` returns an optional, which does not convert where a
+  value is expected: `error: no matching overload for call to op_blk ...
+  cannot pass u32? as u32`; small `case_block` / `label_block` helpers
+  unwrap it.
+- Cast and `if` precedence: `(off as! u64 & 0xFFFFFFFF)` gives
+  `error: expected ')' in parenthesized expression, found '0xFFFFFFFF'`,
+  `nd.c as i64..n_el` gives `error: variable mode (..) applies only to ADT
+  type names` (B1 met this one), and
+  `(if byte { 0xB0 } else { 0xB8 } + r)` gives
+  `error: expected ')' in parenthesized expression, found '+'`. Each needs
+  parentheses around the cast or the `if`.
+
+### Front-end bugs that only code generation could find
+
+The B1 oracles compare tokens, types and AST shapes, not values. Running
+the programs found these (all fixed in the front end):
+
+- wide string literals stored one byte per ASCII character instead of
+  `width` bytes (`L"foo"`);
+- wide character constants did not decode UTF-8 (`L'Ä'` was 0x84);
+- `-0.0` folded to `+0.0` (`0.0 - f` instead of `-f` in `fold_float`);
+- `case` values of `__int128` switches were folded to 64 bits (and so
+  reported as duplicates);
+- the size expression of a VLA parameter (`int a[n++]`) was dropped by
+  the parameter adjustment; it is now kept for the lowering;
+- floating-point literals were converted through `double` (now the
+  lowering converts the spelling with `strtof`/`strtod`/`strtold`).
+
+### What went well
+
+- The whole lowering type-checked after about 30 error fixes, and the
+  first program ran correctly on the first build; 37 of the 44 `tests/c`
+  programs and 1,349 of the 1,427 torture tests passed with the first
+  binary.
+- Bounds checks again turned lowering bugs into exact `file:line` aborts
+  (a slice of a wide string's bytes, a flexible array member written past
+  its object) instead of corrupt objects.
+- Whole-program compilation means the back-end is just more functions:
+  no ABI between the two halves, no copies of the tables, one binary.
+
+### Performance
+
+The lowering is 7% of the time of `goosecc -c` over CTMark and 19% on
+sqlite3.c, which has much code and few headers (README.md, "Speed of
+`goosecc -c`"); its profile has no single hot spot. What helped: a table
+from C type kind to GIR type in `vty` (it is called for nearly every
+node), debug locations that cost nothing without `-g` (each emitter is
+a wrapper that goes straight to the real function unless `-g` is on) and
+little with it (a cache of the last source offset and of the last macro
+range: `set_loc_dbg` went from 13% to 3% of a `-g` run), constant
+conditions decided without materializing an `i1`,
+operand fixups recorded at emission so that `fn_finish` is a single pass,
+and interning the struct types of two-part ABI values once. What remains
+is the cost of the data-stack model: about 15% of a run is page faults and
+the kernel, spread over the many growable arrays touched for the first
+time.
+

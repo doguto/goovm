@@ -33,7 +33,7 @@ fn number_literal(t: Tok) -> u32 {
         if !hex && (c == 'e' || c == 'E') && i > 0 { isfloat = true; }
         if hex && (c == 'p' || c == 'P') { isfloat = true; }
     }
-    if isfloat { return float_literal(s, loc, hex); }
+    if isfloat { return float_literal(s, loc, hex, t.spell); }
     var i = 0;
     var base: u64 = 10;
     if hex { base = 16; i = 2; }
@@ -97,7 +97,7 @@ fn number_literal(t: Tok) -> u32 {
     return n;
 }
 
-fn float_literal(s: const u8[:], loc: u32, hex: bool) -> u32 {
+fn float_literal(s: const u8[:], loc: u32, hex: bool, off: u32) -> u32 {
     var e = s.len;
     var ty = t_double;
     var imag = false;
@@ -168,7 +168,8 @@ fn float_literal(s: const u8[:], loc: u32, hex: bool) -> u32 {
         }
     }
     if kind_of(ty) == TY_FLOAT { v = round_f32(v); }
-    var n = node_v(N_FLOAT, 0, ty, 0, 0, 0, loc, reinterpret_i64(v));
+    // b, c: the literal's text without suffix (B2 lowering converts it exactly)
+    var n = node_v(N_FLOAT, 0, ty, 0, off as i64, e, loc, reinterpret_i64(v));
     if imag {
         n = node(N_BUILTIN, BI_IMAG_CONST, mk_complex(ty), n as i64, 0, 0, loc);
     }
@@ -275,7 +276,7 @@ fn decode_string(t: Tok, width: i64) -> i64 {
             }
             continue;
         }
-        strbytes.push(c as! u8);
+        if width > 1 { str_put(width, c); } else { strbytes.push(c as! u8); }
         count++;
         i++;
     }
@@ -532,8 +533,9 @@ recursive fn parse_postfix(e0: u32) -> u32 {
                 return error_node(loc);
             }
             let name = tval();
+            let nloc = tloc();
             adv();
-            e = mk_member(e, name, k == TK_ARROW, loc);
+            e = mk_member(e, name, k == TK_ARROW, nloc);
         } else if k == TK_PLUSPLUS || k == TK_MINUSMINUS {
             adv();
             e = mk_incdec(e, if k == TK_PLUSPLUS { U_POSTINC } else { U_POSTDEC }, loc);
