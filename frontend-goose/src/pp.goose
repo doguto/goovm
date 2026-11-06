@@ -248,6 +248,42 @@ recursive fn pp_lex() -> Tok {
     }
 }
 
+// pp_lex for a token t that lex_file_token just returned from the file
+// context ci, the top one (main's fast path, pp_fill): true and the token
+// to return, or false to lex again (a directive was handled, a file ended,
+// a macro was entered).
+recursive fn file_token(t0: Tok, ci: i64) -> bool, Tok {
+    var t = t0;
+    if t.kind == TK_HASH && t.flags & F_BOL != 0 && !lx_dir {
+        handle_directive(t);
+        return false, t;
+    }
+    if t.kind == TK_EOF {
+        if end_of_file() { return false, t; }
+        return true, t;
+    }
+    if !lx_dir {
+        let ms = ctxs[ci].mi_state;
+        if ms != MI_INVALID && ms != MI_GUARD { ctxs[ci].mi_state = MI_INVALID; }
+    }
+    // as in pp_lex
+    if t.kind == TK_IDENT {
+        let m = idents[t.val].macro;
+        if m >= 0 && pp_noexpand == 0 {
+            if t.flags & F_NOEXP == 0 && macros[m].enabled {
+                if macros[m].flags & M_FUNC == 0 || next_is_lparen() {
+                    let r = enter_macro(t, m);
+                    if r == 1 { return false, t; }
+                    if r == 2 { return true, builtin_result; }
+                }
+            } else {
+                t.flags = t.flags | F_NOEXP;
+            }
+        }
+    }
+    return true, t;
+}
+
 // Lex without macro expansion (clang LexUnexpandedToken).
 recursive fn pp_lex_unexpanded() -> Tok {
     pp_noexpand++;

@@ -60,6 +60,50 @@ fn add_dir(d: const u8[:], sys: bool) {
     dirs.push(Dir { path: name_add(s), len: s.len as! u32, sys: sys });
 }
 
+// The translation unit's tokens to tu_toks, the EOF included (with -E to
+// the printer, without the EOF): what calling pp_lex until the EOF gives,
+// with a fast path for the runs of file tokens that need no preprocessing
+// (not a directive, not the end of a file, not a macro's name), which
+// pp_lex would return as they come. Only the first token of a run can
+// change the file's include-guard state.
+fn pp_fill() {
+    loop {
+        let ci = ctxs.len - 1;
+        if ctxs[ci].kind == CTX_FILE {
+            let ms = ctxs[ci].mi_state;
+            var mi = ms != MI_INVALID && ms != MI_GUARD;
+            loop {
+                let t = lex_file_token();
+                if t.kind != TK_EOF && !(t.kind == TK_HASH && t.flags & F_BOL != 0) &&
+                        !(t.kind == TK_IDENT && idents[t.val].macro >= 0) {
+                    if mi {
+                        ctxs[ci].mi_state = MI_INVALID;
+                        mi = false;
+                    }
+                    if mode_E { pr_token(t); } else { tu_toks.push(t); }
+                    continue;
+                }
+                let ok, r = file_token(t, ci);
+                if ok {
+                    if r.kind == TK_EOF {
+                        if !mode_E { tu_toks.push(r); }
+                        return;
+                    }
+                    if mode_E { pr_token(r); } else { tu_toks.push(r); }
+                }
+                break;
+            }
+            continue;
+        }
+        let t = pp_lex();
+        if t.kind == TK_EOF {
+            if !mode_E { tu_toks.push(t); }
+            return;
+        }
+        if mode_E { pr_token(t); } else { tu_toks.push(t); }
+    }
+}
+
 fn usage() {
     write_stderr("usage: goosecc (-E | -fsyntax-only | --layout-check) [clang options] file.c [-o out]\n");
     exit(2);
@@ -175,11 +219,7 @@ fn main() {
     if opt_mode == 1 {
         mode_E = true;
         if !pp_start(opt_input) { exit(1); }
-        loop {
-            let t = pp_lex();
-            if t.kind == TK_EOF { break; }
-            pr_token(t);
-        }
+        pp_fill();
         out.push('\n');
         if out_len > 0 && !out_is_stdout() {
             if write_output(names[out_off..out_off + out_len], out) == 0 { fatal("cannot write output"); }
@@ -189,11 +229,7 @@ fn main() {
     } else {
         tu_annot = true;
         if !pp_start(opt_input) { exit(1); }
-        loop {
-            let t = pp_lex();
-            tu_toks.push(t);
-            if t.kind == TK_EOF { break; }
-        }
+        pp_fill();
         let t1 = clock_ns();
         let v = std_version();
         opt_kw_inline = v.len > 0 || opt_gnu;
