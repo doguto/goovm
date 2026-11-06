@@ -15,9 +15,8 @@ clang-20 -O0 -w -c "$here/kernels.c" -o "$w/k.clang-O0.o"
 clang-20 -O2 -w -c "$here/kernels.c" -o "$w/k.clang-O2.o"
 llc-20 -O0 -relocation-model=pic -filetype=obj "$w/k.bc" -o "$w/k.llc.o"
 "$TPDE" "$w/k.bc" -o "$w/k.tpde.o"
-"$GOOVM" --backend=cpp "$w/k.bc" -o "$w/k.goovm.o"
+"$GOOVM" --backend=goose "$w/k.bc" -o "$w/k.goovm.o"
 variants="clang-O0 clang-O2 llc tpde goovm"
-if "$GOOVM" --backend=goose "$w/k.bc" -o "$w/k.goose.o" 2>/dev/null; then variants="$variants goose"; fi
 for v in $variants; do clang-20 "$w/k.$v.o" -o "$w/k.$v"; done
 "$w/k.clang-O0" "$scale" > "$w/expected.txt"
 echo "| back-end | run time (s) | vs llc -O0 | .text bytes |"

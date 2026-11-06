@@ -393,7 +393,7 @@ input. Most of the effort went into the bounds-check analysis.
 - **`checkfree` was accepted on the whole encoder at once,** without
   changing a line.
 
-## 7. Rebuild and reproduce
+## 7. Rebuild and reproduce (v0, at commit 8f55b18)
 
 ```bash
 S=/tmp/claude-0/-home-user-goovm/593b2907-8413-508c-8bdb-c68ef6e66f6e/scratchpad   # this session's scratch
@@ -424,3 +424,106 @@ $GOOSE check --bce-lines backend-goose/cg.goose
 `bench/backend/make_inputs.sh OUTDIR` regenerates the benchmark inputs. The
 E1-E8 variants and the script that relinks them are in
 `$S/work/exp/` (`link.sh`, `t.sh`, `e*.cpp`, `e*.goose`, `e*.c`).
+
+## 8. Milestone A1: the v1 back-end
+
+v1 compiles all of C at -O0 (GIR v2): 3,964 lines of Goose in seven files
+(v0: 1,087 in one), described in [`DESIGN.md`](DESIGN.md). Everything below
+was found while writing and testing it; the messages are verbatim from
+`goose check` (compiler commit 335fddc) or from the generated program.
+
+### New pain points
+
+1. **A cast before a range parses as a variable-mode type.** In
+   `M.strtab[s.name as i64..s.name as i64 + s.name_len]`, `i64..` is read as
+   the variable-mode type `i64..`:
+   `error: variable mode (..) applies only to ADT type names`.
+   Parenthesizing (`(s.name as i64)..`) works, and then the compiler says
+   the cast is redundant (a u32 range bound is fine), so the fix is to drop
+   the cast. The message does not hint at the precedence problem.
+2. **A `match` arm cannot yield several results.** For a function
+   `-> bool, u32, u32, u32`, the arm `F_OEQ => false, CC_E, CC_NP, 1,` is
+   parsed as further patterns:
+   `error: _ cannot be listed with other patterns` (on the `_ =>` arm).
+   Workaround: pack the four values into one integer in the `match` and
+   unpack them in a wrapper that `return`s them.
+3. **Unsigned arithmetic wraps before widening, silently.**
+   `var k: i64 = A.n_in - 1;` with `n_in: u32 = 0` computes `0xFFFFFFFF` in
+   u32 and then widens it, so a "count down to 0" loop started at
+   4294967295. The bounds check caught it at run time:
+   `goose runtime error: index 4294967294 out of bounds (length 118)
+   (backend-goose/lower.goose:1397)`. The fix is `A.n_in as i64 - 1` (a
+   cast that decides the width of the operation, which the compiler accepts
+   without a "redundant" warning). This is the same family as v0's shift
+   pitfall (pain point 3): the operation's width comes from the operands,
+   the destination type does not matter, and nothing warns.
+4. **Self-recursion through a helper needs `recursive fn`**, even for an
+   alias that resolves in one step:
+   `error: recursive call cycle through sym_type, which is not declared
+   `recursive fn` (§7.8)`. Clear and fixable (unrolled the one step); the
+   type-walk for struct returns is a real `recursive fn` (`ret_leaves`).
+5. **Defensive casts produce warnings by the dozen.** The first compile of
+   v1 gave 55 `warning: redundant `as i64`: a u32 converts to i64 implicitly
+   here` (and `as u64`). Helpful, but there is no fix-it mode; I removed them
+   with a script driven by the warning list.
+6. **`inline fn` is not a speed knob here.** Forcing `inline` on the small
+   hot helpers (`zext_reg`, `sext_reg`, `grp1_ri64`, `put_gpr`, and even
+   `gen_inst` into `gen_function`) changed the instruction count by less
+   than 1% (callgrind) and the time not measurably: clang's -O3 on the
+   generated C already does what matters. What helped were fast paths that
+   do less work (section "Speed").
+7. **Keywords keep colliding**: `type` again (`GirSection.type` is `typ` in
+   the Goose mirror), and `loop`/`in` had to be avoided as names.
+
+What went well: the seven files typechecked after fixing the four errors
+above; the first build passed the 35 v0 tests (70/70); bounds checks turned
+two exporter/back-end disagreements into exact `file:line` aborts instead of
+corrupt objects (the u32 wrap above, and a GIR operand run that a new struct
+type had been appended into, which the abort pointed at directly);
+`checkfree` still covers the whole encoder.
+
+### Bugs found by the test corpora (all fixed)
+
+- Constant-pool entries in `SHF_MERGE` sections were referenced through the
+  section symbol with addend `off - 4`; linkers resolve such relocations by
+  the addend and picked the wrong piece (FP constants read as 0). Pool
+  entries now get one local symbol each.
+- `or` with a negative imm32 set the upper bits of a narrow value (the
+  imm32 is sign-extended); results of `or`/`xor` with an immediate are now
+  normalized.
+- Vector values copied in 8-byte chunks right after lane-sized stores missed
+  store-to-load forwarding: `Vector/build2` (200M calls building `<4 x
+  float>` values lane by lane) ran 25x slower than clang -O0 (114 s vs
+  4.6 s) and timed out. Vector homes are now copied lane by lane: 52 s,
+  still 11x clang -O0, the slowest test relative to clang. Keeping small
+  vectors in xmm registers is A2 work.
+- Undefined TLS symbols must be `STT_TLS` or ld rejects the definition
+  ("TLS definition in b.o section .tdata mismatches non-TLS reference").
+- `floor(2.5)` etc. on constants must be folded: LLVM's code generator does,
+  and a test links without `-lm`.
+
+### Speed
+
+`goovm-llc --time` back-end phase, best of 7, on a shared (not quiet) 4-core
+VM; v0 is the goovm-llc built from commit 8f55b18 (`--backend=goose`):
+
+SPEED_TABLE
+
+The v1 back-end executes about 1.25x the instructions of v0 per GIR
+instruction (callgrind, spass: 42.3M vs 33.6M). Where the extra work goes:
+
+- every operand and result now looks up its value class in the type table
+  (v0 had eight hard-wired types), and the dispatch has 83 opcodes and six
+  classes instead of 32 opcodes and one class;
+- the GIR instruction record grew from 16 to 24 bytes (debug location,
+  flags, 16-bit types), and the frame-layout loop that streams through it is
+  memory-bound;
+- calls go through the SysV classifier (FP registers, stack slots, byval);
+  a fast path handles calls whose arguments all get registers;
+- loads and stores of non-predefined types go through the generic
+  odd-size paths; predefined i1..i64/ptr have a fast path.
+
+Fast paths recovered most of the first version's gap (it executed 1.54x v0's
+instructions): the frame-slot path in the encoder (`op_mem_t`: 99 → 63
+instructions per memory operand), the register-only call path, and the
+predefined-type load/store paths.
