@@ -922,7 +922,7 @@ fn load_to_result(j: u32, t: u32, m: Mem) {
         int2_norm_hi(RDX, bits_of(t));
         put_gpr2(j, RAX, RDX);
     } else {
-        copy_mem(res_mem(j), m, store_of(t));
+        copy_mem_g(res_mem(j), m, store_of(t), gran_of(t));
     }
 }
 // Stores value v of type t at m (any class). m's base must not be RAX, RSI,
@@ -937,7 +937,7 @@ fn store_value(m: Mem, v: u32, t: u32) {
         store64(m, RAX);
         store_n(m_add(m, 8), RDX, store_of(t) - 8);
     } else {
-        copy_mem(m, val_mem(v), store_of(t));
+        copy_mem_g(m, val_mem(v), store_of(t), gran_of(t));
     }
 }
 
@@ -1179,7 +1179,7 @@ fn lower_fp_unary(I: Inst, j: u32) {
 // ---------------------------------------------------------------- misc
 
 fn copy_slot(dst: Mem, src: Mem, t: u32) {
-    copy_mem(dst, src, slot_size(t) as! u32);
+    copy_mem_g(dst, src, slot_size(t) as! u32, gran_of(t));
 }
 
 fn lower_select(I: Inst, j: u32) {

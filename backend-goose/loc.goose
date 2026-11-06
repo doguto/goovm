@@ -181,6 +181,28 @@ fn copy_mem(dst: Mem, src: Mem, n: u32) {
         store8(m_add(dst, k), RAX);
     }
 }
+// copy_mem in units of g bytes (1, 2 or 4). Vectors are written lane by
+// lane, so they are copied lane by lane too: a wider load of data written
+// by narrower stores misses the store-to-load forwarding (~15 cycles).
+fn copy_mem_g(dst: Mem, src: Mem, n: u32, g: u32) {
+    if g >= 8 || n > 64 {
+        copy_mem(dst, src, n);
+        return;
+    }
+    var k: u32 = 0;
+    while k + g <= n {
+        load_n(RAX, m_add(src, k), g);
+        store_n(m_add(dst, k), RAX, g);
+        k += g;
+    }
+    if k < n { copy_mem(m_add(dst, k), m_add(src, k), n - k); }
+}
+// Copy granule of a value of type t.
+fn gran_of(t: u32) -> u32 {
+    if cls_of(t) != C_VEC { return 8; }
+    let ls = M.types[M.types[t].elems].size;
+    return if ls == 0 { 1 } else { ls };
+}
 
 // ------------------------------------------------------------ constants
 // Pool memory of constant c (FP, X87, INT2, VEC, MEM classes), allocated
@@ -195,18 +217,19 @@ fn const_mem(ci: u32) -> Mem {
     else if size == 8 && cls_of(t) != C_MEM && cls_of(t) != C_VEC { sec = SEC_CST8; }
     else if size == 16 && cls_of(t) != C_MEM { sec = SEC_CST16; }
     else if size <= 2 && cls_of(t) == C_FP { sec = SEC_CST4; }  // half: in a 4-byte entry
-    var off = c_pool[ci];
-    if off == GIR_NONE {
+    // c_pool[ci]: the pool symbol (mergeable pools) or the .rodata offset.
+    var ref = c_pool[ci];
+    if ref == GIR_NONE {
         if sec == SEC_CST4 {
-            off = cst4.len as! u32;
+            ref = new_pool_sym(sec, cst4.len as! u32, 4);
             let v: u32 = c.lo as! u32;
             o4(cst4, v);
         } else if sec == SEC_CST8 {
-            off = cst8.len as! u32;
+            ref = new_pool_sym(sec, cst8.len as! u32, 8);
             if c.data != GIR_NONE { cst8.append(M.data[c.data..c.data + 8]); }
             else { o8(cst8, c.lo); }
         } else if sec == SEC_CST16 {
-            off = cst16.len as! u32;
+            ref = new_pool_sym(sec, cst16.len as! u32, 16);
             if c.data != GIR_NONE { cst16.append(M.data[c.data..c.data + 16]); }
             else {
                 o8(cst16, c.lo);
@@ -216,13 +239,17 @@ fn const_mem(ci: u32) -> Mem {
             let al: u32 = if M.types[t].align > 16 { M.types[t].align } else { 16 };
             while (srodata.len as u64) % al != 0 { srodata.push(0); }
             if al > rodata_align { rodata_align = al; }
-            off = srodata.len as! u32;
+            ref = srodata.len as! u32;
             if c.data != GIR_NONE { srodata.append(M.data[c.data..c.data + size]); }
             else { srodata.resize(srodata.len + size, 0); }
         }
-        c_pool[ci] = off;
+        c_pool[ci] = ref;
     }
-    return m_sym(sec_sym(sec), R_X86_64_PC32, off as! i32);
+    // Entries of the SHF_MERGE pools are referenced through their own local
+    // symbol: a linker resolves a section-symbol relocation into a mergeable
+    // section by its addend, which for rip-relative operands is off - 4.
+    if sec == SEC_RODATA { return m_sym(sec_sym(sec), R_X86_64_PC32, ref as! i32); }
+    return m_sym(ref, R_X86_64_PC32, 0);
 }
 
 // ------------------------------------------------------- global addresses
@@ -352,5 +379,5 @@ fn copy_val(dst: Mem, v: u32, n: u32) {
     }
     // A constant's pool entry holds only its stored bytes.
     let m: u32 = if gir_kind(v) == GIR_V_CONST && store_of(t) < n { store_of(t) } else { n };
-    copy_mem(dst, val_mem(v), m);
+    copy_mem_g(dst, val_mem(v), m, gran_of(t));
 }

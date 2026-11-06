@@ -158,7 +158,7 @@ fn gen_inst(gi: u32, cur: u32) {
                     let ext: u32 = match op { GIR_ADD => G1_ADD, GIR_SUB => G1_SUB, GIR_AND => G1_AND,
                                               GIR_OR => G1_OR, _ => G1_XOR };
                     grp1_ri64(ext, RAX, imm);
-                    if op == GIR_ADD || op == GIR_SUB || op == GIR_XOR { zext_reg(RAX, bits); }
+                    if op != GIR_AND { zext_reg(RAX, bits); }
                 } else if is_const(I.b) && (op == GIR_SHL || op == GIR_LSHR || op == GIR_ASHR) {
                     let n = (M.consts[gir_idx(I.b)].lo & 63) as! u32;
                     if op == GIR_ASHR { sext_reg(RAX, bits); }
@@ -232,7 +232,7 @@ fn gen_inst(gi: u32, cur: u32) {
                 load64(RAX, tmp);
                 put_gpr(j, RAX);
             } else {
-                copy_mem(res_mem(j), tmp, slot_size(I.ty) as! u32);
+                copy_mem_g(res_mem(j), tmp, slot_size(I.ty) as! u32, gran_of(I.ty));
             }
         },
         GIR_EXTRACTVALUE => load_to_result(j, I.ty, m_add(val_mem(I.a), I.b)),
@@ -444,6 +444,7 @@ export fn gir_codegen(header: const Header[:], types: const TypeDef[:], funcs: c
     cst8.clear();
     cst16.clear();
     baddr.clear();
+    pool_syms.clear();
     rodata_align = 16;
     c_pool.clear();
     c_pool.resize(consts.len, GIR_NONE);

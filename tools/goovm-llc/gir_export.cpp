@@ -21,6 +21,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Constants.h"
@@ -1015,6 +1016,18 @@ struct Exporter {
     }
 
     void intrinsic(const CallBase &CB, Intrinsic::ID id) {
+        // Calls with constant arguments fold, as LLVM's code generator folds
+        // them (a test may rely on floor(2.5) needing no libm).
+        if (const Function *fn = CB.getCalledFunction(); fn && !CB.getType()->isVoidTy() && canConstantFoldCallTo(&CB, fn)) {
+            SmallVector<Constant *, 4> cargs;
+            for (const Use &u : CB.args())
+                if (auto *c = dyn_cast<Constant>(u.get())) cargs.push_back(c);
+            if (cargs.size() == CB.arg_size())
+                if (Constant *c = ConstantFoldCall(&CB, const_cast<Function *>(fn), cargs, &TLI)) {
+                    vmap[&CB] = ref(c);
+                    return;
+                }
+        }
         if (libm_intrinsic(CB, id)) return;
         switch (id) {
         case Intrinsic::memcpy:

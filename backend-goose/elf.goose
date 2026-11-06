@@ -69,6 +69,25 @@ var f_sec: u32[>..] = [];
 
 fn sec_sym(s: u32) -> u32 { s }   // the section symbol of output section s
 
+// Local symbols of constant-pool entries (one per entry of the mergeable
+// .rodata.cst* sections). Relocations name them POOL_BASE + k while code is
+// generated; the writer numbers them after the local globals (and shifts
+// the non-local globals behind them).
+let POOL_BASE = 0x40000000;
+struct PoolSym { sec: u32, off: u32, size: u32 }
+var pool_syms: PoolSym[>..] = [];
+fn new_pool_sym(sec: u32, off: u32, size: u32) -> u32 {
+    pool_syms.push(PoolSym { sec: sec, off: off, size: size });
+    return POOL_BASE + (pool_syms.len - 1) as! u32;
+}
+// Final symbol index of a provisional one.
+fn final_sym(s: u64) -> u64 {
+    if s >= POOL_BASE { return n_local_syms + (s - POOL_BASE); }
+    if s >= n_local_syms { return s + pool_syms.len as u64; }
+    return s;
+}
+fn final_info(info: u64) -> u64 { (final_sym(info >> 32) << 32) | (info & 0xFFFFFFFF) }
+
 checkfree fn o1(o: u8[>..]&, x: u32) { o.push(x as! u8); }
 checkfree fn o2(o: u8[>..]&, x: u32) {
     o1(o, x);
@@ -426,7 +445,7 @@ fn write_elf(o: u8[>..]&) {
         for k in a..b {
             let r = rel_sorted[k];
             o8(o, r.offset);
-            o8(o, r.info);
+            o8(o, final_info(r.info));
             o8(o, r.addend as! u64);
         }
         sh_size[ri] = o.len as u64 - sh_off[ri];
@@ -445,6 +464,17 @@ fn write_elf(o: u8[>..]&) {
         o8(o, 0);
     }
     for pass: u32 in 0..2 {
+        if pass == 1 {
+            // constant-pool entries: local, after the local globals
+            for p in pool_syms {
+                o4(o, 0);
+                o1(o, 1);   // STB_LOCAL, STT_OBJECT
+                o1(o, 0);
+                o2(o, p.sec);
+                o8(o, p.off);
+                o8(o, p.size);
+            }
+        }
         for G, g in M.globals {
             let local: u32 = if G.flags & GF_INTERNAL != 0 { 1 } else { 0 };
             if local != (if pass == 0 { 1 } else { 0 }) { continue; }
@@ -509,7 +539,7 @@ fn write_elf(o: u8[>..]&) {
         } else if s == sec_symtab {
             typ = SHT_SYMTAB;
             link = sec_strtab as! u32;
-            info = n_local_syms;
+            info = n_local_syms + pool_syms.len as! u32;
             align = 8;
             entsize = 24;
         } else if s == sec_strtab || s == sec_shstrtab {
