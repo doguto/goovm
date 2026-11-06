@@ -9,6 +9,97 @@ double goosecc_bits_to_f64(int64_t v) { double d; memcpy(&d, &v, 8); return d; }
 int64_t goosecc_f64_to_bits(double d) { int64_t v; memcpy(&v, &d, 8); return v; }
 double goosecc_round_f32(double d) { return (double)(float)d; }
 
+/* B3: the identifier hash and the lexer's scans, 8 and 16 bytes at a time.
+ *
+ * The hash of s[0..n) (common.goose's hash_bytes, and tools/gen_tables.py's
+ * for the static tables): each 8 bytes as a little-endian word w, the last
+ * one holding what remains (1 to 8 bytes, zero-extended), h = (h ^ w) * K;
+ * then h is mixed so that every byte reaches the low bits the tables index
+ * with. It reads only s[0..n). */
+static inline uint32_t goosecc_hash_mem(const uint8_t *s, int64_t n) {
+    const uint64_t K = 0xff51afd7ed558ccdull;
+    uint64_t h = 0x9e3779b97f4a7c15ull, w;
+    if (n >= 8) {
+        const uint8_t *e = s + n;
+        while (e - s > 8) {
+            memcpy(&w, s, 8);
+            h = (h ^ w) * K;
+            s += 8;
+        }
+        memcpy(&w, e - 8, 8);
+        w >>= 8 * (8 - (e - s));
+        h = (h ^ w) * K;
+    } else if (n >= 4) {
+        uint32_t a, b;
+        memcpy(&a, s, 4);
+        memcpy(&b, s + n - 4, 4);
+        w = (uint64_t)a | ((uint64_t)b << (8 * (n - 4)));
+        h = (h ^ w) * K;
+    } else if (n > 0) {
+        w = (uint64_t)s[0] | ((uint64_t)s[n >> 1] << (8 * (n >> 1))) | ((uint64_t)s[n - 1] << (8 * (n - 1)));
+        h = (h ^ w) * K;
+    }
+    h ^= h >> 32;
+    h *= K;
+    h ^= h >> 29;
+    return (uint32_t)h;
+}
+uint32_t goosecc_hash(sl_u8 s) { return goosecc_hash_mem(s.data, s.len); }
+
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+/* lex.goose's CC_IDCONT: [0-9A-Za-z_$] and the bytes >= 0x80. */
+static inline int goosecc_isid(uint8_t c) {
+    return (uint8_t)((c | 0x20) - 'a') < 26 || (uint8_t)(c - '0') < 10 || c == '_' || c == '$' || c >= 0x80;
+}
+/* The run of identifier characters at s[p..]: its length << 32 | its hash.
+ * 16 bytes at a time while they are inside s. */
+__attribute__((always_inline)) inline uint64_t goosecc_ident_scan(sl_u8 s, int64_t p) {
+    const uint8_t *d = s.data;
+    int64_t q = p, len = s.len;
+#if defined(__SSE2__)
+    while (q + 16 <= len) {
+        __m128i v = _mm_loadu_si128((const __m128i *)(d + q));
+        __m128i l = _mm_or_si128(v, _mm_set1_epi8(0x20));
+        __m128i alpha = _mm_cmplt_epi8(_mm_add_epi8(l, _mm_set1_epi8((char)(128 - 'a'))), _mm_set1_epi8((char)(-128 + 26)));
+        __m128i digit = _mm_cmplt_epi8(_mm_add_epi8(v, _mm_set1_epi8((char)(128 - '0'))), _mm_set1_epi8((char)(-128 + 10)));
+        __m128i us = _mm_or_si128(_mm_cmpeq_epi8(v, _mm_set1_epi8('_')), _mm_cmpeq_epi8(v, _mm_set1_epi8('$')));
+        unsigned m = (unsigned)_mm_movemask_epi8(_mm_or_si128(_mm_or_si128(alpha, digit), us)) | (unsigned)_mm_movemask_epi8(v);
+        if (m != 0xFFFF) {
+            q += __builtin_ctz(~m);
+            return ((uint64_t)(q - p) << 32) | goosecc_hash_mem(d + p, q - p);
+        }
+        q += 16;
+    }
+#endif
+    while (q < len && goosecc_isid(d[q])) q++;
+    return ((uint64_t)(q - p) << 32) | goosecc_hash_mem(d + p, q - p);
+}
+/* The first i >= p with s[i] one of \n / " ' \ NUL (what skipping a line of
+ * a group that is not processed must look at), or s.len. */
+int64_t goosecc_skip_text(sl_u8 s, int64_t p) {
+    const uint8_t *d = s.data;
+    int64_t len = s.len;
+#if defined(__SSE2__)
+    while (p + 16 <= len) {
+        __m128i v = _mm_loadu_si128((const __m128i *)(d + p));
+        __m128i x = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(v, _mm_set1_epi8('\n')), _mm_cmpeq_epi8(v, _mm_set1_epi8('/'))),
+                                 _mm_or_si128(_mm_cmpeq_epi8(v, _mm_set1_epi8('"')), _mm_cmpeq_epi8(v, _mm_set1_epi8('\''))));
+        x = _mm_or_si128(x, _mm_or_si128(_mm_cmpeq_epi8(v, _mm_set1_epi8('\\')), _mm_cmpeq_epi8(v, _mm_setzero_si128())));
+        unsigned m = (unsigned)_mm_movemask_epi8(x);
+        if (m) return p + __builtin_ctz(m);
+        p += 16;
+    }
+#endif
+    while (p < len) {
+        uint8_t c = d[p];
+        if (c == '\n' || c == '/' || c == '"' || c == '\'' || c == '\\' || c == 0) return p;
+        p++;
+    }
+    return len;
+}
+
 /* B3: file I/O with fewer system calls than os's file_exists + read_file
  * (stat, fopen, fstat, 64 KB freads to EOF, fclose: 7 calls per header) and
  * write_file (fopen "wb" truncates, and ext4 then flushes the old blocks'

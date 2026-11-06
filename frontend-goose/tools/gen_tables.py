@@ -9,7 +9,7 @@ translation unit, more than many CTMark files spend parsing; these tables are
 static data instead (`const` arrays), built here from the same text:
 
   TBL_<NAME>_OFF  the offset of each entry's line in the text
-  TBL_<NAME>_HT   open addressing over FNV-1a (common.goose's hash_bytes) of
+  TBL_<NAME>_HT   open addressing over common.goose's hash_bytes (goosecc_rt.h) of
                   the entry's name: entry index + 1, 0 = empty, linear probing
   TBL_<NAME>_LEN  the length of the text, checked at the first lookup, so
                   that tables left stale by a regenerated text are an error
@@ -42,11 +42,21 @@ def goose_text(path, name):
     return m.group(1).encode()
 
 
-def fnv1a(s):
-    h = 2166136261
-    for c in s:
-        h = ((h ^ c) * 16777619) & 0xFFFFFFFF
-    return h
+M64 = (1 << 64) - 1
+
+
+def hash_bytes(s):
+    """goosecc_hash_mem (goosecc_rt.h): 8-byte little-endian words, the last
+    holding what remains; h = (h ^ w) * K, then mixed."""
+    K = 0xff51afd7ed558ccd
+    h = 0x9e3779b97f4a7c15
+    words = [s[i:i + 8] for i in range(0, len(s), 8)]
+    for w in words:
+        h = ((h ^ int.from_bytes(w, "little")) * K) & M64
+    h ^= h >> 32
+    h = (h * K) & M64
+    h ^= h >> 29
+    return h & 0xFFFFFFFF
 
 
 def entries(text, seps):
@@ -77,7 +87,7 @@ def table(name, text, seps):
     ht = [0] * size
     offs = [es[k][1] for k in keep]
     for idx, k in enumerate(keep):
-        p = fnv1a(es[k][0]) & (size - 1)
+        p = hash_bytes(es[k][0]) & (size - 1)
         while ht[p]:
             p = (p + 1) & (size - 1)
         ht[p] = idx + 1

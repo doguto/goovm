@@ -188,12 +188,9 @@ fn pp_fill() {
             var t = Tok { kind: 0, flags: 0, aux: 0, spell: 0, val: 0, xloc: 0 };
             var have = false;
             if cl == LX_IDENT || (cl == LX_IDPREFIX && !quote_follows(p)) {
-                var h: u32 = 2166136261;
-                var q = p;
-                while cc[src[q]] & CC_IDCONT != 0 {
-                    h = (h ^ src[q]) * 16777619;
-                    q++;
-                }
+                let r = ident_scan(src, p);
+                let q = p + (r >> 32) as! i64;
+                let h = (r & 0xFFFFFFFF) as! u32;
                 if src[q] != '\\' {
                     var fid = ident_find(p, q - p, h);
                     if fid < 0 { fid = ident_lookup(p, q - p, h) as i64; }

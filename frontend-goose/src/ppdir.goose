@@ -538,9 +538,9 @@ fn skip_to_directive() -> bool {
             if src[p] == c { p++; }
             continue;
         }
-        // Skip the rest of a plain run quickly.
-        p++;
-        while cc[src[p]] & (CC_IDCONT | CC_HSPACE) != 0 { p++; }
+        // The rest of the line up to what the loop must look at (at_bol
+        // is false: '#' and '%' are plain here), 16 bytes at a time.
+        p = skip_text(src, p + 1);
     }
 }
 

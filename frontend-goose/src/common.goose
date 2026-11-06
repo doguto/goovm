@@ -159,11 +159,14 @@ var idents: Ident[>..] = [];
 var idtab: u32[>..<] = [];    // open addressing: ident id + 1, 0 = empty
 var idmask: i64 = 0;
 
-fn hash_bytes(s: const u8[:]) -> u32 {
-    var h: u32 = 2166136261;
-    for c in s { h = (h ^ c) * 16777619; }
-    return h;
-}
+// The identifier hash, 8 bytes at a time (goosecc_rt.h; tools/gen_tables.py
+// computes the same for the static tables).
+extern fn hash_bytes(s: const u8[:]) -> u32 = "goosecc_hash";
+// The run of identifier characters (CC_IDCONT) at s[p..]: its length << 32
+// | its hash_bytes, 16 bytes at a time.
+extern fn ident_scan(s: const u8[:], p: i64) -> u64 = "goosecc_ident_scan";
+// The first i >= p with s[i] one of \n / " ' \ NUL, or s.len.
+extern fn skip_text(s: const u8[:], p: i64) -> i64 = "goosecc_skip_text";
 
 fn ident_grow() {
     let n = if idtab.len == 0 { 4096 } else { idtab.len * 2 };

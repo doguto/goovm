@@ -362,12 +362,9 @@ fn lex_file_token() -> Tok {
         let cl = lxc[c];
         if cl == LX_IDENT || (cl == LX_IDPREFIX && !quote_follows(p)) {
             // Identifier fast path.
-            var h: u32 = 2166136261;
-            var q = p;
-            while cc[src[q]] & CC_IDCONT != 0 {
-                h = (h ^ src[q]) * 16777619;
-                q++;
-            }
+            let r = ident_scan(src, p);
+            let q = p + (r >> 32) as! i64;
+            let h = (r & 0xFFFFFFFF) as! u32;
             if src[q] == '\\' && splice_at(q) > 0 {
                 let k, e, fl = lex_slow(p);
                 return finish_slow(k, p, e, fl, flags);
