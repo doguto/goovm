@@ -53,7 +53,7 @@ fn number_literal(t: Tok) -> u32 {
             }
             break;
         }
-        if v > (18446744073709551615 - d) / base { overflow = true; }
+        if mul_add_overflows(v, base, d) { overflow = true; }
         v = v * base + d;
         i++;
     }

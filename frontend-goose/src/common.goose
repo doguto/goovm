@@ -235,6 +235,19 @@ fn ident_text(id: i64) -> const u8[:] {
     return src[d.off..d.off + d.len];
 }
 
+// Whether v * base + d (d < base, base 2, 8, 10 or 16) exceeds 2^64 - 1:
+// v > (2^64 - 1 - d) / base, without the division. Goose divides by a
+// value it does not know as a constant through a magic number that it
+// computes before the loop, bit by bit: 60 iterations per literal.
+fn mul_add_overflows(v: u64, base: u64, d: u64) -> bool {
+    var lim: u64 = 1844674407370955160;
+    if base == 16 { lim = 1152921504606846975; }
+    else if base == 8 { lim = 2305843009213693951; }
+    else if base == 2 { lim = 9223372036854775807; }
+    else if d <= 5 { lim = 1844674407370955161; }
+    return v > lim;
+}
+
 // The entry of `name` (h = its hash_bytes) in one of the hash tables of
 // tables_gen.goose, which index `text` (of length tlen when they were
 // generated): its index, or -1. An entry's name is its line up to `sep`

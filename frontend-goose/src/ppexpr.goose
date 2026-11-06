@@ -260,7 +260,7 @@ fn parse_pp_number(t: Tok) -> i64, bool, bool {
         else if c >= 'A' && c <= 'F' { d = (c - 'A' + 10) as u64; }
         else if c == '\'' { i++; continue; }
         if d >= base { break; }
-        if v > (18446744073709551615 - d) / base { overflow = true; }
+        if mul_add_overflows(v, base, d) { overflow = true; }
         v = v * base + d;
         i++;
     }
