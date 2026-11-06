@@ -568,8 +568,6 @@ fn finish_declspec(ds: DeclSpec&, implicit: bool) -> u32 {
 // struct / union / enum
 
 var fscratch: Field[>..<] = [];
-var pack_changes: u32[>..] = [];    // pairs: token index, pack value
-var ms_changes: u32[>..] = [];      // pairs: token index, ms_struct on/off
 
 fn pack_at(i: i64) -> u32 {
     // the last change at or before token i
@@ -2065,32 +2063,6 @@ recursive fn parse_tu() {
     let count = nscratch.len - mark;
     let start = commit_list(mark);
     tu_node = node_v(N_TU, 0, 0, 0, 0, count, 0, start);
-}
-
-// Prepares the token stream: keywords become keyword tokens, #pragma pack
-// annotations are taken out (their positions go to pack_changes).
-fn prepare_tokens() {
-    var w = 0;
-    for r in tu_toks.len {
-        var t = tu_toks[r];
-        if t.kind == TK_ANNOT_PACK {
-            pack_changes.push(w as! u32);
-            pack_changes.push(t.val);
-            continue;
-        }
-        if t.kind == TK_ANNOT_MSSTRUCT {
-            ms_changes.push(w as! u32);
-            ms_changes.push(t.val);
-            continue;
-        }
-        if t.kind == TK_IDENT {
-            let kwc = idents[t.val].kw;
-            if kwc != 0 { t.kind = (TK_KW + (kwc as i64)) as! u8; }
-        }
-        tu_toks[w] = t;
-        w++;
-    }
-    tu_toks.resize(w);
 }
 
 fn declare_builtin_typedef(name: const u8[:], ty: u32) {

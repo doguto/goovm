@@ -105,8 +105,12 @@ struct Tok {
 // offset << 32 | ')' offset): the expansion ranges of -g's locations.
 var mx_ranges: u64[>..] = [];
 
-// The translation unit's tokens (-fsyntax-only).
+// The translation unit's tokens (-fsyntax-only); keywords already have
+// their TK_KW kinds. #pragma pack and ms_struct take effect from token
+// index pack_changes[2k] / ms_changes[2k] on (value at 2k + 1).
 var tu_toks: Tok[>..] = [];
+var pack_changes: u32[>..] = [];
+var ms_changes: u32[>..] = [];
 
 fn is_punct(k: i64) -> bool { k >= TK_L_SQUARE && k < TK_NUM_KINDS }
 
@@ -164,6 +168,21 @@ fn ident_grow() {
         var p = (d.hash as i64) & idmask;
         while idtab[p] != 0 { p = (p + 1) & idmask; }
         idtab[p] = (i + 1) as! u32;
+    }
+}
+
+// The id of the identifier spelled src[off..off+len] (hash h), or -1: the
+// probe of ident_lookup, inlined into the lexer's loop.
+inline fn ident_find(off: i64, len: i64, h: u32) -> i64 {
+    var p = (h as i64) & idmask;
+    loop {
+        let e = idtab[p] as i64;
+        if e == 0 { return -1; }
+        if idents[e - 1].hash == h && idents[e - 1].len == len {
+            let o = idents[e - 1].off as i64;
+            if src[o..o + len] == src[off..off + len] { return e - 1; }
+        }
+        p = (p + 1) & idmask;
     }
 }
 

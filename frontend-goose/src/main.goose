@@ -60,6 +60,16 @@ fn add_dir(d: const u8[:], sys: bool) {
     dirs.push(Dir { path: name_add(s), len: s.len as! u32, sys: sys });
 }
 
+// Adds a token to tu_toks, a keyword with its keyword kind (TK_KW + code).
+fn tu_add(t0: Tok) {
+    var t = t0;
+    if t.kind == TK_IDENT {
+        let kwc = idents[t.val].kw;
+        if kwc != 0 { t.kind = (TK_KW + (kwc as i64)) as! u8; }
+    }
+    tu_toks.push(t);
+}
+
 // The translation unit's tokens to tu_toks, the EOF included (with -E to
 // the printer, without the EOF): what calling pp_lex until the EOF gives,
 // with pp_lex's steps done here for the common tokens:
@@ -116,7 +126,7 @@ fn pp_fill() {
                             if !mode_E { tu_toks.push(m); }
                             return;
                         }
-                        if mode_E { pr_token(m); } else { tu_toks.push(m); }
+                        if mode_E { pr_token(m); } else { tu_add(m); }
                     }
                     break;
                 }
@@ -126,7 +136,7 @@ fn pp_fill() {
                     if !mode_E { tu_toks.push(t); }
                     return;
                 }
-                if mode_E { pr_token(t); } else { tu_toks.push(t); }
+                if mode_E { pr_token(t); } else { tu_add(t); }
             }
             if done { continue; }
             // a paste or the end of the context: ctx_next's, below
@@ -149,7 +159,7 @@ fn pp_fill() {
                 if !mode_E { tu_toks.push(r); }
                 return;
             }
-            if mode_E { pr_token(r); } else { tu_toks.push(r); }
+            if mode_E { pr_token(r); } else { tu_add(r); }
             continue;
         }
         let ms = ctxs[ci].mi_state;
@@ -183,7 +193,9 @@ fn pp_fill() {
                     q++;
                 }
                 if src[q] != '\\' {
-                    let id = ident_lookup(p, q - p, h);
+                    var fid = ident_find(p, q - p, h);
+                    if fid < 0 { fid = ident_lookup(p, q - p, h) as i64; }
+                    let id = fid as! u32;
                     t = Tok { kind: TK_IDENT, flags: flags | sys, aux: 0, spell: p as! u32, val: id, xloc: p as! u32 };
                     p = q;
                     flags = 0;
@@ -192,7 +204,7 @@ fn pp_fill() {
                             ctxs[ci].mi_state = MI_INVALID;
                             mi = false;
                         }
-                        if mode_E { pr_token(t); } else { tu_toks.push(t); }
+                        if mode_E { pr_token(t); } else { tu_add(t); }
                         continue;
                     }
                     have = true;
@@ -203,7 +215,7 @@ fn pp_fill() {
                     mi = false;
                 }
                 t = Tok { kind: PUNCT1[c], flags: flags | sys, aux: 0, spell: p as! u32, val: 0, xloc: p as! u32 };
-                if mode_E { pr_token(t); } else { tu_toks.push(t); }
+                if mode_E { pr_token(t); } else { tu_add(t); }
                 p++;
                 flags = 0;
                 continue;
@@ -218,7 +230,7 @@ fn pp_fill() {
                         ctxs[ci].mi_state = MI_INVALID;
                         mi = false;
                     }
-                    if mode_E { pr_token(t); } else { tu_toks.push(t); }
+                    if mode_E { pr_token(t); } else { tu_add(t); }
                     p = lx_pos;
                     flags = lx_flags;
                     continue;
@@ -230,7 +242,7 @@ fn pp_fill() {
                     if !mode_E { tu_toks.push(r); }
                     return;
                 }
-                if mode_E { pr_token(r); } else { tu_toks.push(r); }
+                if mode_E { pr_token(r); } else { tu_add(r); }
             }
             break;
         }
@@ -362,16 +374,17 @@ fn main() {
     } else {
         tu_annot = true;
         if !pp_start(opt_input) { exit(1); }
-        pp_fill();
-        let t1 = clock_ns();
+        // keywords are known before preprocessing, so that pp_fill gives
+        // keyword tokens their kinds as it adds them
         let v = std_version();
         opt_kw_inline = v.len > 0 || opt_gnu;
         opt_kw_restrict = v.len > 0;
         opt_kw_gnu = opt_gnu;
         opt_c89 = v.len == 0;
         keywords_init();
+        pp_fill();
+        let t1 = clock_ns();
         types_init();
-        prepare_tokens();
         parse_init();
         parse_tu();
         if (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {

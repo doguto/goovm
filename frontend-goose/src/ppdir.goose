@@ -848,11 +848,12 @@ fn string_body(t: Tok, out: u8[>..]&) {
     out.append(src[s + 1..e - 1]);
 }
 
-var tu_annot: bool = false;    // -fsyntax-only: pragma pack goes into tu_toks
+var tu_annot: bool = false;    // not -E: #pragma pack and ms_struct are recorded for the parser
 
 fn emit_pack(loc: u32) {
     if tu_annot {
-        tu_toks.push(Tok { kind: TK_ANNOT_PACK, flags: 0, aux: 0, spell: loc, val: pack_cur, xloc: loc });
+        pack_changes.push(tu_toks.len as! u32);
+        pack_changes.push(pack_cur);
     }
 }
 
@@ -1006,7 +1007,8 @@ recursive fn do_pragma(t: Tok, from_op: bool) {
         var v: u32 = 0;
         if ptok_is(1, "on") { v = 1; }
         if tu_annot {
-            tu_toks.push(Tok { kind: TK_ANNOT_MSSTRUCT, flags: 0, aux: 0, spell: ptoks[0].xloc, val: v, xloc: ptoks[0].xloc });
+            ms_changes.push(tu_toks.len as! u32);
+            ms_changes.push(v);
         }
     }
     if print && mode_E { print_pragma_tokens(0); }
