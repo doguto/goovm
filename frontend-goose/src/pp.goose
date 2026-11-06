@@ -295,7 +295,15 @@ recursive fn macro_token(t0: Tok) -> bool, Tok {
 // file that is not a directive or the end of the file is pp_lex's
 // (unexpanded: no macro name is marked) as lex_file_token returns it.
 recursive fn arg_token() -> Tok {
-    let ci = ctxs.len - 1;
+    var ci = ctxs.len - 1;
+    // a token context: its tokens as ctx_next gives them (none is marked
+    // or expanded while expansion is off), popping the ones that end
+    while ctxs[ci].kind != CTX_FILE {
+        let t = ctx_next(ci);
+        if t.kind != TK_CTX_END { return t; }
+        pop_tok_ctx(t.flags);
+        ci = ctxs.len - 1;
+    }
     if ctxs[ci].kind == CTX_FILE {
         let t = lex_file_token();
         if t.kind != TK_EOF && !(t.kind == TK_HASH && t.flags & F_BOL != 0 && !lx_dir) {
@@ -483,7 +491,7 @@ recursive fn read_macro_args(name: Tok, m: i64) -> bool {
     let mc = macros[m];
     var fixed_left = mc.nparams as i64;
     let variadic = mc.flags & M_VARIADIC != 0;
-    let lp = pp_lex_unexpanded();     // the '('
+    let lp = arg_token();     // the '('
     var t = lp;
     var nactual = 0;
     let a0 = argtoks.len;
