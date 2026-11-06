@@ -48,7 +48,7 @@ print(sys.argv[2], "tpde", " ".join(f"{k[6:].replace(\" \", \"_\")}_us={v}" for 
 ' "$out/tpde-trace.json" "$(basename "$f")"
     for b in cpp goose; do "$GOOVM" --backend=$b "$f" -o "$out/$(basename "$f" .bc).$b.o"; done
     "$TPDE" "$f" -o "$out/$(basename "$f" .bc).tpde.o"
-    llc-20 -O0 -filetype=obj "$f" -o "$out/$(basename "$f" .bc).llc.o"
+    llc-20 -O0 -relocation-model=pic -filetype=obj "$f" -o "$out/$(basename "$f" .bc).llc.o"
     size "$out/$(basename "$f" .bc)".*.o
     cmp "$out/$(basename "$f" .bc).cpp.o" "$out/$(basename "$f" .bc).goose.o" && echo "cpp and goose objects identical"
 done > "$out/phases.txt" 2>&1

@@ -6,7 +6,7 @@
 #
 # For every input, each tool is run RUNS times (default 5) and the best wall
 # time is kept:
-#   llc        llc-20 -O0 -filetype=obj in.bc -o out.o
+#   llc        llc-20 -O0 -relocation-model=pic -filetype=obj in.bc -o out.o
 #   tpde       tpde-llc in.bc -o out.o                     (if found)
 #   goovm      goovm-llc --backend=cpp --time in.bc -o out.o
 #   llvm-inproc goovm-llc --backend=llvm   (--inproc: LLVM -O0 in our process)
@@ -68,7 +68,7 @@ sep="|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
 echo "$hdr"
 echo "$sep"
 for in in "${inputs[@]}"; do
-    t_llc=$(best_of "$LLC" -O0 -filetype=obj "$in" -o "$tmp/llc.o")
+    t_llc=$(best_of "$LLC" -O0 -relocation-model=pic -filetype=obj "$in" -o "$tmp/llc.o")
     t_tpde="-"
     [ -n "$TPDE" ] && t_tpde=$(best_of "$TPDE" "$in" -o "$tmp/tpde.o")
     t_goo=$(best_of "$GOOVM" --backend=cpp --time "$in" -o "$tmp/goo.o")

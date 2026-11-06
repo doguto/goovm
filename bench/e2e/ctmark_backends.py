@@ -5,7 +5,7 @@ Every CTMark compile is split in two steps, and the second step is done by
 each back-end in turn:
 
   front   clang -O0 -c -emit-llvm x.c -o x.bc    (front end + bitcode write)
-  llc     llc-20 -O0 -filetype=obj x.bc           (LLVM's -O0 back-end)
+  llc     llc-20 -O0 -relocation-model=pic -filetype=obj x.bc           (LLVM's -O0 back-end)
   tpde    tpde-llc x.bc                            (TPDE-LLVM)
   goovm   goovm-llc --backend=cpp|goose x.bc       (only files in its subset)
 
@@ -118,7 +118,7 @@ def main():
         if t_front is None:
             print(f"front end failed ({rc}): {e['file']}", file=sys.stderr)
             continue
-        t_llc, _ = timed([a.llc, "-O0", "-filetype=obj", bc, "-o", obj], cwd, a.runs)
+        t_llc, _ = timed([a.llc, "-O0", "-relocation-model=pic", "-filetype=obj", bc, "-o", obj], cwd, a.runs)
         t_tpde, rc_t = timed([a.tpde, bc, "-o", obj], cwd, a.runs)
         d = per[prog]
         if a.goovm:
