@@ -1,12 +1,15 @@
-// goosecc: a C17 + GNU front end (preprocessor, parser, type checker)
-// written in Goose. See ../DESIGN.md.
+// goosecc: a C17 + GNU compiler written in Goose: preprocessor, parser,
+// type checker (B1), and lowering to GIR compiled in-process by the Goose
+// back-end (B2). See ../DESIGN.md.
 //
+//   goosecc -c [options] file.c [-o file.o]  compile to an x86-64 ELF object
+//   goosecc --emit-gir [options] file.c      print the GIR (to -o or stdout)
 //   goosecc -E [options] file.c            preprocess to stdout (or -o)
 //   goosecc -fsyntax-only [options] file.c parse and type-check
 //   goosecc --layout-check [options] file.c -o check.c
 //
 // Options follow clang: -I -isystem -iquote -idirafter -D -U -include
-// -std= -O* -pthread -w; others are accepted and ignored.
+// -std= -O* -g -fPIC -fcommon -pthread -w; others are accepted and ignored.
 
 import std;
 import os;
@@ -26,6 +29,18 @@ import .init;
 import .builtins;
 import .layout;
 import .dump;
+import .gen_ir;
+import .gen_abi;
+import .gen_ops;
+import .gen_expr;
+import .gen_glob;
+import .gen_stmt;
+import .gen_call;
+import .gen_builtin;
+import .gen_asm;
+import .gen_debug;
+import .gen_tu;
+import cg from "../../backend-goose";
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
 var opt_input: u8[>..] = [];
@@ -33,7 +48,7 @@ var out_off: u32 = 0;
 var std_off: u32 = 0;
 var std_len: i64 = 0;
 var out_len: i64 = 0;
-var opt_mode: i64 = 0;      // 0 = -fsyntax-only, 1 = -E, 2 = --layout-check
+var opt_mode: i64 = 0;      // 0 = -fsyntax-only, 1 = -E, 2 = --layout-check, 3 = --dump-ast, 4 = -c, 5 = --emit-gir
 var opt_time: bool = false;
 var sys_dirs_after: u32[>..] = [];   // -idirafter: (off, len) pairs
 var isystem_dirs: u32[>..] = [];
@@ -92,6 +107,15 @@ fn main() {
         else if s == "-fsyntax-only" { opt_mode = 0; }
         else if s == "--layout-check" { opt_mode = 2; }
         else if s == "--dump-ast" { opt_mode = 3; }
+        else if s == "-c" { if opt_mode == 0 { opt_mode = 4; } }
+        else if s == "--emit-gir" { opt_mode = 5; }
+        else if s == "-g" || starts_with(s, "-g") && s != "-g0" && !starts_with(s, "-gno") { gen::opt_debug = true; }
+        else if s == "-g0" { gen::opt_debug = false; }
+        else if s == "-fPIC" || s == "-fpic" { gen::opt_pic = true; gen::opt_pie = false; }
+        else if s == "-fPIE" || s == "-fpie" { gen::opt_pic = false; gen::opt_pie = true; }
+        else if s == "-fno-pic" || s == "-fno-PIC" || s == "-fno-pie" || s == "-fno-PIE" { gen::opt_pic = false; }
+        else if s == "-fcommon" { gen::opt_common = true; }
+        else if s == "-fno-common" { gen::opt_common = false; }
         else if s == "--time" { opt_time = true; }
         else if s == "-pthread" { opt_pthread = true; }
         else if s == "-nostdinc" { nostdinc = true; }
@@ -108,7 +132,12 @@ fn main() {
             if s == "-Os" || s == "-Oz" { opt_os = true; }
         }
         else if s == "-" || (s.len > 0 && s[0] != '-') { opt_input.clear(); opt_input.append(s); }
-        // everything else (-c, -g, -w, -W..., -f..., -m...) is accepted and ignored
+        else if !(starts_with(s, "-W") || s == "-w" || starts_with(s, "-f") || starts_with(s, "-m") || starts_with(s, "-g") ||
+                  starts_with(s, "-pedantic") || s == "-pipe" || s == "-ansi" || s == "-v" || s == "-Qunused-arguments" ||
+                  starts_with(s, "-M") || s == "-S" || s == "-emit-llvm" || starts_with(s, "--")) {
+            write_stderr(str("goosecc: note: ignoring option '", s, "'\n"));
+        }
+        // everything else (-w, -W..., -f..., -m...) is accepted and ignored
     }
     if opt_input.len == 0 { usage(); }
 
@@ -167,6 +196,45 @@ fn main() {
         prepare_tokens();
         parse_init();
         parse_tu();
+        if (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
+            let t2 = clock_ns();
+            let ok = gen::lower_tu(opt_input);
+            let t3 = clock_ns();
+            if !ok { exit(1); }
+            if opt_mode == 5 {
+                var o: u8[>..] = [];
+                gen::dump_gir(o);
+                if out_len > 0 {
+                    if !write_file(names[out_off..out_off + out_len], o) { fatal("cannot write the GIR dump"); }
+                } else {
+                    write_stdout(o);
+                }
+            } else {
+                let obj = gen::codegen();
+                let t4 = clock_ns();
+                var path: u8[>..] = [];
+                if out_len > 0 {
+                    path.append(names[out_off..out_off + out_len]);
+                } else {
+                    // file.c -> file.o in the current directory
+                    var b = 0;
+                    for c, i in opt_input { if c == '/' { b = i + 1; } }
+                    var e = opt_input.len;
+                    if e - b > 2 && opt_input[e - 2] == '.' { e -= 2; }
+                    path.append(opt_input[b..e]);
+                    path.append(".o");
+                }
+                if !write_file(path, obj) { fatal("cannot write the object file"); }
+                let t5 = clock_ns();
+                if opt_time {
+                    write_stderr(str("goosecc: preprocess ", (t1 - t0) / 1000, " us, parse+sema ", (t2 - t1) / 1000, " us, lowering ",
+                        (t3 - t2) / 1000, " us, back-end ", (t4 - t3) / 1000, " us, write ", (t5 - t4) / 1000, " us, total ",
+                        (t5 - t0) / 1000, " us; ", nodes.len, " nodes, ", gen::m_insts.len, " GIR insts, ", obj.len, " bytes\n"));
+                }
+            }
+            if n_errors > 0 { exit(1); }
+            return;
+        }
         if opt_mode == 3 && n_errors == 0 {
             if !dump_ast(names[out_off..out_off + out_len]) { fatal("cannot write the AST dump"); }
         }

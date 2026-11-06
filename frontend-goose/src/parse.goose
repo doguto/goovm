@@ -39,6 +39,11 @@ let AM_GNU_INLINE = 1024;
 let AM_MS_STRUCT = 2048;
 let AM_GCC_STRUCT = 4096;
 
+let AM_CTOR = 8192;
+let AM_DTOR = 16384;
+let AM_NOCOMMON = 32768;
+let AM_COMMON = 65536;
+
 struct Attrs {
     aligned: u32 = 0,
     mode: u8 = 0,
@@ -48,6 +53,29 @@ struct Attrs {
     asm_off: u32 = 0,
     asm_len: u32 = 0,
     misc: u32 = 0,
+    sec_off: u32 = 0,       // section("name"): in strbytes
+    sec_len: u32 = 0,
+    alias_off: u32 = 0,     // alias("name")
+    alias_len: u32 = 0,
+    vis: u8 = 0,            // visibility("hidden") = 1, ("protected") = 2
+    ctor_prio: u16 = 65535,
+    dtor_prio: u16 = 65535,
+}
+
+// The string argument of an attribute: ("text") -> (offset in strbytes, length).
+recursive fn attr_string_arg() -> u32, u32 {
+    adv();
+    var off: u32 = 0;
+    var len: u32 = 0;
+    if at(TK_STRING) {
+        let s = string_literal();
+        let sl = strs[nodes[s].a];
+        off = sl.start;
+        len = sl.len - 1;
+    }
+    while !at(TK_R_PAREN) && !at(TK_EOF) { adv(); }
+    expect(TK_R_PAREN, "')'");
+    return off, len;
 }
 
 fn attr_name(id: u32) -> const u8[:] {
@@ -143,6 +171,33 @@ recursive fn parse_attributes(a: Attrs&) {
                     a.misc = a.misc | AM_MAY_ALIAS;
                 } else if name == "fallthrough" {
                     a.misc = a.misc | AM_FALLTHROUGH;
+                } else if name == "section" {
+                    if at(TK_L_PAREN) {
+                        let o, l = attr_string_arg();
+                        a.sec_off = o;
+                        a.sec_len = l;
+                    }
+                } else if name == "alias" {
+                    if at(TK_L_PAREN) {
+                        let o, l = attr_string_arg();
+                        a.alias_off = o;
+                        a.alias_len = l;
+                    }
+                } else if name == "visibility" {
+                    if at(TK_L_PAREN) {
+                        let o, l = attr_string_arg();
+                        let v = strbytes[o..o + l];
+                        if v == "hidden" || v == "internal" { a.vis = 1; } else if v == "protected" { a.vis = 2; } else { a.vis = 0; }
+                    }
+                } else if name == "constructor" || name == "destructor" {
+                    var prio: i64 = 65535;
+                    if at(TK_L_PAREN) { prio = attr_int_arg(); }
+                    if name == "constructor" { a.misc = a.misc | AM_CTOR; a.ctor_prio = prio as! u16; }
+                    else { a.misc = a.misc | AM_DTOR; a.dtor_prio = prio as! u16; }
+                } else if name == "nocommon" {
+                    a.misc = a.misc | AM_NOCOMMON;
+                } else if name == "common" {
+                    a.misc = a.misc | AM_COMMON;
                 } else if name == "cleanup" {
                     if at(TK_L_PAREN) {
                         adv();
@@ -1205,17 +1260,22 @@ var label_syms: u32[>..<] = [];
 
 fn get_attr(s: i64) -> i64 {
     if syms[s].attr == 0 {
-        if sym_attrs.len == 0 { sym_attrs.push(SymAttr { asm_label: 0, asm_len: 0, cleanup: -1, align: 0, flags: 0 }); }
+        if sym_attrs.len == 0 { sym_attrs.push(SymAttr { asm_label: 0, asm_len: 0, cleanup: -1, align: 0, flags: 0, .. }); }
         syms[s].attr = sym_attrs.len as! u32;
-        sym_attrs.push(SymAttr { asm_label: 0, asm_len: 0, cleanup: -1, align: 0, flags: 0 });
+        sym_attrs.push(SymAttr { asm_label: 0, asm_len: 0, cleanup: -1, align: 0, flags: 0, .. });
     }
     return syms[s].attr as i64;
 }
 
 fn record_attrs(s: i64, a: Attrs&, align: u32) {
-    if a.asm_len != 0 || a.cleanup >= 0 || a.aligned != 0 || align != 0 || a.misc != 0 {
+    if a.asm_len != 0 || a.cleanup >= 0 || a.aligned != 0 || align != 0 || a.misc != 0 || a.sec_len != 0 || a.alias_len != 0 || a.vis != 0 {
         let ai = get_attr(s);
         if a.asm_len != 0 { sym_attrs[ai].asm_label = a.asm_off; sym_attrs[ai].asm_len = a.asm_len; }
+        if a.sec_len != 0 { sym_attrs[ai].sec_off = a.sec_off; sym_attrs[ai].sec_len = a.sec_len; }
+        if a.alias_len != 0 { sym_attrs[ai].alias_off = a.alias_off; sym_attrs[ai].alias_len = a.alias_len; }
+        if a.vis != 0 { sym_attrs[ai].vis = a.vis; }
+        if a.misc & AM_CTOR != 0 { sym_attrs[ai].ctor_prio = a.ctor_prio; }
+        if a.misc & AM_DTOR != 0 { sym_attrs[ai].dtor_prio = a.dtor_prio; }
         if a.cleanup >= 0 { sym_attrs[ai].cleanup = a.cleanup; }
         var al = a.aligned;
         if align > al { al = align; }
@@ -1284,6 +1344,7 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
             // a later declaration has (or, without one, inherits) a prototype
             syms[prev].flags = syms[prev].flags & ~SF_KRDEF;
             record_attrs(prev, a, 0);
+            if scope_depth == 0 && (!ds.is_inline || ds.sc == SC_EXTERN) { syms[prev].flags = syms[prev].flags | SF_FORCE_DEF; }
             if syms[prev].scope as i64 != scope_depth && scope_depth > 0 {
                 // a block-scope redeclaration of a visible function: same entity
             }
@@ -1297,6 +1358,7 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
         if scope_depth == 0 { syms[s].flags = SF_FILESCOPE; } else { syms[s].flags = SF_LOCALLINK; }
         if ds.is_inline { syms[s].flags = syms[s].flags | SF_INLINE; }
         if ds.noreturn { syms[s].flags = syms[s].flags | SF_NORETURN; }
+        if scope_depth == 0 && (!ds.is_inline || ds.sc == SC_EXTERN) { syms[s].flags = syms[s].flags | SF_FORCE_DEF; }
         record_attrs(s, a, 0);
         bind_sym(s, false);
         return s;
@@ -1923,7 +1985,8 @@ recursive fn parse_asm_stmt() -> u32 {
         if at(TK_R_PAREN) { break; }
         loop {
             if section <= 2 {
-                if at(TK_L_SQUARE) { adv(); if at(TK_IDENT) { adv(); } expect(TK_R_SQUARE, "']'"); }
+                var opname: u32 = 0;
+                if at(TK_L_SQUARE) { adv(); if at(TK_IDENT) { opname = tval(); adv(); } expect(TK_R_SQUARE, "']'"); }
                 var cs: u32 = 0;
                 if at(TK_STRING) { cs = string_literal(); } else { err("expected string literal"); break; }
                 expect(TK_L_PAREN, "'('");
@@ -1935,7 +1998,7 @@ recursive fn parse_asm_stmt() -> u32 {
                 } else {
                     ex = e;
                 }
-                nscratch.push(node(N_ASMOP, section, 0, cs as i64, ex as i64, 0, nodes[e].loc));
+                nscratch.push(node(N_ASMOP, section, 0, cs as i64, ex as i64, opname as i64, nodes[e].loc));
             } else if section == 3 {
                 if at(TK_STRING) {
                     let cs = string_literal();
@@ -2033,7 +2096,7 @@ fn declare_builtin_typedef(name: const u8[:], ty: u32) {
 fn parse_init() {
     syms.push(Sym { kind: 0, sc: 0, flags: 0, name: 0, ty: 0, prev: -1, canon: 0, scope: 0, def: -1, v: 0, loc: 0, attr: 0 });
     nodes.push(Node { kind: 0, op: 0, flags: 0, ty: 0, a: 0, b: 0, c: 0, loc: 0, v: 0 });
-    sym_attrs.push(SymAttr { asm_label: 0, asm_len: 0, cleanup: -1, align: 0, flags: 0 });
+    sym_attrs.push(SymAttr { asm_label: 0, asm_len: 0, cleanup: -1, align: 0, flags: 0, .. });
     declare_builtin_typedef("__builtin_va_list", t_valist);
     // the builtin tag, so that builtin signatures naming it get the same type
     let vt = new_sym(SK_TAG, records[0].name, t_valist_rec, 0);
