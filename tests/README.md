@@ -2,7 +2,7 @@
 
 | script | what |
 |---|---|
-| `run.py` | the small differential tests in `c/` (44 programs) |
+| `run.py` | the small differential tests in `c/` (48 programs) |
 | `suite.py` | the llvm-test-suite C corpora through goovm-llc, against their reference outputs |
 | `realworld_mixed.py` | (v0) links SPASS and consumer-typeset from a mix of goovm and clang objects |
 
@@ -20,7 +20,8 @@ tests/run.py --goovm build/tools/goovm-llc/goovm-llc -j3 [--opt-passes PASSES] [
 
 ```
 tests/suite.py --goovm build/tools/goovm-llc/goovm-llc [--corpus a,b,...] [--variants O0,g,mem2reg]
-               [-j 3] [--work DIR] [--fallback] [--report FILE] [--json FILE] [--rebaseline] [filter ...]
+               [-j 3] [--work DIR] [--fallback] [--report FILE] [--json FILE] [--rebaseline]
+               [--time-run N] [filter ...]
 ```
 
 Corpora (from the llvm-test-suite checkout, `--suite`, default
@@ -64,3 +65,12 @@ link error); `unsupported` (goovm-llc exit 2 on some file); `fallback` (with
 `--fallback`, some file went through LLVM's code generator; counted as
 passing if the output is right, and counted separately); `error` (another
 tool failed).
+
+`--time-run N` runs every passing program and its plain `clang-20 -O0`
+build N more times (best wall time of each) and adds a run-time table with
+the ratio per test and their geometric mean. Use `-j 1` (and one variant)
+when the numbers matter, e.g. the CTMark comparison:
+
+```
+tests/suite.py --goovm build/tools/goovm-llc/goovm-llc --corpus ctmark --variants O0 -j 1 --time-run 3
+```

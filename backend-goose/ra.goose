@@ -83,6 +83,7 @@ var dying: u32[>..] = [];       // values whose last use is the current instruct
 // materialized or folded at their use) and the deferred address of a GEP.
 struct Pend { id: u32, m: Mem }
 var pend: Pend[>..] = [];
+var n_pend: i64 = 0;          // entries of pend in use
 var paddr_m: Mem = Mem { M_REG, 0, 0, 0, 0 };
 // A compare whose flags feed the next instruction (CONDBR, SELECT).
 var flags_id: u32 = 0xFFFFFFFF;
@@ -269,6 +270,7 @@ inline fn pp_use(v: u32, j: u32, lo: u32, ncl: u32, mw: u32, nodef: bool) {
     pp_use2(u, j, local, ncl, nodef || mw > u);
 }
 fn pp_use2(u: u32, j: u32, local: bool, ncl: u32, nodef: bool) {
+    if vi[u].home == H_ALLOCA { return; }   // (marked before the walk; addresses are rematerialized)
     let n = vi[u].nuse;
     if n != 255 { vi[u].nuse = n + 1; }
     if local {
@@ -380,6 +382,11 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
     assert(vi.len >= nv);
     let z = VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, hint: NOREG, spare: 0, last: 0, off: 0 };
     for q in 0..nv { vi[q] = z; }
+    // static allocas (entry block): their uses need no bookkeeping
+    let E = blocks[0];
+    for gi in E.first_inst..E.first_inst + E.n_inst {
+        if M.insts[gi].op == GIR_ALLOCA { vi[gi - f_first_inst].home = H_ALLOCA; }
+    }
     for B, b in blocks {
         let lo = B.first_inst - f_first_inst;
         let hi = lo + B.n_inst;
@@ -653,13 +660,14 @@ fn ra_norm(id: u32, r: u32) {
 // ------------------------------------------------------ deferred loads
 
 fn ra_pend_add(id: u32, m: Mem) {
-    pend.push(Pend { id: id, m: m });
+    if n_pend < pend.len { pend[n_pend] = Pend { id: id, m: m }; } else { pend.push(Pend { id: id, m: m }); }
+    n_pend++;
     vi[id].reg = PEND;
 }
 // The memory of deferred load id (removes it).
 fn ra_take_pend(id: u32) -> Mem {
     var k: i64 = 0;
-    let n = pend.len;
+    let n = n_pend;
     while k < n {
         if pend[k].id == id { break; }
         k++;
@@ -667,7 +675,7 @@ fn ra_take_pend(id: u32) -> Mem {
     if k == n { assert(false); }
     let m = pend[k].m;
     pend[k] = pend[n - 1];
-    pend.resize(n - 1, Pend { id: 0, m: m });
+    n_pend = n - 1;
     vi[id].reg = NOREG;
     return m;
 }
@@ -946,7 +954,7 @@ fn ra_func_start() {
     r_free = r_alloc;
     r_lock = 0;
     r_temp = 0;
-    pend.clear();
+    n_pend = 0;
     dying.clear();
     flags_id = RV_NONE;
     ra_carry = false;
@@ -965,7 +973,7 @@ fn ra_block_start() {
     r_free = r_alloc;
     r_lock = 0;
     r_temp = 0;
-    pend.clear();
+    n_pend = 0;
     flags_id = RV_NONE;
     ra_carry = false;
 }

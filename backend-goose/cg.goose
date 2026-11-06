@@ -128,7 +128,7 @@ fn phi_copy(dst: Mem, v: u32, t: u32) {
     copy_mem_t(dst, src, m, gran_of(t), phi_t);
 }
 fn pend_peek(id: u32) -> Mem {
-    for p in pend { if p.id == id { return p.m; } }
+    for k in 0..n_pend { if pend[k].id == id { return pend[k].m; } }
     assert(false);
     return Mem { M_REG, 0, 0, 0, 0 };
 }
