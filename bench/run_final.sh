@@ -64,4 +64,7 @@ python3 "$here/../poc/ircore/run.py" "$GOOSE" "$out/ircore-work" --n 2000000 --r
 echo "== bridge" >&2
 bash "$here/../poc/bridge/run.sh" "$out/bridge-work" > "$out/bridge.txt"
 
+echo "== code quality" >&2
+GOOVM="$GOOVM" TPDE="$TPDE" bash "$here/codequal/run.sh" "$out/codequal-work" 5 2 > "$out/codequal.md"
+
 echo "done: $out" >&2
