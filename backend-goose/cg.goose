@@ -521,11 +521,20 @@ fn emit_prologue(insts: const Inst[:], flags: u32) {
         }
     }
 }
+// rsp is not moved below the saved registers (no frame, or a leaf's frame
+// in the red zone), so the epilogue can pop rbp directly.
+fn frameless() -> bool {
+    var nsave: i64 = 0;
+    for r in CS_REGS { if r_cs_used & bit(r) != 0 { nsave++; } }
+    let sub = ((lay_off + 15) & ~15) - 8 * nsave;
+    let leaf = !f_call && !f_rsp && !f_asm && !f_sjlj;
+    return sub <= 0 || leaf && sub <= 128;
+}
 fn emit_epilogue() {
     var nsave: u32 = 0;
     for r in CS_REGS { if r_cs_used & bit(r) != 0 { nsave++; } }
     if nsave == 0 {
-        b1(0xC9);  // leave
+        if frameless() && !f_rsp { b1(0x5D); } else { b1(0xC9); }  // pop rbp / leave
         b1(0xC3);  // ret
         return;
     }
@@ -557,7 +566,7 @@ fn gen_function(fi: u32) {
     let blocks = M.blocks[f.first_block..f.first_block + f.n_blocks];
     let nv: i64 = f.n_inst as i64 + f.n_args;
     if vi.len < nv {
-        vi.resize(nv, VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, spare: 0, last: 0, off: 0 });
+        vi.resize(nv, VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, hint: NOREG, spare: 0, last: 0, off: 0 });
     }
     if t_off.len < f.n_inst { t_off.resize(f.n_inst, 0); }
     if b_tag.len < f.n_blocks { b_tag.resize(f.n_blocks, 0); }

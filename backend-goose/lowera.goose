@@ -40,6 +40,26 @@ fn v_ext(v: u32) -> bool {
     let id = vid(v);
     return vi[id].reg < 32 && vi[id].st & ST_EXT != 0;
 }
+// ra_gpr for the operand a two-address result will take over: if v has to be
+// loaded and dies here, it is loaded into the register the result is wanted
+// in (its hint), so no copy follows.
+fn ra_gpr_h(v: u32, clean: bool, j: u32) -> u32 {
+    let h: u32 = vi[j].hint;
+    if h < 16 && vi[j].st & (ST_CS | ST_GLOB) == 0 && is_val(v) && r_free & ~r_lock & bit(h) != 0 {
+        let id = vid(v);
+        let x = vi[id];
+        if x.reg >= 32 && x.st & ST_GLOB == 0 && x.last == cur_pos && x.home != H_ALLOCA && x.home != H_BYVAL {
+            let r = ra_alloc(GP_ALLOC, bit(h));
+            if x.reg == PEND { vi[id].st &= ~ST_MEM; }
+            ra_mat_gpr(v, r);
+            r_val[r] = id;
+            vi[id].reg = r as! u8;
+            ra_note(id);
+            return r;
+        }
+    }
+    return ra_gpr(v, clean);
+}
 // The result register for j, taking over the register of operand a if a dies
 // here (else a copy of ra): the two-address form "rd = ra; rd op= ...".
 fn def_from(j: u32, a: u32, ra: u32) -> u32 {
@@ -67,7 +87,7 @@ fn lower_binop_a(I: Inst, j: u32) {
     }
     let ok, imm = alu_imm(I.b, bits);
     if ok && op != GIR_MUL {
-        let ra = ra_gpr(I.a, !exact);
+        let ra = ra_gpr_h(I.a, !exact, j);
         var rd: u32 = 32;
         if op == GIR_ADD || op == GIR_SUB {
             rd = ra_reuse(I.a);
@@ -88,7 +108,7 @@ fn lower_binop_a(I: Inst, j: u32) {
         return;
     }
     if ok && op == GIR_MUL {
-        let ra = ra_gpr(I.a, !exact);
+        let ra = ra_gpr_h(I.a, !exact, j);
         var rd = ra_reuse(I.a);
         if rd != ra { rd = ra_def(j); }
         imul_rri(w, rd, ra, imm);
@@ -103,7 +123,7 @@ fn lower_binop_a(I: Inst, j: u32) {
         a = I.b;
         b = I.a;
     }
-    let ra = ra_gpr(a, !exact);
+    let ra = ra_gpr_h(a, !exact, j);
     let n = int_bytes(bits);
     var okm = false;
     var mb = Mem { M_REG, 0, 0, 0, 0 };
@@ -148,7 +168,7 @@ fn lower_shift_a(I: Inst, j: u32, bits: u32) {
     let need_clean = op == GIR_LSHR && bits != 32 && bits != 64;
     if is_const(I.b) {
         let n = (M.consts[gir_idx(I.b)].lo & 63) as! u32;
-        let ra = ra_gpr(I.a, need_clean);
+        let ra = ra_gpr_h(I.a, need_clean, j);
         var rd: u32 = 32;
         if op == GIR_ASHR && bits != 32 && bits != 64 {
             rd = ra_reuse(I.a);
@@ -172,7 +192,7 @@ fn lower_shift_a(I: Inst, j: u32, bits: u32) {
     }
     // count in cl
     ra_gpr_into(I.b, RCX, false);
-    let ra = ra_gpr(I.a, need_clean);
+    let ra = ra_gpr_h(I.a, need_clean, j);
     var rd = ra_reuse(I.a);
     if rd != ra { rd = ra_def(j); }
     if op == GIR_ASHR && bits != 32 && bits != 64 { sign_ext_into(rd, ra, bits); }
@@ -688,7 +708,7 @@ fn lower_icast_a(I: Inst, j: u32, op: u32, sb: u32, db: u32) {
             lower_int_done(j, rd, db, true);
             return;
         }
-        let rs = ra_gpr(I.a, !exact_width(sb));
+        let rs = ra_gpr_h(I.a, !exact_width(sb), j);
         var rd = ra_reuse(I.a);
         if rd != rs { rd = ra_def(j); }
         if sb == 8 { movsx8(w, rd, rs); }
@@ -712,7 +732,7 @@ fn lower_icast_a(I: Inst, j: u32, op: u32, sb: u32, db: u32) {
             }
         }
         let ext = v_ext(I.a);
-        let rs = ra_gpr(I.a, false);
+        let rs = ra_gpr_h(I.a, false, j);
         var rd = ra_reuse(I.a);
         if widen && ext {
             // zero-extend the garbage away
@@ -769,12 +789,42 @@ fn ra_addr(v: u32) -> Mem {
     return m_reg(ra_gpr(v, false), 0);
 }
 
+// Register r holds a scratch value of the current instruction or a value
+// whose last use has passed (an address carried from a folded GEP).
+fn dead_reg(r: u32) -> bool {
+    let id = r_val[r];
+    if id == RV_TEMP { return true; }
+    if id >= RV_TEMP { return false; }
+    return vi[id].st & ST_GLOB == 0 && vi[id].last < cur_pos;
+}
+// Whether instruction j reads its operands before it writes any fixed
+// register (so a deferred load whose address is in registers can be read
+// by it): arithmetic but division and variable shifts, compares, casts,
+// selects, stores.
+fn pend_reg_ok(j: u32) -> bool {
+    if vi[j].kind != K_A { return false; }
+    let N = M.insts[f_first_inst + j];
+    let op: u32 = N.op;
+    if op == GIR_ADD || op == GIR_SUB || op == GIR_MUL || op == GIR_AND || op == GIR_OR || op == GIR_XOR { return true; }
+    if op == GIR_SHL || op == GIR_LSHR || op == GIR_ASHR { return is_const(N.b); }
+    if op >= GIR_ICMP && op <= GIR_BITCAST || op >= GIR_FADD && op <= GIR_UITOFP { return op != GIR_FNEG; }
+    return op == GIR_STORE;
+}
 fn lower_load_a(I: Inst, j: u32) {
     let t: u32 = I.ty;
     if I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && vi[j].nuse == 1 && rc_of(t) != RC_VX
-       && vi[j].st & (ST_GLOB | ST_NODEF) == 0 && vi[j].last > j && addr_is_static(I.a) {
-        ra_pend_add(j, ra_addr(I.a));
-        return;
+       && vi[j].st & (ST_GLOB | ST_NODEF) == 0 && vi[j].last > j {
+        // deferred to its use; an address in registers only into the next
+        // instruction, which then sees the registers still locked
+        if addr_is_static(I.a) {
+            ra_pend_add(j, ra_addr(I.a));
+            return;
+        }
+        if vi[j].last == j + 1 && pend_reg_ok(j + 1) {
+            ra_pend_add(j, ra_addr(I.a));
+            ra_carry = true;
+            return;
+        }
     }
     let m = ra_addr(I.a);
     if in_xmm(rc_of(t)) {
@@ -787,7 +837,11 @@ fn lower_load_a(I: Inst, j: u32) {
     var rd: u32 = 32;
     if m.kind == M_REG && m.reg != RBP {
         let r: u32 = m.reg;
-        if ra_reuse(I.a) == r { rd = r; }
+        if ra_reuse(I.a) == r || dead_reg(r) { rd = r; }
+    } else if m.kind == M_SIB {
+        let r: u32 = m.reg;
+        let x: u32 = m.rtype & 15;
+        if r != RBP && dead_reg(r) { rd = r; } else if dead_reg(x) { rd = x; }
     }
     if rd == 32 { rd = ra_def(j); }
     load_int(rd, m, bits_of(t));

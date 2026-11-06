@@ -68,8 +68,9 @@ var ra_carry = false;    // the current instruction's registers stay locked into
 //   nuse  uses (saturating at 255)
 //   ncl   calls and legacy lowerings before it in its block (saturating)
 //   kind  for instructions: how it is lowered (K_*)
+//   hint  the register its (only) use wants it in: a return value, a call argument
 //   last  last use (local position), for values used only in their block
-struct VInfo { reg: u8, st: u8, home: u8, nuse: u8, ncl: u8, kind: u8, spare: u16, last: u32, off: i32 }
+struct VInfo { reg: u8, st: u8, home: u8, nuse: u8, ncl: u8, kind: u8, hint: u8, spare: u8, last: u32, off: i32 }
 var vi: VInfo[>..] = [];
 var t_off: i32[>..] = [];       // PHI temp slots (blocks that need them)
 var b_tag: u32[>..] = [];       // per local block: == pp_epoch if its PHIs need temp slots
@@ -320,6 +321,42 @@ fn pp_runs(I: Inst, m: u32, j: u32, lo: u32, ncl: u32, mw: u32, nodef: bool) {
         for q in 0..A.n_in { pp_use(M.opnds[A.ops + 2 * q], j, lo, ncl, mw, true); }
     }
 }
+// Register hints: a value used by a return or as a plain call argument is
+// computed in that register if it is free.
+fn pp_hint(v: u32, r: u32) {
+    if gir_kind(v) != GIR_V_INST { return; }
+    let u = gir_idx(v) - f_first_inst;
+    if u >= f_nins { return; }
+    let c = rc_of(M.insts[f_first_inst + u].ty);
+    if c == RC_GPR { vi[u].hint = r as! u8; }
+    else if in_xmm(c) && r == RAX { vi[u].hint = 16; }
+}
+fn pp_call_hints(I: Inst) {
+    var gp: u32 = 0;
+    var fp: u32 = 0;
+    for k in 0..I.c {
+        let v = M.opnds[I.b + 2 * k];
+        if M.opnds[I.b + 2 * k + 1] != 0 { return; }
+        let c = rc_of(type_of(v));
+        if c == RC_GPR {
+            if gp == 6 { return; }
+            if gir_kind(v) == GIR_V_INST {
+                let u = gir_idx(v) - f_first_inst;
+                if u < f_nins { vi[u].hint = ARG_GPR[gp] as! u8; }
+            }
+            gp++;
+        } else if in_xmm(c) {
+            if fp == 8 { return; }
+            if gir_kind(v) == GIR_V_INST {
+                let u = gir_idx(v) - f_first_inst;
+                if u < f_nins { vi[u].hint = (16 + fp) as! u8; }
+            }
+            fp++;
+        } else {
+            return;
+        }
+    }
+}
 fn pp_term(I: Inst, op: u32, b: u32, j: u32, lo: u32, ncl: u32, mw: u32) {
     if op == GIR_BR { pp_phi_uses(I.a, b, j, lo, ncl, mw, false); }
     else if op == GIR_CONDBR {
@@ -341,7 +378,7 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
     f_asm = false;
     let nv: i64 = f_nins as i64 + f_nargs;
     assert(vi.len >= nv);
-    let z = VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, spare: 0, last: 0, off: 0 };
+    let z = VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, hint: NOREG, spare: 0, last: 0, off: 0 };
     for q in 0..nv { vi[q] = z; }
     for B, b in blocks {
         let lo = B.first_inst - f_first_inst;
@@ -361,6 +398,8 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
             if m & U_B != 0 { pp_use(I.b, j, lo, ncl, mw, nodef); }
             if m & U_C != 0 { pp_use(I.c, j, lo, ncl, mw, nodef); }
             if m >= U_GEP { pp_runs(I, m, j, lo, ncl, mw, nodef); }
+            if op == GIR_RET { pp_hint(I.a, RAX); }
+            else if op == GIR_CALL { pp_call_hints(I); }
             if op <= GIR_SWITCH || op == GIR_INDIRECTBR { pp_term(I, op, b as! u32, j, lo, ncl, mw); }
             // the instruction itself
             if kd & K_W != 0 { mw = j + 1; }
@@ -739,7 +778,13 @@ fn ra_gpr_into(v: u32, r: u32, clean: bool) {
     ra_mat_gpr(v, r);
 }
 // A register for the INT result of j (locked; recorded by ra_set).
-fn ra_def(j: u32) -> u32 { ra_alloc(GP_ALLOC, ra_pref(j)) }
+fn ra_def(j: u32) -> u32 {
+    let h: u32 = vi[j].hint;
+    if h < 16 && vi[j].st & (ST_CS | ST_GLOB) == 0 && r_free & ~r_lock & bit(h) != 0 {
+        return ra_alloc(GP_ALLOC, bit(h));
+    }
+    return ra_alloc(GP_ALLOC, ra_pref(j));
+}
 // The register of operand v if the result may take it over: v is a local
 // value whose last use is this instruction and it is in a register.
 fn ra_reuse(v: u32) -> u32 {
@@ -848,7 +893,13 @@ fn ra_xmm_into(v: u32, x: u32) {
     if id != RV_NONE { ra_note(id); }
     ra_mat_xmm(v, x);
 }
-fn ra_xdef(j: u32) -> u32 { ra_alloc(XMM_ALL, XMM_ALL) - 16 }
+fn ra_xdef(j: u32) -> u32 {
+    let h: u32 = vi[j].hint;
+    if h >= 16 && h < 32 && vi[j].st & ST_GLOB == 0 && r_free & ~r_lock & bit(h) != 0 {
+        return ra_alloc(XMM_ALL, bit(h)) - 16;
+    }
+    return ra_alloc(XMM_ALL, XMM_ALL) - 16;
+}
 fn ra_xreuse(v: u32) -> u32 {
     let r = ra_reuse(v);
     if r < 32 && r >= 16 { return r - 16; }

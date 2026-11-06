@@ -2,7 +2,7 @@
 # Code quality of the -O0 back-ends: build kernels.c through each back-end,
 # check the outputs agree, and time the programs (best of N, whole process).
 #
-#   GOOVM=goovm-llc TPDE=tpde-llc bench/codequal/run.sh WORK_DIR [RUNS] [SCALE]
+#   GOOVM=goovm-llc TPDE=tpde-llc [PER_KERNEL=1] bench/codequal/run.sh WORK_DIR [RUNS] [SCALE]
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 w="${1:?usage: run.sh WORK_DIR [RUNS] [SCALE]}"
@@ -36,3 +36,24 @@ for v in $variants; do
     printf "| %s | %.3f | %.2fx | %s |\n" "$v" "$(echo "${t[$v]} / 1000000000" | bc -l)" \
         "$(echo "${t[$v]} / ${t[llc]}" | bc -l)" "$text"
 done
+# Per kernel (PER_KERNEL=1): best of RUNS for each kernel alone, seconds.
+if [ -n "${PER_KERNEL:-}" ]; then
+    echo
+    echo "| kernel | $(echo $variants | sed 's/ / | /g') | goovm / llc |"
+    echo "|---|$(for v in $variants; do printf -- '---:|'; done)---:|"
+    declare -A kt
+    for k in sieve sort hash matmul string fib; do
+        row="| $k |"
+        for v in $variants; do
+            best=""
+            for i in $(seq "$runs"); do
+                s=$(date +%s%N); "$w/k.$v" "$scale" "$k" > /dev/null; e=$(date +%s%N)
+                d=$(( e - s )); if [ -z "$best" ] || [ "$d" -lt "$best" ]; then best=$d; fi
+            done
+            kt[$v]=$best
+            row="$row $(printf %.3f "$(echo "$best / 1000000000" | bc -l)") |"
+        done
+        row="$row $(printf %.2f "$(echo "${kt[goovm]} / ${kt[llc]}" | bc -l)")x |"
+        echo "$row"
+    done
+fi
