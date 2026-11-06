@@ -119,13 +119,16 @@ static uint64_t string_kernel(int n) {
 
 static uint32_t fib(uint32_t n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }
 
+// usage: kernels [scale [kernel]]: all kernels, or only the named one.
 int main(int argc, char **argv) {
     int scale = argc > 1 ? atoi(argv[1]) : 1;
-    printf("sieve  %llu\n", (unsigned long long)sieve(4000000 * scale));
-    printf("sort   %llu\n", (unsigned long long)sort_kernel(1000000 * scale));
-    printf("hash   %llu\n", (unsigned long long)hash_kernel(500000 * scale));
-    printf("matmul %llu\n", (unsigned long long)matmul_kernel(160 * scale));
-    printf("string %llu\n", (unsigned long long)string_kernel(4000000 * scale));
-    printf("fib    %u\n", fib(27 + scale));
+    const char *only = argc > 2 ? argv[2] : 0;
+#define RUN(name) (!only || !strcmp(only, name))
+    if (RUN("sieve")) printf("sieve  %llu\n", (unsigned long long)sieve(4000000 * scale));
+    if (RUN("sort")) printf("sort   %llu\n", (unsigned long long)sort_kernel(1000000 * scale));
+    if (RUN("hash")) printf("hash   %llu\n", (unsigned long long)hash_kernel(500000 * scale));
+    if (RUN("matmul")) printf("matmul %llu\n", (unsigned long long)matmul_kernel(160 * scale));
+    if (RUN("string")) printf("string %llu\n", (unsigned long long)string_kernel(4000000 * scale));
+    if (RUN("fib")) printf("fib    %u\n", fib(27 + scale));
     return 0;
 }

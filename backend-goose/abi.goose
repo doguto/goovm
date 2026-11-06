@@ -247,47 +247,130 @@ fn emit_call_insn(callee: u32, direct: bool) {
     }
 }
 
+// Register moves into argument registers (a parallel copy).
+var mv_src: u32[>..] = [];
+var mv_dst: u32[>..] = [];
+
+// Register of value v if it is in one (locked), else materializes v into t.
+fn gpr_or(v: u32, t: u32) -> u32 {
+    if is_val(v) {
+        let id = vid(v);
+        let r: u32 = vi[id].reg;
+        if r < 16 {
+            r_lock |= bit(r);
+            ra_note(id);
+            if vi[id].st & ST_EXT != 0 {
+                mov_rr64(t, r);
+                zext_reg(t, bits_of(vtype(id)));
+                return t;
+            }
+            return r;
+        }
+        ra_note(id);
+    }
+    ra_mat_gpr(v, t);
+    return t;
+}
+
+// Before a call: values in caller-saved registers that live on move to a
+// free callee-saved register, or are written to their home (their register
+// stays a source for the argument moves).
+fn ra_save_caller() {
+    var m = ~r_free & r_alloc & (GP_CALLER | XMM_ALL);
+    while m != 0 {
+        let r = ctz32(m);
+        m &= m - 1;
+        let id = r_val[r];
+        if id >= RV_TEMP || !ra_live_after(id) { continue; }
+        let cs = r_free & r_alloc & GP_CALLEE & ~r_lock;
+        if r < 16 && cs != 0 && vi[id].st & ST_GLOB == 0 {
+            let to = ctz32(cs);
+            mov_rr64(to, r);
+            r_free &= ~bit(to);
+            r_cs_used |= bit(to);
+            r_val[to] = id;
+            vi[id].reg = to as! u8;
+            ra_release(r);
+            continue;
+        }
+        if vi[id].st & ST_MEM == 0 { ra_store_home(id, r); }
+    }
+}
+// After a call: the caller-saved registers hold nothing.
+fn ra_after_call() {
+    let mask = GP_CALLER | XMM_ALL;
+    var m = ~r_free & r_alloc & mask;
+    while m != 0 {
+        let r = ctz32(m);
+        m &= m - 1;
+        let id = r_val[r];
+        if id < RV_TEMP { vi[id].reg = NOREG; }
+        r_val[r] = RV_NONE;
+    }
+    r_free |= r_alloc & mask;
+    r_temp &= ~mask;
+    r_lock &= ~mask;
+}
+// Emits the moves mv_src[k] -> mv_dst[k] (registers 0..31, a parallel copy).
+fn emit_moves() {
+    var n = mv_src.len;
+    var k: i64 = 0;
+    while k < n {
+        if mv_src[k] == mv_dst[k] {
+            mv_src[k] = mv_src[n - 1];
+            mv_dst[k] = mv_dst[n - 1];
+            n--;
+        } else {
+            k++;
+        }
+    }
+    while n > 0 {
+        var done = false;
+        var i: i64 = 0;
+        while i < n {
+            let d = mv_dst[i];
+            var busy = false;
+            for q in 0..n { if q != i && mv_src[q] == d { busy = true; } }
+            if !busy {
+                let s = mv_src[i];
+                if d >= 16 { movaps_rr(d - 16, s - 16); } else { mov_rr64(d, s); }
+                mv_src[i] = mv_src[n - 1];
+                mv_dst[i] = mv_dst[n - 1];
+                n--;
+                done = true;
+                break;
+            }
+            i++;
+        }
+        if done { continue; }
+        // a cycle: swap the first move's registers
+        let d = mv_dst[0];
+        let s = mv_src[0];
+        if d >= 16 {
+            xorps_rr(d - 16, s - 16);
+            xorps_rr(s - 16, d - 16);
+            xorps_rr(d - 16, s - 16);
+        } else {
+            xchg_rr(d, s);
+        }
+        mv_src[0] = mv_src[n - 1];
+        mv_dst[0] = mv_dst[n - 1];
+        n--;
+        for q in 0..n {
+            if mv_src[q] == d { mv_src[q] = s; }
+            else if mv_src[q] == s { mv_src[q] = d; }
+        }
+    }
+    mv_src.clear();
+    mv_dst.clear();
+}
+
 fn lower_call(I: Inst, j: u32) {
     let n = I.c;
     let s = I.b;
-    let args = M.opnds[s..s + 2 * n];
     let callee = I.a;
     let direct = gir_kind(callee) == GIR_V_GLOBAL && M.globals[gir_idx(callee)].kind == G_FUNC;
-    // Fast path (most calls): every argument is a plain INT or FP value
-    // that gets a register, so there is no stack area to build.
-    var ngp: u32 = 0;
-    var nfp: u32 = 0;
-    var isfp: bool[14] = [false; 14];
-    var k: i64 = 0;
-    while k < args.len && k < 28 {
-        let t = type_of(args[k]);
-        let c = cls_of(t);
-        if args[k + 1] != 0 || (c != C_INT && c != C_FP) { break; }
-        if c == C_INT { ngp++; } else { nfp++; }
-        isfp[(k >> 1) % 14] = c == C_FP;
-        k += 2;
-    }
-    if k == args.len && ngp <= 6 && nfp <= 8 {
-        if !direct { use_fixed(callee, R11); }
-        var gp: u32 = 0;
-        var fp: u32 = 0;
-        k = 0;
-        while k < args.len {
-            let v = args[k];
-            if !isfp[(k >> 1) % 14] {
-                use_fixed(v, ARG_GPR[gp % 6]);
-                gp++;
-            } else {
-                use_xmm(v, fp);
-                fp++;
-            }
-            k += 2;
-        }
-        if I.flags & IF_VARARG != 0 { mov_ri(RAX, fp); }  // al = number of vector registers used
-        emit_call_insn(callee, direct);
-        if I.ty != GIR_T_VOID { ret_result(j, I.ty); }
-        return;
-    }
+    if lower_call_fast(I, j, direct) { return; }
     classify_reset();
     arg_locs.clear();
     for k in 0..n {
@@ -297,32 +380,97 @@ fn lower_call(I: Inst, j: u32) {
     }
     let sbytes = align_up32(cl_stack, 16);
     if sbytes != 0 { grp1_ri64(G1_SUB, RSP, sbytes as! i32); }
-    // Stack arguments and byval copies first: they use RAX, RSI, RDI, RCX.
-    for l, k in arg_locs {
-        let v = M.opnds[s + 2 * k as! u32];
-        if l.kind == AL_STACK {
-            let t = type_of(v);
-            let dst = m_rsp(l.off as! i32);
-            if cls_of(t) == C_INT {
-                use_gpr(v, RAX);
-                store64(dst, RAX);
-            } else {
-                copy_val(dst, v, val_bytes(t));
+    // Stack arguments and byval copies first: they need scratch registers.
+    if cl_stack != 0 {
+        let t = ra_temp();
+        for l, k in arg_locs {
+            let v = M.opnds[s + 2 * k as! u32];
+            if l.kind == AL_STACK {
+                let tt = type_of(v);
+                let dst = m_rsp(l.off as! i32);
+                let c = rc_of(tt);
+                if c == RC_GPR {
+                    if is_const(v) && cls_of(M.consts[gir_idx(v)].ty) == C_INT && store_const(dst, M.consts[gir_idx(v)].lo, 8) {
+                        continue;
+                    }
+                    store64(dst, gpr_or(v, t));
+                } else if in_xmm(c) {
+                    if c == RC_XMM && is_const(v) && store_const(dst, M.consts[gir_idx(v)].lo, store_of(tt)) { continue; }
+                    xmm_store_t(dst, ra_xmm(v), tt);
+                } else {
+                    let vb = val_bytes(tt);
+                    let cb: u32 = if is_const(v) && store_of(tt) < vb { store_of(tt) } else { vb };
+                    copy_mem_t(dst, val_mem(v), cb, gran_of(tt), t);
+                }
+            } else if l.kind == AL_BYVAL {
+                if l.n > 64 {
+                    ra_gpr_into(v, RSI, false);
+                    ra_clobber(RDI);
+                    ra_clobber(RCX);
+                    lea64(RDI, m_rsp(l.off as! i32));
+                    mov_ri(RCX, l.n);
+                    rep_movsb();
+                } else {
+                    let src = ra_addr(v);
+                    copy_mem_t(m_rsp(l.off as! i32), src, l.n, 8, t);
+                }
             }
-        } else if l.kind == AL_BYVAL {
-            use_gpr(v, RSI);
-            copy_mem(m_rsp(l.off as! i32), m_reg(RSI, 0), l.n);
         }
     }
-    if !direct { use_fixed(callee, R11); }
+    ra_save_caller();
+    // Register arguments: values in registers by parallel moves, the rest
+    // loaded straight into their argument register.
+    if !direct {
+        if is_val(callee) && vi[vid(callee)].reg < 16 {
+            mv_src.push(vi[vid(callee)].reg);
+            mv_dst.push(R11);
+            ra_note(vid(callee));
+        }
+    }
     for l, k in arg_locs {
         let v = M.opnds[s + 2 * k as! u32];
-        if l.kind == AL_GPR { use_fixed(v, l.r0); }
-        else if l.kind == AL_GPR2 { use_gpr2(v, l.r0, l.r1); }
-        else if l.kind == AL_XMM {
-            let t = type_of(v);
-            if cls_of(t) == C_FP { use_xmm(v, l.r0); }
-            else if M.types[t].n == 1 && cls_of(M.types[t].elems) == C_FP {
+        if !is_val(v) { continue; }
+        let id = vid(v);
+        let r: u32 = vi[id].reg;
+        if r >= 32 { continue; }
+        if l.kind == AL_GPR && r < 16 {
+            mv_src.push(r);
+            mv_dst.push(l.r0);
+            ra_note(id);
+        } else if l.kind == AL_XMM && r >= 16 && in_xmm(rc_of(type_of(v))) {
+            mv_src.push(r);
+            mv_dst.push(16 + l.r0);
+            ra_note(id);
+        }
+    }
+    emit_moves();
+    var nfp: u32 = 0;
+    for l, k in arg_locs {
+        let v = M.opnds[s + 2 * k as! u32];
+        let t = type_of(v);
+        if l.kind == AL_GPR {
+            if is_val(v) && vi[vid(v)].reg < 16 {
+                // moved; zero-extend narrow values that carry garbage (zeroext arguments)
+                let id = vid(v);
+                if vi[id].st & ST_EXT != 0 && bits_of(t) < 32 { zext_reg(l.r0, bits_of(t)); }
+                continue;
+            }
+            if rc_of(t) == RC_GPR { ra_mat_gpr(v, l.r0); }
+            else {
+                // a one-lane vector or another small value passed in a GPR
+                load_n(l.r0, val_mem(v), store_of(t));
+            }
+        } else if l.kind == AL_GPR2 {
+            use_gpr2(v, l.r0, l.r1);
+        } else if l.kind == AL_XMM {
+            nfp = l.r0 + l.n;
+            if in_xmm(rc_of(t)) {
+                if is_val(v) && vi[vid(v)].reg >= 16 && vi[vid(v)].reg < 32 { continue; }
+                ra_mat_xmm(v, l.r0);
+            } else if cls_of(t) == C_FP {
+                // f16: its 16-bit pattern
+                xmm_load_n(l.r0, val_mem(v), 2);
+            } else if M.types[t].n == 1 && cls_of(M.types[t].elems) == C_FP {
                 xmm_load_n(l.r0, val_mem(v), M.types[t].store);
             } else {
                 let m = val_mem(v);
@@ -337,38 +485,210 @@ fn lower_call(I: Inst, j: u32) {
             }
         }
     }
+    if !direct && !(is_val(callee) && vi[vid(callee)].reg < 16) { ra_mat_gpr(callee, R11); }
     if I.flags & IF_VARARG != 0 { mov_ri(RAX, cl_fp); }  // al = number of vector registers used
     emit_call_insn(callee, direct);
+    ra_after_call();
     if sbytes != 0 { grp1_ri64(G1_ADD, RSP, sbytes as! i32); }
-    if I.ty != GIR_T_VOID { ret_result(j, I.ty); }
+    call_result(j, I.ty);
+}
+// The result of the call j (in the return registers).
+fn call_result(j: u32, t: u32) {
+    if t == GIR_T_VOID { return; }
+    let c = rc_of(t);
+    if c == RC_GPR {
+        let bits = bits_of(t);
+        if exact_width(bits) { ra_set(j, RAX, bits < 64); }
+        else {
+            zext_reg(RAX, bits);
+            ra_set(j, RAX, false);
+        }
+        return;
+    }
+    if in_xmm(c) {
+        ra_set(j, 16 + XMM0, false);
+        return;
+    }
+    ret_result(j, t);
+}
+
+// Calls whose arguments are all plain INT, f32 or f64 values in registers
+// (most calls): no classification, no stack area. False if not applicable.
+var fa_tgt: u32[16] = [0; 16];
+fn lower_call_fast(I: Inst, j: u32, direct: bool) -> bool {
+    let n = I.c;
+    if n > 14 { return false; }
+    let s = I.b;
+    let callee = I.a;
+    var gp: u32 = 0;
+    var fp: u32 = 0;
+    for k in 0..n {
+        if M.opnds[s + 2 * k + 1] != 0 { return false; }
+        let c = rc_of(type_of(M.opnds[s + 2 * k]));
+        if c == RC_GPR {
+            if gp == 6 { return false; }
+            fa_tgt[k] = ARG_GPR[gp];
+            gp++;
+        } else if in_xmm(c) {
+            if fp == 8 { return false; }
+            fa_tgt[k] = 16 + fp;
+            fp++;
+        } else {
+            return false;
+        }
+    }
+    ra_save_caller();
+    var creg = false;
+    if !direct && is_val(callee) {
+        let id = vid(callee);
+        let r: u32 = vi[id].reg;
+        if r < 16 {
+            mv_src.push(r);
+            mv_dst.push(R11);
+            ra_note(id);
+            creg = true;
+        }
+    }
+    for k in 0..n {
+        let v = M.opnds[s + 2 * k];
+        if !is_val(v) { continue; }
+        let id = vid(v);
+        let r: u32 = vi[id].reg;
+        if r < 32 {
+            mv_src.push(r);
+            mv_dst.push(fa_tgt[k]);
+            ra_note(id);
+        }
+    }
+    if mv_src.len != 0 { emit_moves(); }
+    for k in 0..n {
+        let v = M.opnds[s + 2 * k];
+        let tg = fa_tgt[k];
+        if is_val(v) {
+            let id = vid(v);
+            if vi[id].reg < 32 {
+                if tg < 16 && vi[id].st & ST_EXT != 0 {
+                    let b = bits_of(vtype(id));
+                    if b < 32 { zext_reg(tg, b); }
+                }
+                continue;
+            }
+        }
+        if tg < 16 { ra_mat_gpr(v, tg); } else { ra_mat_xmm(v, tg - 16); }
+    }
+    if !direct && !creg { ra_mat_gpr(callee, R11); }
+    if I.flags & IF_VARARG != 0 { mov_ri(RAX, fp); }  // al = number of vector registers used
+    emit_call_insn(callee, direct);
+    ra_after_call();
+    call_result(j, I.ty);
+    return true;
 }
 
 // ------------------------------------------------------------ prologue
 
-// Stores the incoming arguments into their homes (after the frame is set up).
-fn spill_args() {
+// Per argument with prologue work: (argument number, location).
+struct ProArg { a: u32, off: i32 }
+var pro_args: ProArg[>..] = [];
+
+// Argument homes and registers at function entry (before the body is
+// generated); pro_args lists the arguments the prologue must store.
+fn setup_args() {
     classify_reset();
+    pro_args.clear();
     for a in 0..f_nargs {
         let t = M.opnds[f_args + 2 * a];
         let w = M.opnds[f_args + 2 * a + 1];
         let l = classify(t, w);
-        let home = m_rbp(a_off[a]);
-        let c = cls_of(t);
+        let id = f_nins + a;
+        if vi[id].nuse == 0 { continue; }   // never used
+        let c = rc_of(t);
         if l.kind == AL_BYVAL {
-            a_home[a] = A_BYVAL;
-            a_off[a] = (16 + l.off) as! i32;
-        } else if l.kind == AL_GPR {
-            if c == C_VEC {
-                store64(home, l.r0);
-            } else {
-                zext_reg(l.r0, bits_of(t));
-                store64(home, l.r0);
+            vi[id].home = H_BYVAL;
+            vi[id].off = (16 + l.off) as! i32;
+            vi[id].st |= ST_MEM;
+        } else if l.kind == AL_STACK {
+            vi[id].home = H_STACK;
+            vi[id].off = (16 + l.off) as! i32;
+            vi[id].st |= ST_MEM;
+            if cls_of(t) == C_INT2 && bits_of(t) < 128 {
+                // normalized into a slot of its own
+                vi[id].home = H_SLOT;
+                vi[id].off = new_slot(16);
+                pro_args.push(ProArg { a: a, off: vi[id].off });
             }
+        } else if l.kind == AL_GPR && c == RC_GPR || l.kind == AL_XMM && in_xmm(c) {
+            // register-resident
+            let r: u32 = if l.kind == AL_GPR { l.r0 } else { 16 + l.r0 };
+            vi[id].reg = r as! u8;
+            var st = vi[id].st;
+            if c == RC_GPR && exact_width(bits_of(t)) && bits_of(t) < 64 { st |= ST_EXT; }
+            vi[id].st = st;
+            let pa = st & ST_GLOB != 0 || c == RC_GPR && !exact_width(bits_of(t));
+            if st & ST_GLOB != 0 {
+                ra_home_off(id);
+                vi[id].st |= ST_MEM;
+            }
+            if pa { pro_args.push(ProArg { a: a, off: vi[id].off }); }
+        } else {
+            // INT2, vectors, f16 in registers: stored to a home
+            ra_home_off(id);
+            vi[id].st |= ST_MEM;
+            vi[id].reg = NOREG;
+            pro_args.push(ProArg { a: a, off: vi[id].off });
+        }
+    }
+    va_gp = cl_gp;
+    va_fp = cl_fp;
+    va_stack = cl_stack;
+}
+// The entry block starts with the register-resident arguments in their registers.
+fn ra_entry_state() {
+    ra_block_start();
+    for a in 0..f_nargs {
+        let id = f_nins + a;
+        if vi[id].nuse == 0 { continue; }
+        let r: u32 = vi[id].reg;
+        if r < 32 {
+            r_val[r] = id;
+            r_free &= ~bit(r);
+        }
+    }
+}
+// Prologue code for the arguments in pro_args (normalization, homes).
+fn prologue_args() {
+    classify_reset();
+    var q: i64 = 0;
+    for a in 0..f_nargs {
+        let t = M.opnds[f_args + 2 * a];
+        let w = M.opnds[f_args + 2 * a + 1];
+        let l = classify(t, w);
+        if q >= pro_args.len || pro_args[q].a != a { continue; }
+        let ho = pro_args[q].off;
+        q++;
+        let id = f_nins + a;
+        let c = cls_of(t);
+        if l.kind == AL_STACK {
+            // INT2 narrower than 128 bits
+            let src = m_rbp((16 + l.off) as! i32);
+            let home = m_rbp(ho);
+            copy_mem_t(home, src, 16, 8, RAX);
+            load64(RAX, m_add(home, 8));
+            zext_reg(RAX, bits_of(t) - 64);
+            store64(m_add(home, 8), RAX);
+        } else if l.kind == AL_GPR && rc_of(t) == RC_GPR {
+            if !exact_width(bits_of(t)) { zext_reg(l.r0, bits_of(t)); }
+            if vi[id].st & ST_GLOB != 0 { store_int(m_rbp(ho), l.r0, bits_of(t)); }
+        } else if l.kind == AL_XMM && in_xmm(rc_of(t)) {
+            xmm_store_t(m_rbp(ho), l.r0, t);
+        } else if l.kind == AL_GPR {
+            store64(m_rbp(ho), l.r0);
         } else if l.kind == AL_GPR2 {
+            let home = m_rbp(ho);
             if bits_of(t) < 128 { zext_reg(l.r1, bits_of(t) - 64); }
             store64(home, l.r0);
             store64(m_add(home, 8), l.r1);
         } else if l.kind == AL_XMM {
+            let home = m_rbp(ho);
             let st = M.types[t].store;
             if c == C_FP { xmm_store_n(home, l.r0, st); }
             else {
@@ -380,25 +700,8 @@ fn spill_args() {
                     x++;
                 }
             }
-        } else {
-            let src = m_rbp((16 + l.off) as! i32);
-            if c == C_INT {
-                load_n(RAX, src, M.types[t].store);
-                zext_reg(RAX, bits_of(t));
-                store64(home, RAX);
-            } else {
-                copy_mem(home, src, val_bytes(t));
-                if c == C_INT2 && bits_of(t) < 128 {
-                    load64(RAX, m_add(home, 8));
-                    zext_reg(RAX, bits_of(t) - 64);
-                    store64(m_add(home, 8), RAX);
-                }
-            }
         }
     }
-    va_gp = cl_gp;
-    va_fp = cl_fp;
-    va_stack = cl_stack;
 }
 
 // Register save area of a variadic function: rdi..r9 at +0..+40, xmm0..7 at

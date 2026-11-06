@@ -12,6 +12,10 @@ now split into `cg.goose`, `gir.goose`, `x86.goose`, `loc.goose`,
 [`DESIGN.md`](DESIGN.md). It records the new Goose pain points (with the
 compiler's messages) and the speed against v0.
 
+Section 9 is milestone **A2**: the v2 back-end (register allocation and
+instruction selection of LLVM -O0 class; two new files, `ra.goose` and
+`lowera.goose`), with its bugs, pain points and measurements.
+
 v0 page contents:
 
 - the structure of the port;
@@ -571,3 +575,209 @@ Fast paths recovered most of the first version's gap (it executed 1.54x v0's
 instructions): the frame-slot path in the encoder (`op_mem_t`: 99 → 63
 instructions per memory operand), the register-only call path, and the
 predefined-type load/store paths.
+
+## 9. Milestone A2: register allocation
+
+v2 keeps values in registers (DESIGN.md §4-§6): a forward pre-pass per
+function, block-local allocation with write-through homes for values used
+in other blocks, folding of compares, immediates, memory operands and
+address modes, deferred loads and GEP addresses, jump tables, and vectors of
+8 and 16 bytes in xmm registers. 7,269 lines of Goose in nine files
+(A1: 4,299 in seven): `ra.goose` (the allocator, 1,034 lines) and
+`lowera.goose` (the allocator-aware lowerings, 1,399) are new. A1's
+lowerings stay for the rare classes behind a flush of the caller-saved
+registers, so the allocator was brought up one opcode class at a time
+(integer operations, compares, loads and stores, calls, FP, vectors) with
+the tests passing in between. The
+messages below are verbatim from `goose check` (compiler commit 335fddc).
+
+### Bugs found by the tests (all fixed)
+
+- **A prologue store into a slot the body had reused.** Arguments used in
+  other blocks are stored to their home by the prologue, which is generated
+  after the body. The body had already freed such a home at the value's
+  last use, which resets its recorded offset to 0, so the prologue stored
+  the argument at `[rbp+0]`, over the saved rbp (SIGBUS in
+  `tests/c/38_aggregates`). The prologue now uses the offsets recorded when
+  the homes were assigned.
+- **A register file that outlived its function**: values of the previous
+  function were still "in" registers at the next one's entry
+  (`ra_func_start` resets it).
+- **8-byte alignment for 16-byte slots** (`movaps` faulted); slots are now
+  aligned by size class.
+- **FP bits in a general register.** A1's `copysign` lowering left its
+  result in rax, and the allocator recorded an f64 in a general register;
+  three `ieee` tests failed. `ra_tierb_end` moves a legacy result of the
+  wrong class, `copysign` got an xmm lowering, and `ra_gpr`/`ra_xmm` assert
+  the class.
+- **`trunc` to i32 marked clean.** A truncation is a register copy, so the
+  upper half is the source's; `2003-05-26-Shorts` (mem2reg) printed wrong
+  values once a 64-bit use trusted it. Narrowed values are dirty (`ST_EXT`)
+  unless a 32-bit instruction wrote them (`tests/c/45_ra_widths.c`).
+- **`lea` with a scaled index and no base.** SIB base 5 with mod 00 means
+  "no base, disp32", not rbp, so `lea r, [x*4]` for a shift came out wrong.
+  Only `lea r, [x + x]` (shift by 1) is used.
+- **A deferred load through registers into a consumer with fixed
+  registers.** A consumer that first moves something into a fixed register
+  (a shift count into rcx, a dividend into rax) could overwrite the load's
+  address register. Only consumers that read all their operands first take
+  such a load (`pend_reg_ok`).
+
+### New pain points
+
+1. **A branch cannot yield several values.**
+   `let ok, v = if c { two(5) } else { false, 0 };` gives
+   `error: several values exist only in `return a, b;` and in a call's results, so a block or branch cannot end in `a, b`: return from each branch instead (§7.1)`.
+   The message is good. The workaround (`var`s assigned in each branch, or
+   a helper that returns) costs lines in the lowerings, which pick between
+   (flag, memory operand) or (register, immediate) pairs all the time.
+2. **The declared type does not reach the literals in a branch.**
+   `let k: u32 = (if dbl { 0 } else { 2 }) + 1;` gives
+   `error: expected a value of type u32, got i64 (narrowing and sign changes require an explicit `as`)`.
+   `var k: u32 = 1; if !dbl { k = 3; }` works.
+3. **`pad` again**, as a field of the per-value record
+   (`struct V { reg: u8, pad: u16 }`):
+   `error: expected '}' in struct declaration, found ':'`. Renamed `spare`.
+4. **`ctz` is u64 -> i64.** `std`'s `ctz(x: u64) -> i64` is the only bit
+   scan, and register masks are u32, so every use is `ctz(m) as! u32`
+   (`ctz32` in `ra.goose`). A cast on the argument draws
+   `warning: redundant `as u64`: a u32 converts to u64 implicitly here`;
+   the narrowing of the result needs `as!`.
+5. **Records are cheaper field by field.** The pre-pass first read the
+   16-byte `VInfo` record whole (`let x = vi[u]; ...; vi[u] = x`): 75.0M
+   instructions on spass, against 68.7M with `vi[u].field` reads and writes
+   (callgrind). A `.=` reference binding gave no gain. Each `vi[u]` keeps
+   its bounds check either way.
+6. **Profiles of the generated C are flat.** clang inlines the static
+   functions of the one generated C file into a few large ones:
+   `gen_function` alone is 36.6M of the back-end's 72M instructions on
+   spass, and line-level annotation spreads over many inlined copies.
+   `goose -O0` does not change that (clang still inlines). A separate build
+   with `CMAKE_C_FLAGS=-fno-inline` gave a per-function profile (which
+   costs about 20% more instructions).
+7. **A `match` on integer constants is a chain of compares** in the
+   generated C (`if (op == 0) ... else if (op == 5 || op == 6 || ...)`).
+   Putting the frequent opcodes (load, store, call, GEP, icmp) first in
+   `gen_inst`'s 83-opcode match saved 1.2% of the back-end's instructions,
+   so clang evidently did not make a jump table of it. Nothing in the
+   source says that arm order matters.
+
+### Results
+
+Measured on the shared 4-core VM (another agent's test runs in parallel, so
+single numbers move by a few percent); A1 is the build of commit 5d17665.
+
+**Generated code: `bench/codequal`** (`PER_KERNEL=1 bench/codequal/run.sh
+DIR 5 2`, best of 5 runs, seconds):
+
+| kernel | clang -O0 | llc -O0 | TPDE | goovm A1 | goovm A2 | A2 / llc | A1 / llc |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| sieve | 0.094 | 0.090 | 0.080 | 0.134 | 0.079 | 0.88 | 1.52 |
+| sort | 0.370 | 0.370 | 0.362 | 0.522 | 0.364 | 0.98 | 1.43 |
+| hash | 0.102 | 0.100 | 0.075 | 0.163 | 0.103 | 1.03 | 1.53 |
+| matmul | 0.081 | 0.081 | 0.079 | 0.269 | 0.077 | 0.96 | 3.40 |
+| string | 0.306 | 0.306 | 0.263 | 0.547 | 0.318 | 1.04 | 1.81 |
+| fib | 0.006 | 0.006 | 0.006 | 0.009 | 0.006 | 1.10 | 1.57 |
+| whole program | 0.975 | 0.982 | 0.890 | 1.682 | 0.962 | 0.98 | 1.72 |
+
+(A1's column is from a run of its own, against its own llc time.)
+
+**CTMark C programs** (`tests/suite.py --corpus ctmark --variants O0 -j 1
+--time-run N`, best of N, seconds):
+
+| program | clang -O0 | goovm A1 | goovm A2 | A1 / clang | A2 / clang |
+|---|---:|---:|---:|---:|---:|
+| sqlite3 | 3.669 | 14.803 | 3.694 | 3.95 | 1.01 |
+| SPASS | 13.616 | 27.495 | 13.674 | 2.00 | 1.00 |
+| ClamAV | 0.162 | 0.330 | 0.159 | 1.95 | 0.98 |
+| lencod | 9.518 | 30.735 | 9.432 | 3.21 | 0.99 |
+| mafft | 33.314 | 70.665 | 32.933 | 2.12 | 0.99 |
+| consumer-typeset | 0.133 | 0.608 | 0.126 | 4.40 | 0.95 |
+| geometric mean | | | | 2.78 | 0.99 |
+
+(A2: best of 5; A1: best of 3, its run's clang -O0 times within 5% of
+these.) sqlite3 was at 1.10x before the last round of changes (jump tables,
+GEP chains, hints through casts); its VDBE loop is a `switch` over about 150
+opcodes, which had been a chain of compares.
+
+**Vector/build2** (200M calls building `<4 x float>` lane by lane):
+clang -O0 4.757 s, goovm A2 5.484 s (1.15x), A1 51.8 s (10.9x).
+
+**`.text` bytes:**
+
+| input | llc -O0 | TPDE | goovm A1 | goovm A2 | A2 / llc |
+|---|---:|---:|---:|---:|---:|
+| gen-20000.bc | 10,457,901 | 12,463,678 | 48,124,970 | 10,465,581 | 1.00 |
+| spass.bc | 515,668 | 604,813 | 1,478,415 | 525,655 | 1.02 |
+| typeset.bc | 483,283 | 521,176 | 1,836,072 | 516,953 | 1.07 |
+| codequal kernels | 2,578 | 2,980 | 10,818 | 2,705 | 1.05 |
+
+**Compile speed** (`bench/backend/time_backend.py -n 7`, best of 7, ms;
+TPDE: `Compile` of its `--time-trace`, best of 7):
+
+| input | GIR insts | A1 back-end | A2 back-end | A2 / A1 | A1 export | A2 export | goovm A2 total | TPDE Compile |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| gen-20000.bc | 3,205,263 | 179.9 | 208.9 | 1.16 | 448.8 | 215.1 | 424.0 | 506.5 |
+| spass.bc | 114,371 | 8.4 | 11.1 | 1.32 | 17.9 | 8.8 | 19.9 | 24.9 |
+| typeset.bc | 119,262 | 9.5 | 9.9 | 1.04 | 18.1 | 9.7 | 19.6 | 16.7 |
+
+The back-end does more per instruction (spass, callgrind: 72.5M
+instructions, A1 44.2M): the pre-pass is about a quarter of it, the
+register file and the allocator-aware lowerings most of the rest. It emits
+a third of A1's bytes, which is why typeset (whose large functions made A1
+share frame slots) costs about the same. The exporter is twice as fast as
+A1's (same GIR, commit 00bdafc, plus cached GEP layouts), so the total is
+below A1's everywhere and below TPDE's `Compile` on gen-20000 and spass;
+on typeset it is 1.17x TPDE.
+
+**Correctness** (`tests/suite.py -j3`, all corpora, final build):
+
+| corpus | tests | clang -O0 passes | goovm passes (O0 / g / mem2reg) | unsupported | fallbacks |
+|---|---:|---:|---:|---:|---:|
+| gcc-c-torture execute | 1427 | 1427 | 1427 / 1427 / 1427 | 0 | 0 |
+| gcc-c-torture ieee | 57 | 57 | 57 / 57 / 57 | 0 | 0 |
+| gcc-c-torture builtins | 54 | 48 | 48 / 48 / 48 | 0 | 0 |
+| SingleSource UnitTests | 129 | 129 | 129 / 129 / 129 | 0 | 0 |
+| SingleSource Regression/C | 37 | 37 | 37 / 37 / 37 | 0 | 0 |
+| SingleSource Benchmarks (C) | 100 | 100 | 100 / 100 / 100 | 0 | 0 |
+| CTMark C programs | 6 | 6 | 6 / 6 / 6 | 0 | 0 |
+
+1,810 tests x 3 variants in 1,728 s; the 6 excluded builtins tests fail with
+plain clang -O0 too. `tests/run.py`: 98/98 (49 programs, O0 and mem2reg).
+
+### What is left
+
+- **Back-end time on many small functions**: spass (3,700 functions of 31
+  instructions on average) is at 1.32x A1's back-end time. The pre-pass (a
+  quarter of the back-end's instructions, mostly bounds-checked `vi[u]`
+  field accesses) is the largest single cost.
+- **typeset's total is 1.17x TPDE's `Compile`**: its exporter phase (9.7 ms,
+  GEP-heavy) is the larger half.
+- **Forward branches are always rel32** (no relaxation pass): on spass
+  9,447 of 10,397 branches are rel32 (llc: 2,680 of 12,199), and rel8
+  forms would save up to 24.9 KB, more than the 10.0 KB by which goovm's
+  `.text` exceeds llc's (typeset: 28.3 KB of 33.7 KB). A relaxation pass
+  would have to move the intra-instruction branches (`jcc_fwd`) and the
+  jump-table entries too.
+- **A GEP folds only into the instruction right after it**; `p->a[i]`
+  with a load of `i` in between still costs an `lea`.
+- Values that live across blocks go through memory, as with LLVM -O0
+  (no global allocation); INT2, x87, f16, odd vectors, atomics, TLS and
+  inline asm keep A1's lowerings behind a flush of the caller-saved
+  registers.
+- TPDE's code is faster than llc's on two kernels (hash 0.75x, string
+  0.86x of llc); goovm is at 1.03x and 1.04x there.
+
+### Rebuild and reproduce (A2)
+
+```bash
+S=/tmp/claude-0/-home-user-goovm/593b2907-8413-508c-8bdb-c68ef6e66f6e/scratchpad   # this session's scratch
+GOOSE=$S/work/goose-build/goose GOOSE_STDLIB=$S/src/goose/stdlib backend-goose/build.sh build
+G=build/tools/goovm-llc/goovm-llc
+tests/run.py --goovm $G -j3                                   # 49 programs, O0 + mem2reg
+tests/suite.py --goovm $G -j3 --report suite.md               # all corpora, O0 / g / mem2reg
+tests/suite.py --goovm $G --corpus ctmark --variants O0 -j 1 --time-run 5
+PER_KERNEL=1 GOOVM=$G TPDE=$S/work/a2/tpde-llc bench/codequal/run.sh /tmp/cq 5 2
+bench/backend/time_backend.py --goovm $S/work/a2/goovm-a1 --goovm $G -n 7 \
+    $S/work/a2/inputs/{gen-20000,spass,typeset}.bc
+```

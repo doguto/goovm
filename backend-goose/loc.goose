@@ -1,57 +1,42 @@
-// Value locations.
+// Value locations: type helpers, normalization, memory copies, constant
+// pools, global addresses, and the legacy value-location interface.
 //
-// Every instruction lowering reaches its operands and its result only
-// through the functions in the "value-location interface" section below.
-// The A1 policy behind them is "always spill": every value has a home in
-// the frame (or is a constant, a global address or an alloca address), a
-// use loads it into the scratch register the lowering suggests, and a
-// definition stores the register back to the home right away. A register
-// allocator (A2) replaces the policy here, not the lowerings: `use_gpr` may
-// then return the register the value already lives in, `def_gpr` may pick
-// the result register, and `put_gpr` may keep the value in it.
+// Register allocation is in ra.goose. Instructions are lowered in one of
+// two ways (gen_inst in cg.goose):
 //
-// Homes, per local instruction j (index = global index - f_first_inst):
-//   H_SLOT    v_off[j] is the rbp offset of its result slot
-//   H_ALLOCA  the value is the address rbp + v_off[j] (static alloca)
-//   H_PTR     the value is the pointer stored at rbp + v_off[j] (over-aligned alloca)
-// and per argument a: A_SLOT (slot at a_off[a]) or A_BYVAL (the value is
-// the address rbp + a_off[a] of the caller's copy).
+//   - allocator-aware lowerings (lowera.goose, the calls and terminators)
+//     use the ra_* interface: an operand stays in the register it lives in,
+//     a result gets a register of its own;
+//   - legacy lowerings (lower.goose: INT2, x87, vectors, aggregates, bit
+//     operations, atomics, inline asm, ...) use the interface below, which
+//     keeps milestone A1's contract: operands are fetched into the scratch
+//     registers the lowering names, scratch registers rax..r11 and xmm0..15
+//     may be clobbered freely, results are handed back with put_*. Before a
+//     legacy lowering, ra_tierb_begin spills every value that lives in a
+//     caller-saved register (callee-saved registers survive), and
+//     ra_tierb_end takes over the result register.
 
-let H_NONE = 0;
-let H_SLOT = 1;
-let H_ALLOCA = 2;
-let H_PTR = 3;
-let A_SLOT = 1;
-let A_BYVAL = 2;
-
-// Per function (index = local instruction / block / argument number).
+// Per function.
 var f_first_inst: u32 = 0;
 var f_first_block: u32 = 0;
 var f_args: u32 = 0;            // opnds index of the (type, abi) argument run
 var f_nargs: u32 = 0;
 var f_index: u32 = 0;           // funcs index of the current function
-var v_off: i32[>..] = [];
-var v_home: u8[>..] = [];
-var t_off: i32[>..] = [];       // rbp offset of a PHI's temp slot
-// Liveness for slot sharing (layout_shared in cg.goose): v_span[j] = (last
-// use of j) - j when every use of j is in j's block, else SPAN_ALL (used in
-// other blocks). Only valid when f_shared (else every value has its slot).
-var f_shared = false;
-var v_span: u32[>..] = [];
-var cur_pos: u32 = 0;           // local index of the instruction being lowered
-let SPAN_ALL: u32 = 0xFFFFFFFF;
-var a_off: i32[>..] = [];
-var a_home: u8[>..] = [];
-var block_off: u32[>..] = [];   // code offset of each local block
-var scratch_off: i32 = 0;       // 32 bytes of per-function scratch, 16-aligned
+var scratch_off: i32 = 0;       // 32 bytes of per-function scratch (0 = not allocated yet)
 var rsa_off: i32 = 0;           // register save area (va_start), 176 bytes
 var va_gp: u32 = 0;             // general registers taken by named arguments
 var va_fp: u32 = 0;             // vector registers taken by named arguments
 var va_stack: u32 = 0;          // stack bytes taken by named arguments
-var f_sjlj: bool = false;       // callee-saved registers saved below rbp
+var f_sjlj: bool = false;       // __builtin_setjmp: all callee-saved registers are saved
+var tierb = false;              // a legacy lowering is running
+var tb_id: u32 = 0xFFFFFFFF;    // its result register (put_gpr / put_xmm)
+var tb_reg: u32 = 0;
 
 // Constant pools (per module): offset of each constant in its pool, or NONE.
 var c_pool: u32[>..] = [];
+// Sign and magnitude masks (16 bytes each in .rodata.cst16): f32 sign, f64
+// sign, f32 abs, f64 abs; pool symbols, or NONE.
+var mask_pool: u32[4] = [0xFFFFFFFF; 4];
 
 // --------------------------------------------------------------- types
 
@@ -68,17 +53,16 @@ inline fn type_of(v: u32) -> u32 {
     if k == GIR_V_CONST { return M.consts[i].ty; }
     return GIR_T_PTR;
 }
-// Slot size of a value of type t: INT and FP 8, INT2 and X87 16, else the
-// allocation size rounded up to 8.
-fn slot_size(t: u32) -> i64 {
-    let c = cls_of(t);
-    if c == C_INT || c == C_FP { return 8; }
-    if c == C_INT2 || c == C_X87 { return 16; }
-    let s: i64 = size_of(t);
-    if s == 0 { return 8; }
-    return (s + 7) & ~7;
+
+// The 32 bytes of scratch (x87 control words, conversion temporaries),
+// allocated in the frame on first use.
+fn scr() -> i32 {
+    if scratch_off == 0 {
+        lay_off = (lay_off + 32 + 15) & ~15;
+        scratch_off = (-lay_off) as! i32;
+    }
+    return scratch_off;
 }
-fn slot_align(t: u32) -> i64 { if slot_size(t) >= 16 { 16 } else { 8 } }
 
 // ------------------------------------------------- normalization (INT class)
 // Values narrower than 64 bits are kept zero-extended in registers and slots.
@@ -157,6 +141,31 @@ checkfree fn store_n(x: Mem, r: u32, n: u32) {
         }
     }
 }
+// Copies n bytes from src to dst in units of g bytes (1, 2, 4 or 8) through
+// register t.
+fn copy_mem_t(dst: Mem, src: Mem, n: u32, g: u32, t: u32) {
+    var k: u32 = 0;
+    while k + 8 <= n && g >= 8 {
+        load64(t, m_add(src, k));
+        store64(m_add(dst, k), t);
+        k += 8;
+    }
+    while k + 4 <= n && g >= 4 {
+        load32(t, m_add(src, k));
+        store32(m_add(dst, k), t);
+        k += 4;
+    }
+    while k + 2 <= n && g >= 2 {
+        load16z(t, m_add(src, k));
+        store16(m_add(dst, k), t);
+        k += 2;
+    }
+    while k < n {
+        load8z(t, m_add(src, k));
+        store8(m_add(dst, k), t);
+        k += 1;
+    }
+}
 // Copies n bytes from src to dst through RAX (RAX clobbered). Large copies
 // use rep movsb (RSI, RDI, RCX clobbered).
 fn copy_mem(dst: Mem, src: Mem, n: u32) {
@@ -167,26 +176,7 @@ fn copy_mem(dst: Mem, src: Mem, n: u32) {
         rep_movsb();
         return;
     }
-    var k: u32 = 0;
-    while k + 8 <= n {
-        load64(RAX, m_add(src, k));
-        store64(m_add(dst, k), RAX);
-        k += 8;
-    }
-    if k + 4 <= n {
-        load32(RAX, m_add(src, k));
-        store32(m_add(dst, k), RAX);
-        k += 4;
-    }
-    if k + 2 <= n {
-        load16z(RAX, m_add(src, k));
-        store16(m_add(dst, k), RAX);
-        k += 2;
-    }
-    if k < n {
-        load8z(RAX, m_add(src, k));
-        store8(m_add(dst, k), RAX);
-    }
+    copy_mem_t(dst, src, n, 8, RAX);
 }
 // copy_mem in units of g bytes (1, 2 or 4). Vectors are written lane by
 // lane, so they are copied lane by lane too: a wider load of data written
@@ -196,13 +186,7 @@ fn copy_mem_g(dst: Mem, src: Mem, n: u32, g: u32) {
         copy_mem(dst, src, n);
         return;
     }
-    var k: u32 = 0;
-    while k + g <= n {
-        load_n(RAX, m_add(src, k), g);
-        store_n(m_add(dst, k), RAX, g);
-        k += g;
-    }
-    if k < n { copy_mem(m_add(dst, k), m_add(src, k), n - k); }
+    copy_mem_t(dst, src, n, g, RAX);
 }
 // Copy granule of a value of type t.
 fn gran_of(t: u32) -> u32 {
@@ -258,6 +242,23 @@ fn const_mem(ci: u32) -> Mem {
     if sec == SEC_RODATA { return m_sym(sec_sym(sec), R_X86_64_PC32, ref as! i32); }
     return m_sym(ref, R_X86_64_PC32, 0);
 }
+// A 16-byte mask in .rodata.cst16 (k: 0 f32 sign, 1 f64 sign, 2 f32 abs, 3 f64 abs).
+fn mask_mem(k: u32) -> Mem {
+    var ref = mask_pool[k % 4];
+    if ref == GIR_NONE {
+        ref = new_pool_sym(SEC_CST16, cst16.len as! u32, 16);
+        let v: u64 = match k {
+            0 => 0x8000000080000000,
+            1 => 0x8000000000000000,
+            2 => 0x7FFFFFFF7FFFFFFF,
+            _ => 0x7FFFFFFFFFFFFFFF,
+        };
+        o8(cst16, v);
+        o8(cst16, v);
+        mask_pool[k % 4] = ref;
+    }
+    return m_sym(ref, R_X86_64_PC32, 0);
+}
 
 // ------------------------------------------------------- global addresses
 
@@ -273,55 +274,83 @@ fn global_addr(r: u32, g: u32) {
     else { load64(r, m_sym(g_sym[g], R_X86_64_REX_GOTPCRELX, 0)); }
 }
 
-// ================================================ value-location interface
+// ================================================ legacy lowerings' interface
 
-// A local value is read only between its definition and its last use: its
-// slot may hold another value outside that range. A use that the liveness
-// scan in gen_function missed stops here instead of reading a stale slot.
-inline fn live_check(j: u32) {
-    if f_shared && cur_pos - j > v_span[j] { assert(false); }  // (u32: also catches cur_pos < j)
+fn ra_tierb_begin(all: bool) {
+    ra_flush(if all { GP_ALLOC | XMM_ALL } else { GP_CALLER | XMM_ALL });
+    tierb = true;
+    tb_id = RV_NONE;
+}
+fn ra_tierb_end() {
+    tierb = false;
+    if tb_id != RV_NONE {
+        let t = vtype(tb_id);
+        let c = rc_of(t);
+        var r = tb_reg;
+        if c == RC_XMM && r < 16 {
+            // the bits of an f32/f64 result in a general register (copysign, ...)
+            let x = ra_alloc(XMM_ALL, XMM_ALL);
+            if t == GIR_T_F32 { movd_xr(x - 16, r); } else { movq_xr(x - 16, r); }
+            r = x;
+        } else if c == RC_GPR && r >= 16 {
+            let g = ra_alloc(GP_ALLOC, GP_CALLER);
+            if bits_of(t) <= 32 { movd_rx(g, r - 16); } else { movq_rx(g, r - 16); }
+            r = g;
+        }
+        ra_set(tb_id, r, false);
+        tb_id = RV_NONE;
+    }
 }
 
-// Home memory of local instruction j (H_SLOT or the alloca area).
-inline fn res_mem(j: u32) -> Mem { m_rbp(v_off[j]) }
+// Home memory of local instruction j (its slot or its alloca area): the
+// legacy lowering writes the result there.
+fn res_mem(j: u32) -> Mem {
+    vi[j].st |= ST_MEM;
+    vi[j].reg = NOREG;
+    return ra_home(j);
+}
 
 // The bytes of value v (any class but INT constants and addresses): its
-// slot, or a constant's pool entry.
+// home (stored there first if it lives in a register), a deferred load's
+// memory, or a constant's pool entry.
 fn val_mem(v: u32) -> Mem {
-    let i = gir_idx(v);
     let k = gir_kind(v);
-    if k == GIR_V_INST {
-        let j = i - f_first_inst;
-        live_check(j);
-        return m_rbp(v_off[j]);
-    }
-    if k == GIR_V_ARG { return m_rbp(a_off[i]); }
-    return const_mem(i);
+    if k == GIR_V_CONST { return const_mem(gir_idx(v)); }
+    let id = vid(v);
+    ra_note(id);
+    let r: u32 = vi[id].reg;
+    if r == PEND { return ra_take_pend(id); }
+    if r < 32 && vi[id].st & ST_MEM == 0 { ra_store_home(id, r); }
+    if vi[id].home == H_STACK || vi[id].home == H_ALLOCA || vi[id].home == H_BYVAL { return m_rbp(vi[id].off); }
+    return ra_home(id);
 }
 
 // INT-class value v into register r, zero-extended to 64 bits (only r is
-// written). Returns the register that holds v: under A1 always r.
+// written). Returns r.
 fn use_gpr(v: u32, r: u32) -> u32 {
-    let i = gir_idx(v);
-    let k = gir_kind(v);
-    if k == GIR_V_INST {
-        let j = i - f_first_inst;
-        let h = v_home[j];
-        if h == H_ALLOCA { lea64(r, m_rbp(v_off[j])); }
-        else {
-            live_check(j);
-            load64(r, m_rbp(v_off[j]));
+    if is_val(v) {
+        let id = vid(v);
+        let vr: u32 = vi[id].reg;
+        if vr < 16 {
+            ra_note(id);
+            if vr != r { mov_rr64(r, vr); }
+            if vi[id].st & ST_EXT != 0 { zext_reg(r, bits_of(vtype(id))); }
+            return r;
         }
-    } else if k == GIR_V_ARG {
-        if a_home[i] == A_BYVAL { lea64(r, m_rbp(a_off[i])); }
-        else { load64(r, m_rbp(a_off[i])); }
-    } else if k == GIR_V_CONST {
-        let c = M.consts[i];
-        if c.ty <= GIR_T_PTR || cls_of(c.ty) == C_INT { mov_ri(r, c.lo); }
-        else { load_n(r, const_mem(i), size_of(c.ty)); }  // the bits of a small FP/vector constant
-    } else {
-        global_addr(r, i);
+        if vr < 32 {
+            // an f32/f64 value whose bits are wanted (inline asm, f16 paths)
+            ra_note(id);
+            if vtype(id) == GIR_T_F32 { movd_rx(r, vr - 16); } else { movq_rx(r, vr - 16); }
+            return r;
+        }
+        ra_note(id);
+        if rc_of(vtype(id)) == RC_XMM && vi[id].home == H_SLOT {
+            let t = vtype(id);
+            load_n(r, val_mem(v), store_of(t));
+            return r;
+        }
     }
+    ra_mat_gpr(v, r);
     return r;
 }
 // v into exactly register r (fixed-register operands: shift counts, call
@@ -347,34 +376,57 @@ fn use_xmm(v: u32, x: u32) -> u32 {
         movd_xr(x, RAX);
         return x;
     }
-    let m = val_mem(v);
-    if t == GIR_T_F32 { movss_load(x, m); } else { movsd_load(x, m); }
+    if is_val(v) {
+        let id = vid(v);
+        let vr: u32 = vi[id].reg;
+        ra_note(id);
+        if vr >= 16 && vr < 32 {
+            if vr - 16 != x { movaps_rr(x, vr - 16); }
+            return x;
+        }
+    }
+    ra_mat_xmm(v, x);
     return x;
 }
-// Register for the result of local instruction j (A1: the suggestion).
-fn def_gpr(j: u32, r: u32) -> u32 { r }
-// The result of j is in r (zero-extended): A1 stores it to its slot.
-inline fn put_gpr(j: u32, r: u32) { store64(m_rbp(v_off[j]), r); }
+// The result of j is in r (zero-extended).
+fn put_gpr(j: u32, r: u32) {
+    if tierb {
+        tb_id = j;
+        tb_reg = r;
+        return;
+    }
+    ra_set(j, r, false);
+}
 fn put_gpr2(j: u32, lo: u32, hi: u32) {
-    store64(m_rbp(v_off[j]), lo);
-    store64(m_rbp(v_off[j] + 8), hi);
+    let m = res_mem(j);
+    store64(m, lo);
+    store64(m_add(m, 8), hi);
 }
 // The FP result of j is in xmm x.
 fn put_xmm(j: u32, x: u32, t: u32) {
     if t == GIR_T_F16 {
         movd_rx(RAX, x);
         movzx16(RAX, RAX);
-        store64(m_rbp(v_off[j]), RAX);
-    } else if t == GIR_T_F32 { movss_store(m_rbp(v_off[j]), x); }
-    else { movsd_store(m_rbp(v_off[j]), x); }
+        store64(res_mem(j), RAX);
+        return;
+    }
+    if tierb {
+        tb_id = j;
+        tb_reg = x + 16;
+        return;
+    }
+    ra_set(j, x + 16, false);
 }
 // Memory operand of the address held by pointer value v: an alloca or a
 // local global is addressed directly, anything else is loaded into scratch.
 fn addr_of(v: u32, scratch: u32) -> Mem {
     let i = gir_idx(v);
     let k = gir_kind(v);
-    if k == GIR_V_INST && v_home[i - f_first_inst] == H_ALLOCA { return m_rbp(v_off[i - f_first_inst]); }
-    if k == GIR_V_ARG && a_home[i] == A_BYVAL { return m_rbp(a_off[i]); }
+    if k <= GIR_V_ARG {
+        let id = vid(v);
+        let h = vi[id].home;
+        if h == H_ALLOCA || h == H_BYVAL { return m_rbp(vi[id].off); }
+    }
     if k == GIR_V_GLOBAL && is_local_ref(i) { return m_sym(g_sym[i], R_X86_64_PC32, 0); }
     use_gpr(v, scratch);
     return m_reg(scratch, 0);

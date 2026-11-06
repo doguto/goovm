@@ -44,7 +44,9 @@ struct GirUnsupported {
 };
 
 // Fills `out` from `m`; throws GirUnsupported. The module is not modified.
-void gir_export(const llvm::Module &m, GirTables &out);
+// size_hint (optional, e.g. the bitcode file size in bytes) pre-sizes the
+// tables.
+void gir_export(const llvm::Module &m, GirTables &out, size_t size_hint = 0);
 
 // Prints the tables in a readable text form (for debugging and for checking
 // another back-end's reading of the format).

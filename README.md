@@ -17,9 +17,16 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 - [初期調査（2026-11-05）](docs/research/2026-11-05-goose-llvm-investigation.md)
 - [検証結果：フェーズ0〜2（2026-11-06）](docs/research/2026-11-06-results.md)
 
-## 現在の状態（マイルストーン A1）
+## 現在の状態（マイルストーン A2）
 
-バックエンドは Goose 版だけを育てます。A1 で、clang-20 が `-O0`（`-g` 付き、`mem2reg` 後を含む）で出す C の LLVM IR をすべて扱う `-O0` バックエンドになりました。
+バックエンドは Goose 版だけを育てます。A1 で、clang-20 が `-O0`（`-g` 付き、`mem2reg` 後を含む）で出す C の LLVM IR をすべて扱う `-O0` バックエンドになりました。A2 で、出力コードの質が LLVM の `-O0`（FastISel + RegAllocFast）と同じ水準になりました。
+
+- レジスタ割り付けを入れました。ブロック内の値はレジスタに置き、ブロックをまたぐ値はスタック上の置き場所に書き通します。比較と分岐の融合、即値・メモリオペランド・アドレス形式の畳み込み、xmm レジスタ上の浮動小数点と 8/16 バイトのベクトルも扱います。設計は [`backend-goose/DESIGN.md`](backend-goose/DESIGN.md) です。
+- `bench/codequal` の実行時間は llc -O0 の 0.98 倍、`.text` は 1.05 倍です（A1 は 1.72 倍と 4.2 倍）。CTMark の C プログラムの実行時間は clang -O0 の 0.95〜1.01 倍（幾何平均 0.99、A1 は 2.78）、Vector/build2 は 1.15 倍（A1 は 10.9 倍）です。
+- バックエンドの時間は A1 の 1.04〜1.32 倍です。エクスポータを2倍速くしたので、goovm 全体（書き出しとバックエンド）は A1 より速く、gen-20000 と spass では TPDE の Compile より速いままです（typeset では 1.17 倍）。
+- 計測結果は [`bench/results/a2-2026-11-06/`](bench/results/a2-2026-11-06/) と [`backend-goose/NOTES.md`](backend-goose/NOTES.md) の9節にあります。
+
+A1 から変わらない点:
 
 - GIR は版2になりました（型表、i128・f80・集約・ベクトル、デバッグ位置、ABI 属性、TLS、別名、セクションなど）。仕様は [`gir/README.md`](gir/README.md) です。
 - 書き出せない IR に出会うと、終了コード2と理由を出して止まります。`--fallback` を付けると、その入力だけ LLVM の `-O0` コード生成に任せ、標準エラーにそう書きます。
@@ -44,7 +51,7 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 | `backend-cpp/` | v0 の C++ 版バックエンド。`8f55b18` で凍結し、ビルドしない |
 | `frontend-goose/` | Goose で一から書いた C コンパイラ `goosecc`（プリプロセッサ・構文解析・型検査・GIR への変換。Goose 版バックエンドを同じプロセスで呼び、LLVM なしで ELF オブジェクトを出す） |
 | `tools/goovm-cc/` | clang のフロントエンドを同じプロセス内で動かし、LLVM IR をそのままバックエンドへ渡す `clang -c` 代替 |
-| `tests/` | `suite.py`（各コーパスでの正しさの検証）、`suite_goosecc.py`（同じコーパスを goosecc で）、`bench_goosecc.py`（goosecc の速さ）、C テストプログラム44本（`run.py`） |
+| `tests/` | `suite.py`（各コーパスでの正しさの検証）、`suite_goosecc.py`（同じコーパスを goosecc で）、`bench_goosecc.py`（goosecc の速さ）、C テストプログラム49本（`run.py`） |
 | `bench/` | CTMark、LLVM 自身のビルド、バックエンド、要因の切り分け、出力コードの質、全体への効果の計測 |
 | `poc/` | Goose コンパイラの伸び方、C++ との接続、変更可能な IR グラフの試作 |
 

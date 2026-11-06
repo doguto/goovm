@@ -5,31 +5,6 @@
 // processed lane by lane in memory.
 
 fn local_of(v: u32) -> u32 { gir_idx(v) - f_first_inst }
-fn is_const(v: u32) -> bool { gir_kind(v) == GIR_V_CONST }
-
-// The constant v as a sign-extended imm32 usable with 64-bit ALU operations
-// on `bits`-wide zero-extended values (only the low `bits` bits of the
-// result matter, except for compares, see cmp_imm).
-fn alu_imm(v: u32, bits: u32) -> bool, i32 {
-    if !is_const(v) { return false, 0; }
-    let c = M.consts[gir_idx(v)];
-    if cls_of(c.ty) != C_INT { return false, 0; }
-    if bits <= 32 { return true, (c.lo as! u32) as! i32; }
-    if bits == 64 && fits32(c.lo as! i64) { return true, c.lo as! i32; }
-    return false, 0;
-}
-// The constant v as an imm32 for a compare with a `bits`-wide value that is
-// zero-extended (sgn = false) or sign-extended (sgn = true) to 64 bits.
-fn cmp_imm(v: u32, bits: u32, sgn: bool) -> bool, i32 {
-    if !is_const(v) { return false, 0; }
-    let c = M.consts[gir_idx(v)];
-    if cls_of(c.ty) != C_INT { return false, 0; }
-    var x: i64 = c.lo as! i64;
-    if sgn && bits < 64 { x = (x << (64 - bits)) >> (64 - bits); }
-    if fits32(x) { return true, x as! i32; }
-    return false, 0;
-}
-
 // ------------------------------------------------------ integer core ops
 
 // RAX = RAX op RCX for `bits`-wide zero-extended values; result normalized.
@@ -64,20 +39,6 @@ fn int_binop(op: u32, bits: u32) {
         },
     }
 }
-checkfree fn icmp_cc(p: u32) -> u32 {
-    match p {
-        GIR_EQ => CC_E,
-        GIR_NE => CC_NE,
-        GIR_UGT => CC_A,
-        GIR_UGE => CC_AE,
-        GIR_ULT => CC_B,
-        GIR_ULE => CC_BE,
-        GIR_SGT => CC_G,
-        GIR_SGE => CC_GE,
-        GIR_SLT => CC_L,
-        _ => CC_LE,
-    }
-}
 // Loads a, b of a `bits`-wide integer compare (RAX, and RCX or an
 // immediate), compares, and leaves 0/1 in EAX.
 fn int_cmp_vals(pred: u32, bits: u32, a: u32, b: u32) {
@@ -108,31 +69,6 @@ fn int_cmp_rr(pred: u32, bits: u32) {
 
 // ---------------------------------------------------- floating-point core
 
-// How an FCMP predicate is computed from ucomis(x, y) flags: compare (a, b)
-// or swapped (b, a), then cc1 [combined with cc2 by and/or]. Packed as
-// swap | cc1 << 8 | cc2 << 16 | comb << 24 (comb: 1 = and, 2 = or).
-fn fcmp_plan_packed(p: u32) -> u32 {
-    match p {
-        F_OEQ => CC_E << 8 | CC_NP << 16 | 1 << 24,
-        F_UNE => CC_NE << 8 | CC_P << 16 | 2 << 24,
-        F_OGT => CC_A << 8,
-        F_OGE => CC_AE << 8,
-        F_OLT => 1 | CC_A << 8,
-        F_OLE => 1 | CC_AE << 8,
-        F_ONE => CC_NE << 8,
-        F_ORD => CC_NP << 8,
-        F_UNO => CC_P << 8,
-        F_UEQ => CC_E << 8,
-        F_UGT => 1 | CC_B << 8,
-        F_UGE => 1 | CC_BE << 8,
-        F_ULT => CC_B << 8,
-        _ => CC_BE << 8,
-    }
-}
-fn fcmp_plan(p: u32) -> bool, u32, u32, u32 {
-    let x = fcmp_plan_packed(p);
-    return x & 1 != 0, (x >> 8) & 0xFF, (x >> 16) & 0xFF, x >> 24;
-}
 fn fcmp_result(cc1: u32, cc2: u32, comb: u32) {
     setcc(cc1, RAX);
     if comb != 0 {
@@ -169,14 +105,6 @@ fn fcmp_x87(p: u32, a: Mem, b: Mem) {
     fstp_st0();
     fcmp_result(cc1, cc2, comb);
 }
-fn sse_op(op: u32) -> u32 {
-    match op {
-        GIR_FADD => 0x58,
-        GIR_FMUL => 0x59,
-        GIR_FSUB => 0x5C,
-        _ => 0x5E,
-    }
-}
 fn x87_op(op: u32) -> u32 {
     match op {
         GIR_FADD => X87_FADDP,
@@ -189,25 +117,25 @@ fn x87_op(op: u32) -> u32 {
 // Sets the x87 rounding mode to truncation around a fistp; the saved
 // control word lives in the scratch area (scratch+0, +2).
 fn x87_trunc_on() {
-    fnstcw(m_rbp(scratch_off));
-    load16z(RAX, m_rbp(scratch_off));
+    fnstcw(m_rbp(scr()));
+    load16z(RAX, m_rbp(scr()));
     grp1_ri32(G1_OR, RAX, 0x0C00);
-    store16(m_rbp(scratch_off + 2), RAX);
-    fldcw(m_rbp(scratch_off + 2));
+    store16(m_rbp(scr() + 2), RAX);
+    fldcw(m_rbp(scr() + 2));
 }
-fn x87_trunc_off() { fldcw(m_rbp(scratch_off)); }
+fn x87_trunc_off() { fldcw(m_rbp(scr())); }
 
 // st0 (f80) -> RAX as a signed (sgn) or unsigned 64-bit integer; pops st0.
 fn x87_to_int(sgn: bool) {
     x87_trunc_on();
-    let tmp = m_rbp(scratch_off + 8);
+    let tmp = m_rbp(scr() + 8);
     if sgn {
         fistp_m(8, tmp);
         load64(RAX, tmp);
     } else {
         // st0 = a. Compare with 2^63; subtract it first if a >= 2^63.
-        store_imm32(m_rbp(scratch_off + 16), 0x5F000000);  // 2^63 as f32
-        fld_m(4, m_rbp(scratch_off + 16));                 // st0 = 2^63, st1 = a
+        store_imm32(m_rbp(scr() + 16), 0x5F000000);  // 2^63 as f32
+        fld_m(4, m_rbp(scr() + 16));                 // st0 = 2^63, st1 = a
         fxch();                                            // st0 = a, st1 = 2^63
         x87_2(0xDB, 0xE9);                                 // fucomi st0, st1
         let small = jcc_fwd(CC_B);
@@ -271,14 +199,14 @@ fn int_to_fp(dbl: bool, sgn: bool, bits: u32) {
 // RAX (zero-extended `bits` integer) -> st0 (f80).
 fn int_to_x87(sgn: bool, bits: u32) {
     if sgn { sext_reg(RAX, bits); }
-    let tmp = m_rbp(scratch_off + 8);
+    let tmp = m_rbp(scr() + 8);
     store64(tmp, RAX);
     fild_m(8, tmp);
     if !sgn && bits == 64 {
         test_rr64(RAX, RAX);
         let ok = jcc_fwd(CC_NS);
-        store_imm32(m_rbp(scratch_off + 16), 0x5F800000);  // 2^64 as f32
-        fadd_m32(m_rbp(scratch_off + 16));
+        store_imm32(m_rbp(scr() + 16), 0x5F800000);  // 2^64 as f32
+        fadd_m32(m_rbp(scr() + 16));
         patch_here(ok);
     }
 }
@@ -1280,70 +1208,6 @@ fn lower_store(I: Inst) {
     }
     let m = addr_of(I.b, RCX);
     store_value(m, I.a, t);
-}
-
-fn lower_gep(I: Inst, j: u32) {
-    use_fixed(I.a, RAX);
-    let off = (M.opnds[I.b] | M.opnds[I.b + 1] as u64 << 32) as! i64;
-    for k in 0..I.c {
-        let idx = M.opnds[I.b + 2 + 2 * k];
-        let sc = M.opnds[I.b + 3 + 2 * k];
-        if sc == 0 { continue; }  // the exporter never emits these
-        use_fixed(idx, RCX);
-        sext_reg(RCX, bits_of(type_of(idx)));
-        if sc & (sc - 1) == 0 {
-            var sh: u32 = 0;
-            while ((1 as u32) << sh) < sc { sh++; }
-            if sh != 0 { shift_imm64(SH_SHL, RCX, sh); }
-        } else if sc <= 0x7FFFFFFF {
-            imul_rri64(RCX, RCX, sc as! i32);
-        } else {
-            mov_ri(RDX, sc);
-            imul_rr64(RCX, RDX);
-        }
-        alu_rr64(ALU_ADD, RAX, RCX);
-    }
-    if off != 0 {
-        if fits32(off) {
-            grp1_ri64(G1_ADD, RAX, off as! i32);
-        } else {
-            mov_ri(RCX, off as! u64);
-            alu_rr64(ALU_ADD, RAX, RCX);
-        }
-    }
-    put_gpr(j, RAX);
-}
-
-fn lower_memcpy(I: Inst) {
-    let n = I.c;
-    if I.op == GIR_MEMSET {
-        use_fixed(I.b, RAX);
-        movzx8(RAX, RAX);
-        if n > 64 {
-            use_fixed(I.a, RDI);
-            mov_ri(RCX, n);
-            rep_stosb();
-            return;
-        }
-        mov_ri(RCX, 0x0101010101010101);
-        imul_rr64(RAX, RCX);
-        let m = addr_of(I.a, RDX);
-        var k: u32 = 0;
-        while k + 8 <= n {
-            store64(m_add(m, k), RAX);
-            k += 8;
-        }
-        while k < n {
-            let r = n - k;
-            let w: u32 = if r >= 4 { 4 } else if r >= 2 { 2 } else { 1 };
-            store_n(m_add(m, k), RAX, w);
-            k += w;
-        }
-        return;
-    }
-    let dst = addr_of(I.a, RDX);
-    let src = addr_of(I.b, RCX);
-    copy_mem(dst, src, n);
 }
 
 fn lower_dynalloca(I: Inst, j: u32) {
