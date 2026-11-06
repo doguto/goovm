@@ -1,18 +1,17 @@
-/* GIR: goovm's flat IR, version 0, revision 1.
+/* GIR: goovm's flat IR, version 2.
  *
- * GIR is the hand-off format between LLVM and a fast back-end. A C++
- * exporter walks an llvm::Module once and fills these tables; a back-end
- * (written in C++ or in Goose) reads them and produces an ELF object.
+ * GIR is the hand-off format between LLVM and goovm's fast back-end. The
+ * C++ exporter (tools/goovm-llc/gir_export.cpp) walks an llvm::Module once
+ * and fills these tables; the Goose back-end (backend-goose/) reads them
+ * and writes an ELF64 x86-64 relocatable object.
  *
  * Every record is a fixed-size struct whose fields are naturally aligned
  * with no padding, so the same bytes are valid as a C struct and as the
- * packed C type that Goose generates for the matching Goose struct. The
+ * packed C struct that Goose generates for the matching Goose struct. The
  * host passes each table to Goose as a slice ({ data, len }) without
- * copying.
- *
- * Indices are u32 and global to the module unless stated otherwise.
- * gir/README.md describes the format in prose and lists the changes made
- * in revision 1; this header is the normative definition.
+ * copying. Indices are u32 and global to the module unless stated
+ * otherwise. gir/README.md describes the format in prose and lists the
+ * changes from version 0; this header is the normative definition.
  *
  * ------------------------------------------------------------------------
  * Value references (u32), used by instruction operands:
@@ -27,7 +26,7 @@
  *   GIR_NONE (0xFFFFFFFF) means "no value" (e.g. `ret void`).
  *
  * The type of a value reference is always recoverable from the tables:
- *   INST -> insts[i].ty, ARG -> opnds[func.arg_tys + i],
+ *   INST -> insts[i].ty, ARG -> opnds[func.args + 2*i],
  *   CONST -> consts[i].ty, GLOBAL -> GIR_T_PTR.
  *
  * Block references inside a function are local block numbers
@@ -40,29 +39,38 @@
  *    order of the tables. The entry block is local block 0 and has no
  *    predecessors.
  *  - Every block ends with exactly one terminator (RET, BR, CONDBR, SWITCH,
- *    UNREACHABLE); no terminator appears elsewhere.
+ *    INDIRECTBR, UNREACHABLE); no terminator appears elsewhere. An
+ *    instruction that never returns (TRAP, SJLJ_LONGJMP, a noreturn CALL)
+ *    is still followed by a terminator.
  *  - PHIs appear only at the start of a block, before any other
  *    instruction. A PHI has exactly one (value, pred) pair per incoming
  *    CFG edge; a predecessor reached by several edges (switch) appears
  *    several times with the same value.
- *  - ALLOCAs appear only in the entry block; they are static (constant
- *    size) with alignment <= 16.
- *  - Instructions without a result have ty = GIR_T_VOID (RET, BR, CONDBR,
- *    SWITCH, UNREACHABLE, STORE, CALL of a void function). An instruction
+ *  - ALLOCAs (static, constant size) appear only in the entry block, with
+ *    any power-of-two alignment. Every other alloca is a DYNALLOCA.
+ *  - Instructions without a result have ty = GIR_T_VOID. An instruction
  *    operand never refers to such an instruction.
  *  - An INST operand refers to an instruction that dominates the use (for a
  *    PHI operand: that dominates the end of the predecessor block). It may
  *    lie later in layout order than the use.
- *  - Call ABI details are already lowered by the exporter: arguments with
- *    the LLVM `signext` attribute arrive as an explicit SEXT to i32; a
- *    function whose return has `signext` returns an explicit SEXT to i32
- *    (so RET's operand may be wider than Func.ret_ty); a function with an
- *    `sret` parameter returns that parameter (Func.ret_ty = GIR_T_PTR).
- *    A back-end only has to follow the plain SysV integer convention.
+ *  - Operations that need a run-time library function (i128 division,
+ *    conversions between i128 and floating point, frem, half <-> float,
+ *    the libm intrinsics, large or variable-size memcpy/memmove/memset) are
+ *    already explicit CALLs of that function: a back-end never has to name
+ *    a symbol that is not in the globals table.
+ *  - ABI details are lowered as far as the IR allows: arguments with the
+ *    LLVM `signext` attribute arrive as an explicit SEXT to i32; a function
+ *    whose return has `signext` returns an explicit SEXT to i32 (so RET's
+ *    operand may be wider than Func.ret_ty); a function with an `sret`
+ *    parameter returns that parameter (Func.ret_ty = GIR_T_PTR). What is
+ *    left is the plain LLVM x86-64 C calling convention on the argument and
+ *    return types, plus the byval words of CALL and Func arguments.
  */
 #ifndef GIR_H
 #define GIR_H
 #include <stdint.h>
+
+#define GIR_VERSION 2u
 
 #define GIR_V_INST   0u
 #define GIR_V_ARG    1u
@@ -73,65 +81,234 @@
 #define GIR_MK(k, i) (((uint32_t)(k) << 30) | (uint32_t)(i))
 #define GIR_NONE     0xFFFFFFFFu
 
-/* Value types. Integers narrower than 64 bits are kept zero-extended in a
- * 64-bit slot by convention of the reference back-ends; that is a back-end
- * choice, not part of the format. */
+/* ---------------------------------------------------------------- types
+ * A type id (u16) is an index into the `types` table. Ids 0..15 are
+ * predefined: the exporter always writes these 16 records first, with the
+ * kinds, sizes and classes listed here. Further ids are integers of other
+ * widths (i24, i48, i72, ...), vectors, structs and arrays. */
 enum GirType {
     GIR_T_VOID = 0, GIR_T_I1 = 1, GIR_T_I8 = 2, GIR_T_I16 = 3,
     GIR_T_I32 = 4,  GIR_T_I64 = 5, GIR_T_PTR = 6,
-    GIR_T_F32 = 7,  GIR_T_F64 = 8   /* reserved: not produced by v0 */
+    GIR_T_F32 = 7,  GIR_T_F64 = 8, GIR_T_F80 = 9, GIR_T_I128 = 10,
+    GIR_T_F16 = 11,              /* IEEE half (_Float16) */
+    GIR_T_FIRST_USER = 16        /* 12..15 are reserved (kind VOID) */
 };
 
-/* Opcodes. Operand fields a/b/c of GirInst; "ops[s..s+n)" means the run
- * opnds[s .. s+n) of the opnds table. Unused fields are 0. */
+/* Type kinds (GirTypeDef.kind). */
+enum GirTypeKind {
+    GIR_TK_VOID = 0, GIR_TK_INT = 1, GIR_TK_PTR = 2, GIR_TK_FLOAT = 3,
+    GIR_TK_VECTOR = 4, GIR_TK_STRUCT = 5, GIR_TK_ARRAY = 6
+};
+
+/* Value classes (GirTypeDef.cls): how a value of the type is held. */
+enum GirClass {
+    GIR_C_NONE = 0,  /* void */
+    GIR_C_INT = 1,   /* integer of 1..64 bits or pointer: one general register */
+    GIR_C_INT2 = 2,  /* integer of 65..128 bits: two general registers (lo, hi) */
+    GIR_C_FP = 3,    /* f16, f32, f64: low part of one SSE register */
+    GIR_C_X87 = 4,   /* f80: x87 stack */
+    GIR_C_VEC = 5,   /* fixed vector */
+    GIR_C_MEM = 6    /* struct or array (first-class aggregate value) */
+};
+
+/* 24 bytes. `size` is the DataLayout allocation size (the stride in an
+ * array, the size of a stack slot), `store` the number of bytes a LOAD or
+ * STORE of the type touches (i24: store 3, size 4; f80: store 10, size 16).
+ * Vectors of i1 are the exception: GIR gives them one byte per lane
+ * (store = size = n) and the exporter rejects loads, stores and bitcasts of
+ * them, so the in-memory bit packing never matters.
+ *   INT    bits = width
+ *   PTR    bits = 64
+ *   FLOAT  bits = 16, 32, 64 or 80
+ *   VECTOR n = lanes, elems = lane type id (an INT of 1/8/16/32/64 bits or
+ *          F32/F64); lane k is at byte offset k * types[elems].size
+ *   ARRAY  n = elements, elems = element type id
+ *   STRUCT n = fields; opnds[elems + 2*i] = type id of field i,
+ *          opnds[elems + 2*i + 1] = its byte offset (StructLayout) */
+typedef struct GirTypeDef {
+    uint8_t  kind;    /* GirTypeKind */
+    uint8_t  cls;     /* GirClass */
+    uint16_t bits;
+    uint32_t size;
+    uint32_t align;   /* ABI alignment (power of two) */
+    uint32_t store;
+    uint32_t n;
+    uint32_t elems;
+} GirTypeDef;
+
+/* ------------------------------------------------------------- opcodes
+ * Operand fields a/b/c of GirInst; "ops[s..s+n)" means the run
+ * opnds[s .. s+n). Unused fields are 0. "value" means a value reference,
+ * "imm" an immediate, "block" a local block number. Unless stated
+ * otherwise an operation on a vector type applies lane by lane. */
 enum GirOp {
+    /* terminators */
     GIR_RET = 0,       /* a = value or GIR_NONE                               */
     GIR_BR,            /* a = target block                                   */
     GIR_CONDBR,        /* a = i1 cond, b = true block, c = false block        */
-    GIR_SWITCH,        /* a = cond, b = s, c = n: ops[s] = default block,     */
-                       /*   then n pairs (const value ref, block); the case  */
-                       /*   constants have the type of cond and are distinct */
+    GIR_SWITCH,        /* a = cond (INT or INT2), b = s, c = n: ops[s] =      */
+                       /*   default block, then n pairs (const ref, block);  */
+                       /*   the case constants have the type of cond and are */
+                       /*   distinct                                         */
     GIR_UNREACHABLE,
-    /* binary integer ops: a, b; ty = operand and result type (never ptr).
-     * Shift amounts >= the bit width and division by zero are undefined. */
+    /* binary integer ops: a, b values; ty = operand and result type (INT,
+     * INT2 or an integer vector; never ptr). Shift amounts >= the width and
+     * division by zero are undefined. */
     GIR_ADD, GIR_SUB, GIR_MUL, GIR_SDIV, GIR_UDIV, GIR_SREM, GIR_UREM,
     GIR_AND, GIR_OR, GIR_XOR, GIR_SHL, GIR_LSHR, GIR_ASHR,
     GIR_ICMP,          /* a, b; sub = GirPred; aux = operand type; ty = i1   */
-    GIR_SELECT,        /* a = i1 cond, b = true value, c = false value       */
-    /* casts: a = source; ty = destination type; aux = source type */
-    GIR_ZEXT, GIR_SEXT, GIR_TRUNC, GIR_PTRTOINT, GIR_INTTOPTR, GIR_BITCAST,
+                       /*   (or <n x i1> for vectors)                        */
+    GIR_SELECT,        /* a = i1 cond (or <n x i1> with a vector ty),        */
+                       /*   b = true value, c = false value; any ty          */
+    /* casts: a = source value; ty = destination type; aux = source type */
+    GIR_ZEXT, GIR_SEXT, GIR_TRUNC, GIR_PTRTOINT, GIR_INTTOPTR,
+    GIR_BITCAST,       /* same size, any classes (f64 <-> i64, vectors, ...) */
     GIR_ALLOCA,        /* a = size in bytes, b = alignment (immediates);      */
-                       /*   static allocas only; ty = ptr                    */
-    GIR_LOAD,          /* a = pointer; ty = loaded type                      */
-    GIR_STORE,         /* a = value, b = pointer; aux = stored type          */
+                       /*   entry block only; ty = ptr                       */
+    GIR_LOAD,          /* a = pointer; ty = loaded type; flags: VOLATILE,     */
+                       /*   atomic ordering                                  */
+    GIR_STORE,         /* a = value, b = pointer; aux = stored type; flags    */
     GIR_GEP,           /* a = base pointer, b = s, c = n: ops[s], ops[s+1] = */
                        /*   constant byte offset (lo, hi of an i64), then n  */
-                       /*   pairs (index value ref, scale in bytes); result  */
+                       /*   pairs (index value, scale in bytes); result      */
                        /*   = a + offset + sum(sext64(index) * scale). The   */
-                       /*   index type is the type of the index value; all   */
-                       /*   arithmetic wraps modulo 2^64                     */
-    GIR_CALL,          /* a = callee value ref, b = s, c = n: ops[s..s+n) =  */
-                       /*   argument refs; ty = return type;                 */
-                       /*   sub = GIR_F_VARARG for a variadic callee         */
-    GIR_PHI,           /* b = s, c = n: n pairs (value ref, pred block)      */
+                       /*   index type is the type of the index value (INT); */
+                       /*   all arithmetic wraps modulo 2^64                 */
+    GIR_CALL,          /* a = callee value, b = s, c = n: n pairs            */
+                       /*   ops[s+2k] = argument value, ops[s+2k+1] = ABI    */
+                       /*   word (GIR_ABI_*); ty = return type; flags:       */
+                       /*   GIR_IF_VARARG for a variadic callee              */
+    GIR_PHI,           /* b = s, c = n: n pairs (value, pred block)          */
+    /* --- version 2 --- */
+    GIR_FADD, GIR_FSUB, GIR_FMUL, GIR_FDIV,   /* a, b; ty = FP, X87 or FP vector */
+    GIR_FNEG,          /* a                                                  */
+    GIR_FCMP,          /* a, b; sub = GirFPred; aux = operand type; ty = i1  */
+    GIR_FPEXT, GIR_FPTRUNC,                   /* casts between f32/f64/f80   */
+    GIR_FPTOSI, GIR_FPTOUI,                   /* FP/X87 -> INT (<= 64 bits)  */
+    GIR_SITOFP, GIR_UITOFP,                   /* INT (<= 64 bits) -> FP/X87  */
+    GIR_EXTRACTVALUE,  /* a = aggregate, b = byte offset (imm); ty = field   */
+    GIR_INSERTVALUE,   /* a = aggregate, b = field value, c = byte offset    */
+                       /*   (imm); ty = aggregate type                       */
+    GIR_EXTRACTELT,    /* a = vector, b = lane index value; ty = lane type   */
+    GIR_INSERTELT,     /* a = vector, b = lane value, c = lane index value   */
+    GIR_SHUFFLE,       /* a, b = vectors (type aux); c = s: ops[s..s+n) =    */
+                       /*   lane numbers (n = lanes of ty; lanes of a first, */
+                       /*   then b; GIR_NONE = undefined lane)               */
+    GIR_DYNALLOCA,     /* a = byte count value (i64), b = alignment (imm);   */
+                       /*   ty = ptr; memory below the current stack         */
+    GIR_STACKSAVE,     /* ty = ptr                                           */
+    GIR_STACKRESTORE,  /* a = value from STACKSAVE                           */
+    GIR_VASTART,       /* a = pointer to a va_list (SysV: 24 bytes)          */
+    GIR_MEMCPY,        /* a = dst, b = src, c = byte count (imm, <= 4096);   */
+                       /*   non-overlapping                                  */
+    GIR_MEMSET,        /* a = dst, b = byte value (i8 value), c = count (imm,*/
+                       /*   <= 4096)                                         */
+    GIR_CTLZ, GIR_CTTZ, /* a; b = 1 if a zero input is poison (imm)          */
+    GIR_CTPOP, GIR_BSWAP, GIR_BITREVERSE,     /* a                           */
+    GIR_FSHL, GIR_FSHR,                       /* a, b, c (shift amount)      */
+    GIR_OVF,           /* a, b; sub = GirOvf; ty = { iN, i1 } struct: field  */
+                       /*   0 = wrapped result, field 1 = overflow bit       */
+    GIR_SCMP, GIR_UCMP, /* a, b (type aux); ty = result integer (-1, 0, 1)   */
+    GIR_FABS,          /* a                                                  */
+    GIR_COPYSIGN,      /* a, b                                               */
+    GIR_FSQRT,         /* a                                                  */
+    GIR_ISFPCLASS,     /* a (type aux), b = class mask (imm, LLVM FPClassTest)*/
+    GIR_CMPXCHG,       /* a = ptr, b = expected, c = new value; aux = value  */
+                       /*   type; ty = { iN, i1 } (old value, success);      */
+                       /*   flags: orderings, WEAK                           */
+    GIR_ATOMICRMW,     /* a = ptr, b = value; sub = GirRmw; ty = value type  */
+                       /*   (the old value); flags: ordering                 */
+    GIR_FENCE,         /* flags: ordering, SINGLETHREAD                      */
+    GIR_TLSADDR,       /* a = TLS global index (imm); ty = ptr: its address  */
+                       /*   in the current thread                            */
+    GIR_FRAMEADDR,     /* a = level (imm); ty = ptr (llvm.frameaddress)      */
+    GIR_RETADDR,       /* a = level (imm); ty = ptr (llvm.returnaddress)     */
+    GIR_SJLJ_SETJMP,   /* a = buffer; ty = i32: 0, or 1 after a longjmp.     */
+                       /*   Stores the resume address in word 1 of the       */
+                       /*   buffer; the IR stored the frame address (word 0) */
+                       /*   and STACKSAVE (word 2) itself                    */
+    GIR_SJLJ_LONGJMP,  /* a = buffer: restores rbp, rsp, jumps to word 1     */
+    GIR_TRAP,          /* ud2                                                */
+    GIR_DEBUGTRAP,     /* int3                                               */
+    GIR_INDIRECTBR,    /* a = address (from BLOCKADDR), b = s, c = n:        */
+                       /*   ops[s..s+n) = possible target blocks             */
+    GIR_BLOCKADDR,     /* a = function global index (imm), b = local block of*/
+                       /*   that function (imm); ty = ptr                    */
+    GIR_X86,           /* x86 SSE intrinsic: sub = GirX86, a, b; ty          */
+    GIR_ASM,           /* inline assembly: a = index into asms; ty = void,   */
+                       /*   the single output, or a struct of the outputs    */
     GIR_OP_COUNT
 };
 
-enum GirPred {
+enum GirPred {         /* ICMP predicates */
     GIR_EQ = 0, GIR_NE, GIR_UGT, GIR_UGE, GIR_ULT, GIR_ULE,
     GIR_SGT, GIR_SGE, GIR_SLT, GIR_SLE
 };
 
-#define GIR_F_VARARG 1u
+/* FCMP predicates: the LLVM numbering (CmpInst::FCMP_*). O = ordered (false
+ * if either operand is NaN), U = unordered (true if either is NaN). */
+enum GirFPred {
+    GIR_F_FALSE = 0, GIR_F_OEQ, GIR_F_OGT, GIR_F_OGE, GIR_F_OLT, GIR_F_OLE,
+    GIR_F_ONE, GIR_F_ORD, GIR_F_UNO, GIR_F_UEQ, GIR_F_UGT, GIR_F_UGE,
+    GIR_F_ULT, GIR_F_ULE, GIR_F_UNE, GIR_F_TRUE
+};
 
-/* One instruction: 16 bytes. Instructions of a block are contiguous, and
+enum GirOvf {          /* GIR_OVF.sub (llvm.*.with.overflow) */
+    GIR_OVF_SADD = 0, GIR_OVF_UADD, GIR_OVF_SSUB, GIR_OVF_USUB,
+    GIR_OVF_SMUL, GIR_OVF_UMUL
+};
+
+enum GirRmw {          /* GIR_ATOMICRMW.sub */
+    GIR_RMW_XCHG = 0, GIR_RMW_ADD, GIR_RMW_SUB, GIR_RMW_AND, GIR_RMW_NAND,
+    GIR_RMW_OR, GIR_RMW_XOR, GIR_RMW_MAX, GIR_RMW_MIN, GIR_RMW_UMAX,
+    GIR_RMW_UMIN, GIR_RMW_FADD, GIR_RMW_FSUB
+};
+
+enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors */
+    GIR_X86_MAXPS = 0,     /* llvm.x86.sse.max.ps (a, b)                      */
+    GIR_X86_MINPS,         /* llvm.x86.sse.min.ps (a, b)                      */
+    GIR_X86_MOVMSKPS,      /* llvm.x86.sse.movmsk.ps (a) -> i32               */
+    GIR_X86_PACKSSDW,      /* llvm.x86.sse2.packssdw.128 (a, b)               */
+    GIR_X86_PSLLIW,        /* llvm.x86.sse2.pslli.w (a, b = i32 count)        */
+    GIR_X86_PSRLIW,        /* llvm.x86.sse2.psrli.w                           */
+    GIR_X86_PSRAIW,        /* llvm.x86.sse2.psrai.w                           */
+    GIR_X86_PSLLID,        /* llvm.x86.sse2.pslli.d                           */
+    GIR_X86_PSRLID,        /* llvm.x86.sse2.psrli.d                           */
+    GIR_X86_PSRAID         /* llvm.x86.sse2.psrai.d                           */
+};
+
+/* GirInst.flags */
+#define GIR_IF_VOLATILE      0x0001u
+#define GIR_IF_ORD_SHIFT     1        /* bits 1..3: atomic ordering (LLVM AtomicOrdering) */
+#define GIR_IF_ORD_MASK      0x000Eu  /*   0 = not atomic, 1 unordered, 2 monotonic,     */
+                                      /*   4 acquire, 5 release, 6 acq_rel, 7 seq_cst    */
+#define GIR_IF_FORD_SHIFT    4        /* bits 4..6: cmpxchg failure ordering             */
+#define GIR_IF_FORD_MASK     0x0070u
+#define GIR_IF_WEAK          0x0080u  /* weak cmpxchg                                    */
+#define GIR_IF_SINGLETHREAD  0x0100u  /* syncscope("singlethread")                       */
+#define GIR_IF_VARARG        0x0200u  /* CALL of a variadic function type                */
+#define GIR_IF_NORETURN      0x0400u  /* CALL that does not return                       */
+
+/* ABI words of CALL arguments and Func arguments. 0 = passed by value as
+ * its type says. GIR_ABI_BYVAL: the argument is a pointer whose pointee
+ * (size bytes, alignment 1 << align_log2) is copied to the stack argument
+ * area; the callee sees the address of that copy. */
+#define GIR_ABI_BYVAL        0x80000000u
+#define GIR_ABI_SIZE(w)      ((w) & 0x00FFFFFFu)        /* byval size (< 16 MiB) */
+#define GIR_ABI_ALIGN_LOG2(w) (((w) >> 24) & 0x1Fu)     /* byval alignment       */
+#define GIR_ABI_SRET         0x40000000u  /* informational: the sret pointer */
+
+/* One instruction: 24 bytes. Instructions of a block are contiguous, and
  * blocks of a function are contiguous, in layout order. */
 typedef struct GirInst {
     uint8_t  op;     /* GirOp */
-    uint8_t  ty;     /* result type (GirType) */
-    uint8_t  sub;    /* predicate for ICMP, GIR_F_* for CALL */
-    uint8_t  aux;    /* secondary type (source of a cast, operand of ICMP/STORE) */
+    uint8_t  sub;    /* predicate, GirOvf, GirRmw, GirX86 */
+    uint16_t flags;  /* GIR_IF_* */
+    uint16_t ty;     /* result type id */
+    uint16_t aux;    /* secondary type id (cast source, compare operand,
+                        stored value, shuffle operands, ...) */
     uint32_t a, b, c;
+    uint32_t dbg;    /* index into dlocs; 0 = no source location */
 } GirInst;
 
 typedef struct GirBlock {
@@ -139,11 +316,15 @@ typedef struct GirBlock {
     uint32_t n_inst;
 } GirBlock;
 
-#define GIR_FN_DECL     1u   /* declaration only: no body */
-#define GIR_FN_VARARG   2u
-#define GIR_FN_INTERNAL 4u   /* local linkage */
+#define GIR_FN_VARARG   2u     /* variadic definition */
+#define GIR_FN_INTERNAL 4u     /* local linkage */
+#define GIR_FN_VASTART  8u     /* contains VASTART: needs a register save area */
+#define GIR_FN_SJLJ     16u    /* contains SJLJ_SETJMP: preserve all callee-saved registers */
+#define GIR_FN_RETURNS_TWICE 32u /* calls a returns_twice function (setjmp, vfork, ...): */
+                               /*   a frame slot must not be shared between values */
+#define GIR_FN_ALIGN_SHIFT 24  /* bits 24..31: log2 of the function alignment (>= 4) */
 
-/* 36 bytes. Functions are also globals (Func.global is their entry in the
+/* 40 bytes. Functions are also globals (Func.global is their entry in the
  * globals table) so that calls and address-taking use one namespace. */
 typedef struct GirFunc {
     uint32_t global;       /* index into globals */
@@ -151,28 +332,45 @@ typedef struct GirFunc {
     uint32_t first_block, n_blocks;
     uint32_t first_inst, n_inst;
     uint32_t n_args;
-    uint32_t arg_tys;      /* opnds[arg_tys .. arg_tys+n_args) = GirType of each argument */
-    uint32_t ret_ty;       /* GirType */
+    uint32_t args;         /* opnds[args + 2*i] = type id of argument i, */
+                           /* opnds[args + 2*i + 1] = its ABI word        */
+    uint32_t ret_ty;       /* type id */
+    uint32_t dbg;          /* DISubprogram: index into dscopes, 0 = none */
 } GirFunc;
 
-/* 16 bytes. Integer and pointer constants; null is value 0 with ty ptr.
- * `value` is the constant's bit pattern zero-extended from the width of
- * `ty` to 64 bits (i1 true = 1, i8 -1 = 255, i32 -1 = 0xFFFFFFFF). */
+/* 24 bytes. Constants of every type. `lo` holds bits 0..63 of the value
+ * zero-extended from the type's width (i1 true = 1, i8 -1 = 255, f32 and
+ * f64 their IEEE bit pattern, f80 its 64-bit significand); `hi` holds bits
+ * 64..127 (INT2 integers, the 16 sign/exponent bits of an f80), else 0.
+ * Null is value 0 with ty ptr; undef and poison are 0. A constant of class
+ * VEC or MEM has data = offset of its `types[ty].size` bytes in `data`, or
+ * GIR_NONE if it is all zero. (A vector or aggregate constant that contains
+ * an address is not a GirConst: the exporter makes it a private global and
+ * LOADs it.) */
 typedef struct GirConst {
-    int64_t  value;
-    uint32_t ty;           /* GirType */
-    uint32_t pad;          /* 0 */
+    uint64_t lo;
+    uint64_t hi;
+    uint32_t ty;           /* type id */
+    uint32_t data;
 } GirConst;
 
 #define GIR_G_FUNC     0u
 #define GIR_G_VAR      1u
-#define GIR_GF_DEFINED  1u   /* has a body / initializer in this module */
-#define GIR_GF_INTERNAL 2u   /* local linkage */
-#define GIR_GF_CONST    4u   /* read-only data */
-#define GIR_GF_ZERO     8u   /* zero-initialized: no bytes in data (bss) */
-#define GIR_GF_WEAK    16u   /* weak binding (weak, linkonce, common, extern_weak) */
+#define GIR_G_ALIAS    2u   /* another name for (globals[func] + aux) */
 
-/* 32 bytes. A named global: a function or a variable.
+#define GIR_GF_DEFINED   1u   /* has a body / initializer in this module */
+#define GIR_GF_INTERNAL  2u   /* local linkage */
+#define GIR_GF_CONST     4u   /* read-only data */
+#define GIR_GF_ZERO      8u   /* zero-initialized: no bytes in data (bss) */
+#define GIR_GF_WEAK     16u   /* weak binding (weak, linkonce, extern_weak) */
+#define GIR_GF_TLS      32u   /* thread-local */
+#define GIR_GF_COMMON   64u   /* common symbol (size, align): SHN_COMMON */
+#define GIR_GF_HIDDEN  128u   /* STV_HIDDEN */
+#define GIR_GF_PROTECTED 256u /* STV_PROTECTED */
+#define GIR_GF_LOCALREF 512u  /* references may bind directly (dso_local): no GOT */
+#define GIR_GF_RELOCS 1024u   /* the initializer has data relocations */
+
+/* 40 bytes. A named global: a function, a variable or an alias.
  * Names: strtab[name .. name+name_len) is the symbol name; it is followed
  * by a NUL byte and strtab[0] is NUL, so strtab is directly usable as an
  * ELF string table with st_name = name. */
@@ -181,36 +379,136 @@ typedef struct GirGlobal {
     uint32_t kind;               /* GIR_G_* */
     uint32_t flags;              /* GIR_GF_* */
     uint32_t data, size;         /* variables: initializer bytes in data[] */
-                                 /*   (size is also set for ZERO variables) */
+                                 /*   (size is also set for ZERO/COMMON)   */
     uint32_t align;              /* power of two >= 1 */
     uint32_t func;               /* functions: index into funcs (GIR_NONE if */
-                                 /*   undefined); variables: GIR_NONE        */
+                                 /*   undefined); aliases: the aliased global; */
+                                 /*   variables: GIR_NONE                  */
+    uint32_t section;            /* GIR_NONE = the default section for its */
+                                 /*   kind; else index into sections       */
+    uint32_t aux;                /* aliases: byte offset (i32) from the target */
 } GirGlobal;
 
-/* 16 bytes. A pointer-sized relocation inside a variable's initializer:
- * at data[Global.data + offset] store the address of globals[target] plus
- * addend. Relocations of one variable are contiguous; Global has no direct
- * link to them, the back-end groups them by `owner`. The 8 initializer
- * bytes under a relocation are zero. */
+/* 16 bytes. An explicitly named output section (section attribute,
+ * .init_array/.fini_array for llvm.global_ctors/dtors). */
+#define GIR_SF_WRITE   1u
+#define GIR_SF_EXEC    2u
+#define GIR_SF_TLS     4u
+#define GIR_SF_NOBITS  8u   /* zero-initialized: no file bytes (.bss.*) */
+typedef struct GirSection {
+    uint32_t name, name_len;     /* into strtab (NUL-terminated as well) */
+    uint32_t flags;              /* GIR_SF_* */
+    uint32_t type;               /* ELF sh_type: 1 PROGBITS, 8 NOBITS, 14 INIT_ARRAY,
+                                    15 FINI_ARRAY, 16 PREINIT_ARRAY */
+} GirSection;
+
+/* 24 bytes. A relocation inside a variable's initializer, at byte
+ * data[Global.data + offset]. The initializer bytes under it are zero.
+ * Relocations of one variable are contiguous, in offset order.
+ *   ABS64   8 bytes: address of globals[target] + addend
+ *   BLOCK   8 bytes: address of local block `block` of the function
+ *           globals[target] + addend (blockaddress)
+ *   BLOCKDIFF32  4 bytes: (block `block` - block `block2`) of function
+ *           globals[target] + addend, a link-time constant the back-end
+ *           computes itself (&&l1 - &&l2 in an initializer) */
+#define GIR_DR_ABS64      0u
+#define GIR_DR_BLOCK      1u
+#define GIR_DR_BLOCKDIFF32 2u
 typedef struct GirDataReloc {
     uint32_t owner;              /* index into globals (the variable) */
     uint32_t offset;             /* byte offset inside that variable */
     uint32_t target;             /* index into globals */
-    int32_t  addend;
+    uint32_t kind;               /* GIR_DR_* */
+    int64_t  addend;
+    uint32_t block;              /* BLOCK, BLOCKDIFF32: local block number */
+    uint32_t block2;             /* BLOCKDIFF32: the subtracted block */
 } GirDataReloc;
+
+/* ---------------------------------------------------------- inline asm
+ * A GIR_ASM instruction is machine code assembled by the exporter (LLVM's
+ * MC layer) from the template with every operand bound to a register: the
+ * exporter allocates registers for "r"/"x"/"m" operands and substitutes
+ * them into the template, so the back-end only moves values in and out.
+ *   opnds[ops + 2k], opnds[ops + 2k + 1]  (k < n_in): input value, register
+ *     (an "m" operand's input is its address, loaded into the register the
+ *     template uses as the base)
+ *   opnds[ops + 2 n_in + 2k], [... + 1]   (k < n_out): register, byte offset
+ *     of the output in the result (0 for a single output)
+ * Registers: 0..15 rax..r15 (x86 numbering), 16..31 xmm0..15, 32..39
+ * st(0)..st(7). x87 inputs are pushed deepest first; after the code the x87
+ * stack holds the st outputs (st(0) first) followed by x87_pop values that
+ * the back-end pops. An empty template needs no GIR_ASM (see the exporter).
+ */
+typedef struct GirAsm {          /* 24 bytes */
+    uint32_t code, code_len;     /* machine code in data[] */
+    uint32_t n_in, n_out;
+    uint32_t ops;                /* opnds index */
+    uint32_t x87_pop;
+} GirAsm;
+#define GIR_ASMREG_XMM0 16u
+#define GIR_ASMREG_ST0  32u
+
+/* ------------------------------------------------------------ debug info
+ * Carried for a later DWARF emitter; the A1 back-end ignores it. Entry 0
+ * of dlocs, dscopes and dfiles means "none". dstr is a string table of
+ * NUL-terminated strings with dstr[0] = NUL. */
+typedef struct GirDLoc {         /* 16 bytes: a DILocation */
+    uint32_t line;
+    uint32_t col;
+    uint32_t scope;              /* index into dscopes */
+    uint32_t inlined_at;         /* index into dlocs, 0 = not inlined */
+} GirDLoc;
+
+#define GIR_DS_CU          1u    /* compile unit: name = producer, line = DWARF language */
+#define GIR_DS_SUBPROGRAM  2u    /* name, linkage = linkage name, line = scope line */
+#define GIR_DS_LEXICAL     3u    /* lexical block: line, col */
+#define GIR_DS_FILE        4u    /* lexical block file: file only */
+typedef struct GirDScope {       /* 24 bytes */
+    uint32_t kind;               /* GIR_DS_* */
+    uint32_t parent;             /* enclosing scope, 0 = none */
+    uint32_t file;               /* index into dfiles */
+    uint32_t line;
+    uint32_t name;               /* offset in dstr */
+    uint32_t extra;              /* SUBPROGRAM: linkage name offset; LEXICAL: column */
+} GirDScope;
+
+typedef struct GirDFile {        /* 8 bytes */
+    uint32_t name;               /* offset in dstr */
+    uint32_t dir;                /* offset in dstr */
+} GirDFile;
+
+/* ---------------------------------------------------------- module header
+ * 32 bytes, one record (passed to Goose as a one-element slice). */
+#define GIR_MF_PIE   1u          /* linked into an executable (PIE level set):
+                                    initial-exec/local-exec TLS are valid */
+typedef struct GirHeader {
+    uint32_t version;            /* GIR_VERSION */
+    uint32_t flags;              /* GIR_MF_* */
+    uint32_t tls_get_addr;       /* globals index of __tls_get_addr, or GIR_NONE */
+    uint32_t n_llvm_insts;       /* statistics */
+    uint32_t reserved[4];
+} GirHeader;
 
 /* The whole module, as the host holds it (host-side only: this struct is
  * not shared with Goose, so its padding does not matter). */
 typedef struct GirModule {
+    const GirHeader    *header;
+    const GirTypeDef   *types;   uint32_t n_types;
     const GirFunc      *funcs;   uint32_t n_funcs;
     const GirBlock     *blocks;  uint32_t n_blocks;
     const GirInst      *insts;   uint32_t n_insts;
     const uint32_t     *opnds;   uint32_t n_opnds;
     const GirConst     *consts;  uint32_t n_consts;
     const GirGlobal    *globals; uint32_t n_globals;
+    const GirSection   *sections; uint32_t n_sections;
     const uint8_t      *data;    uint32_t n_data;
     const GirDataReloc *drelocs; uint32_t n_drelocs;
     const uint8_t      *strtab;  uint32_t n_strtab;
+    const GirDLoc      *dlocs;   uint32_t n_dlocs;
+    const GirDScope    *dscopes; uint32_t n_dscopes;
+    const GirDFile     *dfiles;  uint32_t n_dfiles;
+    const GirAsm       *asms;    uint32_t n_asms;
+    const uint8_t      *dstr;    uint32_t n_dstr;
 } GirModule;
 
 /* Record sizes are part of the format. */
@@ -219,11 +517,18 @@ typedef struct GirModule {
 #else
 #define GIR_STATIC_ASSERT(c, m) _Static_assert(c, m)
 #endif
-GIR_STATIC_ASSERT(sizeof(GirInst) == 16, "GirInst must be 16 bytes");
+GIR_STATIC_ASSERT(sizeof(GirTypeDef) == 24, "GirTypeDef must be 24 bytes");
+GIR_STATIC_ASSERT(sizeof(GirInst) == 24, "GirInst must be 24 bytes");
 GIR_STATIC_ASSERT(sizeof(GirBlock) == 8, "GirBlock must be 8 bytes");
-GIR_STATIC_ASSERT(sizeof(GirFunc) == 36, "GirFunc must be 36 bytes");
-GIR_STATIC_ASSERT(sizeof(GirConst) == 16, "GirConst must be 16 bytes");
-GIR_STATIC_ASSERT(sizeof(GirGlobal) == 32, "GirGlobal must be 32 bytes");
-GIR_STATIC_ASSERT(sizeof(GirDataReloc) == 16, "GirDataReloc must be 16 bytes");
+GIR_STATIC_ASSERT(sizeof(GirFunc) == 40, "GirFunc must be 40 bytes");
+GIR_STATIC_ASSERT(sizeof(GirConst) == 24, "GirConst must be 24 bytes");
+GIR_STATIC_ASSERT(sizeof(GirGlobal) == 40, "GirGlobal must be 40 bytes");
+GIR_STATIC_ASSERT(sizeof(GirSection) == 16, "GirSection must be 16 bytes");
+GIR_STATIC_ASSERT(sizeof(GirDataReloc) == 32, "GirDataReloc must be 32 bytes");
+GIR_STATIC_ASSERT(sizeof(GirDLoc) == 16, "GirDLoc must be 16 bytes");
+GIR_STATIC_ASSERT(sizeof(GirDScope) == 24, "GirDScope must be 24 bytes");
+GIR_STATIC_ASSERT(sizeof(GirDFile) == 8, "GirDFile must be 8 bytes");
+GIR_STATIC_ASSERT(sizeof(GirHeader) == 32, "GirHeader must be 32 bytes");
+GIR_STATIC_ASSERT(sizeof(GirAsm) == 24, "GirAsm must be 24 bytes");
 
 #endif /* GIR_H */

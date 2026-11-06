@@ -1,191 +1,295 @@
-# GIR: goovm's flat IR
+# GIR: goovm's flat IR (version 2)
 
-GIR is the hand-off format between LLVM and goovm's fast -O0 back-ends. The
+GIR is the hand-off format between LLVM and goovm's fast -O0 back-end. The
 C++ exporter (`tools/goovm-llc/gir_export.cpp`) walks an `llvm::Module` once
-and fills nine flat tables. A back-end reads the tables and writes an ELF
-object. There are two back-ends: the C++ reference in `backend-cpp/` and the
-Goose port in `backend-goose/`. [`gir.h`](gir.h) is the normative definition;
-this page describes the format in prose and records the changes made in
-revision 1.
+and fills flat tables; the Goose back-end (`backend-goose/`) reads them and
+writes an ELF64 x86-64 relocatable object. [`gir.h`](gir.h) is the normative
+definition; this page describes the format in prose and lists what changed
+from version 0 (frozen at commit 8f55b18 with the C++ reference back-end).
+
+Version 2 covers what clang-20 emits at -O0 for C on x86-64 Linux, with and
+without `-g`, and after `opt -passes=mem2reg`: every integer width up to 128
+bits, `half`/`float`/`double`/`x86_fp80`, vectors, first-class aggregates,
+the SysV ABI attributes, variadic functions, dynamic stack allocation, the
+intrinsics C uses, atomics, TLS, aliases, constructors, sections, inline
+assembly and debug locations.
 
 ## Tables
 
-All tables are arrays of fixed-size records. Every field is naturally
-aligned and no record has padding, so the host can pass each table to Goose
-as a slice (`{data, len}`) without copying. Goose sees the same bytes as its
-packed structs.
+Every record is a fixed-size struct whose fields are naturally aligned with
+no padding, so the host passes each table to Goose as a slice (`{data,
+len}`) without copying, and Goose's packed structs see the same bytes.
+`goovm-llc.cpp` `static_assert`s the size and key field offsets of every
+generated Goose struct against `gir.h`.
 
 | table | record | size | content |
 |---|---|---:|---|
-| `funcs` | `GirFunc` | 36 | defined functions: block range, instruction range, argument types, return type |
+| `header` | `GirHeader` | 32 | one record: version, module flags (`PIE`), the `__tls_get_addr` global |
+| `types` | `GirTypeDef` | 24 | every type id: kind, value class, bits, size, alignment, store size, elements |
+| `funcs` | `GirFunc` | 40 | defined functions: block and instruction ranges, argument (type, ABI word) run, return type, flags, DISubprogram |
 | `blocks` | `GirBlock` | 8 | basic blocks: instruction range |
-| `insts` | `GirInst` | 16 | instructions: `op, ty, sub, aux` (u8 each), operands `a, b, c` (u32) |
-| `opnds` | `u32` | 4 | variable-length operand runs (call arguments, PHI pairs, switch cases, GEP terms, argument types) |
-| `consts` | `GirConst` | 16 | integer and pointer constants (`value` is i64) |
-| `globals` | `GirGlobal` | 32 | named functions and variables: name, kind, flags, initializer range, alignment |
-| `data` | `u8` | 1 | initializer bytes of all defined, non-zero variables |
-| `drelocs` | `GirDataReloc` | 16 | pointer-sized relocations inside initializers |
-| `strtab` | `u8` | 1 | symbol names |
+| `insts` | `GirInst` | 24 | `op, sub` (u8), `flags, ty, aux` (u16), operands `a, b, c`, debug location `dbg` (u32) |
+| `opnds` | `u32` | 4 | variable-length runs (call arguments, PHI pairs, switch cases, GEP terms, struct fields, shuffle masks, asm operands) |
+| `consts` | `GirConst` | 24 | constants of every type: `lo`, `hi` (u64), `ty`, `data` |
+| `globals` | `GirGlobal` | 40 | functions, variables and aliases: name, kind, flags, initializer, alignment, section |
+| `sections` | `GirSection` | 16 | explicitly named sections: name, flags, ELF type |
+| `data` | `u8` | 1 | initializer bytes, aggregate constants, assembled inline asm |
+| `drelocs` | `GirDataReloc` | 32 | relocations inside initializers (addresses, block addresses, label differences) |
+| `strtab` | `u8` | 1 | symbol and section names (a valid ELF string table) |
+| `asms` | `GirAsm` | 24 | inline-asm machine code and operand bindings |
+| `dlocs` | `GirDLoc` | 16 | DILocations: line, column, scope, inlined-at |
+| `dscopes` | `GirDScope` | 24 | compile units, subprograms, lexical blocks |
+| `dfiles` | `GirDFile` | 8 | file name and directory |
+| `dstr` | `u8` | 1 | debug strings |
 
 Functions own contiguous ranges of `blocks` and `insts`, and blocks own
-contiguous ranges of `insts`. Layout order is table order. Block 0 is the
-entry block. Indices are u32 and global to the module. Block numbers inside
-instructions are local to the function (relative to `GirFunc.first_block`).
+contiguous ranges of `insts`; layout order is table order. Block 0 is the
+entry block. Indices are u32 and global to the module; block numbers inside
+instructions are local to the function.
+
+## Types
+
+A type id is a u16 index into `types`. Ids 0..15 are predefined and always
+present: `void`, `i1`, `i8`, `i16`, `i32`, `i64`, `ptr`, `f32`, `f64`, `f80`,
+`i128`, `f16` (11), then reserved. The exporter adds a record for every
+other type a value has: integers of other widths (`i24`, `i48`, `i72`, ...),
+fixed vectors, structs and arrays. A struct record's fields are an `opnds`
+run of (type, byte offset) pairs from LLVM's `StructLayout`.
+
+Each type has a **value class** that tells a back-end how to hold it:
+
+| class | types | held in |
+|---|---|---|
+| `INT` | `i1`..`i64` (any width), `ptr` | one general register |
+| `INT2` | `i65`..`i128` | two general registers (lo, hi) |
+| `FP` | `f16`, `f32`, `f64` | the low part of an SSE register |
+| `X87` | `f80` (`long double`) | the x87 stack |
+| `VEC` | fixed vectors | memory, one lane at a time (SSE registers at call boundaries) |
+| `MEM` | structs, arrays (first-class aggregates) | memory |
+
+`size` is the allocation size (array stride, slot size), `store` the bytes a
+load or store touches: `i24` is store 3 / size 4, `f80` store 10 / size 16.
+Vectors of `i1` (vector compare results) are one byte per lane; the exporter
+rejects loads, stores and bitcasts of them, so their bit packing never
+matters.
 
 ## Value references
 
-An instruction operand that names a value is a u32 reference:
+An operand that names a value is a u32 with the kind in bits 31..30: `INST`
+(an instruction result, module-global index), `ARG` (argument number),
+`CONST` (index into `consts`) or `GLOBAL` (the address of a global).
+`GIR_NONE` (0xFFFFFFFF) is "no value". The type of a reference is always in
+the tables: `insts[i].ty`, `opnds[func.args + 2*i]`, `consts[i].ty`, or `ptr`.
+Instructions whose meaning depends on an operand type their result does not
+show carry it in `aux` (casts, compares, stores, shuffles, cmpxchg).
 
-```
-bits 31..30  kind           bits 29..0
-   0         GIR_V_INST     module-global index into insts (same function)
-   1         GIR_V_ARG      argument number of the current function
-   2         GIR_V_CONST    index into consts
-   3         GIR_V_GLOBAL   index into globals (the value is its address)
-GIR_NONE = 0xFFFFFFFF: no value (ret void)
-```
+## Constants
 
-The macros are `GIR_KIND(v)`, `GIR_IDX(v)` and `GIR_MK(kind, idx)`. Every
-reference has a type that can be read from the tables:
+`GirConst` holds any constant. `lo` is bits 0..63 of the value, zero-extended
+from the type's width (`i8 -1` = 255; `f32`/`f64` as their bit pattern; the
+64-bit significand of an `f80`); `hi` is bits 64..127 (the high half of an
+`INT2`, the sign and exponent of an `f80`). Null is 0 with type `ptr`;
+`undef` and `poison` are 0. A vector or aggregate constant points at its
+`types[ty].size` bytes in `data`, or has `data = GIR_NONE` if it is all
+zero. A vector or aggregate constant that holds an address cannot be bytes:
+the exporter makes it a private read-only global and `LOAD`s it.
 
-| kind | type |
-|---|---|
-| INST | `insts[i].ty` |
-| ARG | `opnds[func.arg_tys + i]` |
-| CONST | `consts[i].ty` |
-| GLOBAL | `GIR_T_PTR` |
-
-So GIR never repeats a type at a use. The exceptions are the instructions
-whose meaning depends on an operand type the result does not show: ICMP
-(`aux` = operand type), casts (`aux` = source type) and STORE (`aux` =
-stored type). An instruction that defines no value (`ty = GIR_T_VOID`) is
-never an operand.
-
-Instructions refer to their operands only. There are no use lists. A back-end
-that needs uses (for liveness, say) builds them in one pass.
+The exporter deduplicates FP, wide and aggregate constants (integer
+constants are cheap to repeat), so a back-end can key a constant pool by the
+constant's index.
 
 ## Instructions
 
-The opcodes are listed in `gir.h`. Operands that are not value references
-are immediates or block numbers (BR targets, ALLOCA size and alignment) or
-indices of `opnds` runs:
+`GirInst` is 24 bytes: `op`, `sub` (a predicate, overflow kind, RMW operation
+or x86 intrinsic), `flags` (volatile, atomic orderings, weak cmpxchg,
+single-thread scope, variadic call, noreturn call), the result type `ty`, a
+secondary type `aux`, operands `a`, `b`, `c` and `dbg`. The opcodes and their
+operand conventions are listed in `gir.h`; by group:
 
-- `CALL a=callee, b=s, c=n`: `opnds[s..s+n)` are the arguments.
-  `sub & GIR_F_VARARG` marks a variadic callee (the SysV caller sets `al`).
-- `PHI b=s, c=n`: n pairs `(value, pred block)`.
-- `SWITCH a=cond, b=s, c=n`: `opnds[s]` is the default block, followed by n
-  pairs `(const ref, block)`.
-- `GEP a=base, b=s, c=n`: `opnds[s]` and `opnds[s+1]` are the low and high
-  halves of a constant i64 byte offset. They are followed by n pairs
-  `(index ref, scale)`. Result = `base + offset + sum(sext64(index) * scale)`.
+- **Control flow**: `RET`, `BR`, `CONDBR`, `SWITCH` (on any integer, including
+  `INT2`), `INDIRECTBR` (with its possible targets), `UNREACHABLE`.
+- **Integers**: `ADD` .. `ASHR`, `ICMP` (ten predicates), `SELECT` (any type,
+  scalar or vector condition), casts `ZEXT`, `SEXT`, `TRUNC`, `PTRTOINT`,
+  `INTTOPTR`, `BITCAST` (any two types of one size).
+- **Floating point**: `FADD`, `FSUB`, `FMUL`, `FDIV`, `FNEG`, `FCMP` (all 16
+  LLVM predicates), `FPEXT`, `FPTRUNC`, `FPTOSI`, `FPTOUI`, `SITOFP`, `UITOFP`,
+  `FABS`, `COPYSIGN`, `FSQRT`, `ISFPCLASS`.
+- **Memory**: `ALLOCA` (static, entry block, any alignment), `DYNALLOCA`
+  (variable size), `STACKSAVE`, `STACKRESTORE`, `LOAD`, `STORE`, `GEP`
+  (constant offset plus (index, scale) pairs), `MEMCPY`/`MEMSET` (constant
+  size up to 256 bytes; anything else is a libc call).
+- **Aggregates and vectors**: `EXTRACTVALUE`/`INSERTVALUE` (with the byte
+  offset the exporter computed from the index path), `EXTRACTELT`,
+  `INSERTELT`, `SHUFFLE` (mask in `opnds`). Arithmetic, compares, selects and
+  casts on vector types are lane-wise.
+- **Calls**: `CALL` with (value, ABI word) argument pairs; `VASTART`.
+- **Bit operations**: `CTLZ`, `CTTZ`, `CTPOP`, `BSWAP`, `BITREVERSE`, `FSHL`,
+  `FSHR`, `OVF` (the six `*.with.overflow`), `SCMP`, `UCMP`.
+- **Atomics**: `LOAD`/`STORE` with an ordering, `CMPXCHG`, `ATOMICRMW` (13
+  operations incl. `fadd`/`fsub`), `FENCE`.
+- **Platform**: `TLSADDR`, `FRAMEADDR`, `RETADDR`, `SJLJ_SETJMP`,
+  `SJLJ_LONGJMP` (`__builtin_setjmp`/`__builtin_longjmp`), `TRAP`,
+  `DEBUGTRAP`, `BLOCKADDR`, `X86` (the SSE intrinsics clang emits for
+  `<xmmintrin.h>`-style code: `maxps`, `minps`, `movmskps`, `packssdw`, the
+  immediate shifts), `ASM`.
 
-The exporter folds constant GEP indices and struct field offsets into the
-offset, using the module's DataLayout. A GEP with no dynamic index and offset
-0 is not emitted: its users refer to the base directly.
+### Structural rules
 
-## What the exporter lowers or drops
+These are guaranteed by the exporter and relied on by a single-pass
+back-end:
 
-- `llvm.memcpy`, `llvm.memmove`, `llvm.memset` (and the `.inline` forms)
-  become CALLs of libc `memcpy`, `memmove` and `memset` with three arguments.
-  The `isvolatile` flag is dropped.
-- `llvm.abs`, `llvm.smin`, `llvm.smax`, `llvm.umin` and `llvm.umax` become
-  ICMP + SELECT (abs also gets a SUB). clang -O0 emits `llvm.abs` for
-  `abs()`.
-- The exporter drops these intrinsics: `llvm.lifetime.*`, `llvm.dbg.*`,
-  `llvm.experimental.noalias.scope.decl`, `llvm.assume`, `llvm.donothing`,
-  `llvm.sideeffect`, `llvm.var.annotation`, `llvm.invariant.*` and
-  `llvm.pseudoprobe`. It also drops `llvm.trap` when `unreachable` follows
-  it, because that already traps.
-- `llvm.expect`, `llvm.ptr.annotation`, `freeze` and the
-  launder/strip.invariant.group intrinsics map their result to their first
-  operand.
-- `undef` and `poison` become the constant 0.
-- Constant expressions in operands (GEP, casts, integer binops) become GIR
-  instructions right before their user. If a PHI uses one, it is built once
-  at the start of the entry block, because the entry block dominates every
-  predecessor.
-- The exporter lowers ABI attributes. An argument with `signext` and a type
-  narrower than 32 bits goes through an explicit `SEXT` to i32, as clang's
-  callees expect. A return value with `signext` gets the same treatment. A
-  function with an `sret` parameter returns that pointer (`ret_ty = ptr`),
-  as SysV requires.
+- Each block ends with exactly one terminator, and terminators appear
+  nowhere else. A call that does not return is still followed by one.
+- PHIs come first in their block and have one (value, pred) pair per CFG
+  edge (a predecessor reached by two switch edges appears twice).
+- `ALLOCA`s are static, constant-size and in the entry block; every other
+  alloca is a `DYNALLOCA`.
+- Void instructions are never operands; an `INST` operand dominates its use
+  but may come later in layout order.
+- Run-time library functions are already explicit `CALL`s with the symbol in
+  `globals`: i128 division (`__divti3` ...), conversions between i128 and
+  FP (`__fixdfti`, `__floattidf` ...), `frem` (`fmod`, `fmodf`, `fmodl`),
+  half conversions (`__extendhfsf2`, `__truncsfhf2` ...), the libm intrinsics
+  (`floor`, `pow`, `fma`, `lround` ...; `powi` as `__powidf2`), and large or
+  variable-size `memcpy`/`memmove`/`memset`.
 
-Anything else outside the subset makes `goovm-llc` exit with status 2 and an
-error message that names the function and the instruction. Examples are
-floating point, vectors, odd-width integers such as i48 (structs of 3, 5, 6
-or 7 bytes passed by value), aggregate SSA values, `byval`, `va_start` and
-`va_arg`, dynamic allocas, inline asm, exceptions, atomics, TLS, aliases and
-custom sections.
+## ABI
 
-## Globals and data
+GIR leaves the plain LLVM x86-64 C convention on the argument and return
+types to the back-end, plus three things the types cannot say:
 
-Every function and every variable that the module defines or uses gets a
-`GirGlobal`. Functions get a `GirFunc` only if they are defined
-(`GirGlobal.func`, otherwise `GIR_NONE`). The flags are `DEFINED`,
-`INTERNAL` (local linkage), `CONST` (read-only), `ZERO` (all-zero
-initializer: it has no bytes in `data` and goes to .bss) and `WEAK`. The
-exporter skips declarations without uses and the intrinsics.
+- **ABI words** (one per argument, in `CALL` pairs and in `Func.args`): 0 for
+  a plain argument; `GIR_ABI_BYVAL | size | log2(align) << 24` for `byval`
+  (the pointee is copied to the stack argument area, aligned to
+  `max(8, align)`); `GIR_ABI_SRET` marks the sret pointer for information.
+- `GIR_IF_VARARG` on a `CALL` (set `al` to the number of vector registers).
+- Function flags (`GirFunc.flags`): `VARARG`, `INTERNAL`, `VASTART` (needs a
+  register save area), `SJLJ` (contains `SJLJ_SETJMP`), `RETURNS_TWICE`
+  (calls `setjmp`, `vfork` or another `returns_twice` function: a back-end
+  must not let two values share a frame slot, because the second return
+  resumes with the frame as it was then), and the log2 of the alignment in
+  bits 24..31.
+- The exporter lowers what is not a calling-convention matter: `signext`
+  arguments narrower than 32 bits are an explicit `SEXT` to i32, a `signext`
+  return is an explicit `SEXT` (so `RET`'s operand may be wider than
+  `ret_ty`), and an sret function returns its sret pointer (`ret_ty = ptr`).
 
-The initializer of a non-zero variable is `data[g.data .. g.data+g.size)`.
-It is laid out with the DataLayout (struct padding included). A pointer in an
-initializer is written as 8 zero bytes plus a `GirDataReloc`
-`(owner, offset, target, addend)`. This covers pointers to variables,
-functions and string literals, plus constant offsets such as `"abc" + 1` or
-`&arr[3]`. The relocations of one variable are contiguous.
+Return types are checked to fit the return registers (`rax rdx rcx`,
+`xmm0 xmm1` for scalars, `xmm0..3` for vectors, `st0 st1`); clang never
+needs LLVM's sret demotion for C.
 
-`strtab` starts with a NUL byte and each name is followed by a NUL byte. So
-the back-end can use it as the ELF `.strtab` verbatim (`st_name =
-GirGlobal.name`). Names with a leading `\01` lose it. Unnamed globals get
-`__unnamed_N`.
+## Globals, sections and data
 
-## Changes in revision 1
+Every function, variable and alias that the module defines or uses gets a
+`GirGlobal`; only defined functions get a `GirFunc` (`GirGlobal.func`,
+otherwise `GIR_NONE`). The flags are `DEFINED`, `INTERNAL`, `CONST`, `ZERO`
+(.bss), `WEAK`, `TLS`, `COMMON` (an `SHN_COMMON` symbol of `size`/`align`),
+`HIDDEN`, `PROTECTED`, `LOCALREF` (LLVM's `dso_local`: references may bind
+directly, without the GOT) and `RELOCS` (the initializer has relocations, so
+read-only data belongs in `.data` for a PIE link). An alias (`kind = ALIAS`)
+names `globals[func]` plus the byte offset in `aux`.
 
-Revision 1 is a clarification of v0 plus one additive flag. A back-end
-written against v0 keeps working, except for the GIR_FN_DECL change in
-point 4.
+`section` is `GIR_NONE` (the default section for the global's kind) or an
+index into `sections`: section attributes, and the `.init_array[.PRIO]` and
+`.fini_array[.PRIO]` arrays the exporter builds from `llvm.global_ctors` and
+`llvm.global_dtors` (one internal pointer-array global per priority).
+Explicitly placed variables are never `.bss` unless the section name says so
+(LLVM's rule).
 
-1. **Constants are zero-extended.** `GirConst.value` is the bit pattern
-   zero-extended from the type's width (i8 -1 is 255). v0 did not say. With
-   this rule a back-end that keeps narrow values zero-extended can use
-   constants as immediates without masking them, and switch case values can
-   be compared directly.
-2. **`GIR_GF_WEAK` (16).** This flag is new: weak, linkonce(_odr), common and
-   extern_weak symbols need `STB_WEAK` to link (C `__attribute__((weak))`
-   and linkonce/common symbols, e.g. from `-fcommon` tentative definitions).
-3. **Structural rules are normative.** These were implicit in v0 and now
-   appear in the header comment:
-   - Each block ends with exactly one terminator.
-   - PHIs come first in their block and have one pair per CFG edge.
-   - ALLOCAs are static, sit in the entry block and have alignment ≤ 16.
-   - Void instructions are never operands.
-   - An INST operand dominates its use but may come later in layout order.
+A defined variable's initializer is `data[g.data .. g.data + g.size)`, laid
+out with the DataLayout. Each address inside it is 8 zero bytes plus a
+`GirDataReloc`: `ABS64` (a global plus addend), `BLOCK` (a block address:
+function plus local block number), or `BLOCKDIFF32` (a 4-byte difference of
+two blocks of one function, `&&a - &&b`, which the back-end computes itself).
 
-   A single-pass back-end relies on all of these.
-4. **Declarations get no `GirFunc`.** Only defined functions are in `funcs`.
-   Undefined ones have `GirGlobal.func = GIR_NONE`. In v0 the
-   `GIR_FN_DECL` flag suggested that declarations had entries. Giving them
-   entries would force the exporter to encode types of functions that are
-   never called, such as `double sqrt(double)` whose address is taken. The
-   flag stays defined but is not produced.
-5. **The exporter lowers ABI extension and sret** (see above). Otherwise
-   every back-end would need per-argument attribute tables to be
-   ABI-compatible with clang-compiled code. The rule is "callee may assume
-   `signext` arguments are sign-extended to 32 bits", and clang's callees
-   rely on it.
-6. **GEP index typing is stated.** The index type is the type of the index
-   value, and every index is sign-extended to 64 bits. v0 left this open.
-7. **`strtab` is NUL-terminated per name** (see above). This saves the
-   back-end a copy, and `name_len` stays valid.
-8. **Size checks.** `gir.h` has `static_assert`s on all record sizes. It also
-   notes that `GirModule` is a host-side view whose padding is irrelevant,
-   because it is never passed to Goose.
+`strtab` starts with a NUL byte and NUL-terminates every name, so it is the
+ELF `.strtab` verbatim. Names with a leading `\01` lose it; unnamed globals
+get `__unnamed_N`.
 
-The record layouts did not change. In the Goose mirror the field
-`GirConst.pad` is called `reserved`, because `pad` is a Goose keyword. Only
-the offset matters.
+## Inline assembly
+
+An empty template (whitespace and comments only, the usual optimization
+barrier) needs no instruction: a direct output tied to an input takes that
+input, other outputs are undefined, indirect outputs are unchanged. Any
+other template becomes a `GIR_ASM`: the exporter binds every operand to a
+register (fixed constraints as given, `r`/`q`/`g` and `x` from the
+caller-saved pools, `m` as `(%reg)` holding the address, constant `i` as an
+immediate), substitutes them into the template, and assembles it with
+LLVM's MC layer. `GirAsm` holds the machine code and the (value, register)
+inputs and (register, offset) outputs; the back-end only moves values.
+x87 operands (`t`, `u`, `{st(N)}`) follow LLVM's stack rules; `x87_pop`
+says how many inputs the code leaves on the stack.
+
+## Debug information
+
+With `-g`, every instruction's `dbg` names a `GirDLoc` (line, column,
+scope, inlined-at), and `GirFunc.dbg` names the function's DISubprogram in
+`dscopes`. Scopes form a tree (compile unit, subprograms, lexical blocks,
+lexical block files) with files in `dfiles` and strings in `dstr`. Entry 0
+of each table means "none". The A1 back-end ignores these tables; they are
+there for a DWARF emitter.
+
+## What the exporter drops or folds
+
+- Debug records, `llvm.lifetime.*`, `llvm.assume`, `llvm.donothing`,
+  `llvm.sideeffect`, `llvm.var.annotation`, `llvm.invariant.*`,
+  `llvm.experimental.noalias.scope.decl`, `llvm.pseudoprobe`,
+  `llvm.prefetch`, `llvm.va_end`, `llvm.clear_cache`.
+- `llvm.expect*`, `llvm.ptr.annotation`, `llvm.annotation`, `freeze`, the
+  invariant-group intrinsics and `llvm.threadlocal.address` map their result
+  to their first operand.
+- Calls of intrinsics with constant arguments are folded with LLVM's
+  `ConstantFoldCall`, as LLVM's code generator folds them.
+- `llvm.objectsize` is evaluated as LLVM's `-O0` pipeline does
+  (`lowerObjectSizeCall`), `llvm.is.constant` to whether its operand is a
+  constant.
+- `llvm.abs`, `smin`/`smax`/`umin`/`umax` become `ICMP` + `SELECT`;
+  `llvm.fmuladd` becomes `FMUL` + `FADD` (the x86-64 baseline has no FMA);
+  `llvm.ptrmask` becomes integer `AND`; half arithmetic is done in float.
+- Constant expressions in operands become instructions right before their
+  user (for PHI operands, at the start of the entry block). So do TLS
+  addresses and block addresses.
+
+Anything else outside the format (exception handling, `va_arg` instructions,
+scalable vectors, `asm goto`, Intel-syntax inline assembly, ...) makes
+`goovm-llc` exit with status 2 and a message that names the construct, the
+function and the instruction, or, with `--fallback`, compile the module with
+LLVM's code generator.
+
+## Changes from version 0
+
+GIR v0 (revision 1, commit 8f55b18) was the integer-and-pointer subset that
+the C++ and Goose back-ends compiled byte-identically. Version 2:
+
+1. **Type table.** Type ids are u16 indices into `types` (v0: eight fixed
+   u8 type codes). The ids 0..8 keep their v0 values.
+2. **Instruction record 16 → 24 bytes**: `sub` and `flags` added, `ty` and
+   `aux` widened to u16, `dbg` added. `CALL`'s vararg mark moved from `sub` to
+   `flags` (`GIR_IF_VARARG`).
+3. **Constants 16 → 24 bytes**: `lo`/`hi` for 128-bit and `f80` values,
+   `data` for vector and aggregate constants (v0 had only i64 `value`).
+4. **Calls and functions carry ABI words**: `CALL` operands are (value, ABI
+   word) pairs and `GirFunc.args` is a (type, ABI word) run (v0: plain
+   argument refs and a type run). `GirFunc` gained `dbg` (36 → 40 bytes)
+   and the flags `VASTART`, `SJLJ`, `RETURNS_TWICE` and the alignment.
+5. **Globals 32 → 40 bytes** with `section` and `aux`; new kind `ALIAS`; new
+   flags `TLS`, `COMMON`, `HIDDEN`, `PROTECTED`, `LOCALREF`, `RELOCS` (v0
+   treated common symbols as weak .bss definitions).
+6. **Data relocations 16 → 32 bytes** with a kind (`ABS64`, `BLOCK`,
+   `BLOCKDIFF32`) and a 64-bit addend.
+7. **New tables**: `header`, `types`, `sections`, `asms`, `dlocs`,
+   `dscopes`, `dfiles`, `dstr`.
+8. **51 new opcodes** (FP, aggregates, vectors, dynamic stack, va_start,
+   inline copies, bit operations, atomics, TLS, setjmp/longjmp, block
+   addresses, x86 intrinsics, inline asm); v0's 32 keep their numbers.
+9. **Allocas**: any power-of-two alignment (v0: at most 16); non-entry and
+   variable-size allocas are `DYNALLOCA`.
+10. **Libcalls are explicit**: memory intrinsics with a constant size up to
+    256 bytes are `MEMCPY`/`MEMSET` instead of always calling libc.
 
 ## Debugging aid
 
-`goovm-llc --dump-gir in.bc -o out.o` prints the tables as text. It shows
-globals, data relocations and every function with its blocks and
-instructions, `%N` being the module-global instruction index.
+`goovm-llc --dump-gir in.bc -o out.o` prints the tables as text: the header,
+sections, globals, data relocations and every function with its blocks and
+instructions (`%N` is the module-global instruction index, `!line:col` the
+debug location).

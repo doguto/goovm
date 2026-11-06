@@ -1,9 +1,18 @@
-# The Goose back-end: port notes
+# The Goose back-end: notes
 
-`cg.goose` is a 1:1 port of `backend-cpp/gir_codegen_cpp.cpp` (see
+Sections 1-7 are the record of the **v0 port** (GIR v0, commit 8f55b18):
+`cg.goose` was then a 1:1 port of `backend-cpp/gir_codegen_cpp.cpp` (see
 [`../backend-cpp/DESIGN.md`](../backend-cpp/DESIGN.md)) to Goose (compiler
-commit 335fddc). It writes **byte-identical** objects: 79/79 inputs, see
-[Results](#results). This page covers:
+commit 335fddc), writing **byte-identical** objects (79/79 inputs). They
+describe that version; file and function names there are v0's.
+
+Section 8 is milestone **A1**: the v1 back-end for GIR v2 (all of C at -O0),
+now split into `cg.goose`, `gir.goose`, `x86.goose`, `loc.goose`,
+`abi.goose`, `lower.goose` and `elf.goose` and described in
+[`DESIGN.md`](DESIGN.md). It records the new Goose pain points (with the
+compiler's messages) and the speed against v0.
+
+v0 page contents:
 
 - the structure of the port;
 - every place where it differs from the C++, and why;
@@ -11,11 +20,11 @@ commit 335fddc). It writes **byte-identical** objects: 79/79 inputs, see
 - what the measurements say about the speed;
 - the Goose pain points met on the way.
 
-| file | what |
+| file (v0) | what |
 |---|---|
 | `cg.goose` | the back-end: `export fn gir_codegen(...) -> const u8[:]` |
-| `build.sh` | generates `build/cg.c` + `build/cg.h` and builds goovm-llc with `-DGOOVM_WITH_GOOSE=ON` |
-| `check_identical.py` | `cmp`s `--backend=cpp` and `--backend=goose` objects over all tests and benchmark inputs |
+| `build.sh` | generated `build/cg.c` + `build/cg.h` and built goovm-llc with `-DGOOVM_WITH_GOOSE=ON` (now: configures CMake, which runs goose) |
+| `check_identical.py` | `cmp`s `--backend=cpp` and `--backend=goose` objects over all tests and benchmark inputs (v0 only) |
 
 ## 1. Structure
 
@@ -384,7 +393,7 @@ input. Most of the effort went into the bounds-check analysis.
 - **`checkfree` was accepted on the whole encoder at once,** without
   changing a line.
 
-## 7. Rebuild and reproduce
+## 7. Rebuild and reproduce (v0, at commit 8f55b18)
 
 ```bash
 S=/tmp/claude-0/-home-user-goovm/593b2907-8413-508c-8bdb-c68ef6e66f6e/scratchpad   # this session's scratch
@@ -415,3 +424,150 @@ $GOOSE check --bce-lines backend-goose/cg.goose
 `bench/backend/make_inputs.sh OUTDIR` regenerates the benchmark inputs. The
 E1-E8 variants and the script that relinks them are in
 `$S/work/exp/` (`link.sh`, `t.sh`, `e*.cpp`, `e*.goose`, `e*.c`).
+
+## 8. Milestone A1: the v1 back-end
+
+v1 compiles all of C at -O0 (GIR v2): 4,299 lines of Goose in seven files
+(v0: 1,087 in one), described in [`DESIGN.md`](DESIGN.md). Everything below
+was found while writing and testing it; the messages are verbatim from
+`goose check` (compiler commit 335fddc) or from the generated program.
+
+### New pain points
+
+1. **A cast before a range parses as a variable-mode type.** In
+   `M.strtab[s.name as i64..s.name as i64 + s.name_len]`, `i64..` is read as
+   the variable-mode type `i64..`:
+   `error: variable mode (..) applies only to ADT type names`.
+   Parenthesizing (`(s.name as i64)..`) works, and then the compiler says
+   the cast is redundant (a u32 range bound is fine), so the fix is to drop
+   the cast. The message does not hint at the precedence problem.
+2. **A `match` arm cannot yield several results.** For a function
+   `-> bool, u32, u32, u32`, the arm `F_OEQ => false, CC_E, CC_NP, 1,` is
+   parsed as further patterns:
+   `error: _ cannot be listed with other patterns` (on the `_ =>` arm).
+   Workaround: pack the four values into one integer in the `match` and
+   unpack them in a wrapper that `return`s them.
+3. **Unsigned arithmetic wraps before widening, silently.**
+   `var k: i64 = A.n_in - 1;` with `n_in: u32 = 0` computes `0xFFFFFFFF` in
+   u32 and then widens it, so a "count down to 0" loop started at
+   4294967295. The bounds check caught it at run time:
+   `goose runtime error: index 4294967294 out of bounds (length 118)
+   (backend-goose/lower.goose:1397)`. The fix is `A.n_in as i64 - 1` (a
+   cast that decides the width of the operation, which the compiler accepts
+   without a "redundant" warning). This is the same family as v0's shift
+   pitfall (pain point 3): the operation's width comes from the operands,
+   the destination type does not matter, and nothing warns.
+4. **Self-recursion through a helper needs `recursive fn`**, even for an
+   alias that resolves in one step:
+   `error: recursive call cycle through sym_type, which is not declared
+   `recursive fn` (§7.8)`. Clear and fixable (unrolled the one step); the
+   type-walk for struct returns is a real `recursive fn` (`ret_leaves`).
+5. **Defensive casts produce warnings by the dozen.** The first compile of
+   v1 gave 55 `warning: redundant `as i64`: a u32 converts to i64 implicitly
+   here` (and `as u64`). Helpful, but there is no fix-it mode; I removed them
+   with a script driven by the warning list.
+6. **`inline fn` is not a speed knob here.** Forcing `inline` on the small
+   hot helpers (`zext_reg`, `sext_reg`, `grp1_ri64`, `put_gpr`, and even
+   `gen_inst` into `gen_function`) changed the instruction count by less
+   than 1% (callgrind) and the time not measurably: clang's -O3 on the
+   generated C already does what matters. What helped were fast paths that
+   do less work (section "Speed").
+7. **Keywords keep colliding**: `type` again (`GirSection.type` is `typ` in
+   the Goose mirror), and `loop`/`in` had to be avoided as names.
+8. **Simple loops are expensive in the generated C.** The slot-sharing
+   layout pass (a backward walk: load the 24-byte instruction, look up an
+   operand mask, for each operand a range check, a mark check and maybe a
+   free-list pop) executes about 150 x86 instructions per GIR instruction
+   (callgrind, line-level on the generated C): every array access keeps its
+   bounds check (`GS_IDX(...)`), every `i64` add its overflow check
+   (`gs_add_i64(..., file, line)`), each record is copied by value, and the
+   stores into `u32` arrays may alias the module globals (`GS_GL->...`), so
+   clang reloads them after each store. The same loop in C would be a third
+   of that. I limited the pass to functions where it matters (more than 512
+   instructions) instead of fighting the code shape.
+
+What went well: the seven files typechecked after fixing the four errors
+above; the first build passed the 35 v0 tests (70/70); bounds checks turned
+two exporter/back-end disagreements into exact `file:line` aborts instead of
+corrupt objects (the u32 wrap above, and a GIR operand run that a new struct
+type had been appended into, which the abort pointed at directly);
+`checkfree` still covers the whole encoder.
+
+### Bugs found by the test corpora (all fixed)
+
+- Constant-pool entries in `SHF_MERGE` sections were referenced through the
+  section symbol with addend `off - 4`; linkers resolve such relocations by
+  the addend and picked the wrong piece (FP constants read as 0). Pool
+  entries now get one local symbol each.
+- `or` with a negative imm32 set the upper bits of a narrow value (the
+  imm32 is sign-extended); results of `or`/`xor` with an immediate are now
+  normalized.
+- Vector values copied in 8-byte chunks right after lane-sized stores missed
+  store-to-load forwarding: `Vector/build2` (200M calls building `<4 x
+  float>` values lane by lane) ran 25x slower than clang -O0 (114 s vs
+  4.6 s) and timed out. Vector homes are now copied lane by lane: 52 s,
+  still 11x clang -O0, the slowest test relative to clang. Keeping small
+  vectors in xmm registers is A2 work.
+- Undefined TLS symbols must be `STT_TLS` or ld rejects the definition
+  ("TLS definition in b.o section .tdata mismatches non-TLS reference").
+- `floor(2.5)` etc. on constants must be folded: LLVM's code generator does,
+  and a test links without `-lm`.
+- CTMark consumer-typeset crashed (SIGSEGV, stack overflow): with one slot per
+  value its recursive `Manifest` (16,000 GIR instructions) had a 97 KB frame
+  (clang -O0: 2.1 KB). Large functions now share slots between values that
+  die in their block (DESIGN.md §5): 2.9 KB.
+
+### Correctness
+
+`tests/suite.py --fallback -j3` with the final build (commit c698c97), three
+variants each (`O0`, `g` = `-O0 -g`, `mem2reg`); "excluded" tests fail with
+plain clang-20 -O0 too (gcc's builtins tests that need -O2 folding):
+
+| corpus | tests | clang -O0 passes | goovm passes (O0 / g / mem2reg) | fallbacks |
+|---|---:|---:|---:|---:|
+| gcc-c-torture execute | 1427 | 1427 | 1427 / 1427 / 1427 | 0 |
+| gcc-c-torture ieee | 57 | 57 | 57 / 57 / 57 | 0 |
+| gcc-c-torture builtins | 54 | 48 | 48 / 48 / 48 | 0 |
+| SingleSource UnitTests | 129 | 129 | 129 / 129 / 129 | 0 |
+| SingleSource Regression/C | 37 | 37 | 37 / 37 / 37 | 0 |
+| SingleSource Benchmarks (C) | 100 | 100 | 100 / 100 / 100 | 0 |
+| CTMark C programs | 6 | 6 | 6 / 6 / 6 | 0 |
+
+(torture: the 1,514 files minus the 87 the test-suite's CMakeLists lists as
+unsupported or failing; ieee: 58 minus 1; builtins: 108 files = 54 tests.)
+
+### Speed
+
+`goovm-llc --time` back-end phase, best of 7, on a shared (not quiet) 4-core
+VM; v0 is the goovm-llc built from commit 8f55b18 (`--backend=goose`):
+
+| input | GIR insts | v0 back-end | v1 back-end | v1 / v0 | v0 export | v1 export |
+|---|---:|---:|---:|---:|---:|---:|
+| gen-20000.bc | 3,205,263 | 139.5 ms | 180.2 ms | 1.29 | 371.6 ms | 441.1 ms |
+| spass.bc | 114,371 | 6.1 ms | 8.5 ms | 1.39 | 14.6 ms | 18.0 ms |
+
+v1 before slot sharing (commit b00cfb8): 175.0 ms and 8.2 ms, so slot sharing
+in functions of more than 512 instructions costs 3% to 4%; with a limit of
+256 it cost 12% on gen-20000 (most of its functions have 257 to 512
+instructions) and 5% on spass. The exporter (GIR v2 has more to say: types,
+debug locations, ABI words) is 1.19x to 1.23x v0's.
+
+The v1 back-end executes 1.32x the instructions of v0 (callgrind, spass:
+44.2M vs 33.6M; 43.0M before slot sharing). Where the extra work goes:
+
+- every operand and result now looks up its value class in the type table
+  (v0 had eight hard-wired types), and the dispatch has 83 opcodes and six
+  classes instead of 32 opcodes and one class;
+- the GIR instruction record grew from 16 to 24 bytes (debug location,
+  flags, 16-bit types), and the frame-layout loop that streams through it is
+  memory-bound;
+- calls go through the SysV classifier (FP registers, stack slots, byval);
+  a fast path handles calls whose arguments all get registers;
+- loads and stores of non-predefined types go through the generic
+  odd-size paths; predefined i1..i64/ptr have a fast path;
+- the slot-sharing layout of large functions (pain point 8).
+
+Fast paths recovered most of the first version's gap (it executed 1.54x v0's
+instructions): the frame-slot path in the encoder (`op_mem_t`: 99 → 63
+instructions per memory operand), the register-only call path, and the
+predefined-type load/store paths.

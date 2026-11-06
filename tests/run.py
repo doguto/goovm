@@ -3,12 +3,12 @@
 
 For every tests/c/*.c program:
   reference:  clang-20 -O0 x.c -o ref                      (run, record stdout + exit code)
-  O0:         clang-20 -O0 -emit-llvm -> goovm-llc --backend=cpp -> clang-20 link -> run, compare
+  O0:         clang-20 -O0 -emit-llvm -> goovm-llc --backend=goose -> clang-20 link -> run, compare
   mem2reg:    clang-20 -O0 -Xclang -disable-O0-optnone -emit-llvm
               -> opt-20 -passes=mem2reg -> goovm-llc -> link -> run, compare (PHI-heavy input)
 Optional extra variants:
-  --opt PASSES   also run opt-20 -passes=PASSES on the mem2reg input (e.g. "sroa,instcombine,simplifycfg")
-  --backend B    goovm-llc back-end to test (cpp, goose, llvm)
+  --opt-passes P also run opt-20 -passes=P on the mem2reg input (e.g. "sroa,instcombine,simplifycfg")
+  --backend B    goovm-llc back-end to test (goose, llvm)
   --tpde PATH    also compile the O0 bitcode with tpde-llc and compare
 
 usage: tests/run.py [--goovm PATH] [-j N] [--work DIR] [--keep] [filter ...]
@@ -57,7 +57,7 @@ def test_one(src, args):
     results = []
     try:
         ref = os.path.join(wd, "ref")
-        step([cc, "-O0", "-w", src, "-o", ref], "reference build")
+        step([cc, "-O0", "-w", src, "-o", ref, "-lm"], "reference build")
         expect = execute(ref)
 
         bcs = []
@@ -81,7 +81,7 @@ def test_one(src, args):
                 r = run([args.goovm, f"--backend={args.backend}", bcf, "-o", obj])
                 if r.returncode != 0:
                     raise Fail(f"goovm-llc exit {r.returncode}: {r.stderr.decode(errors='replace').strip()}")
-                step([cc, obj, "-o", exe], "link")
+                step([cc, obj, "-o", exe, "-lm"], "link")
                 got = execute(exe)
                 if got != expect:
                     raise Fail(f"output mismatch: expected exit {expect[1]}, got {got[1]}\n"
@@ -95,7 +95,7 @@ def test_one(src, args):
             exe = os.path.join(wd, "tpde.exe")
             try:
                 step([args.tpde, bc, "-o", obj], "tpde-llc")
-                step([cc, obj, "-o", exe], "link")
+                step([cc, obj, "-o", exe, "-lm"], "link")
                 got = execute(exe)
                 if got != expect:
                     raise Fail(f"tpde output mismatch: expected exit {expect[1]}, got {got[1]}")
@@ -110,7 +110,7 @@ def test_one(src, args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--goovm", default=os.environ.get("GOOVM_LLC", os.path.join(ROOT, "build/tools/goovm-llc/goovm-llc")))
-    ap.add_argument("--backend", default="cpp")
+    ap.add_argument("--backend", default="goose")
     ap.add_argument("--clang", default="clang-20")
     ap.add_argument("--opt", default="opt-20")
     ap.add_argument("--opt-passes", dest="opt_passes", default="")
