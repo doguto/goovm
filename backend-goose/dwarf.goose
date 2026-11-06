@@ -94,8 +94,13 @@ let ROW_EPI = 4;       // epilogue_begin
 let ROW_ZERO = 8;
 let ROW_START = 16;
 var rows: LRow[>..] = [];
-var sec_rows0: u32[>..] = [];  // per code section: its rows are rows[sec_rows0[s] .. sec_rows1[s])
-var sec_rows1: u32[>..] = [];
+// Per function with debug information (table index): its code section (0:
+// none), code range (section offsets) and rows.
+var fn_sec: u32[>..] = [];
+var fn_lo: u32[>..] = [];
+var fn_hi: u32[>..] = [];
+var fn_r0: u32[>..] = [];
+var fn_r1: u32[>..] = [];
 
 // The current function.
 var df_sp: u32 = 0;            // its DISubprogram scope (0: no debug information)
@@ -107,6 +112,8 @@ var df_block = false;          // an instruction of an earlier block was seen (P
 var df_pend = false;           // prologue_end placed
 var df_force = false;          // force is_stmt on this block's first line
 var df_ret: u32 = 0;           // location of the function's last instruction if it is a RET
+var df_va = false;             // a prologue_end row at the va register save code (rows[df_row0 + 1])
+var pro_va: u32 = 0;           // offset of that code in the prologue (cg.goose)
 var blk_force: u8[>..] = [];   // per local block: force is_stmt on its first line
 var blk_first: u32[>..] = [];  // per local block: first line / last line
 var blk_last: u32[>..] = [];
@@ -136,9 +143,15 @@ var sc_first: u32[>..] = [];   // open range of each instance (per function, sc_
 var sc_last: u32[>..] = [];
 var sc_tag: u32[>..] = [];
 var sc_epoch: u32 = 0;
-// Per code section: the code of its functions with debug information.
-var cs_lo: u32[>..] = [];
-var cs_hi: u32[>..] = [];
+// The unit's code ranges, as LLVM's DwarfCompileUnit::addRange makes them:
+// runs of functions with debug information that follow each other in the
+// module in one section (a function in another section, or one without
+// debug information, ends a run). Each is a line-table sequence.
+var cr_sec: u32[>..] = [];
+var cr_lo: u32[>..] = [];
+var cr_hi: u32[>..] = [];
+var cr_r0: u32[>..] = [];
+var cr_r1: u32[>..] = [];
 
 // Variables (GIR_DF_LOCAL attributes): per function, in a counting sort by
 // function, and the frame address found for each.
@@ -344,15 +357,17 @@ fn dbg_make_sections() {
     add_osec(SHT_PROGBITS, SHF_MERGE | SHF_STRINGS, 1, 1, BUF_DBG, ".debug_line_str");
     sec_rng = osecs.len as! u32;
     add_osec(SHT_PROGBITS, 0, 1, 0, BUF_DBG, ".debug_rnglists");
-    let ns = osecs.len;
-    sec_rows0.clear();
-    sec_rows0.resize(ns, 0);
-    sec_rows1.clear();
-    sec_rows1.resize(ns, 0);
-    cs_lo.clear();
-    cs_lo.resize(ns, GIR_NONE);
-    cs_hi.clear();
-    cs_hi.resize(ns, 0);
+    let nf = M.funcs.len;
+    fn_sec.clear();
+    fn_sec.resize(nf, 0);
+    fn_lo.clear();
+    fn_lo.resize(nf, 0);
+    fn_hi.clear();
+    fn_hi.resize(nf, 0);
+    fn_r0.clear();
+    fn_r0.resize(nf, 0);
+    fn_r1.clear();
+    fn_r1.resize(nf, 0);
 }
 
 // ------------------------------------------------- per function, early
@@ -394,6 +409,7 @@ fn dbg_func_start(sp: u32) {
     df_block = false;
     df_pend = false;
     df_ret = 0;
+    df_va = false;
     runs.clear();
     run_open = false;
     if lb_first.len != 0 {
@@ -408,6 +424,16 @@ fn dbg_func_start(sp: u32) {
     let S = M.dscopes[sp];
     rows.push(LRow { pos: 0, d: sp, flags: ROW_START | ROW_STMT });
     df_line = S.line;
+    // A function with va_start saves the argument registers in its
+    // prologue, past a branch (no xmm registers passed): LLVM's
+    // findPrologueEndLoc then gives up on the body and puts prologue_end,
+    // with the scope line, on that code.
+    if ins_row0.len < f_nins { ins_row0.resize(f_nins, 0); }
+    df_va = M.funcs[f_index].flags & FN_VASTART != 0;
+    if df_va {
+        rows.push(LRow { pos: 0, d: sp, flags: ROW_START | ROW_STMT | ROW_PEND });
+        df_pend = true;
+    }
     let nb = cur_nblocks;
     if blk_force.len < nb {
         blk_force.resize(nb, 0);
@@ -452,8 +478,17 @@ fn dbg_func_start(sp: u32) {
             if C.op == GIR_CALL && C.flags & IF_INVOKE != 0 { succ_edge(M.opnds[C.b + 2 * C.c], ll); }
         }
     }
-    let L = M.insts[f_first_inst + f_nins - 1];
-    if L.op == GIR_RET { df_ret = L.dbg; }
+    // the epilogue (shared, at the end) has the location of the last return,
+    // wherever it is (landing pads and cleanups may follow it)
+    var k: i64 = f_nins;
+    while k > 0 {
+        k--;
+        let L = M.insts[f_first_inst + k];
+        if L.op == GIR_RET {
+            df_ret = L.dbg;
+            break;
+        }
+    }
 }
 fn succ_edge(s: u32, ll: u32) {
     if s >= cur_nblocks { return; }
@@ -466,9 +501,44 @@ fn dbg_block_start() {
 }
 
 fn row(d: u32, flags: u32, line: u32) {
-    rows.push(LRow { pos: here(), d: d, flags: flags });
+    rows.push(LRow { pos: if rw_set { rw_pos } else { here() }, d: d, flags: flags });
     df_line = line;
 }
+var rw_set = false;            // row() at rw_pos instead of here()
+var rw_pos: u32 = 0;
+
+// The row state before the current instruction: an instruction that emits
+// no code (a folded GEP or compare, a deferred load, a branch to the next
+// block) has no machine instruction in LLVM, so dbg_inst_end undoes what
+// dbg_inst did for it.
+var sv_pos: u32 = 0;
+var sv_rows: i64 = 0;
+var sv_runs: i64 = 0;
+var sv_prev: u32 = 0;
+var sv_line: u32 = 0;
+var sv_top = false;
+var sv_block = false;
+var sv_pend = false;
+var sv_force = false;
+var sv_run_open = false;
+var sv_run_d: u32 = 0;
+var sv_run_start: u32 = 0;
+// A deferred load materialized into a register by the instruction being
+// generated (ra_mat_gpr / ra_mat_xmm) is a separate machine instruction in
+// LLVM, with its own location: dbg_ld gives its code the load's row when the
+// line differs (an argument on the next line of a call), dbg_ld_end goes back
+// to the instruction's location.
+var df_cur: u32 = 0;           // location of the instruction being generated
+var df_inst = false;           // between dbg_inst and dbg_inst_end
+var ld_on = false;
+var ld_any = false;            // a load row was made in this instruction
+var ld_same = false;           // a load on the instruction's line was materialized
+var ins_row0: u32[>..] = [];   // per local instruction: rows.len at its dbg_inst
+var rs_row: i64 = -1;          // the row dbg_ld_end added, and the state before it
+var rs_prev: u32 = 0;
+var rs_line: u32 = 0;
+var rs_pend = false;
+var rs_force = false;
 
 // Before instruction k: rows and runs, as LLVM's beginInstruction.
 fn dbg_inst(k: u32) {
@@ -478,6 +548,25 @@ fn dbg_inst(k: u32) {
     }
     let d = M.insts[k].dbg;
     if df_sp == 0 { return; }
+    df_cur = d;
+    df_inst = true;
+    ld_on = false;
+    ld_any = false;
+    ld_same = false;
+    rs_row = -1;
+    sv_pos = here();
+    sv_rows = rows.len;
+    ins_row0[k - f_first_inst] = rows.len as! u32;
+    sv_runs = runs.len;
+    sv_prev = df_prev;
+    sv_line = df_line;
+    sv_top = df_top;
+    sv_block = df_block;
+    sv_pend = df_pend;
+    sv_force = df_force;
+    sv_run_open = run_open;
+    sv_run_d = run_d;
+    sv_run_start = run_start;
     let top = df_top;
     df_top = false;
     if d == 0 {
@@ -496,6 +585,10 @@ fn dbg_inst(k: u32) {
         run_d = d;
         run_start = here();
     }
+    loc_row(d);
+}
+// The row of an instruction with location d (d != 0).
+fn loc_row(d: u32) {
     let L = M.dlocs[d];
     var force = false;
     if df_force && L.line != 0 {
@@ -517,6 +610,121 @@ fn dbg_inst(k: u32) {
     row(d, fl, L.line);
     if L.line != 0 { df_prev = d; }
 }
+// Before the code of deferred load id (a local instruction index).
+fn dbg_ld(id: u32) {
+    if !df_inst || ld_on || df_cur == 0 { return; }
+    let d = M.insts[f_first_inst + id].dbg;
+    if d == 0 { return; }
+    let ln = M.dlocs[d].line;
+    if ln == 0 { return; }
+    if ln == M.dlocs[df_cur].line {
+        ld_same = true;
+        return;
+    }
+    let last = rows.len - 1;
+    // The first such load, before any on the instruction's line: in LLVM
+    // the load comes before the code of the instructions that follow it, so
+    // the code emitted since its own position (address computations, moves
+    // of values already in registers) gets the load's row if all of it has
+    // the instruction's location.
+    if !ld_any {
+        ld_any = true;
+        let j: i64 = id + 1;
+        let r0: i64 = if j < f_nins { ins_row0[j] } else { rows.len };
+        var all = !ld_same && r0 > df_row0 && r0 < rows.len;
+        if all {
+            for q in r0..rows.len {
+                if rows[q].d != df_cur || rows[q].flags & (ROW_ZERO | ROW_START) != 0 {
+                    all = false;
+                    break;
+                }
+            }
+        }
+        if all {
+            let p = rows[r0].pos;
+            if rows[r0].flags & ROW_PEND != 0 { df_pend = false; }
+            // the state after row r0 - 1
+            let R = rows[r0 - 1];
+            df_line = if R.flags & ROW_START != 0 { M.dscopes[R.d].line }
+                      else if R.flags & ROW_ZERO != 0 { 0 } else { M.dlocs[R.d].line };
+            df_prev = 0;
+            var q: i64 = r0;
+            while q > df_row0 {
+                q--;
+                let P = rows[q];
+                if P.flags & (ROW_ZERO | ROW_START) != 0 { break; }
+                if M.dlocs[P.d].line != 0 {
+                    df_prev = P.d;
+                    break;
+                }
+            }
+            while rows.len > r0 { rows.pop(); }
+            rs_row = -1;
+            rw_set = true;
+            rw_pos = p;
+            loc_row(d);
+            rw_set = false;
+            ld_on = true;
+            return;
+        }
+    }
+    // a row of no code here (the instruction's own, or dbg_ld_end's) gives way
+    if last >= sv_rows && rows[last].pos == here() {
+        if last == rs_row {
+            df_prev = rs_prev;
+            df_line = rs_line;
+            df_pend = rs_pend;
+            df_force = rs_force;
+        } else if last == sv_rows {
+            df_prev = sv_prev;
+            df_line = sv_line;
+            df_pend = sv_pend;
+            df_force = sv_force;
+        }
+        rows.pop();
+        rs_row = -1;
+    }
+    loc_row(d);
+    ld_on = true;
+}
+fn dbg_ld_end() {
+    if !ld_on { return; }
+    ld_on = false;
+    rs_prev = df_prev;
+    rs_line = df_line;
+    rs_pend = df_pend;
+    rs_force = df_force;
+    let n = rows.len;
+    loc_row(df_cur);
+    rs_row = if rows.len > n { n } else { -1 };
+}
+// After the instruction: if it emitted no code, as if it were not there.
+fn dbg_inst_end() {
+    df_inst = false;
+    if df_sp == 0 { return; }
+    if here() != sv_pos {
+        // a row dbg_ld_end added after the last code
+        if rs_row >= 0 && rs_row == rows.len - 1 && rows[rs_row].pos == here() {
+            rows.pop();
+            df_prev = rs_prev;
+            df_line = rs_line;
+            df_pend = rs_pend;
+            df_force = rs_force;
+        }
+        return;
+    }
+    while rows.len > sv_rows { rows.pop(); }
+    while runs.len > sv_runs { runs.pop(); }
+    df_prev = sv_prev;
+    df_line = sv_line;
+    df_top = sv_top;
+    df_block = sv_block;
+    df_pend = sv_pend;
+    df_force = sv_force;
+    run_open = sv_run_open;
+    run_d = sv_run_d;
+    run_start = sv_run_start;
+}
 fn dbg_block_end() {
     if run_open {
         runs.push(Run { start: run_start, end: here(), d: run_d });
@@ -532,6 +740,7 @@ fn dbg_epilogue() {
     if df_sp == 0 || df_ret == 0 { return; }
     let L = M.dlocs[df_ret];
     var fl: u32 = ROW_EPI;
+    if df_ret != df_prev && L.line == 0 && df_line == 0 { return; }   // (no line-0 repeat, even for the flag)
     if df_ret != df_prev {
         let old: u32 = if df_prev != 0 { M.dlocs[df_prev].line } else { df_line };
         if L.line != 0 && L.line != old { fl |= ROW_STMT; }
@@ -721,11 +930,12 @@ fn dbg_func_end(fi: u32, start: u32, prolen: u32, size: u32, sec: u32) {
     // rows: the function start, then the body
     rows[df_row0].pos = start;
     for k in df_row0 + 1..rows.len { rows[k].pos += base; }
-    if sec_rows1[sec] == 0 { sec_rows0[sec] = df_row0 as! u32; }
-    sec_rows1[sec] = rows.len as! u32;
-    // the unit's code in this section
-    if cs_lo[sec] == GIR_NONE { cs_lo[sec] = soff; }
-    cs_hi[sec] = soff + size;
+    if df_va { rows[df_row0 + 1].pos = start + pro_va; }
+    fn_sec[fi] = sec;
+    fn_lo[fi] = soff;
+    fn_hi[fi] = soff + size;
+    fn_r0[fi] = df_row0 as! u32;
+    fn_r1[fi] = rows.len as! u32;
     // lexical block ranges from the runs (LexicalScopes)
     sc_epoch++;
     var prev: u32 = 0;
@@ -788,8 +998,6 @@ var ref_fix: RefFix[>..] = [];  // ref4 values in b_body to patch
 struct BRel { pos: u32, sym: u32, typ: u32, addend: i64 }
 var body_rel: BRel[>..] = [];   // relocations in b_body
 var use_rng = false;
-var n_cs: u32 = 0;              // code sections with debug code
-var cs_one: u32 = 0;
 
 fn dstr_at(off: u32) -> const u8[:] {
     var e: i64 = off;
@@ -1010,17 +1218,17 @@ fn put_attr(A: DAttr) {
     } else if form == DF_STR_BASE {
         put_sec_offset(DW_AT_str_offsets_base, sec_stroff, 8);
     } else if form == DF_CU_PC {
-        if n_cs == 1 {
-            put_lowhigh(sec_sym(cs_one), cs_lo[cs_one], cs_hi[cs_one] - cs_lo[cs_one]);
-        } else if n_cs > 1 {
+        let n = cr_sec.len;
+        if n == 1 {
+            put_lowhigh(sec_sym(cr_sec[0]), cr_lo[0], cr_hi[0] - cr_lo[0]);
+        } else if n > 1 {
             ab_add(DW_AT_low_pc, DW_FORM_addr);
             o8(b_body, 0);
-            let l = new_rnglist(n_cs);
-            for s in 0..cs_lo.len {
-                if cs_lo[s] == GIR_NONE { continue; }
-                rl_sym.push(sec_sym(s as! u32));
-                rl_start.push(cs_lo[s]);
-                rl_len.push(cs_hi[s] - cs_lo[s]);
+            let l = new_rnglist(n as! u32);
+            for c, k in cr_sec {
+                rl_sym.push(sec_sym(c));
+                rl_start.push(cr_lo[k]);
+                rl_len.push(cr_hi[k] - cr_lo[k]);
             }
             ab_add(DW_AT_ranges, DW_FORM_rnglistx);
             bb_uleb(l);
@@ -1142,18 +1350,12 @@ fn dbg_write() {
     file_list.clear();
     let CU = M.dscopes[cu_scope];
     file_number(CU.file);
-    n_cs = 0;
-    for s in 0..cs_lo.len {
-        if cs_lo[s] != GIR_NONE {
-            n_cs++;
-            cs_one = s as! u32;
-        }
-    }
+    cu_runs();
     mark_dies();
     // range lists are used if the unit's code is in several sections or a
     // kept lexical block has several ranges (the unit then gets
     // DW_AT_rnglists_base)
-    use_rng = n_cs > 1;
+    use_rng = cr_sec.len > 1;
     for k in 0..nd {
         if use_rng { break; }
         if dk_keep[k] == 0 { continue; }
@@ -1436,16 +1638,49 @@ fn write_line() {
         uleb(b_line, fe_dir[k]);
     }
     patch_o4(b_line, hstart - 4, (b_line.len - hstart) as! u32);
-    // one sequence per code section
-    for s in 0..sec_rows1.len {
-        let r1 = sec_rows1[s];
-        if r1 == 0 { continue; }
-        line_sequence(s as! u32, sec_rows0[s], r1);
+    // a sequence per unit code range, grouped by section in the order of the
+    // sections' first use (MCDwarfLineTable: line entries per section)
+    var done: u8[>..] = [];
+    done.resize(osecs.len, 0);
+    for c, k in cr_sec {
+        if done[c] != 0 { continue; }
+        done[c] = 1;
+        for q in k..cr_sec.len {
+            if cr_sec[q] == c { line_sequence(c, cr_r0[q], cr_r1[q], cr_hi[q]); }
+        }
     }
     patch_o4(b_line, 0, (b_line.len - 4) as! u32);
 }
 
-fn line_sequence(sec: u32, r0: u32, r1: u32) {
+// The unit's code ranges (cr_*), from the functions in table (module) order.
+fn cu_runs() {
+    cr_sec.clear();
+    cr_lo.clear();
+    cr_hi.clear();
+    cr_r0.clear();
+    cr_r1.clear();
+    var open = false;
+    for c, fi in fn_sec {
+        if c == 0 {
+            open = false;
+            continue;
+        }
+        if open && cr_sec[cr_sec.len - 1] == c {
+            cr_hi[cr_hi.len - 1] = fn_hi[fi];
+            cr_r1[cr_r1.len - 1] = fn_r1[fi];
+            continue;
+        }
+        cr_sec.push(c);
+        cr_lo.push(fn_lo[fi]);
+        cr_hi.push(fn_hi[fi]);
+        cr_r0.push(fn_r0[fi]);
+        cr_r1.push(fn_r1[fi]);
+        open = true;
+    }
+}
+
+// The rows r0 .. r1 of code section sec, up to section offset hi.
+fn line_sequence(sec: u32, r0: u32, r1: u32, hi: u32) {
     let base: u32 = osecs[sec].start as! u32;
     // DW_LNE_set_address
     o1(b_line, 0);
@@ -1490,8 +1725,8 @@ fn line_sequence(sec: u32, r0: u32, r1: u32) {
         line = ln;
         addr = R.pos;
     }
-    // the end of the section
-    let end: u32 = (osecs[sec].start + osecs[sec].size) as! u32;
+    // the end of the range
+    let end: u32 = osecs[sec].start as! u32 + hi;
     if end > addr {
         o1(b_line, 2);   // DW_LNS_advance_pc
         uleb(b_line, end - addr);

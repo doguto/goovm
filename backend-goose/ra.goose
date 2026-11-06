@@ -716,7 +716,12 @@ fn ra_mat_gpr(v: u32, r: u32) {
         return;
     }
     let t = vtype(id);
-    if vi[id].reg == PEND { load_int(r, ra_take_pend(id), bits_of(t)); return; }
+    if vi[id].reg == PEND {
+        if dbg_on { dbg_ld(id); }
+        load_int(r, ra_take_pend(id), bits_of(t));
+        if dbg_on { dbg_ld_end(); }
+        return;
+    }
     if h == H_STACK {
         load_int(r, m_rbp(vi[id].off), bits_of(t));
         if !exact_width(bits_of(t)) { zext_reg(r, bits_of(t)); }
@@ -865,10 +870,13 @@ fn ra_mat_xmm(v: u32, x: u32) {
     let id = vid(v);
     let t = vtype(id);
     var m = Mem { M_REG, 0, 0, 0, 0 };
-    if vi[id].reg == PEND { m = ra_take_pend(id); }
+    let pend = vi[id].reg == PEND;
+    if pend { m = ra_take_pend(id); }
     else if vi[id].home == H_STACK { m = m_rbp(vi[id].off); }
     else { m = ra_home(id); }
+    if pend && dbg_on { dbg_ld(id); }
     xmm_load_t(x, m, t);
+    if pend && dbg_on { dbg_ld_end(); }
 }
 fn ra_xmm(v: u32) -> u32 {
     if is_val(v) {

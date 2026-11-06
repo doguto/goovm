@@ -9,7 +9,7 @@ and one scripted gdb session per build (batch mode, gdb's Python API):
 breakpoints on the program's functions and on a sample of the statement
 lines of the reference line table; at each stop (at most 3 per breakpoint,
 --stops in all) `bt`, `info args`, `info locals`, two `next` with the
-locals, a `step` with the frame, and `finish` (its return value). The
+locals, a `step` with the frame, then `continue`. The
 values of variables that are not initialized yet depend on what the stack
 held, which differs between the two builds; so on entry to each of the
 program's functions (the first instruction, an internal breakpoint) the
@@ -113,9 +113,11 @@ while stops < cfg["stops"] and alive() and stopped_in_code():
         out.write("--- step\n" + ex("step"))
         if alive() and stopped_in_code():
             out.write(ex("bt 2"))
-            f = gdb.selected_frame()
-            if f.older() is not None and f.name() != "main":
-                out.write("--- finish\n" + ex("finish"))
+            # (no `finish`: it stops at the call's return address, which may
+            # start the next statement in one build and not in the other -
+            # clang reserves the outgoing argument area in the prologue,
+            # goovm pops it after the call - and that decides whether the
+            # `continue` below stops at a breakpoint there)
     for b in bps:
         if b.is_valid() and b.hit_count >= 3 and b.enabled:
             b.enabled = False
@@ -376,6 +378,20 @@ def normalize(t, p):
     lines = []
     for l in t.splitlines():
         l = re.sub(r"0x[0-9a-f]+", "0xADDR", l)
+        # glibc's __libc_start_call_main (after `next` out of main): its
+        # jmp_buf holds stack addresses and mangled pointers, which depend on
+        # the executable's name and the random pointer guard
+        if l.startswith("unwind_buf = "):
+            l = re.sub(r"-?\d+", "N", l)
+        # stack addresses as values (the frames are laid out differently):
+        # as integers (0x7ff000000000 .. 0x7fffffffffff, the stack without
+        # ASLR) and as the bytes of a pointer in a char array
+        l = re.sub(r"\b14\d{13}\b", lambda m: "STACK" if 0x7FF000000000 <= int(m.group(0)) < 0x800000000000
+                   else m.group(0), l)
+        l = re.sub(r'(\\\d{3}|[^\\"]){2}\\377\\377\\377\\177', "STACK", l)
+        # how far uninitialized (poisoned) stack memory extends past a buffer
+        # depends on the frame layout too
+        l = re.sub(r"'\\245' <repeats \d+ times>", "'\\245' <repeats N times>", l)
         l = re.sub(r"process \d+", "process N", l)
         l = re.sub(r"Thread 0xADDR \(LWP \d+\)", "Thread", l)
         l = re.sub(r"\[Inferior 1 \(process N\) exited", "[Inferior exited", l)

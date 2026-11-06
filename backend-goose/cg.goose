@@ -422,6 +422,13 @@ fn gen_inst(gi: u32, cur: u32) {
                     phi_moves(cur, I.a);
                 }
                 if I.a != next { jmp_block(I.a); }
+                else if M.blocks[f_first_block + cur].n_inst == 1 {
+                    // a block of only a branch to the next block: LLVM's
+                    // FastISel emits the jump anyway "for more accurate line
+                    // information" (a debugger stops on the branch's line)
+                    b1(0xEB);
+                    b1(0);
+                }
             },
             GIR_CONDBR => lower_condbr(I, cur, next),
             GIR_SWITCH => lower_switch(I, cur, next),
@@ -609,7 +616,10 @@ fn emit_prologue(insts: const Inst[:], flags: u32) {
     let sub = frame - 8 * nsave;
     let leaf = !f_call && !f_rsp && !f_asm && !f_sjlj;
     if sub > 0 && !(leaf && sub <= 128) { grp1_ri64(G1_SUB, RSP, sub as! i32); }
-    if flags & FN_VASTART != 0 { save_va_regs(); }
+    if flags & FN_VASTART != 0 {
+        pro_va = here() - pro_base;
+        save_va_regs();
+    }
     prologue_args();
     if f_overaligned {
         for I, j in insts {
@@ -727,6 +737,7 @@ fn gen_function(fi: u32) {
             for k in B.first_inst..B.first_inst + B.n_inst {
                 dbg_inst(k);
                 gen_inst(k, b as! u32);
+                dbg_inst_end();
             }
             dbg_block_end();
         }

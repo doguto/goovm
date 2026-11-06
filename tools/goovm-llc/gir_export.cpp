@@ -150,8 +150,7 @@ struct PtrMap {
     }
 };
 
-// Inline copies and fills up to this many bytes; larger or variable sizes
-// call libc.
+// The largest inline copy or fill (mem_intrinsic: which ones are inline).
 constexpr uint64_t MAX_INLINE_MEM = 256;
 
 struct Exporter : GirDwarfHost {
@@ -1154,7 +1153,14 @@ struct Exporter : GirDwarfHost {
         uint32_t a0 = ref(CB.getArgOperand(0));
         uint32_t a1 = ref(CB.getArgOperand(1));
         bool vol = id != Intrinsic::memmove && cast<ConstantInt>(CB.getArgOperand(3))->isOne();
-        if (CL && CL->getZExtValue() <= MAX_INLINE_MEM && id != Intrinsic::memmove) {
+        // Inline as LLVM's -O0 does (X86FastISel): llvm.memcpy of at most 32
+        // bytes, the *.inline forms; volatile ones (which FastISel leaves to
+        // SelectionDAG's inline expansion) up to MAX_INLINE_MEM bytes. Other
+        // memcpy and every memset are libc calls, so that a debugger steps
+        // into memcpy/memset where it does in a clang -O0 build.
+        bool inl = id == Intrinsic::memcpy_inline || id == Intrinsic::memset_inline ||
+                   (id == Intrinsic::memcpy && CL && CL->getZExtValue() <= 32) || (vol && id != Intrinsic::memmove);
+        if (CL && inl && CL->getZExtValue() <= MAX_INLINE_MEM) {
             uint8_t op = (id == Intrinsic::memset || id == Intrinsic::memset_inline) ? GIR_MEMSET : GIR_MEMCPY;
             if (CL->getZExtValue() == 0) return;
             emit(op, GIR_T_VOID, 0, vol ? GIR_IF_VOLATILE : 0, 0, a0, a1, (uint32_t)CL->getZExtValue(), RA | RB);
