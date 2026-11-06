@@ -281,6 +281,22 @@ fn lex_slow(p0: i64) -> i64, i64, u8 {
     return k, pe, fl;
 }
 
+// The position after the block comment starting at p ("/*").
+fn skip_block_comment(p0: i64) -> i64 {
+    var q = p0 + 2;
+    loop {
+        let r = find_byte(src[q..lx_end], '*');
+        if r < 0 { return lx_end; }
+        q = q + r + 1;
+        if src[q] == '/' { return q + 1; }
+        if src[q] == '\\' {
+            var t = q;
+            loop { let s = splice_at(t); if s == 0 { break; } t += s; }
+            if src[t] == '/' { return t + 1; }
+        }
+    }
+}
+
 // The next token of the current file.
 fn lex_file_token() -> Tok {
     var p = lx_pos;
@@ -324,6 +340,29 @@ fn lex_file_token() -> Tok {
         if c == '\\' {
             let s = splice_at(p);
             if s > 0 { p += s; continue; }
+        }
+        if c == '/' && src[p + 1] == '*' {
+            // a block comment: find "*/" (possibly "*\<newline>/")
+            p = skip_block_comment(p);
+            flags |= F_LSPACE;
+            continue;
+        }
+        if c == '/' && src[p + 1] == '/' {
+            // a line comment, continued by a backslash-newline
+            var q = p + 2;
+            loop {
+                let r = find_byte(src[q..lx_end], '\n');
+                if r < 0 { q = lx_end; break; }
+                q = q + r;
+                var b = q - 1;
+                if b >= p + 2 && src[b] == '\r' { b--; }
+                while b >= p + 2 && cc[src[b]] & CC_HSPACE != 0 && src[b] != '\r' { b--; }
+                if b >= p + 2 && src[b] == '\\' { q++; continue; }
+                break;
+            }
+            p = q;
+            flags |= F_LSPACE;
+            continue;
         }
         let k, e, fl = scan_token(src, p);
         // A splice right after the token, or inside a literal, may change it.
@@ -394,9 +433,7 @@ fn lex_skip_line() {
             if s > 0 { p += s; continue; }
         }
         if c == '/' && src[p + 1] == '*' {
-            p += 2;
-            while p < lx_end && !(src[p] == '*' && src[p + 1] == '/') { p++; }
-            p = min(p + 2, lx_end);
+            p = skip_block_comment(p);
             continue;
         }
         if c == '/' && src[p + 1] == '/' {
@@ -471,9 +508,7 @@ fn lex_peek_lparen() -> i64 {
             return 0;
         }
         if c == '/' && src[p + 1] == '*' {
-            p += 2;
-            while p < lx_end && !(src[p] == '*' && src[p + 1] == '/') { p++; }
-            p = min(p + 2, lx_end);
+            p = skip_block_comment(p);
             continue;
         }
         if c == '/' && src[p + 1] == '/' {

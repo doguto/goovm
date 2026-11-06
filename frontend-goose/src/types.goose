@@ -161,7 +161,16 @@ fn qt(t: i64, q: i64) -> u32 { ((t << 4) | q) as! u32 }
 fn tyi(q: u32) -> i64 { (q >> 4) as i64 }
 fn quals(q: u32) -> i64 { (q & 15) as i64 }
 fn unqual(q: u32) -> u32 { q & 4294967280 }
-fn with_quals(q: u32, add: i64) -> u32 { q | (add as! u32) }
+// Adds qualifiers. Qualifiers of an array type belong to its elements
+// (C11 6.7.3p9), so they are pushed down, as clang canonicalizes them.
+recursive fn with_quals(q: u32, add: i64) -> u32 {
+    if add == 0 { return q; }
+    let t = types[q >> 4];
+    if t.kind as i64 == TY_ARRAY && t.flags & TF_ALIGNED == 0 {
+        return with_quals(mk_array(with_quals(t.base, add), t.n), quals(q));
+    }
+    return q | (add as! u32);
+}
 fn kind_of(q: u32) -> i64 { types[q >> 4].kind as i64 }
 fn tbase(q: u32) -> u32 { types[q >> 4].base }
 fn tcanon(q: u32) -> u32 { qt(types[q >> 4].canon as i64, quals(q)) }

@@ -1250,8 +1250,16 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
         return s;
     }
     if is_func(ty) {
-        if ds.noreturn || a.misc & AM_NORETURN != 0 { types[ty >> 4].flags = types[ty >> 4].flags; }
         var sc = ds.sc;
+        if types[ty >> 4].flags & TF_NOPROTO != 0 && scope_depth == 0 {
+            // clang: a library builtin redeclared without a prototype keeps the
+            // builtin's type
+            let bi = builtin_index(name);
+            if bi >= 0 && is_library_name(ident_text(name as i64)) {
+                let bty = builtin_type(bi);
+                if bty != 0 && compatible(bty, ty) && types[bty >> 4].flags & TF_NOPROTO == 0 { ty = bty; }
+            }
+        }
         if scope_depth > 0 && sc == SC_STATIC {
             err_at(loc, "function declared in block scope cannot have 'static' storage class");
         }
@@ -1639,10 +1647,9 @@ recursive fn parse_stmt() -> u32 {
         return node(N_LABEL, 0, 0, l, st as i64, 0, loc);
     }
     if k < TK_KW {
-        if k == TK_KW + KW_ATTRIBUTE {}
         let e = parse_expr();
         expect(TK_SEMI, "';' after expression");
-        return node(N_EXPR, 0, 0, e as i64, 0, 0, loc);
+        return node(N_EXPR, 0, 0, discard_value(e) as i64, 0, 0, loc);
     }
     let w = k - TK_KW;
     if w == KW_IF {
@@ -1865,7 +1872,13 @@ recursive fn parse_stmt() -> u32 {
     }
     let e = parse_expr();
     expect(TK_SEMI, "';' after expression");
-    return node(N_EXPR, 0, 0, e as i64, 0, 0, loc);
+    return node(N_EXPR, 0, 0, discard_value(e) as i64, 0, 0, loc);
+}
+
+// A discarded expression: a volatile scalar lvalue is still read (clang).
+fn discard_value(e: u32) -> u32 {
+    if is_lvalue(e) && quals(nty(e)) & Q_VOLATILE != 0 && is_scalar(nty(e)) { return rv(e); }
+    return e;
 }
 
 recursive fn parse_asm_stmt() -> u32 {
@@ -1999,6 +2012,10 @@ fn parse_init() {
     nodes.push(Node { kind: 0, op: 0, flags: 0, ty: 0, a: 0, b: 0, c: 0, loc: 0, v: 0 });
     sym_attrs.push(SymAttr { asm_label: 0, asm_len: 0, cleanup: -1, align: 0, flags: 0 });
     declare_builtin_typedef("__builtin_va_list", t_valist);
+    // the builtin tag, so that builtin signatures naming it get the same type
+    let vt = new_sym(SK_TAG, records[0].name, t_valist_rec, 0);
+    syms[vt].v = (t_valist_rec >> 4) as i64;
+    bind_sym(vt, true);
     declare_builtin_typedef("__int128_t", t_int128);
     declare_builtin_typedef("__uint128_t", t_uint128);
     declare_builtin_typedef("__builtin_ms_va_list", t_charptr);

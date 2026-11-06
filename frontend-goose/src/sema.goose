@@ -224,7 +224,15 @@ fn nty(n: u32) -> u32 { nodes[n].ty }
 fn nflags(n: u32) -> i64 { nodes[n].flags as i64 }
 
 fn icast(n: u32, ck: i64, to: u32) -> u32 {
-    let r = node(N_ICAST, ck, to, n as i64, 0, 0, nodes[n].loc);
+    // Like clang's ImpCastExprToType: a conversion of an implicit
+    // conversion of the same kind updates it (a promotion followed by a
+    // conversion is then one IntegralCast from the original type).
+    let nd = nodes[n];
+    if nd.kind == N_ICAST && nd.op as i64 == ck && ck != CK_LVAL2RVAL && ck != CK_ARRAY2PTR && ck != CK_FUNC2PTR {
+        nodes[n].ty = to;
+        return n;
+    }
+    let r = node(N_ICAST, ck, to, n as i64, 0, 0, nd.loc);
     return r;
 }
 
@@ -234,7 +242,8 @@ fn rv(n: u32) -> u32 {
     let t = nty(n);
     let k = kind_of(t);
     if k == TY_ARRAY || k == TY_VLA {
-        return icast(n, CK_ARRAY2PTR, mk_ptr(tbase(t)));
+        // qualifiers of an array type are those of its elements
+        return icast(n, CK_ARRAY2PTR, mk_ptr(with_quals(tbase(t), quals(t))));
     }
     if k == TY_FUNC {
         return icast(n, CK_FUNC2PTR, mk_ptr(unqual(t)));
@@ -268,11 +277,10 @@ fn promoted_type(n: u32) -> u32 {
     if !is_integer_kind(k) { return t; }
     let w = bitfield_width(n);
     if w >= 0 {
-        // a bit-field narrower than int promotes to int (or unsigned int)
-        if k != TY_INT128 && k != TY_UINT128 && k != TY_LONG && k != TY_ULONG && k != TY_LLONG && k != TY_ULLONG {
-            if w < 32 { return t_int; }
-            if w == 32 { return if is_signed(t) { t_int } else { t_uint }; }
-        }
+        // a bit-field narrower than int promotes to int whatever its type
+        // (GCC compatibility, clang's isPromotableBitField)
+        if w < 32 { return t_int; }
+        if w == 32 { return if is_signed(t) { t_int } else { t_uint }; }
     }
     if k == TY_ENUM {
         let u = enum_underlying(t);
@@ -296,10 +304,7 @@ fn cast_kind(from: u32, to: u32) -> i64 {
         if kf == TY_POINTER { return CK_PTR2BOOL; }
     }
     if is_integer_kind(kt) {
-        if fi {
-            if type_size(from) == type_size(to) && is_signed(from) == is_signed(to) { return CK_NOOP; }
-            return CK_INTEGRAL;
-        }
+        if fi { return CK_INTEGRAL; }
         if ff { return CK_FLOAT2INT; }
         if kf == TY_POINTER { return CK_PTR2INT; }
         if kf == TY_COMPLEX { return CK_COMPLEX2REAL; }
@@ -311,18 +316,22 @@ fn cast_kind(from: u32, to: u32) -> i64 {
     }
     if kt == TY_POINTER {
         if fi { return CK_INT2PTR; }
-        if kf == TY_POINTER { return CK_BITCAST; }
+        if kf == TY_POINTER {
+            // a qualification conversion is a no-op (clang NoOp)
+            if unqual(tcanon(tbase(from))) == unqual(tcanon(tbase(to))) { return CK_NOOP; }
+            return CK_BITCAST;
+        }
     }
     if kt == TY_COMPLEX {
         if kf == TY_COMPLEX { return CK_COMPLEXCAST; }
         return CK_REAL2COMPLEX;
     }
     if kt == TY_VECTOR || kt == TY_EXTVECTOR {
-        if kf == TY_VECTOR || kf == TY_EXTVECTOR { return CK_VECBITCAST; }
-        if type_size(from) == type_size(to) { return CK_VECBITCAST; }
+        if kf == TY_VECTOR || kf == TY_EXTVECTOR { return CK_BITCAST; }
+        if type_size(from) == type_size(to) { return CK_BITCAST; }
         return CK_VECSPLAT;
     }
-    if (kf == TY_VECTOR || kf == TY_EXTVECTOR) { return CK_VECBITCAST; }
+    if (kf == TY_VECTOR || kf == TY_EXTVECTOR) { return CK_BITCAST; }
     return CK_NOOP;
 }
 

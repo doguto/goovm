@@ -213,6 +213,7 @@ recursive fn assign_value(val: u32, base_depth: i64, tail: u32) {
         if is_string_for(st, val) {
             let flag_n = val;
             nodes[flag_n].flags = nodes[flag_n].flags | NF_STRINIT;
+            string_init_type(val, st);
             record_entry(base_depth, val);
             if kind_of(st) == TY_ARRAY && types[st >> 4].n < 0 {
                 let sl = strs[nodes[val].a].len as i64;
@@ -273,6 +274,7 @@ recursive fn init_braced(t: u32, syn: u32) {
     if c >= 1 && kind_of(t) == TY_ARRAY && nodes[nlist[first]].kind == N_STRING && is_string_for(t, nlist[first]) {
         let s = nlist[first];
         nodes[s].flags = nodes[s].flags | NF_STRINIT;
+        string_init_type(s, t);
         ients.push(IEnt { pstart: ipath.len as! u32, plen: (ifr.len) as! u32, val: s });
         // the path to this object: the current frames
         let ps = ipath.len;
@@ -542,6 +544,7 @@ recursive fn init_value(s: i64, t: u32, syn: u32, loc: u32) -> u32 {
             if is_string_for(t, syn) {
                 nodes[syn].flags = nodes[syn].flags | NF_STRINIT;
                 complete_from_string(s, t, syn);
+                string_init_type(syn, t);
                 return syn;
             }
             let r = rv(syn);
@@ -592,6 +595,16 @@ recursive fn init_value(s: i64, t: u32, syn: u32, loc: u32) -> u32 {
         syms[s].flags = syms[s].flags;
     }
     return result;
+}
+
+// A string literal initializing an array takes the array's type (as in
+// clang); an incomplete array is completed from the string's length.
+fn string_init_type(n: u32, t: u32) {
+    if kind_of(t) == TY_ARRAY && types[t >> 4].n < 0 {
+        nodes[n].ty = with_quals(mk_array(tbase(t), strs[nodes[n].a].len as i64), quals(t));
+    } else {
+        nodes[n].ty = t;
+    }
 }
 
 fn complete_from_string(s: i64, t: u32, str_node: u32) {

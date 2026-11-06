@@ -25,6 +25,7 @@ import .parse;
 import .init;
 import .builtins;
 import .layout;
+import .dump;
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
 var opt_input: u8[>..] = [];
@@ -90,6 +91,7 @@ fn main() {
         if s == "-E" { opt_mode = 1; }
         else if s == "-fsyntax-only" { opt_mode = 0; }
         else if s == "--layout-check" { opt_mode = 2; }
+        else if s == "--dump-ast" { opt_mode = 3; }
         else if s == "--time" { opt_time = true; }
         else if s == "-pthread" { opt_pthread = true; }
         else if s == "-nostdinc" { nostdinc = true; }
@@ -165,6 +167,9 @@ fn main() {
         prepare_tokens();
         parse_init();
         parse_tu();
+        if opt_mode == 3 && n_errors == 0 {
+            if !dump_ast(names[out_off..out_off + out_len]) { fatal("cannot write the AST dump"); }
+        }
         if opt_mode == 2 && n_errors == 0 {
             var abs: u8[>..] = [];
             if opt_input[0] != '/' {

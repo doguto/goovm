@@ -229,13 +229,18 @@ fn build_lines(f: i64) {
     let e = files[f].end as i64;
     line_starts.push(s as! u32);
     var p = s;
-    while p < e {
-        if src[p] == '\n' { line_starts.push((p + 1) as! u32); }
-        p++;
+    loop {
+        let q = find_byte(src[p..e], '\n');
+        if q < 0 { break; }
+        p = p + q + 1;
+        line_starts.push(p as! u32);
     }
     files[f].lines_first = first as! i32;
     files[f].lines_count = (line_starts.len - first) as! i32;
 }
+
+// memchr: the index of the first c in s, or -1.
+extern fn find_byte(s: const u8[:], c: u8) -> i64 = "goosecc_find_byte";
 
 // The file holding source offset `off`, or -1 (scratch text).
 var last_file_hit: i64 = 0;
@@ -251,16 +256,32 @@ fn file_of(off: i64) -> i64 {
 }
 
 // 1-based line and column of offset `off` in file f.
+// Lookups come mostly in increasing order within a file (the -E printer),
+// so the last hit is remembered and searched forward from first.
+var lc_file: i64 = -1;
+var lc_idx: i64 = 0;
+
 fn line_col(f: i64, off: i64) -> i64, i64 {
     if files[f].lines_first < 0 { build_lines(f); }
     let first = files[f].lines_first as i64;
     let n = files[f].lines_count as i64;
+    if f == lc_file && lc_idx < n && line_starts[first + lc_idx] <= off {
+        var i = lc_idx;
+        var steps = 0;
+        while i + 1 < n && line_starts[first + i + 1] <= off && steps < 64 { i++; steps++; }
+        if i + 1 >= n || line_starts[first + i + 1] > off {
+            lc_idx = i;
+            return i + 1, off - line_starts[first + i] + 1;
+        }
+    }
     var lo = 0;
     var hi = n;    // invariant: line_starts[first+lo] <= off
     while hi - lo > 1 {
         let mid = (lo + hi) / 2;
         if line_starts[first + mid] <= off { lo = mid; } else { hi = mid; }
     }
+    lc_file = f;
+    lc_idx = lo;
     return lo + 1, off - line_starts[first + lo] + 1;
 }
 

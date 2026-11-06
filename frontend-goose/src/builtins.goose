@@ -191,9 +191,12 @@ fn builtin_call(s: i64, mark: i64, loc: u32) -> u32 {
             if nargs < ft.n { err_at(loc, str("too few arguments to function call, expected ", ft.n, ", have ", nargs)); }
             else if nargs > ft.n && ft.flags & TF_VARIADIC == 0 { err_at(loc, str("too many arguments to function call, expected ", ft.n, ", have ", nargs)); }
         }
+        let va_start = name == "__builtin_va_start" || name == "__builtin_c23_va_start";
         for i in nargs {
             let a = arg(mark, i);
             if nodes[a].kind == N_ERROR { continue; }
+            // clang leaves va_start's second argument as it is
+            if va_start && i == 1 { continue; }
             var c = rv(a);
             if proto && i < ft.n {
                 let pt = unqual(tparams[ft.extra + i]);

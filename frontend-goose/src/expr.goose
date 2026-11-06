@@ -890,7 +890,7 @@ recursive fn assign_convert(n: u32, to: u32, loc: u32, what: i64) -> u32 {
             if !is_void(tp) && !is_void(fp) && !compatible_unq(tp, fp) {
                 warn(loc, str("incompatible pointer types converting ", tname(from), " to ", tname(to)));
             }
-            return icast(n, CK_BITCAST, unqual(to));
+            return icast(n, cast_kind(from, to), unqual(to));
         }
         if is_integer(from) {
             int_conversion(loc, str("incompatible integer to pointer conversion from ", tname(from), " to ", tname(to)));
@@ -963,8 +963,8 @@ fn mk_cond(c0: u32, a0: u32, b0: u32, loc: u32) -> u32 {
             warn(loc, str("pointer type mismatch (", tname(ta), " and ", tname(tb), ")"));
             rt = mk_ptr(with_quals(t_void, q));
         }
-        ca = convert(a, rt);
-        cb = convert(b, rt);
+        ca = cond_ptr_arm(a, rt);
+        cb = cond_ptr_arm(b, rt);
     } else if is_pointer(ta) && is_integer(tb) {
         if !is_null_const(b) { warn(loc, "pointer/integer type mismatch in conditional expression"); }
         rt = ta;
@@ -984,6 +984,12 @@ fn mk_cond(c0: u32, a0: u32, b0: u32, loc: u32) -> u32 {
         return node(N_COND, 0, rt, c as i64, 0, cb as i64, loc);
     }
     return node(N_COND, 0, rt, c as i64, ca as i64, cb as i64, loc);
+}
+
+fn cond_ptr_arm(n: u32, rt: u32) -> u32 {
+    if unqual(nty(n)) == unqual(rt) { return n; }
+    if is_null_const(n) { return icast(n, CK_NULL2PTR, unqual(rt)); }
+    return icast(n, CK_BITCAST, unqual(rt));
 }
 
 fn ptr_elem_ok(pt: u32, loc: u32) -> bool {
@@ -1011,7 +1017,10 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
         if !is_scalar(ta) || !is_scalar(tb) {
             if !(is_vector(ta) || is_vector(tb)) { return bad_operands(a, b, loc); }
         }
-        return node(N_BINARY, op, t_int, a as i64, b as i64, 0, loc);
+        // C: the operands get the usual unary conversions (promotions)
+        let pa = if is_integer(ta) { promote(a) } else { a };
+        let pb = if is_integer(tb) { promote(b) } else { b };
+        return node(N_BINARY, op, t_int, pa as i64, pb as i64, 0, loc);
     }
     if is_vector(ta) || is_vector(tb) {
         // element-wise; a scalar operand is splatted
@@ -1030,17 +1039,17 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
     if op == B_MUL || op == B_DIV {
         if !is_arith(ta) || !is_arith(tb) { return bad_operands(a, b, loc); }
         let t = arith_common(a, b);
-        return node(N_BINARY, op, t, convert(a, t) as i64, convert(b, t) as i64, 0, loc);
+        return node(N_BINARY, op, t, arith_operand(a, t) as i64, arith_operand(b, t) as i64, 0, loc);
     }
     if op == B_REM || op == B_AND || op == B_OR || op == B_XOR {
         if !is_integer(ta) || !is_integer(tb) { return bad_operands(a, b, loc); }
         let t = arith_common(a, b);
-        return node(N_BINARY, op, t, convert(a, t) as i64, convert(b, t) as i64, 0, loc);
+        return node(N_BINARY, op, t, arith_operand(a, t) as i64, arith_operand(b, t) as i64, 0, loc);
     }
     if op == B_ADD {
         if is_arith(ta) && is_arith(tb) {
             let t = arith_common(a, b);
-            return node(N_BINARY, op, t, convert(a, t) as i64, convert(b, t) as i64, 0, loc);
+            return node(N_BINARY, op, t, arith_operand(a, t) as i64, arith_operand(b, t) as i64, 0, loc);
         }
         if is_pointer(ta) && is_integer(tb) {
             if !ptr_elem_ok(ta, loc) { return error_node(loc); }
@@ -1055,7 +1064,7 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
     if op == B_SUB {
         if is_arith(ta) && is_arith(tb) {
             let t = arith_common(a, b);
-            return node(N_BINARY, op, t, convert(a, t) as i64, convert(b, t) as i64, 0, loc);
+            return node(N_BINARY, op, t, arith_operand(a, t) as i64, arith_operand(b, t) as i64, 0, loc);
         }
         if is_pointer(ta) && is_integer(tb) {
             if !ptr_elem_ok(ta, loc) { return error_node(loc); }
@@ -1079,14 +1088,17 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
     // comparisons
     if is_arith(ta) && is_arith(tb) {
         let t = arith_common(a, b);
-        return node(N_BINARY, op, t_int, convert(a, t) as i64, convert(b, t) as i64, 0, loc);
+        return node(N_BINARY, op, t_int, cmp_operand(a, t) as i64, cmp_operand(b, t) as i64, 0, loc);
     }
     if is_pointer(ta) && is_pointer(tb) {
         let pa = tbase(ta);
         let pb = tbase(tb);
         var ca = a;
         var cb = b;
-        if !compatible_unq(pa, pb) {
+        if compatible_unq(pa, pb) && unqual(ta) != unqual(tb) {
+            // clang converts the right operand to the left one's type
+            cb = icast(b, CK_BITCAST, unqual(ta));
+        } else if !compatible_unq(pa, pb) {
             if is_void(pa) || is_void(pb) || is_null_const(a) || is_null_const(b) {
                 if is_null_const(b) { cb = convert(b, ta); }
                 else if is_null_const(a) { ca = convert(a, tb); }
@@ -1107,6 +1119,26 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
         return node(N_BINARY, op, t_int, convert(a, tb) as i64, b as i64, 0, loc);
     }
     return bad_operands(a, b, loc);
+}
+
+// An operand converted for an arithmetic operation of type t. With a
+// complex result, a real operand is converted to the element type only
+// (clang keeps mixed complex/real operations).
+fn arith_operand(n: u32, t: u32) -> u32 {
+    // clang promotes first (a bit-field or char is converted from its
+    // promoted type; the casts merge)
+    var x = n;
+    if is_integer(nty(n)) { x = promote(n); }
+    if is_complex(t) && !is_complex(nty(x)) && is_real_float(tbase(t)) { return convert(x, tbase(t)); }
+    return convert(x, t);
+}
+
+// Comparison operands: a real operand compared with a complex one is
+// converted to the complex type.
+fn cmp_operand(n: u32, t: u32) -> u32 {
+    var x = n;
+    if is_integer(nty(n)) { x = promote(n); }
+    return convert(x, t);
 }
 
 fn mk_unary_arith(op: i64, e: u32, loc: u32) -> u32 {
@@ -1153,11 +1185,6 @@ fn mk_incdec(e: u32, op: i64, loc: u32) -> u32 {
 fn mk_addr(e: u32, loc: u32) -> u32 {
     if is_error(e) { return e; }
     let nd = nodes[e];
-    // &*p is p
-    if nd.kind == N_UNARY && nd.op == U_DEREF {
-        let p = nd.a;
-        return node(N_ICAST, CK_NOOP, mk_ptr(nd.ty), p as i64, 0, 0, loc);
-    }
     if nd.flags & NF_BITFIELD != 0 {
         err_at(loc, "address of bit-field requested");
         return error_node(loc);
@@ -1234,7 +1261,7 @@ fn mk_index(base: u32, idx: u32, loc: u32) -> u32 {
         err_at(loc, str("subscript of pointer to incomplete type ", tname(et)));
         return error_node(loc);
     }
-    let n = node(N_INDEX, 0, et, a as i64, promote(b) as i64, 0, loc);
+    let n = node(N_INDEX, 0, et, a as i64, b as i64, 0, loc);
     if !is_func(et) { nodes[n].flags = NF_LVALUE; }
     return n;
 }
@@ -1376,7 +1403,8 @@ fn mk_cast(ty: u32, e: u32, loc: u32) -> u32 {
     if is_error(e) { return e; }
     let to = ty;
     if is_void(to) {
-        let a = if is_array(nty(e)) || is_func(nty(e)) { rv(e) } else { e };
+        // C: the operand of a cast to void is converted to an rvalue (clang)
+        let a = if is_void(nty(e)) { e } else { rv(e) };
         return node(N_CAST, CK_TOVOID, unqual(to), a as i64, 0, 0, loc);
     }
     let a = rv(e);

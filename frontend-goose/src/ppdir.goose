@@ -448,9 +448,7 @@ fn skip_to_directive() -> bool {
             if s > 0 { p += s; continue; }
         }
         if c == '/' && src[p + 1] == '*' {
-            p += 2;
-            while p < lx_end && !(src[p] == '*' && src[p + 1] == '/') { p++; }
-            p = min(p + 2, lx_end);
+            p = skip_block_comment(p);
             continue;
         }
         if c == '/' && src[p + 1] == '/' {
