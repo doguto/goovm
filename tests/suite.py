@@ -47,6 +47,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CORPORA = ["torture", "ieee", "builtins", "unittests", "regression", "benchmarks", "ctmark"]
 VARIANTS = ["O0", "g", "mem2reg"]
+# Opt-in variants: "cc" builds each file with goovm-cc (clang front end in-process
+# + the Goose back-end) instead of clang -emit-llvm + goovm-llc.
+EXTRA_VARIANTS = ["cc", "cc-g"]
 
 
 class Test:
@@ -464,7 +467,32 @@ def emit_bc(t, s, i, wd, variant, args):
     return base, bc
 
 
+def build_goovm_cc(t, wd, variant, args, info):
+    exe = os.path.join(wd, variant + ".exe")
+    objs = []
+    for i, s in enumerate(t.srcs):
+        o = os.path.join(wd, obj_name(s, i) + "." + variant + ".o")
+        cmd = ([args.cc, "--backend=goose"] + (["--fallback"] if args.fallback else []) + ["-O0"]
+               + (["-g"] if variant == "cc-g" else []) + t.cflags + ["-c", s, "-o", o])
+        r = sh(cmd, timeout=600)
+        err = r.stderr.decode(errors="replace")
+        if r.returncode == 2:
+            raise Fail("unsupported", f"{os.path.basename(s)}: {err.strip().splitlines()[0] if err.strip() else ''}")
+        if r.returncode != 0:
+            raise Fail("error", f"goovm-cc exit {r.returncode} on {os.path.basename(s)}: {err[-600:]}")
+        if "goovm-cc: falling back to LLVM:" in err:
+            info.setdefault("fallback", []).append(
+                f"{os.path.basename(s)}: {err.split('goovm-cc: falling back to LLVM:', 1)[1].strip().splitlines()[0]}")
+        objs.append(o)
+    r = sh([args.clang] + objs + t.ldflags + ["-o", exe])
+    if r.returncode:
+        raise Fail("fail", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
+    return exe
+
+
 def build_goovm(t, wd, variant, args, info):
+    if variant in EXTRA_VARIANTS:
+        return build_goovm_cc(t, wd, variant, args, info)
     exe = os.path.join(wd, variant + ".exe")
     objs = []
     for i, s in enumerate(t.srcs):
@@ -601,6 +629,8 @@ def main():
     ap.add_argument("--corpus", default=",".join(CORPORA))
     ap.add_argument("--variants", default=",".join(VARIANTS))
     ap.add_argument("--clang", default="clang-20")
+    ap.add_argument("--cc", default=os.environ.get("GOOVM_CC", os.path.join(ROOT, "build/tools/goovm-cc/goovm-cc")),
+                    help="goovm-cc, for the cc and cc-g variants")
     ap.add_argument("--opt", default="opt-20")
     ap.add_argument("-j", type=int, default=3)
     ap.add_argument("--work", default=os.path.join(ROOT, "build-suite"))
@@ -616,7 +646,7 @@ def main():
     args.variants = [v for v in args.variants.split(",") if v]
     corpora = [c for c in args.corpus.split(",") if c]
     for v in args.variants:
-        if v not in VARIANTS:
+        if v not in VARIANTS + EXTRA_VARIANTS:
             sys.exit(f"unknown variant {v}")
     os.makedirs(args.work, exist_ok=True)
     args.work = os.path.abspath(args.work)
