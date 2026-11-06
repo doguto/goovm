@@ -160,9 +160,9 @@ the function is laid out again with one slot per value, as are functions
 that call `setjmp` or another `returns_twice` function (`GIR_FN_RETURNS_TWICE`,
 `GIR_FN_SJLJ`) and functions of at most 512 instructions (whose value slots
 are at most ~4 KB): the backward pass executes about 150 x86 instructions per
-GIR instruction, which made the whole back-end 7% slower on spass and 12% on
-gen-20000 with a limit of 256 (gen-20000's functions have 100 to 500
-instructions), and 1% to 3% with 512. One slot per value made consumer-typeset's recursive `Manifest`
+GIR instruction, which made the whole back-end 5% slower on spass and 12% on
+gen-20000 with a limit of 256 (most of gen-20000's functions have 100 to 500
+instructions), and 3% to 4% with 512. One slot per value made consumer-typeset's recursive `Manifest`
 (16 000 instructions) take a 97 KB frame and overflow the 8 MB stack; with
 sharing it is 2.9 KB (clang -O0: 2.1 KB). `v_span[j]` records the last use;
 `live_check` in the value-location interface aborts if a lowering reads a
@@ -265,7 +265,17 @@ symbol plus the block's offset; label differences are resolved in place.
 
 ## 10. Speed
 
-The back-end stays a single pass with flat arrays. Compared with v0 it does
+The back-end stays a single pass with flat arrays (plus the backward layout
+pass for functions of more than 512 instructions). Compared with v0 it does
 more per instruction (a type-table lookup for the class of each operand and
-result, and a larger dispatch), see `backend-goose/NOTES.md` for the
-measurements.
+result, a larger dispatch, the SysV classifier): back-end phase, best of 7 on
+a shared 4-core VM, v0 (commit 8f55b18) vs v1:
+
+| input | GIR insts | v0 | v1 | v1 / v0 |
+|---|---:|---:|---:|---:|
+| gen-20000.bc | 3,205,263 | 139.5 ms | 180.2 ms | 1.29 |
+| spass.bc | 114,371 | 6.1 ms | 8.5 ms | 1.39 |
+
+`backend-goose/NOTES.md` §8 has the breakdown (callgrind: 1.32x the
+instructions of v0 on spass) and the fast paths that recovered most of the
+first version's 1.54x.

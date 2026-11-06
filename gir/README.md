@@ -270,7 +270,8 @@ the C++ and Goose back-ends compiled byte-identically. Version 2:
    `data` for vector and aggregate constants (v0 had only i64 `value`).
 4. **Calls and functions carry ABI words**: `CALL` operands are (value, ABI
    word) pairs and `GirFunc.args` is a (type, ABI word) run (v0: plain
-   argument refs and a type run). `GirFunc` gained `dbg` (36 → 40 bytes).
+   argument refs and a type run). `GirFunc` gained `dbg` (36 → 40 bytes)
+   and the flags `VASTART`, `SJLJ`, `RETURNS_TWICE` and the alignment.
 5. **Globals 32 → 40 bytes** with `section` and `aux`; new kind `ALIAS`; new
    flags `TLS`, `COMMON`, `HIDDEN`, `PROTECTED`, `LOCALREF`, `RELOCS` (v0
    treated common symbols as weak .bss definitions).

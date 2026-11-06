@@ -522,10 +522,19 @@ type had been appended into, which the abort pointed at directly);
 `goovm-llc --time` back-end phase, best of 7, on a shared (not quiet) 4-core
 VM; v0 is the goovm-llc built from commit 8f55b18 (`--backend=goose`):
 
-SPEED_TABLE
+| input | GIR insts | v0 back-end | v1 back-end | v1 / v0 | v0 export | v1 export |
+|---|---:|---:|---:|---:|---:|---:|
+| gen-20000.bc | 3,205,263 | 139.5 ms | 180.2 ms | 1.29 | 371.6 ms | 441.1 ms |
+| spass.bc | 114,371 | 6.1 ms | 8.5 ms | 1.39 | 14.6 ms | 18.0 ms |
 
-The v1 back-end executes about 1.25x the instructions of v0 per GIR
-instruction (callgrind, spass: 42.3M vs 33.6M). Where the extra work goes:
+v1 before slot sharing (commit b00cfb8): 175.0 ms and 8.2 ms, so slot sharing
+in functions of more than 512 instructions costs 3% to 4%; with a limit of
+256 it cost 12% on gen-20000 (most of its functions have 257 to 512
+instructions) and 5% on spass. The exporter (GIR v2 has more to say: types,
+debug locations, ABI words) is 1.19x to 1.23x v0's.
+
+The v1 back-end executes 1.32x the instructions of v0 (callgrind, spass:
+44.2M vs 33.6M; 43.0M before slot sharing). Where the extra work goes:
 
 - every operand and result now looks up its value class in the type table
   (v0 had eight hard-wired types), and the dispatch has 83 opcodes and six
@@ -536,7 +545,8 @@ instruction (callgrind, spass: 42.3M vs 33.6M). Where the extra work goes:
 - calls go through the SysV classifier (FP registers, stack slots, byval);
   a fast path handles calls whose arguments all get registers;
 - loads and stores of non-predefined types go through the generic
-  odd-size paths; predefined i1..i64/ptr have a fast path.
+  odd-size paths; predefined i1..i64/ptr have a fast path;
+- the slot-sharing layout of large functions (pain point 8).
 
 Fast paths recovered most of the first version's gap (it executed 1.54x v0's
 instructions): the frame-slot path in the encoder (`op_mem_t`: 99 → 63
