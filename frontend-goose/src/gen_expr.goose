@@ -32,8 +32,13 @@ fn nkind(n: u32) -> i64 { nodes[n].kind as i64 }
 
 // ------------------------------------------------------------ per-function state
 
-var sym_addr: u32[>..] = [];     // per symbol: the address of a local (alloca, byval arg, VLA)
-var sym_glob: u32[>..] = [];     // per symbol: its GIR global, NONE until needed
+// Per symbol: the address of a local (alloca, byval arg, VLA), its GIR
+// global (NONE until needed), the initializer node of a file-scope
+// object, the N_DECL that defines it, the initializer of a const local
+// (for folding); one array, sized by ensure_sym_gen.
+struct SymGen { addr: u32, glob: u32, init: u32, decl: u32, linit: u32 }
+var sym_gen: SymGen[>..] = [];
+fn ensure_sym_gen() { while sym_gen.len < syms.len { sym_gen.push(SymGen { addr: NONE, glob: NONE, init: 0, decl: 0, linit: 0 }); } }
 var vla_size: u32[>..] = [];     // per VLA type index: the value of its element count, NONE
 var f_sym: i64 = -1;
 var f_ret: Abi = Abi { kind: AK_IGNORE, ext: 0, n: 0, tmp: 0, t0: 0, t1: 0, off0: 0, off1: 0, size: 0, align: 1 };
@@ -42,7 +47,7 @@ var f_ret_q: u32 = 0;
 var f_flags: u32 = 0;
 
 fn ensure_sym_tables() {
-    while sym_addr.len < syms.len { sym_addr.push(NONE); sym_glob.push(NONE); }
+    ensure_sym_gen();
 }
 
 fn ensure_vla_table() {
@@ -467,8 +472,8 @@ recursive fn vec_init_val(n: u32) -> u32 {
 
 fn bug(what: const u8[:], n: u32) {
     write_stderr(str("goosecc: internal error: ", what, " cannot lower node kind ", nodes[n].kind, " op ", nodes[n].op, "\n"));
+    var err_out: u8[>..] = [];
     loc_prefix(err_out, nodes[n].loc as i64);
-    err_out.clear();
     n_errors++;
 }
 
@@ -1517,11 +1522,11 @@ recursive fn ex_complit(n: u32) -> u32 {
     if syms[s].flags & SF_FILESCOPE != 0 || syms[s].sc == SC_STATIC || f_sym < 0 {
         return gref(complit_global(n));
     }
-    var p = sym_addr[s];
+    var p = sym_gen[s].addr;
     let q = syms[s].ty;
     if p == NONE {
         p = alloca(type_size(q), local_align(s, q));
-        sym_addr[s] = p;
+        sym_gen[s].addr = p;
     }
     init_object(p, q, nd.a);
     return p;

@@ -159,8 +159,8 @@ recursive fn const_str_ptr(n: u32) -> bool, u32, i64 {
         if syms[s].kind != SK_VAR || quals(q) & Q_CONST == 0 || quals(q) & Q_VOLATILE != 0 { return false, 0, 0; }
         // the initializer of a const local (N_DECL) or a const global
         var init: u32 = 0;
-        if s < sym_init.len && sym_init[s] != 0 { init = sym_init[s]; }
-        if init == 0 && s < local_init.len { init = local_init[s]; }
+        if s < sym_gen.len && sym_gen[s].init != 0 { init = sym_gen[s].init; }
+        if init == 0 && s < sym_gen.len { init = sym_gen[s].linit; }
         if init == 0 { return false, 0, 0; }
         return const_str_ptr(init);
     }
@@ -182,7 +182,6 @@ recursive fn const_str_ptr(n: u32) -> bool, u32, i64 {
     return false, 0, 0;
 }
 
-var local_init: u32[>..] = [];   // per symbol: the initializer of a const local (for folding)
 
 fn str_at(si: u32, off: i64) -> bool, const u8[:] {
     let sl = strs[si];

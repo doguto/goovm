@@ -61,9 +61,6 @@ var lx_flags: u8 = 0;    // flags for the next token (F_BOL / F_LSPACE)
 var lx_dir: bool = false; // lexing a directive: a newline ends it with TK_EOD
 var lx_sys: u8 = 0;      // F_SYSHDR when the current file is a system header
 
-// Scratch for the slow path.
-var lxtmp: u8[>..] = [];
-var lxmap: u32[>..] = [];
 
 // Recognizes the token at buf[i] (which is not whitespace, not an
 // identifier start handled by the caller... any token in fact). Returns the
@@ -266,8 +263,8 @@ fn splice_at(p: i64) -> i64 {
 // appended to src (its offset in lx_slow_spell).
 var lx_slow_spell: i64 = 0;
 fn lex_slow(p0: i64) -> i64, i64, u8 {
-    lxtmp.clear();
-    lxmap.clear();
+    var lxtmp: u8[>..] = [];
+    var lxmap: u32[>..] = [];
     var p = p0;
     // Gather the logical line from p0.
     loop {

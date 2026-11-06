@@ -43,8 +43,6 @@ var pathents: PathEnt[>..] = [];
 var pathtab: u32[>..<] = [];
 var pathmask: i64 = 0;
 var pbuf: u8[>..] = [];        // path being built
-var nbuf: u8[>..] = [];        // normalized path
-var trig_buf: u8[>..] = [];
 
 fn path_grow() {
     let n = if pathtab.len == 0 { 1024 } else { pathtab.len * 2 };
@@ -60,8 +58,7 @@ fn path_grow() {
 
 // Normalizes pbuf into nbuf: drops "." components and empty ones, folds
 // "x/.." textually.
-fn normalize_path() {
-    nbuf.clear();
+fn normalize_path(nbuf: u8[>..]&) {
     var i = 0;
     let n = pbuf.len;
     if n > 0 && pbuf[0] == '/' { nbuf.push('/'); }
@@ -144,7 +141,8 @@ fn note_dir(dl: i64) {
 
 // The file at path pbuf, loaded once; -1 if there is none.
 fn lookup_file() -> i64 {
-    normalize_path();
+    var nbuf: u8[>..] = [];
+    normalize_path(nbuf);
     let h = hash_bytes(nbuf);
     if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
     let p = path_slot(nbuf, h);
@@ -173,8 +171,8 @@ fn load_file(path: const u8[:]) -> i64 {
     if src.len - s >= 3 && src[s] == 239 && src[s + 1] == 187 && src[s + 2] == 191 { s += 3; }
     var e = src.len;
     if opt_trigraphs && has_trigraphs(s, e) {
-        trig_buf.clear();
-        replace_trigraphs(s, e);
+        var trig_buf: u8[>..] = [];
+        replace_trigraphs(s, e, trig_buf);
         s = src.len;
         src.append(trig_buf);
         e = src.len;
@@ -182,9 +180,7 @@ fn load_file(path: const u8[:]) -> i64 {
     src.push(0);
     src.push(0);
     let f = files.len;
-    files.push(FileRec { path: 0, path_len: 0, start: s as! u32, end: e as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0 });
-    file_spelling.push(0);
-    file_spelling_len.push(0);
+    files.push(FileRec { path: 0, path_len: 0, start: s as! u32, end: e as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0, sp_off: 0, sp_len: 0 });
     return f;
 }
 
@@ -204,7 +200,7 @@ fn has_trigraphs(s: i64, e: i64) -> bool {
     return false;
 }
 
-fn replace_trigraphs(s: i64, e: i64) {
+fn replace_trigraphs(s: i64, e: i64, trig_buf: u8[>..]&) {
     var i = s;
     while i < e {
         if i + 2 < e && src[i] == '?' && src[i + 1] == '?' && trigraph_char(src[i + 2]) != 0 {
@@ -295,9 +291,9 @@ fn push_file(f: i64, spell: const u8[:], dir_idx: i64, sys: bool) {
     if ctxs.len > 0 { save_lexer(); }
     let so = name_add(spell);
     let sl = spell.len as! u32;
-    if file_spelling_len[f] == 0 {
-        file_spelling[f] = so;
-        file_spelling_len[f] = sl;
+    if files[f].sp_len == 0 {
+        files[f].sp_off = so;
+        files[f].sp_len = sl;
     }
     let s: u8 = if sys || files[f].system { F_SYSHDR } else { 0 };
     ctxs.push(Ctx {
@@ -759,7 +755,7 @@ recursive fn do_include(t: Tok, k: i64) {
     if g >= 0 && idents[g].macro >= 0 { return; }
     if k == PK_IMPORT {
         // #import: include at most once
-        if file_spelling_len[f] != 0 { return; }
+        if files[f].sp_len != 0 { return; }
     }
     let sys = found_dir >= sys_start || (ctxs[cur_file_ctx].sys != 0 && found_dir < 0);
     // pbuf holds the spelling of the path that was found

@@ -192,7 +192,6 @@ fn tok_text_len(t: Tok) -> i64 {
 
 // Makes a token whose spelling is `s`, lexed as one token (for builtin
 // macro results). The text goes to the src scratch area.
-var mk_buf: u8[>..] = [];
 fn make_token(kind: i64, s: const u8[:], like: Tok) -> Tok {
     let off = src_add(s);
     src.push(0);
@@ -374,7 +373,7 @@ fn ctx_next(ci: i64) -> Tok {
 
 // Pastes lhs and rhs. Returns false if they do not form one token.
 fn paste_two(lhs: Tok, rhs: Tok, xl: u32) -> bool, Tok {
-    mk_buf.clear();
+    var mk_buf: u8[>..] = [];
     tok_spelling(mk_buf, lhs);
     let ll = mk_buf.len;
     tok_spelling(mk_buf, rhs);
@@ -826,7 +825,7 @@ recursive fn expand_simple(m: i64, i0: i64, xl: u32) -> bool {
 
 // Stringizes the tokens b..e of buffer `bf` (# operator).
 fn stringify_range(bf: u8, s: i64, e: i64, xl: u32) -> Tok {
-    mk_buf.clear();
+    var mk_buf: u8[>..] = [];
     mk_buf.push('"');
     var first = true;
     for j in s..e {

@@ -277,6 +277,8 @@ struct FileRec {
     system: bool,                 // #pragma GCC system_header seen
     lines_first: i32,             // index into line_starts, -1 = not built yet
     lines_count: i32,
+    sp_off: u32, sp_len: u32,     // the spelling it was first included by (names), the
+                                  // presumed file name of diagnostics; 0 = not included yet
 }
 var files: FileRec[>..] = [];
 var line_starts: u32[>..] = [];
@@ -350,20 +352,14 @@ fn line_col(f: i64, off: i64) -> i64, i64 {
 var n_errors: i64 = 0;
 var n_warnings: i64 = 0;
 var quiet_warnings: bool = true;
-var err_out: u8[>..] = [];
-
-// Presumed file name for diagnostics at a location (set by the preprocessor:
-// the spelling the file was included by).
-var file_spelling: u32[>..] = [];      // per file: offset in names of the spelling, len in file_spelling_len
-var file_spelling_len: u32[>..] = [];
 
 fn loc_prefix(out: u8[>..]&, loc: i64) {
     let f = file_of(loc);
     if f < 0 { out.append("<scratch>: "); return; }
     let line, col = line_col(f, loc);
-    if f < file_spelling.len {
-        let o = file_spelling[f] as i64;
-        out.append(names[o..o + file_spelling_len[f]]);
+    if f < files.len {
+        let o = files[f].sp_off as i64;
+        out.append(names[o..o + files[f].sp_len]);
     } else {
         let o = files[f].path as i64;
         out.append(names[o..o + files[f].path_len]);
@@ -376,7 +372,7 @@ var diag_suppressed_errors: i64 = 0;
 
 fn error_at(loc: i64, msg: const u8[:]) {
     if diag_suppress > 0 { diag_suppressed_errors++; return; }
-    err_out.clear();
+    var err_out: u8[>..] = [];
     loc_prefix(err_out, loc);
     err_out.append("error: ");
     err_out.append(msg);
@@ -390,7 +386,7 @@ fn warn_at(loc: i64, msg: const u8[:]) {
     if diag_suppress > 0 { return; }
     n_warnings++;
     if quiet_warnings { return; }
-    err_out.clear();
+    var err_out: u8[>..] = [];
     loc_prefix(err_out, loc);
     err_out.append("warning: ");
     err_out.append(msg);

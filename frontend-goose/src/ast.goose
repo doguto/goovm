@@ -249,19 +249,17 @@ struct SymAttr { asm_label: u32, asm_len: u32, cleanup: i32, align: u32, flags: 
 var sym_attrs: SymAttr[>..] = [];
 
 // Per identifier: the innermost ordinary / tag binding (-1 none).
-var id_ord: i32[>..] = [];
-var id_tag: i32[>..] = [];
-var id_label: i32[>..] = [];
+// Per identifier, the innermost binding in each name space (symbol, -1 none).
+struct IdBind { ord: i32, tag: i32, label: i32 }
+var id_bind: IdBind[>..] = [];
 
 var scope_depth: i64 = 0;
 var scope_log: u32[>..<] = [];     // symbols bound, innermost scope last
 var scope_marks: u32[>..<] = [];
 
 fn ensure_ids() {
-    while id_ord.len < idents.len {
-        id_ord.push(-1);
-        id_tag.push(-1);
-        id_label.push(-1);
+    while id_bind.len < idents.len {
+        id_bind.push(IdBind { ord: -1, tag: -1, label: -1 });
     }
 }
 
@@ -278,11 +276,11 @@ fn bind_sym(s: i64, tag: bool) {
     if name == 0 { return; }
     ensure_ids();
     if tag {
-        syms[s].prev = id_tag[name];
-        id_tag[name] = s as! i32;
+        syms[s].prev = id_bind[name].tag;
+        id_bind[name].tag = s as! i32;
     } else {
-        syms[s].prev = id_ord[name];
-        id_ord[name] = s as! i32;
+        syms[s].prev = id_bind[name].ord;
+        id_bind[name].ord = s as! i32;
     }
     syms[s].scope = scope_depth as! u32;
     scope_log.push(s as! u32);
@@ -300,9 +298,9 @@ fn pop_scope() {
         let s = scope_log[j] as i64;
         let name = syms[s].name as i64;
         if syms[s].kind == SK_TAG {
-            id_tag[name] = syms[s].prev;
+            id_bind[name].tag = syms[s].prev;
         } else {
-            id_ord[name] = syms[s].prev;
+            id_bind[name].ord = syms[s].prev;
         }
         j--;
     }
@@ -311,13 +309,13 @@ fn pop_scope() {
 }
 
 fn lookup_ord(name: u32) -> i64 {
-    if name as i64 >= id_ord.len { return -1; }
-    return id_ord[name] as i64;
+    if name as i64 >= id_bind.len { return -1; }
+    return id_bind[name].ord as i64;
 }
 
 fn lookup_tag(name: u32) -> i64 {
-    if name as i64 >= id_tag.len { return -1; }
-    return id_tag[name] as i64;
+    if name as i64 >= id_bind.len { return -1; }
+    return id_bind[name].tag as i64;
 }
 
 fn sym_name(s: i64) -> const u8[:] { ident_text(syms[s].name as i64) }

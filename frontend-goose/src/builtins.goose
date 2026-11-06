@@ -90,7 +90,6 @@ fn lex_string_tokens(s: const u8[:]) -> i64 {
     return first;
 }
 
-var bt_name: u8[>..] = [];
 
 // The function type of builtin entry b (parsed on first use).
 recursive fn builtin_type(b: i64) -> u32 {
@@ -171,11 +170,11 @@ fn bind_file_scope(s: i64) {
     syms[s].prev = -1;
     syms[s].scope = 0;
     if scope_depth == 0 {
-        id_ord[name] = s as! i32;
+        id_bind[name].ord = s as! i32;
         scope_log.push(s as! u32);
         return;
     }
-    id_ord[name] = s as! i32;
+    id_bind[name].ord = s as! i32;
     late_file_syms.push(s as! u32);
 }
 var late_file_syms: u32[>..] = [];

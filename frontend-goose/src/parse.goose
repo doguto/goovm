@@ -1651,11 +1651,11 @@ var switch_defaults: u8[>..<] = [];
 
 fn label_ref(name: u32, loc: u32) -> i64 {
     ensure_ids();
-    let l = id_label[name] as i64;
+    let l = id_bind[name].label as i64;
     if l >= 0 && syms[l].v == func_gen { return l; }
     let s = new_sym(SK_LABEL, name, t_void, loc);
     syms[s].v = func_gen;
-    id_label[name] = s as! i32;
+    id_bind[name].label = s as! i32;
     label_syms.push(s as! u32);
     return s;
 }

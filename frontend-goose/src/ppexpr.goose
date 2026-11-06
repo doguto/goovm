@@ -458,10 +458,9 @@ fn feature_value(kind: i64, name: const u8[:]) -> i64 {
     return table_lookup(2, nm);
 }
 
-var bt2: u8[>..] = [];
 fn attr_value(k: i64, name: const u8[:]) -> i64 {
     // Normalize __x__ (also after a scope).
-    bt2.clear();
+    var bt2: u8[>..] = [];
     var nm = name;
     var scope_len = -1;
     let cpos = find(nm, "::");
@@ -615,9 +614,8 @@ recursive fn has_include(name: Tok, next: bool) -> i64 {
     return if f >= 0 { 1 } else { 0 };
 }
 
-var num_buf: u8[>..] = [];
 fn number_token(v: i64, like: Tok) -> Tok {
-    num_buf.clear();
+    var num_buf: u8[>..] = [];
     format(num_buf, v);
     return make_token(TK_NUMBER, num_buf, like);
 }
@@ -929,9 +927,7 @@ fn pp_start(path: const u8[:]) -> bool {
     src.push(0);
     src.push(0);
     let bf = files.len;
-    files.push(FileRec { path: name_add("<built-in>"), path_len: 10, start: bstart as! u32, end: bend as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0 });
-    file_spelling.push(0);
-    file_spelling_len.push(0);
+    files.push(FileRec { path: name_add("<built-in>"), path_len: 10, start: bstart as! u32, end: bend as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0, sp_off: 0, sp_len: 0 });
     let save = mode_E;
     mode_E = false;
     push_file(f, path, -1, false);

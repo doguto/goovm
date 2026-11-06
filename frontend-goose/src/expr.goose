@@ -21,7 +21,6 @@ fn hexval(c: u8) -> u64 {
     return (c - 'A' + 10) as u64;
 }
 
-var lit_buf: u8[>..] = [];
 
 fn number_literal(t: Tok) -> u32 {
     let s = src[t.spell..t.spell + t.val];
@@ -142,7 +141,7 @@ fn float_literal(s: const u8[:], loc: u32, hex: bool, off: u32) -> u32 {
         }
         v = float_text::ldexp(m, exp as! i32);
     } else {
-        lit_buf.clear();
+        var lit_buf: u8[>..] = [];
         for c in body { if c != '\'' { lit_buf.push(c); } }
         // parse_flt wants a digit before a '.'
         if lit_buf.len > 0 && lit_buf[0] == '.' {

@@ -354,13 +354,12 @@ fn alloca(size: i64, align: i64) -> u32 {
 }
 
 // Grows m_data by n zero bytes (M, the back-end's view, forbids resize).
-var zero_page: u8[>..] = [];
+let ZERO_PAGE: const u8[4096] = [0; 4096];
 fn data_grow(n: i64) {
-    if zero_page.len == 0 { for i in 4096 { zero_page.push(0); } }
     var left = n;
     while left > 0 {
         let k = if left > 4096 { 4096 } else { left };
-        m_data.append(zero_page[..k]);
+        m_data.append(ZERO_PAGE[..k]);
         left -= k;
     }
 }

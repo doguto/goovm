@@ -50,8 +50,6 @@ var std_len: i64 = 0;
 var out_len: i64 = 0;
 var opt_mode: i64 = 0;      // 0 = -fsyntax-only, 1 = -E, 2 = --layout-check, 3 = --dump-ast, 4 = -c, 5 = --emit-gir
 var opt_time: bool = false;
-var sys_dirs_after: u32[>..] = [];   // -idirafter: (off, len) pairs
-var isystem_dirs: u32[>..] = [];
 var nostdinc: bool = false;
 
 fn add_dir(d: const u8[:], sys: bool) {
@@ -261,8 +259,11 @@ fn out_is_stdout() -> bool { out_len == 1 && names[out_off] == '-' }
 // rather than truncating it (goosecc_rt.h): 1 on success.
 extern fn write_output(path: const u8[:], data: const u8[:]) -> i64 = "goosecc_write_file";
 
-fn main() {
+// The options and the include search list.
+fn options() {
     let a = args();
+    var sys_dirs_after: u32[>..] = [];   // -idirafter: (off, len) pairs
+    var isystem_dirs: u32[>..] = [];
     var i = 1;
     var quote: u32[>..] = [];
     var angled: u32[>..] = [];
@@ -359,7 +360,10 @@ fn main() {
     }
     k = 0;
     while k + 1 < sys_dirs_after.len { add_dir(names[sys_dirs_after[k]..sys_dirs_after[k] + sys_dirs_after[k + 1]], true); k += 2; }
+}
 
+fn main() {
+    options();
     let t0 = clock_ns();
     if opt_mode == 1 {
         mode_E = true;

@@ -17,8 +17,9 @@ var dstr_map = dictionary<u32, u32> {};    // interned string -> offset in m_dst
 var dfile_of: i32[>..] = [];               // frontend file -> dfiles index (-1 not yet)
 var dbg_cu: u32 = 0;
 var dbg_sp: u32 = 0;                       // the current subprogram
-var dbg_scopes: u32[>..<] = [];            // the stack of lexical scopes (0 = not made yet)
-var dbg_scope_nodes: u32[>..<] = [];
+// The stack of lexical scopes: the compound statement, its DScope (0 = not made yet).
+struct DbgScope { scope: u32, node: u32 }
+var dbg_scopes: DbgScope[>..<] = [];
 var last_line: u32 = 0;
 var last_col: u32 = 0;
 var last_scope: u32 = 0;
@@ -58,9 +59,9 @@ fn dfile(f: i64) -> u32 {
     if dfile_of[f] >= 0 { return dfile_of[f] as! u32; }
     let p = files[f].path as i64;
     var nm = names[p..p + files[f].path_len];
-    if f < file_spelling.len {
-        let o = file_spelling[f] as i64;
-        nm = names[o..o + file_spelling_len[f]];
+    if f < files.len {
+        let o = files[f].sp_off as i64;
+        nm = names[o..o + files[f].sp_len];
     }
     let d = dfile_for_name(nm);
     dfile_of[f] = d as! i32;
@@ -72,7 +73,6 @@ fn dbg_function_begin(s: i64, loc: u32) {
     last_col = 0;
     last_scope = 0;
     dbg_scopes.clear();
-    dbg_scope_nodes.clear();
     cur_dbg = 0;
     if !opt_debug { return; }
     let xl = expansion_loc(loc) as i64;
@@ -97,13 +97,11 @@ fn dbg_function_end() -> u32 {
 fn dbg_scope_enter(n: u32) {
     if !opt_debug { return; }
     // the function body is the subprogram itself
-    dbg_scope_nodes.push(n);
-    dbg_scopes.push(if dbg_scope_nodes.len == 1 { dbg_sp } else { 0 });
+    dbg_scopes.push(DbgScope { scope: if dbg_scopes.len == 0 { dbg_sp } else { 0 }, node: n });
 }
 
 fn dbg_scope_leave() {
     if !opt_debug { return; }
-    dbg_scope_nodes.pop();
     dbg_scopes.pop();
 }
 
@@ -111,13 +109,13 @@ fn dbg_scope_leave() {
 fn dbg_cur_scope() -> u32 {
     var k = dbg_scopes.len - 1;
     if k < 0 { return dbg_sp; }
-    if dbg_scopes[k] != 0 { return dbg_scopes[k]; }
+    if dbg_scopes[k].scope != 0 { return dbg_scopes[k].scope; }
     // make the missing blocks from the outside in
     var i: i64 = 0;
     var parent = dbg_sp;
     while i <= k {
-        if dbg_scopes[i] == 0 {
-            let n = dbg_scope_nodes[i];
+        if dbg_scopes[i].scope == 0 {
+            let n = dbg_scopes[i].node;
             let loc = expansion_loc(nodes[n].loc) as i64;
             let f = file_of(loc);
             var line: i64 = 0;
@@ -130,12 +128,12 @@ fn dbg_cur_scope() -> u32 {
                 file = dfile(f);
             }
             m_dscopes.push(DScope { kind: 3, parent: parent, file: file, line: line as! u32, name: 0, extra: col as! u32 });
-            dbg_scopes[i] = (m_dscopes.len - 1) as! u32;
+            dbg_scopes[i].scope = (m_dscopes.len - 1) as! u32;
         }
-        parent = dbg_scopes[i];
+        parent = dbg_scopes[i].scope;
         i++;
     }
-    return dbg_scopes[k];
+    return dbg_scopes[k].scope;
 }
 
 var last_loc: u32 = 0;      // the location of the statement being lowered (for late diagnostics)
@@ -221,9 +219,10 @@ fn pop_loc(saved: u32) {
 
 inline fn dbg_on() -> bool { opt_debug && f_sym >= 0 }
 
-// The outermost function-like macro invocations, sorted and disjoint.
-var mx_start: u32[>..] = [];
-var mx_end: u32[>..] = [];
+// The outermost function-like macro invocations, sorted and disjoint:
+// the name's offset and the ')''s.
+struct MxRange { start: u32, end: u32 }
+var mx: MxRange[>..] = [];
 
 fn mx_prepare() {
     sort(mx_ranges);
@@ -231,9 +230,8 @@ fn mx_prepare() {
         let s = (r >> 32) as! u32;
         let e = (r & 0xFFFFFFFF) as! u32;
         // an invocation in the arguments of another one is inside it
-        if mx_end.len > 0 && s <= mx_end[mx_end.len - 1] { continue; }
-        mx_start.push(s);
-        mx_end.push(e);
+        if mx.len > 0 && s <= mx[mx.len - 1].end { continue; }
+        mx.push(MxRange { start: s, end: e });
     }
 }
 
@@ -246,18 +244,18 @@ var mx_hint: i64 = 0;                      // the range found last
 fn expansion_loc(loc: u32) -> u32 {
     // locations come mostly in order: try the last range and the gap after it
     let h = mx_hint;
-    if h < mx_start.len && mx_start[h] <= loc {
-        if loc <= mx_end[h] { return mx_start[h]; }
-        if h + 1 >= mx_start.len || loc < mx_start[h + 1] { return loc; }
+    if h < mx.len && mx[h].start <= loc {
+        if loc <= mx[h].end { return mx[h].start; }
+        if h + 1 >= mx.len || loc < mx[h + 1].start { return loc; }
     }
     var lo: i64 = 0;
-    var hi = mx_start.len;
+    var hi = mx.len;
     while lo < hi {
         let mid = (lo + hi) / 2;
-        if mx_start[mid] <= loc { lo = mid + 1; } else { hi = mid; }
+        if mx[mid].start <= loc { lo = mid + 1; } else { hi = mid; }
     }
     if lo > 0 { mx_hint = lo - 1; }
-    if lo > 0 && loc <= mx_end[lo - 1] { return mx_start[lo - 1]; }
+    if lo > 0 && loc <= mx[lo - 1].end { return mx[lo - 1].start; }
     return loc;
 }
 
