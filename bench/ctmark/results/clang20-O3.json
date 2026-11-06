@@ -1,0 +1,6579 @@
+{
+ "label": "clang 20.1.2, CTMark, O3",
+ "programs": {
+  "7zip": {
+   "wall": 48.69521715899896,
+   "files": 212.0,
+   "ExecuteCompiler": 41.497475,
+   "Frontend": 23.643220999999997,
+   "Optimizer": 9.908869999999999,
+   "CodeGenPasses": 7.237551,
+   "Backend": 17.402043999999993
+  },
+  "Bullet": {
+   "wall": 23.484067471000117,
+   "files": 121.0,
+   "ExecuteCompiler": 19.190304999999995,
+   "Frontend": 8.249436999999999,
+   "Optimizer": 6.366919000000003,
+   "CodeGenPasses": 4.154325000000002,
+   "Backend": 10.655344000000001
+  },
+  "tramp3d-v4": {
+   "wall": 17.04628961000003,
+   "files": 1.0,
+   "ExecuteCompiler": 15.597911,
+   "Frontend": 2.4526,
+   "Optimizer": 9.133907,
+   "CodeGenPasses": 3.982152,
+   "Backend": 13.120088
+  },
+  "kimwitu++": {
+   "wall": 10.515396549999991,
+   "files": 14.0,
+   "ExecuteCompiler": 9.177136999999998,
+   "Frontend": 3.250516,
+   "Optimizer": 2.895396,
+   "CodeGenPasses": 2.956934,
+   "Backend": 5.877455000000001
+  },
+  "lencod": {
+   "wall": 12.05443440599936,
+   "files": 55.0,
+   "ExecuteCompiler": 10.524374,
+   "Frontend": 1.4098310000000003,
+   "Optimizer": 5.354365,
+   "CodeGenPasses": 3.611011,
+   "Backend": 9.030218999999997
+  },
+  "SPASS": {
+   "wall": 10.928022170999839,
+   "files": 51.0,
+   "ExecuteCompiler": 9.241935000000002,
+   "Frontend": 1.6302290000000002,
+   "Optimizer": 4.653143000000001,
+   "CodeGenPasses": 2.828451,
+   "Backend": 7.537718
+  },
+  "ClamAV": {
+   "wall": 11.590681058000314,
+   "files": 98.0,
+   "ExecuteCompiler": 9.261340000000006,
+   "Frontend": 1.6498699999999995,
+   "Optimizer": 4.223515999999999,
+   "CodeGenPasses": 3.1503049999999986,
+   "Backend": 7.477074999999999
+  },
+  "sqlite3": {
+   "wall": 7.84517804099994,
+   "files": 2.0,
+   "ExecuteCompiler": 7.538405,
+   "Frontend": 0.363151,
+   "Optimizer": 4.218158,
+   "CodeGenPasses": 2.9498309999999996,
+   "Backend": 7.1711529999999994
+  },
+  "consumer-typeset": {
+   "wall": 7.1554670920000945,
+   "files": 51.0,
+   "ExecuteCompiler": 5.806997999999999,
+   "Frontend": 1.0803669999999999,
+   "Optimizer": 2.3976080000000004,
+   "CodeGenPasses": 2.196911999999999,
+   "Backend": 4.652907
+  },
+  "mafft": {
+   "wall": 6.95771017599975,
+   "files": 27.0,
+   "ExecuteCompiler": 6.170579,
+   "Frontend": 0.7523300000000002,
+   "Optimizer": 2.9384100000000006,
+   "CodeGenPasses": 2.406901,
+   "Backend": 5.377542999999999
+  }
+ },
+ "files": [
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/myWindows/myGetTickCount.cpp",
+   "program": "7zip",
+   "wall": 0.16530101500006822,
+   "ExecuteCompiler": 0.135398,
+   "Frontend": 0.124113,
+   "Optimizer": 0.004344,
+   "CodeGenPasses": 0.002473,
+   "Backend": 0.009362
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/myWindows/wine_date_and_time.cpp",
+   "program": "7zip",
+   "wall": 0.0837683920000245,
+   "ExecuteCompiler": 0.057815,
+   "Frontend": 0.023764,
+   "Optimizer": 0.015731,
+   "CodeGenPasses": 0.015701,
+   "Backend": 0.03259
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/myWindows/myAddExeFlag.cpp",
+   "program": "7zip",
+   "wall": 0.1676799409999603,
+   "ExecuteCompiler": 0.138563,
+   "Frontend": 0.129886,
+   "Optimizer": 0.002836,
+   "CodeGenPasses": 0.001811,
+   "Backend": 0.005822
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/myWindows/mySplitCommandLine.cpp",
+   "program": "7zip",
+   "wall": 0.18935436000003847,
+   "ExecuteCompiler": 0.158356,
+   "Frontend": 0.128789,
+   "Optimizer": 0.018046,
+   "CodeGenPasses": 0.007999,
+   "Backend": 0.027283
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/BenchCon.cpp",
+   "program": "7zip",
+   "wall": 0.22476798600007442,
+   "ExecuteCompiler": 0.190352,
+   "Frontend": 0.132312,
+   "Optimizer": 0.030067,
+   "CodeGenPasses": 0.024379,
+   "Backend": 0.055735
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/ConsoleClose.cpp",
+   "program": "7zip",
+   "wall": 0.16842895900003896,
+   "ExecuteCompiler": 0.136643,
+   "Frontend": 0.12528,
+   "Optimizer": 0.003287,
+   "CodeGenPasses": 0.004511,
+   "Backend": 0.009007
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/ExtractCallbackConsole.cpp",
+   "program": "7zip",
+   "wall": 0.24375979400008418,
+   "ExecuteCompiler": 0.207566,
+   "Frontend": 0.154849,
+   "Optimizer": 0.025569,
+   "CodeGenPasses": 0.02337,
+   "Backend": 0.050255
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/List.cpp",
+   "program": "7zip",
+   "wall": 0.454724060999979,
+   "ExecuteCompiler": 0.408037,
+   "Frontend": 0.157849,
+   "Optimizer": 0.139712,
+   "CodeGenPasses": 0.106506,
+   "Backend": 0.247543
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/Main.cpp",
+   "program": "7zip",
+   "wall": 0.4966496399999869,
+   "ExecuteCompiler": 0.446168,
+   "Frontend": 0.17063,
+   "Optimizer": 0.156976,
+   "CodeGenPasses": 0.114567,
+   "Backend": 0.272912
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/MainAr.cpp",
+   "program": "7zip",
+   "wall": 0.20271523399992475,
+   "ExecuteCompiler": 0.171564,
+   "Frontend": 0.152084,
+   "Optimizer": 0.00753,
+   "CodeGenPasses": 0.008085,
+   "Backend": 0.016865
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/OpenCallbackConsole.cpp",
+   "program": "7zip",
+   "wall": 0.18660538899996482,
+   "ExecuteCompiler": 0.155433,
+   "Frontend": 0.134983,
+   "Optimizer": 0.009652,
+   "CodeGenPasses": 0.007043,
+   "Backend": 0.017966
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/PercentPrinter.cpp",
+   "program": "7zip",
+   "wall": 0.1804487160000008,
+   "ExecuteCompiler": 0.14949,
+   "Frontend": 0.12567,
+   "Optimizer": 0.011008,
+   "CodeGenPasses": 0.009328,
+   "Backend": 0.021528
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/UpdateCallbackConsole.cpp",
+   "program": "7zip",
+   "wall": 0.24379866099991432,
+   "ExecuteCompiler": 0.208312,
+   "Frontend": 0.150956,
+   "Optimizer": 0.030536,
+   "CodeGenPasses": 0.023026,
+   "Backend": 0.054874
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Console/UserInputUtils.cpp",
+   "program": "7zip",
+   "wall": 0.20116480199999387,
+   "ExecuteCompiler": 0.167832,
+   "Frontend": 0.128016,
+   "Optimizer": 0.025981,
+   "CodeGenPasses": 0.010149,
+   "Backend": 0.037356
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/CommandLineParser.cpp",
+   "program": "7zip",
+   "wall": 0.26776929699997254,
+   "ExecuteCompiler": 0.231013,
+   "Frontend": 0.129037,
+   "Optimizer": 0.062835,
+   "CodeGenPasses": 0.035436,
+   "Backend": 0.099568
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/CRC.cpp",
+   "program": "7zip",
+   "wall": 0.154427069999997,
+   "ExecuteCompiler": 0.124638,
+   "Frontend": 0.11864,
+   "Optimizer": 0.001704,
+   "CodeGenPasses": 0.000888,
+   "Backend": 0.003789
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/IntToString.cpp",
+   "program": "7zip",
+   "wall": 0.19514957499995944,
+   "ExecuteCompiler": 0.164102,
+   "Frontend": 0.121017,
+   "Optimizer": 0.020396,
+   "CodeGenPasses": 0.019271,
+   "Backend": 0.040844
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/ListFileUtils.cpp",
+   "program": "7zip",
+   "wall": 0.23959212900001603,
+   "ExecuteCompiler": 0.206462,
+   "Frontend": 0.129825,
+   "Optimizer": 0.053214,
+   "CodeGenPasses": 0.019892,
+   "Backend": 0.07438
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/StdInStream.cpp",
+   "program": "7zip",
+   "wall": 0.19869335600003524,
+   "ExecuteCompiler": 0.165761,
+   "Frontend": 0.128439,
+   "Optimizer": 0.020801,
+   "CodeGenPasses": 0.013075,
+   "Backend": 0.03504
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/StdOutStream.cpp",
+   "program": "7zip",
+   "wall": 0.1888229549999778,
+   "ExecuteCompiler": 0.156277,
+   "Frontend": 0.129228,
+   "Optimizer": 0.011836,
+   "CodeGenPasses": 0.011325,
+   "Backend": 0.02436
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/MyString.cpp",
+   "program": "7zip",
+   "wall": 0.20164129800002684,
+   "ExecuteCompiler": 0.168063,
+   "Frontend": 0.132521,
+   "Optimizer": 0.016325,
+   "CodeGenPasses": 0.015763,
+   "Backend": 0.033272
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/StringConvert.cpp",
+   "program": "7zip",
+   "wall": 0.20080199400001675,
+   "ExecuteCompiler": 0.168498,
+   "Frontend": 0.127411,
+   "Optimizer": 0.025186,
+   "CodeGenPasses": 0.012337,
+   "Backend": 0.038789
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/StringToInt.cpp",
+   "program": "7zip",
+   "wall": 0.16624713300006988,
+   "ExecuteCompiler": 0.135634,
+   "Frontend": 0.116582,
+   "Optimizer": 0.008897,
+   "CodeGenPasses": 0.006955,
+   "Backend": 0.017056
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/UTFConvert.cpp",
+   "program": "7zip",
+   "wall": 0.21238615000004302,
+   "ExecuteCompiler": 0.179301,
+   "Frontend": 0.125541,
+   "Optimizer": 0.035283,
+   "CodeGenPasses": 0.014796,
+   "Backend": 0.051366
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/MyWindows.cpp",
+   "program": "7zip",
+   "wall": 0.17188751499998034,
+   "ExecuteCompiler": 0.140179,
+   "Frontend": 0.121433,
+   "Optimizer": 0.007296,
+   "CodeGenPasses": 0.007397,
+   "Backend": 0.015959
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/MyVector.cpp",
+   "program": "7zip",
+   "wall": 0.1746481650000078,
+   "ExecuteCompiler": 0.142436,
+   "Frontend": 0.120211,
+   "Optimizer": 0.008982,
+   "CodeGenPasses": 0.00961,
+   "Backend": 0.01983
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Common/Wildcard.cpp",
+   "program": "7zip",
+   "wall": 0.40916574699997454,
+   "ExecuteCompiler": 0.363023,
+   "Frontend": 0.134031,
+   "Optimizer": 0.129429,
+   "CodeGenPasses": 0.09611,
+   "Backend": 0.226744
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/Error.cpp",
+   "program": "7zip",
+   "wall": 0.19079957999997532,
+   "ExecuteCompiler": 0.159311,
+   "Frontend": 0.125513,
+   "Optimizer": 0.021834,
+   "CodeGenPasses": 0.008336,
+   "Backend": 0.031457
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/FileDir.cpp",
+   "program": "7zip",
+   "wall": 0.4219330280000122,
+   "ExecuteCompiler": 0.378703,
+   "Frontend": 0.14621,
+   "Optimizer": 0.133941,
+   "CodeGenPasses": 0.094832,
+   "Backend": 0.230037
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/FileFind.cpp",
+   "program": "7zip",
+   "wall": 0.4704176789999792,
+   "ExecuteCompiler": 0.425229,
+   "Frontend": 0.13813,
+   "Optimizer": 0.159637,
+   "CodeGenPasses": 0.123546,
+   "Backend": 0.284614
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/FileIO.cpp",
+   "program": "7zip",
+   "wall": 0.25720696499990936,
+   "ExecuteCompiler": 0.218608,
+   "Frontend": 0.134341,
+   "Optimizer": 0.046261,
+   "CodeGenPasses": 0.034089,
+   "Backend": 0.081743
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/FileName.cpp",
+   "program": "7zip",
+   "wall": 0.2053319949999377,
+   "ExecuteCompiler": 0.17289,
+   "Frontend": 0.129827,
+   "Optimizer": 0.024992,
+   "CodeGenPasses": 0.014551,
+   "Backend": 0.040788
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/PropVariant.cpp",
+   "program": "7zip",
+   "wall": 0.21113908199993148,
+   "ExecuteCompiler": 0.175882,
+   "Frontend": 0.127411,
+   "Optimizer": 0.016665,
+   "CodeGenPasses": 0.028449,
+   "Backend": 0.046323
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/PropVariantConversions.cpp",
+   "program": "7zip",
+   "wall": 0.199332836999929,
+   "ExecuteCompiler": 0.167046,
+   "Frontend": 0.130953,
+   "Optimizer": 0.020602,
+   "CodeGenPasses": 0.011804,
+   "Backend": 0.033687
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/Synchronization.cpp",
+   "program": "7zip",
+   "wall": 0.17071719299997312,
+   "ExecuteCompiler": 0.138759,
+   "Frontend": 0.127721,
+   "Optimizer": 0.004605,
+   "CodeGenPasses": 0.002708,
+   "Backend": 0.008512
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/System.cpp",
+   "program": "7zip",
+   "wall": 0.045345427000029304,
+   "ExecuteCompiler": 0.019839,
+   "Frontend": 0.014365,
+   "Optimizer": 0.001637,
+   "CodeGenPasses": 0.001192,
+   "Backend": 0.003993
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/Windows/Time.cpp",
+   "program": "7zip",
+   "wall": 0.18109531199991125,
+   "ExecuteCompiler": 0.149618,
+   "Frontend": 0.128536,
+   "Optimizer": 0.009598,
+   "CodeGenPasses": 0.007927,
+   "Backend": 0.018823
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/CreateCoder.cpp",
+   "program": "7zip",
+   "wall": 0.21596044199998232,
+   "ExecuteCompiler": 0.182488,
+   "Frontend": 0.144155,
+   "Optimizer": 0.020882,
+   "CodeGenPasses": 0.01379,
+   "Backend": 0.035984
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/CWrappers.cpp",
+   "program": "7zip",
+   "wall": 0.2098092319999978,
+   "ExecuteCompiler": 0.174314,
+   "Frontend": 0.136261,
+   "Optimizer": 0.012516,
+   "CodeGenPasses": 0.021649,
+   "Backend": 0.035591
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/FilePathAutoRename.cpp",
+   "program": "7zip",
+   "wall": 0.23121194800000922,
+   "ExecuteCompiler": 0.197243,
+   "Frontend": 0.133047,
+   "Optimizer": 0.036988,
+   "CodeGenPasses": 0.023273,
+   "Backend": 0.061624
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/FileStreams.cpp",
+   "program": "7zip",
+   "wall": 0.22926165699993817,
+   "ExecuteCompiler": 0.192742,
+   "Frontend": 0.13538,
+   "Optimizer": 0.025493,
+   "CodeGenPasses": 0.02823,
+   "Backend": 0.05505
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/FilterCoder.cpp",
+   "program": "7zip",
+   "wall": 0.32475797899996905,
+   "ExecuteCompiler": 0.274364,
+   "Frontend": 0.139322,
+   "Optimizer": 0.06354,
+   "CodeGenPasses": 0.067774,
+   "Backend": 0.132679
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/InBuffer.cpp",
+   "program": "7zip",
+   "wall": 0.176305579999962,
+   "ExecuteCompiler": 0.144417,
+   "Frontend": 0.127558,
+   "Optimizer": 0.006483,
+   "CodeGenPasses": 0.006845,
+   "Backend": 0.014642
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/InOutTempBuffer.cpp",
+   "program": "7zip",
+   "wall": 0.21059487800005172,
+   "ExecuteCompiler": 0.175812,
+   "Frontend": 0.133394,
+   "Optimizer": 0.0197,
+   "CodeGenPasses": 0.019141,
+   "Backend": 0.040085
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/LimitedStreams.cpp",
+   "program": "7zip",
+   "wall": 0.24548508800000945,
+   "ExecuteCompiler": 0.207126,
+   "Frontend": 0.1364,
+   "Optimizer": 0.035511,
+   "CodeGenPasses": 0.031587,
+   "Backend": 0.068402
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/LockedStream.cpp",
+   "program": "7zip",
+   "wall": 0.19561893399998098,
+   "ExecuteCompiler": 0.15969,
+   "Frontend": 0.138726,
+   "Optimizer": 0.009068,
+   "CodeGenPasses": 0.007787,
+   "Backend": 0.018296
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/MemBlocks.cpp",
+   "program": "7zip",
+   "wall": 0.20707889900006649,
+   "ExecuteCompiler": 0.175982,
+   "Frontend": 0.125112,
+   "Optimizer": 0.02407,
+   "CodeGenPasses": 0.023508,
+   "Backend": 0.048787
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/MethodId.cpp",
+   "program": "7zip",
+   "wall": 0.16359873499993682,
+   "ExecuteCompiler": 0.134707,
+   "Frontend": 0.120522,
+   "Optimizer": 0.008099,
+   "CodeGenPasses": 0.002887,
+   "Backend": 0.012065
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/MethodProps.cpp",
+   "program": "7zip",
+   "wall": 0.19130155000004834,
+   "ExecuteCompiler": 0.159884,
+   "Frontend": 0.130298,
+   "Optimizer": 0.015001,
+   "CodeGenPasses": 0.010997,
+   "Backend": 0.027198
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/OffsetStream.cpp",
+   "program": "7zip",
+   "wall": 0.178260039999941,
+   "ExecuteCompiler": 0.146179,
+   "Frontend": 0.124524,
+   "Optimizer": 0.00922,
+   "CodeGenPasses": 0.008744,
+   "Backend": 0.019416
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/OutBuffer.cpp",
+   "program": "7zip",
+   "wall": 0.16765525699997852,
+   "ExecuteCompiler": 0.137922,
+   "Frontend": 0.115928,
+   "Optimizer": 0.009769,
+   "CodeGenPasses": 0.008783,
+   "Backend": 0.019676
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/OutMemStream.cpp",
+   "program": "7zip",
+   "wall": 0.18628293800009033,
+   "ExecuteCompiler": 0.154671,
+   "Frontend": 0.121703,
+   "Optimizer": 0.015675,
+   "CodeGenPasses": 0.014212,
+   "Backend": 0.030984
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/ProgressMt.cpp",
+   "program": "7zip",
+   "wall": 0.17206257100008315,
+   "ExecuteCompiler": 0.142567,
+   "Frontend": 0.120338,
+   "Optimizer": 0.010673,
+   "CodeGenPasses": 0.008521,
+   "Backend": 0.020293
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/ProgressUtils.cpp",
+   "program": "7zip",
+   "wall": 0.18033707500001128,
+   "ExecuteCompiler": 0.147257,
+   "Frontend": 0.123115,
+   "Optimizer": 0.01114,
+   "CodeGenPasses": 0.009303,
+   "Backend": 0.021712
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/StreamBinder.cpp",
+   "program": "7zip",
+   "wall": 0.20531407500004661,
+   "ExecuteCompiler": 0.16933,
+   "Frontend": 0.12905,
+   "Optimizer": 0.020414,
+   "CodeGenPasses": 0.016267,
+   "Backend": 0.037971
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/StreamObjects.cpp",
+   "program": "7zip",
+   "wall": 0.24772439599996687,
+   "ExecuteCompiler": 0.208871,
+   "Frontend": 0.130647,
+   "Optimizer": 0.036795,
+   "CodeGenPasses": 0.037724,
+   "Backend": 0.075863
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/StreamUtils.cpp",
+   "program": "7zip",
+   "wall": 0.16980236200004128,
+   "ExecuteCompiler": 0.138575,
+   "Frontend": 0.120166,
+   "Optimizer": 0.008119,
+   "CodeGenPasses": 0.006422,
+   "Backend": 0.015869
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Common/VirtThread.cpp",
+   "program": "7zip",
+   "wall": 0.16028503400002592,
+   "ExecuteCompiler": 0.129608,
+   "Frontend": 0.11642,
+   "Optimizer": 0.005801,
+   "CodeGenPasses": 0.004192,
+   "Backend": 0.01113
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/ArchiveCommandLine.cpp",
+   "program": "7zip",
+   "wall": 0.4942412030000014,
+   "ExecuteCompiler": 0.449344,
+   "Frontend": 0.158866,
+   "Optimizer": 0.176417,
+   "CodeGenPasses": 0.110431,
+   "Backend": 0.288046
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/ArchiveExtractCallback.cpp",
+   "program": "7zip",
+   "wall": 0.37728895599991574,
+   "ExecuteCompiler": 0.331628,
+   "Frontend": 0.164314,
+   "Optimizer": 0.087856,
+   "CodeGenPasses": 0.075654,
+   "Backend": 0.16486
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/ArchiveOpenCallback.cpp",
+   "program": "7zip",
+   "wall": 0.32697158799999215,
+   "ExecuteCompiler": 0.279924,
+   "Frontend": 0.148357,
+   "Optimizer": 0.074271,
+   "CodeGenPasses": 0.053608,
+   "Backend": 0.129112
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/Bench.cpp",
+   "program": "7zip",
+   "wall": 0.48921453699995254,
+   "ExecuteCompiler": 0.437622,
+   "Frontend": 0.15238,
+   "Optimizer": 0.182599,
+   "CodeGenPasses": 0.09812,
+   "Backend": 0.282142
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/DefaultName.cpp",
+   "program": "7zip",
+   "wall": 0.25295146999997087,
+   "ExecuteCompiler": 0.216308,
+   "Frontend": 0.141579,
+   "Optimizer": 0.049034,
+   "CodeGenPasses": 0.02171,
+   "Backend": 0.072056
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/EnumDirItems.cpp",
+   "program": "7zip",
+   "wall": 0.4196130990000029,
+   "ExecuteCompiler": 0.376329,
+   "Frontend": 0.148212,
+   "Optimizer": 0.130709,
+   "CodeGenPasses": 0.093728,
+   "Backend": 0.225709
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/Extract.cpp",
+   "program": "7zip",
+   "wall": 0.36453672499999357,
+   "ExecuteCompiler": 0.320929,
+   "Frontend": 0.158403,
+   "Optimizer": 0.10236,
+   "CodeGenPasses": 0.056349,
+   "Backend": 0.16001
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/ExtractingFilePath.cpp",
+   "program": "7zip",
+   "wall": 0.22564148499998282,
+   "ExecuteCompiler": 0.189306,
+   "Frontend": 0.131033,
+   "Optimizer": 0.032047,
+   "CodeGenPasses": 0.022583,
+   "Backend": 0.055887
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/LoadCodecs.cpp",
+   "program": "7zip",
+   "wall": 0.30565604400010216,
+   "ExecuteCompiler": 0.265503,
+   "Frontend": 0.139232,
+   "Optimizer": 0.078399,
+   "CodeGenPasses": 0.044238,
+   "Backend": 0.123816
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/OpenArchive.cpp",
+   "program": "7zip",
+   "wall": 0.49388975300007587,
+   "ExecuteCompiler": 0.434716,
+   "Frontend": 0.15913,
+   "Optimizer": 0.141163,
+   "CodeGenPasses": 0.130395,
+   "Backend": 0.273032
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/PropIDUtils.cpp",
+   "program": "7zip",
+   "wall": 0.22168411799998466,
+   "ExecuteCompiler": 0.188459,
+   "Frontend": 0.130458,
+   "Optimizer": 0.036162,
+   "CodeGenPasses": 0.018258,
+   "Backend": 0.055731
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/SetProperties.cpp",
+   "program": "7zip",
+   "wall": 0.22593737599993347,
+   "ExecuteCompiler": 0.190683,
+   "Frontend": 0.135038,
+   "Optimizer": 0.033922,
+   "CodeGenPasses": 0.018188,
+   "Backend": 0.05336
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/SortUtils.cpp",
+   "program": "7zip",
+   "wall": 0.1777699389999725,
+   "ExecuteCompiler": 0.146692,
+   "Frontend": 0.125104,
+   "Optimizer": 0.013123,
+   "CodeGenPasses": 0.00464,
+   "Backend": 0.019011
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/TempFiles.cpp",
+   "program": "7zip",
+   "wall": 0.1680592019999949,
+   "ExecuteCompiler": 0.138144,
+   "Frontend": 0.129592,
+   "Optimizer": 0.003486,
+   "CodeGenPasses": 0.001659,
+   "Backend": 0.006362
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/Update.cpp",
+   "program": "7zip",
+   "wall": 0.6452336090000017,
+   "ExecuteCompiler": 0.587623,
+   "Frontend": 0.169209,
+   "Optimizer": 0.258584,
+   "CodeGenPasses": 0.155285,
+   "Backend": 0.415218
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/UpdateAction.cpp",
+   "program": "7zip",
+   "wall": 0.15417895500002032,
+   "ExecuteCompiler": 0.125076,
+   "Frontend": 0.121451,
+   "Optimizer": 0.000169,
+   "CodeGenPasses": 0.000166,
+   "Backend": 0.001578
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/UpdateCallback.cpp",
+   "program": "7zip",
+   "wall": 0.3275125839999191,
+   "ExecuteCompiler": 0.285452,
+   "Frontend": 0.148441,
+   "Optimizer": 0.071793,
+   "CodeGenPasses": 0.061578,
+   "Backend": 0.13461
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/UpdatePair.cpp",
+   "program": "7zip",
+   "wall": 0.22829307699998935,
+   "ExecuteCompiler": 0.196439,
+   "Frontend": 0.123748,
+   "Optimizer": 0.043115,
+   "CodeGenPasses": 0.026163,
+   "Backend": 0.070388
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/UI/Common/UpdateProduce.cpp",
+   "program": "7zip",
+   "wall": 0.16204361499990227,
+   "ExecuteCompiler": 0.134352,
+   "Frontend": 0.121041,
+   "Optimizer": 0.005731,
+   "CodeGenPasses": 0.004257,
+   "Backend": 0.011051
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Bz2Handler.cpp",
+   "program": "7zip",
+   "wall": 0.3166067129999419,
+   "ExecuteCompiler": 0.276974,
+   "Frontend": 0.141098,
+   "Optimizer": 0.068905,
+   "CodeGenPasses": 0.063484,
+   "Backend": 0.133529
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/DeflateProps.cpp",
+   "program": "7zip",
+   "wall": 0.21246802899997874,
+   "ExecuteCompiler": 0.182198,
+   "Frontend": 0.120845,
+   "Optimizer": 0.030588,
+   "CodeGenPasses": 0.027669,
+   "Backend": 0.059288
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/GzHandler.cpp",
+   "program": "7zip",
+   "wall": 0.4198416389999693,
+   "ExecuteCompiler": 0.366882,
+   "Frontend": 0.14456,
+   "Optimizer": 0.12462,
+   "CodeGenPasses": 0.094262,
+   "Backend": 0.220084
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/LzmaHandler.cpp",
+   "program": "7zip",
+   "wall": 0.2572765620000155,
+   "ExecuteCompiler": 0.218012,
+   "Frontend": 0.129163,
+   "Optimizer": 0.049229,
+   "CodeGenPasses": 0.03626,
+   "Backend": 0.086608
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/PpmdHandler.cpp",
+   "program": "7zip",
+   "wall": 0.29040209900006175,
+   "ExecuteCompiler": 0.252318,
+   "Frontend": 0.130422,
+   "Optimizer": 0.067274,
+   "CodeGenPasses": 0.051324,
+   "Backend": 0.119784
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/SplitHandler.cpp",
+   "program": "7zip",
+   "wall": 0.36077855200005615,
+   "ExecuteCompiler": 0.320525,
+   "Frontend": 0.132397,
+   "Optimizer": 0.104515,
+   "CodeGenPasses": 0.08032,
+   "Backend": 0.185885
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/XzHandler.cpp",
+   "program": "7zip",
+   "wall": 0.42164133800008585,
+   "ExecuteCompiler": 0.375578,
+   "Frontend": 0.137059,
+   "Optimizer": 0.131489,
+   "CodeGenPasses": 0.103709,
+   "Backend": 0.23649
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/ZHandler.cpp",
+   "program": "7zip",
+   "wall": 0.19627059499998722,
+   "ExecuteCompiler": 0.161373,
+   "Frontend": 0.119415,
+   "Optimizer": 0.022643,
+   "CodeGenPasses": 0.016252,
+   "Backend": 0.039987
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/CoderMixer2.cpp",
+   "program": "7zip",
+   "wall": 0.19817868399991312,
+   "ExecuteCompiler": 0.166772,
+   "Frontend": 0.116632,
+   "Optimizer": 0.031034,
+   "CodeGenPasses": 0.016288,
+   "Backend": 0.048361
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/CoderMixer2MT.cpp",
+   "program": "7zip",
+   "wall": 0.3342600879999509,
+   "ExecuteCompiler": 0.288774,
+   "Frontend": 0.130449,
+   "Optimizer": 0.097905,
+   "CodeGenPasses": 0.057126,
+   "Backend": 0.156198
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/CrossThreadProgress.cpp",
+   "program": "7zip",
+   "wall": 0.15999089000001732,
+   "ExecuteCompiler": 0.129754,
+   "Frontend": 0.115123,
+   "Optimizer": 0.006688,
+   "CodeGenPasses": 0.005017,
+   "Backend": 0.01274
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/DummyOutStream.cpp",
+   "program": "7zip",
+   "wall": 0.1518653489999906,
+   "ExecuteCompiler": 0.125012,
+   "Frontend": 0.110424,
+   "Optimizer": 0.006644,
+   "CodeGenPasses": 0.005268,
+   "Backend": 0.012903
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/FindSignature.cpp",
+   "program": "7zip",
+   "wall": 0.15613531499991495,
+   "ExecuteCompiler": 0.129366,
+   "Frontend": 0.110894,
+   "Optimizer": 0.008369,
+   "CodeGenPasses": 0.007171,
+   "Backend": 0.016627
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/HandlerOut.cpp",
+   "program": "7zip",
+   "wall": 0.31365140999992036,
+   "ExecuteCompiler": 0.277017,
+   "Frontend": 0.126009,
+   "Optimizer": 0.088252,
+   "CodeGenPasses": 0.059585,
+   "Backend": 0.14897
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/InStreamWithCRC.cpp",
+   "program": "7zip",
+   "wall": 0.16711856100005207,
+   "ExecuteCompiler": 0.138171,
+   "Frontend": 0.112773,
+   "Optimizer": 0.011505,
+   "CodeGenPasses": 0.010873,
+   "Backend": 0.02351
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/ItemNameUtils.cpp",
+   "program": "7zip",
+   "wall": 0.16516354800000954,
+   "ExecuteCompiler": 0.13689,
+   "Frontend": 0.113457,
+   "Optimizer": 0.013952,
+   "CodeGenPasses": 0.006587,
+   "Backend": 0.021585
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/MultiStream.cpp",
+   "program": "7zip",
+   "wall": 0.17092009899999994,
+   "ExecuteCompiler": 0.141342,
+   "Frontend": 0.114168,
+   "Optimizer": 0.013164,
+   "CodeGenPasses": 0.010634,
+   "Backend": 0.024929
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/OutStreamWithCRC.cpp",
+   "program": "7zip",
+   "wall": 0.1622785690000228,
+   "ExecuteCompiler": 0.13348,
+   "Frontend": 0.117201,
+   "Optimizer": 0.007255,
+   "CodeGenPasses": 0.00581,
+   "Backend": 0.014192
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Common/ParseProperties.cpp",
+   "program": "7zip",
+   "wall": 0.19876266099993245,
+   "ExecuteCompiler": 0.165435,
+   "Frontend": 0.131083,
+   "Optimizer": 0.017612,
+   "CodeGenPasses": 0.012973,
+   "Backend": 0.031923
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zCompressionMode.cpp",
+   "program": "7zip",
+   "wall": 0.15295234899997467,
+   "ExecuteCompiler": 0.125221,
+   "Frontend": 0.121282,
+   "Optimizer": 0.000162,
+   "CodeGenPasses": 0.00014,
+   "Backend": 0.001615
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zDecode.cpp",
+   "program": "7zip",
+   "wall": 0.3574630650000472,
+   "ExecuteCompiler": 0.314547,
+   "Frontend": 0.157476,
+   "Optimizer": 0.103693,
+   "CodeGenPasses": 0.049714,
+   "Backend": 0.154657
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zEncode.cpp",
+   "program": "7zip",
+   "wall": 0.4449700559999883,
+   "ExecuteCompiler": 0.391004,
+   "Frontend": 0.161906,
+   "Optimizer": 0.140009,
+   "CodeGenPasses": 0.085532,
+   "Backend": 0.226725
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zExtract.cpp",
+   "program": "7zip",
+   "wall": 0.24124746500001493,
+   "ExecuteCompiler": 0.206371,
+   "Frontend": 0.142001,
+   "Optimizer": 0.038122,
+   "CodeGenPasses": 0.023068,
+   "Backend": 0.062344
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zFolderInStream.cpp",
+   "program": "7zip",
+   "wall": 0.2038745080000126,
+   "ExecuteCompiler": 0.171514,
+   "Frontend": 0.123524,
+   "Optimizer": 0.025164,
+   "CodeGenPasses": 0.019754,
+   "Backend": 0.045995
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zFolderOutStream.cpp",
+   "program": "7zip",
+   "wall": 0.2093215779999582,
+   "ExecuteCompiler": 0.176706,
+   "Frontend": 0.125092,
+   "Optimizer": 0.026941,
+   "CodeGenPasses": 0.021471,
+   "Backend": 0.049519
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zHandler.cpp",
+   "program": "7zip",
+   "wall": 0.4517922599999338,
+   "ExecuteCompiler": 0.407228,
+   "Frontend": 0.139017,
+   "Optimizer": 0.143371,
+   "CodeGenPasses": 0.121397,
+   "Backend": 0.26593
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zHandlerOut.cpp",
+   "program": "7zip",
+   "wall": 0.36306959500006997,
+   "ExecuteCompiler": 0.319705,
+   "Frontend": 0.143863,
+   "Optimizer": 0.097886,
+   "CodeGenPasses": 0.074555,
+   "Backend": 0.173584
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zHeader.cpp",
+   "program": "7zip",
+   "wall": 0.13782613099999708,
+   "ExecuteCompiler": 0.111824,
+   "Frontend": 0.108245,
+   "Optimizer": 0.000168,
+   "CodeGenPasses": 0.000169,
+   "Backend": 0.001411
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zIn.cpp",
+   "program": "7zip",
+   "wall": 0.5416031229999589,
+   "ExecuteCompiler": 0.493855,
+   "Frontend": 0.146875,
+   "Optimizer": 0.203818,
+   "CodeGenPasses": 0.139877,
+   "Backend": 0.344809
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zOut.cpp",
+   "program": "7zip",
+   "wall": 0.5048962909999091,
+   "ExecuteCompiler": 0.449647,
+   "Frontend": 0.153309,
+   "Optimizer": 0.173575,
+   "CodeGenPasses": 0.11889,
+   "Backend": 0.293865
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zProperties.cpp",
+   "program": "7zip",
+   "wall": 0.20839742400005434,
+   "ExecuteCompiler": 0.176068,
+   "Frontend": 0.136515,
+   "Optimizer": 0.021788,
+   "CodeGenPasses": 0.014204,
+   "Backend": 0.037258
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zSpecStream.cpp",
+   "program": "7zip",
+   "wall": 0.1837365700000646,
+   "ExecuteCompiler": 0.151208,
+   "Frontend": 0.125095,
+   "Optimizer": 0.011266,
+   "CodeGenPasses": 0.011366,
+   "Backend": 0.023897
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zUpdate.cpp",
+   "program": "7zip",
+   "wall": 0.7835752679999359,
+   "ExecuteCompiler": 0.721493,
+   "Frontend": 0.180196,
+   "Optimizer": 0.336128,
+   "CodeGenPasses": 0.200741,
+   "Backend": 0.538407
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/7z/7zRegister.cpp",
+   "program": "7zip",
+   "wall": 0.17552216299998236,
+   "ExecuteCompiler": 0.14165,
+   "Frontend": 0.133538,
+   "Optimizer": 0.002109,
+   "CodeGenPasses": 0.002401,
+   "Backend": 0.00576
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Cab/CabBlockInStream.cpp",
+   "program": "7zip",
+   "wall": 0.19919633399990744,
+   "ExecuteCompiler": 0.167496,
+   "Frontend": 0.124049,
+   "Optimizer": 0.023353,
+   "CodeGenPasses": 0.016724,
+   "Backend": 0.041192
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Cab/CabHandler.cpp",
+   "program": "7zip",
+   "wall": 0.5166856380000127,
+   "ExecuteCompiler": 0.461804,
+   "Frontend": 0.152637,
+   "Optimizer": 0.187565,
+   "CodeGenPasses": 0.117726,
+   "Backend": 0.306477
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Cab/CabHeader.cpp",
+   "program": "7zip",
+   "wall": 0.14088859499997852,
+   "ExecuteCompiler": 0.11498,
+   "Frontend": 0.111775,
+   "Optimizer": 0.000148,
+   "CodeGenPasses": 0.000136,
+   "Backend": 0.001412
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Cab/CabIn.cpp",
+   "program": "7zip",
+   "wall": 0.2986195480000333,
+   "ExecuteCompiler": 0.262754,
+   "Frontend": 0.133933,
+   "Optimizer": 0.077468,
+   "CodeGenPasses": 0.047941,
+   "Backend": 0.126677
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Cab/CabRegister.cpp",
+   "program": "7zip",
+   "wall": 0.20000651899999866,
+   "ExecuteCompiler": 0.165246,
+   "Frontend": 0.130402,
+   "Optimizer": 0.015484,
+   "CodeGenPasses": 0.015719,
+   "Backend": 0.032586
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Tar/TarHandler.cpp",
+   "program": "7zip",
+   "wall": 0.3871320470000228,
+   "ExecuteCompiler": 0.339661,
+   "Frontend": 0.151828,
+   "Optimizer": 0.10124,
+   "CodeGenPasses": 0.082859,
+   "Backend": 0.185348
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Tar/TarHandlerOut.cpp",
+   "program": "7zip",
+   "wall": 0.257112635999988,
+   "ExecuteCompiler": 0.221874,
+   "Frontend": 0.137176,
+   "Optimizer": 0.046513,
+   "CodeGenPasses": 0.034372,
+   "Backend": 0.082131
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Tar/TarHeader.cpp",
+   "program": "7zip",
+   "wall": 0.15126181599998745,
+   "ExecuteCompiler": 0.122669,
+   "Frontend": 0.118726,
+   "Optimizer": 0.000211,
+   "CodeGenPasses": 0.000184,
+   "Backend": 0.001655
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Tar/TarIn.cpp",
+   "program": "7zip",
+   "wall": 0.29014405700002044,
+   "ExecuteCompiler": 0.256323,
+   "Frontend": 0.128641,
+   "Optimizer": 0.073486,
+   "CodeGenPasses": 0.050384,
+   "Backend": 0.125117
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Tar/TarOut.cpp",
+   "program": "7zip",
+   "wall": 0.2755585280000332,
+   "ExecuteCompiler": 0.240568,
+   "Frontend": 0.128938,
+   "Optimizer": 0.0631,
+   "CodeGenPasses": 0.044502,
+   "Backend": 0.108964
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Tar/TarUpdate.cpp",
+   "program": "7zip",
+   "wall": 0.24939583899993067,
+   "ExecuteCompiler": 0.214441,
+   "Frontend": 0.135739,
+   "Optimizer": 0.044353,
+   "CodeGenPasses": 0.030526,
+   "Backend": 0.076141
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Tar/TarRegister.cpp",
+   "program": "7zip",
+   "wall": 0.15384965399994144,
+   "ExecuteCompiler": 0.126086,
+   "Frontend": 0.118551,
+   "Optimizer": 0.001986,
+   "CodeGenPasses": 0.002118,
+   "Backend": 0.00516
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Zip/ZipAddCommon.cpp",
+   "program": "7zip",
+   "wall": 0.30145771499996954,
+   "ExecuteCompiler": 0.262771,
+   "Frontend": 0.152071,
+   "Optimizer": 0.071546,
+   "CodeGenPasses": 0.035663,
+   "Backend": 0.108514
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Zip/ZipHandler.cpp",
+   "program": "7zip",
+   "wall": 0.5310144029999719,
+   "ExecuteCompiler": 0.4752,
+   "Frontend": 0.169453,
+   "Optimizer": 0.176716,
+   "CodeGenPasses": 0.125449,
+   "Backend": 0.303312
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Zip/ZipHandlerOut.cpp",
+   "program": "7zip",
+   "wall": 0.3691384510000262,
+   "ExecuteCompiler": 0.332338,
+   "Frontend": 0.142283,
+   "Optimizer": 0.100263,
+   "CodeGenPasses": 0.086151,
+   "Backend": 0.187607
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Zip/ZipHeader.cpp",
+   "program": "7zip",
+   "wall": 0.140786941999977,
+   "ExecuteCompiler": 0.114686,
+   "Frontend": 0.110318,
+   "Optimizer": 0.000869,
+   "CodeGenPasses": 0.000171,
+   "Backend": 0.002156
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Zip/ZipIn.cpp",
+   "program": "7zip",
+   "wall": 0.38738501199998154,
+   "ExecuteCompiler": 0.346131,
+   "Frontend": 0.136418,
+   "Optimizer": 0.113184,
+   "CodeGenPasses": 0.093178,
+   "Backend": 0.207509
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Zip/ZipItem.cpp",
+   "program": "7zip",
+   "wall": 0.1751739369999541,
+   "ExecuteCompiler": 0.144274,
+   "Frontend": 0.121936,
+   "Optimizer": 0.010097,
+   "CodeGenPasses": 0.008868,
+   "Backend": 0.020063
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Zip/ZipOut.cpp",
+   "program": "7zip",
+   "wall": 0.24829742800000076,
+   "ExecuteCompiler": 0.214658,
+   "Frontend": 0.125885,
+   "Optimizer": 0.04606,
+   "CodeGenPasses": 0.039091,
+   "Backend": 0.08636
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Zip/ZipUpdate.cpp",
+   "program": "7zip",
+   "wall": 0.6312199870000086,
+   "ExecuteCompiler": 0.57211,
+   "Frontend": 0.162589,
+   "Optimizer": 0.258977,
+   "CodeGenPasses": 0.146808,
+   "Backend": 0.407058
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Archive/Zip/ZipRegister.cpp",
+   "program": "7zip",
+   "wall": 0.16496825299998363,
+   "ExecuteCompiler": 0.133694,
+   "Frontend": 0.126271,
+   "Optimizer": 0.001939,
+   "CodeGenPasses": 0.002133,
+   "Backend": 0.005163
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/Bcj2Coder.cpp",
+   "program": "7zip",
+   "wall": 0.2709998379999661,
+   "ExecuteCompiler": 0.232864,
+   "Frontend": 0.124159,
+   "Optimizer": 0.059417,
+   "CodeGenPasses": 0.045544,
+   "Backend": 0.106243
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/Bcj2Register.cpp",
+   "program": "7zip",
+   "wall": 0.16010788400001275,
+   "ExecuteCompiler": 0.130808,
+   "Frontend": 0.120101,
+   "Optimizer": 0.005044,
+   "CodeGenPasses": 0.002359,
+   "Backend": 0.008441
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BcjCoder.cpp",
+   "program": "7zip",
+   "wall": 0.15621231499994792,
+   "ExecuteCompiler": 0.127947,
+   "Frontend": 0.113801,
+   "Optimizer": 0.005715,
+   "CodeGenPasses": 0.005225,
+   "Backend": 0.011921
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BcjRegister.cpp",
+   "program": "7zip",
+   "wall": 0.1515583019998985,
+   "ExecuteCompiler": 0.123827,
+   "Frontend": 0.115317,
+   "Optimizer": 0.00322,
+   "CodeGenPasses": 0.002128,
+   "Backend": 0.006491
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BitlDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.15028439499997148,
+   "ExecuteCompiler": 0.122955,
+   "Frontend": 0.113123,
+   "Optimizer": 0.004015,
+   "CodeGenPasses": 0.0026,
+   "Backend": 0.007714
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BranchCoder.cpp",
+   "program": "7zip",
+   "wall": 0.15622112500000185,
+   "ExecuteCompiler": 0.127983,
+   "Frontend": 0.115165,
+   "Optimizer": 0.005413,
+   "CodeGenPasses": 0.004418,
+   "Backend": 0.0109
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BranchMisc.cpp",
+   "program": "7zip",
+   "wall": 0.16844330300000365,
+   "ExecuteCompiler": 0.137965,
+   "Frontend": 0.1151,
+   "Optimizer": 0.008255,
+   "CodeGenPasses": 0.01136,
+   "Backend": 0.020707
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BranchRegister.cpp",
+   "program": "7zip",
+   "wall": 0.16124905100002707,
+   "ExecuteCompiler": 0.132327,
+   "Frontend": 0.116004,
+   "Optimizer": 0.006542,
+   "CodeGenPasses": 0.006549,
+   "Backend": 0.014194
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/ByteSwap.cpp",
+   "program": "7zip",
+   "wall": 0.1719371299999466,
+   "ExecuteCompiler": 0.142056,
+   "Frontend": 0.116352,
+   "Optimizer": 0.011405,
+   "CodeGenPasses": 0.011243,
+   "Backend": 0.023783
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BZip2Crc.cpp",
+   "program": "7zip",
+   "wall": 0.15584179600000425,
+   "ExecuteCompiler": 0.128094,
+   "Frontend": 0.112514,
+   "Optimizer": 0.007706,
+   "CodeGenPasses": 0.005024,
+   "Backend": 0.013806
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BZip2Decoder.cpp",
+   "program": "7zip",
+   "wall": 0.4276279609999847,
+   "ExecuteCompiler": 0.381727,
+   "Frontend": 0.134155,
+   "Optimizer": 0.136502,
+   "CodeGenPasses": 0.107521,
+   "Backend": 0.245216
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BZip2Encoder.cpp",
+   "program": "7zip",
+   "wall": 0.4731115270000146,
+   "ExecuteCompiler": 0.429581,
+   "Frontend": 0.13086,
+   "Optimizer": 0.16462,
+   "CodeGenPasses": 0.130742,
+   "Backend": 0.296565
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/BZip2Register.cpp",
+   "program": "7zip",
+   "wall": 0.15823920900004396,
+   "ExecuteCompiler": 0.131029,
+   "Frontend": 0.12403,
+   "Optimizer": 0.001892,
+   "CodeGenPasses": 0.00203,
+   "Backend": 0.00501
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/CopyCoder.cpp",
+   "program": "7zip",
+   "wall": 0.18609097299997757,
+   "ExecuteCompiler": 0.149559,
+   "Frontend": 0.116182,
+   "Optimizer": 0.015543,
+   "CodeGenPasses": 0.014724,
+   "Backend": 0.031425
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/CopyRegister.cpp",
+   "program": "7zip",
+   "wall": 0.15024708399994324,
+   "ExecuteCompiler": 0.122536,
+   "Frontend": 0.115075,
+   "Optimizer": 0.003022,
+   "CodeGenPasses": 0.001605,
+   "Backend": 0.005704
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/Deflate64Register.cpp",
+   "program": "7zip",
+   "wall": 0.19677507699998387,
+   "ExecuteCompiler": 0.164364,
+   "Frontend": 0.122965,
+   "Optimizer": 0.020741,
+   "CodeGenPasses": 0.01755,
+   "Backend": 0.039459
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/DeflateDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.39683017000004384,
+   "ExecuteCompiler": 0.350546,
+   "Frontend": 0.139051,
+   "Optimizer": 0.1199,
+   "CodeGenPasses": 0.087691,
+   "Backend": 0.208886
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/DeflateEncoder.cpp",
+   "program": "7zip",
+   "wall": 0.5455858049999733,
+   "ExecuteCompiler": 0.495351,
+   "Frontend": 0.141711,
+   "Optimizer": 0.203262,
+   "CodeGenPasses": 0.146503,
+   "Backend": 0.351057
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/DeflateRegister.cpp",
+   "program": "7zip",
+   "wall": 0.2149661250000463,
+   "ExecuteCompiler": 0.177921,
+   "Frontend": 0.13165,
+   "Optimizer": 0.022838,
+   "CodeGenPasses": 0.019864,
+   "Backend": 0.043981
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/DeltaFilter.cpp",
+   "program": "7zip",
+   "wall": 0.21900995999999395,
+   "ExecuteCompiler": 0.180498,
+   "Frontend": 0.126851,
+   "Optimizer": 0.025687,
+   "CodeGenPasses": 0.02448,
+   "Backend": 0.051474
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/ImplodeDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.2603091679999352,
+   "ExecuteCompiler": 0.222158,
+   "Frontend": 0.132075,
+   "Optimizer": 0.050746,
+   "CodeGenPasses": 0.035715,
+   "Backend": 0.087787
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/ImplodeHuffmanDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.17544897799996306,
+   "ExecuteCompiler": 0.145319,
+   "Frontend": 0.119159,
+   "Optimizer": 0.014526,
+   "CodeGenPasses": 0.008553,
+   "Backend": 0.024219
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/Lzma2Decoder.cpp",
+   "program": "7zip",
+   "wall": 0.26883021999992707,
+   "ExecuteCompiler": 0.226031,
+   "Frontend": 0.136235,
+   "Optimizer": 0.041203,
+   "CodeGenPasses": 0.044918,
+   "Backend": 0.087373
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/Lzma2Encoder.cpp",
+   "program": "7zip",
+   "wall": 0.2570106880000367,
+   "ExecuteCompiler": 0.215324,
+   "Frontend": 0.16023,
+   "Optimizer": 0.021963,
+   "CodeGenPasses": 0.029169,
+   "Backend": 0.052531
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/Lzma2Register.cpp",
+   "program": "7zip",
+   "wall": 0.16343583600007605,
+   "ExecuteCompiler": 0.133705,
+   "Frontend": 0.125533,
+   "Optimizer": 0.002254,
+   "CodeGenPasses": 0.002409,
+   "Backend": 0.005901
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/LzmaDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.2683154400000376,
+   "ExecuteCompiler": 0.227592,
+   "Frontend": 0.128382,
+   "Optimizer": 0.04668,
+   "CodeGenPasses": 0.049013,
+   "Backend": 0.096915
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/LzmaEncoder.cpp",
+   "program": "7zip",
+   "wall": 0.21824709500003792,
+   "ExecuteCompiler": 0.183034,
+   "Frontend": 0.129687,
+   "Optimizer": 0.02569,
+   "CodeGenPasses": 0.024116,
+   "Backend": 0.051183
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/LzmaRegister.cpp",
+   "program": "7zip",
+   "wall": 0.16566545400007726,
+   "ExecuteCompiler": 0.13514,
+   "Frontend": 0.127159,
+   "Optimizer": 0.002186,
+   "CodeGenPasses": 0.002366,
+   "Backend": 0.005768
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/LzOutWindow.cpp",
+   "program": "7zip",
+   "wall": 0.15905840499999613,
+   "ExecuteCompiler": 0.129913,
+   "Frontend": 0.123868,
+   "Optimizer": 0.001429,
+   "CodeGenPasses": 0.001323,
+   "Backend": 0.003946
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/Lzx86Converter.cpp",
+   "program": "7zip",
+   "wall": 0.18722697200007588,
+   "ExecuteCompiler": 0.156148,
+   "Frontend": 0.124474,
+   "Optimizer": 0.017009,
+   "CodeGenPasses": 0.011299,
+   "Backend": 0.029517
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/LzxDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.37557519000006323,
+   "ExecuteCompiler": 0.334381,
+   "Frontend": 0.135812,
+   "Optimizer": 0.120032,
+   "CodeGenPasses": 0.074461,
+   "Backend": 0.195806
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/PpmdDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.2122331520000671,
+   "ExecuteCompiler": 0.17782,
+   "Frontend": 0.120017,
+   "Optimizer": 0.027554,
+   "CodeGenPasses": 0.026686,
+   "Backend": 0.055489
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/PpmdEncoder.cpp",
+   "program": "7zip",
+   "wall": 0.2054164789999504,
+   "ExecuteCompiler": 0.172134,
+   "Frontend": 0.124812,
+   "Optimizer": 0.02238,
+   "CodeGenPasses": 0.021841,
+   "Backend": 0.045373
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/PpmdRegister.cpp",
+   "program": "7zip",
+   "wall": 0.17438948100004836,
+   "ExecuteCompiler": 0.142622,
+   "Frontend": 0.12886,
+   "Optimizer": 0.006008,
+   "CodeGenPasses": 0.004185,
+   "Backend": 0.011473
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/PpmdZip.cpp",
+   "program": "7zip",
+   "wall": 0.2297206669999241,
+   "ExecuteCompiler": 0.194773,
+   "Frontend": 0.132133,
+   "Optimizer": 0.030188,
+   "CodeGenPasses": 0.028622,
+   "Backend": 0.060165
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/QuantumDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.3164233759999888,
+   "ExecuteCompiler": 0.276054,
+   "Frontend": 0.134201,
+   "Optimizer": 0.077395,
+   "CodeGenPasses": 0.060979,
+   "Backend": 0.139603
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/ShrinkDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.228631962999998,
+   "ExecuteCompiler": 0.194044,
+   "Frontend": 0.130461,
+   "Optimizer": 0.03181,
+   "CodeGenPasses": 0.028303,
+   "Backend": 0.061416
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Compress/ZDecoder.cpp",
+   "program": "7zip",
+   "wall": 0.22187478299997565,
+   "ExecuteCompiler": 0.18743,
+   "Frontend": 0.131605,
+   "Optimizer": 0.027285,
+   "CodeGenPasses": 0.024953,
+   "Backend": 0.053535
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/7zAes.cpp",
+   "program": "7zip",
+   "wall": 0.36141934399995534,
+   "ExecuteCompiler": 0.312658,
+   "Frontend": 0.14496,
+   "Optimizer": 0.084208,
+   "CodeGenPasses": 0.079675,
+   "Backend": 0.165167
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/7zAesRegister.cpp",
+   "program": "7zip",
+   "wall": 0.17882800799998222,
+   "ExecuteCompiler": 0.146459,
+   "Frontend": 0.129338,
+   "Optimizer": 0.009269,
+   "CodeGenPasses": 0.004312,
+   "Backend": 0.01483
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/HmacSha1.cpp",
+   "program": "7zip",
+   "wall": 0.18661108399999193,
+   "ExecuteCompiler": 0.155,
+   "Frontend": 0.124941,
+   "Optimizer": 0.017021,
+   "CodeGenPasses": 0.009503,
+   "Backend": 0.027947
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/MyAes.cpp",
+   "program": "7zip",
+   "wall": 0.2022983210000575,
+   "ExecuteCompiler": 0.166659,
+   "Frontend": 0.130669,
+   "Optimizer": 0.014656,
+   "CodeGenPasses": 0.017537,
+   "Backend": 0.033425
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/Pbkdf2HmacSha1.cpp",
+   "program": "7zip",
+   "wall": 0.15873557800000526,
+   "ExecuteCompiler": 0.130318,
+   "Frontend": 0.112166,
+   "Optimizer": 0.009381,
+   "CodeGenPasses": 0.00584,
+   "Backend": 0.016253
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/RandGen.cpp",
+   "program": "7zip",
+   "wall": 0.1644414099999949,
+   "ExecuteCompiler": 0.136447,
+   "Frontend": 0.11827,
+   "Optimizer": 0.008403,
+   "CodeGenPasses": 0.006381,
+   "Backend": 0.015979
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/Sha1.cpp",
+   "program": "7zip",
+   "wall": 0.23415521199990508,
+   "ExecuteCompiler": 0.204793,
+   "Frontend": 0.114669,
+   "Optimizer": 0.052513,
+   "CodeGenPasses": 0.034541,
+   "Backend": 0.088231
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/WzAes.cpp",
+   "program": "7zip",
+   "wall": 0.2560760459999756,
+   "ExecuteCompiler": 0.220359,
+   "Frontend": 0.124765,
+   "Optimizer": 0.047979,
+   "CodeGenPasses": 0.044419,
+   "Backend": 0.093524
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/ZipCrypto.cpp",
+   "program": "7zip",
+   "wall": 0.1993248210000047,
+   "ExecuteCompiler": 0.16531,
+   "Frontend": 0.119057,
+   "Optimizer": 0.021975,
+   "CodeGenPasses": 0.021263,
+   "Backend": 0.04439
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/CPP/7zip/Crypto/ZipStrong.cpp",
+   "program": "7zip",
+   "wall": 0.2069745439999906,
+   "ExecuteCompiler": 0.173422,
+   "Frontend": 0.129239,
+   "Optimizer": 0.020364,
+   "CodeGenPasses": 0.020487,
+   "Backend": 0.042041
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/7zStream.c",
+   "program": "7zip",
+   "wall": 0.059486352000021725,
+   "ExecuteCompiler": 0.034622,
+   "Frontend": 0.005232,
+   "Optimizer": 0.011727,
+   "CodeGenPasses": 0.015155,
+   "Backend": 0.02815
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Aes.c",
+   "program": "7zip",
+   "wall": 0.1085349679999581,
+   "ExecuteCompiler": 0.084649,
+   "Frontend": 0.007262,
+   "Optimizer": 0.045698,
+   "CodeGenPasses": 0.029307,
+   "Backend": 0.076057
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Alloc.c",
+   "program": "7zip",
+   "wall": 0.06579238100005114,
+   "ExecuteCompiler": 0.04193,
+   "Frontend": 0.015313,
+   "Optimizer": 0.011616,
+   "CodeGenPasses": 0.012593,
+   "Backend": 0.025318
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Bra.c",
+   "program": "7zip",
+   "wall": 0.0601645000000417,
+   "ExecuteCompiler": 0.037004,
+   "Frontend": 0.002856,
+   "Optimizer": 0.018403,
+   "CodeGenPasses": 0.013369,
+   "Backend": 0.032861
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Bra86.c",
+   "program": "7zip",
+   "wall": 0.03956691299993054,
+   "ExecuteCompiler": 0.01948,
+   "Frontend": 0.002213,
+   "Optimizer": 0.008131,
+   "CodeGenPasses": 0.006904,
+   "Backend": 0.016047
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/BraIA64.c",
+   "program": "7zip",
+   "wall": 0.04072671699998409,
+   "ExecuteCompiler": 0.021905,
+   "Frontend": 0.00193,
+   "Optimizer": 0.013337,
+   "CodeGenPasses": 0.004708,
+   "Backend": 0.018897
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/BwtSort.c",
+   "program": "7zip",
+   "wall": 0.08385390499995538,
+   "ExecuteCompiler": 0.062791,
+   "Frontend": 0.004023,
+   "Optimizer": 0.031117,
+   "CodeGenPasses": 0.025362,
+   "Backend": 0.057481
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Delta.c",
+   "program": "7zip",
+   "wall": 0.04660968899997897,
+   "ExecuteCompiler": 0.024762,
+   "Frontend": 0.002238,
+   "Optimizer": 0.012589,
+   "CodeGenPasses": 0.007564,
+   "Backend": 0.021283
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/HuffEnc.c",
+   "program": "7zip",
+   "wall": 0.0493327249999993,
+   "ExecuteCompiler": 0.028843,
+   "Frontend": 0.002577,
+   "Optimizer": 0.014363,
+   "CodeGenPasses": 0.009733,
+   "Backend": 0.025066
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/LzFind.c",
+   "program": "7zip",
+   "wall": 0.20869219999997313,
+   "ExecuteCompiler": 0.183354,
+   "Frontend": 0.012223,
+   "Optimizer": 0.099951,
+   "CodeGenPasses": 0.068945,
+   "Backend": 0.169901
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/LzFindMt.c",
+   "program": "7zip",
+   "wall": 0.14788511500000823,
+   "ExecuteCompiler": 0.114932,
+   "Frontend": 0.015842,
+   "Optimizer": 0.048685,
+   "CodeGenPasses": 0.047695,
+   "Backend": 0.097753
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Lzma2Dec.c",
+   "program": "7zip",
+   "wall": 0.07531058100005339,
+   "ExecuteCompiler": 0.050655,
+   "Frontend": 0.006658,
+   "Optimizer": 0.024619,
+   "CodeGenPasses": 0.016655,
+   "Backend": 0.042531
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Lzma2Enc.c",
+   "program": "7zip",
+   "wall": 0.08527648199992655,
+   "ExecuteCompiler": 0.060122,
+   "Frontend": 0.011387,
+   "Optimizer": 0.025599,
+   "CodeGenPasses": 0.020614,
+   "Backend": 0.047379
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/LzmaDec.c",
+   "program": "7zip",
+   "wall": 0.22289918299998135,
+   "ExecuteCompiler": 0.195252,
+   "Frontend": 0.015346,
+   "Optimizer": 0.114427,
+   "CodeGenPasses": 0.062673,
+   "Backend": 0.178385
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/LzmaEnc.c",
+   "program": "7zip",
+   "wall": 0.6834506939999301,
+   "ExecuteCompiler": 0.645862,
+   "Frontend": 0.029719,
+   "Optimizer": 0.379359,
+   "CodeGenPasses": 0.233737,
+   "Backend": 0.614591
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/MtCoder.c",
+   "program": "7zip",
+   "wall": 0.08982108700001845,
+   "ExecuteCompiler": 0.06259,
+   "Frontend": 0.013979,
+   "Optimizer": 0.025449,
+   "CodeGenPasses": 0.020467,
+   "Backend": 0.04701
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Ppmd7.c",
+   "program": "7zip",
+   "wall": 0.16260167300004014,
+   "ExecuteCompiler": 0.135997,
+   "Frontend": 0.01111,
+   "Optimizer": 0.079612,
+   "CodeGenPasses": 0.042692,
+   "Backend": 0.123483
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Ppmd7Dec.c",
+   "program": "7zip",
+   "wall": 0.058130664000032084,
+   "ExecuteCompiler": 0.036799,
+   "Frontend": 0.004269,
+   "Optimizer": 0.016393,
+   "CodeGenPasses": 0.01394,
+   "Backend": 0.031237
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Ppmd7Enc.c",
+   "program": "7zip",
+   "wall": 0.07268298399992545,
+   "ExecuteCompiler": 0.051651,
+   "Frontend": 0.004106,
+   "Optimizer": 0.028294,
+   "CodeGenPasses": 0.017049,
+   "Backend": 0.046313
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Ppmd8.c",
+   "program": "7zip",
+   "wall": 0.23345029100005377,
+   "ExecuteCompiler": 0.205179,
+   "Frontend": 0.014267,
+   "Optimizer": 0.118277,
+   "CodeGenPasses": 0.070099,
+   "Backend": 0.189549
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Ppmd8Dec.c",
+   "program": "7zip",
+   "wall": 0.05994536399998651,
+   "ExecuteCompiler": 0.038534,
+   "Frontend": 0.004054,
+   "Optimizer": 0.019707,
+   "CodeGenPasses": 0.012402,
+   "Backend": 0.033145
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Ppmd8Enc.c",
+   "program": "7zip",
+   "wall": 0.060211804999994456,
+   "ExecuteCompiler": 0.038292,
+   "Frontend": 0.003987,
+   "Optimizer": 0.020286,
+   "CodeGenPasses": 0.011684,
+   "Backend": 0.03302
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Sha256.c",
+   "program": "7zip",
+   "wall": 0.054936949999955687,
+   "ExecuteCompiler": 0.033311,
+   "Frontend": 0.003096,
+   "Optimizer": 0.018985,
+   "CodeGenPasses": 0.008997,
+   "Backend": 0.02895
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Sort.c",
+   "program": "7zip",
+   "wall": 0.03499940000006063,
+   "ExecuteCompiler": 0.014402,
+   "Frontend": 0.002098,
+   "Optimizer": 0.00643,
+   "CodeGenPasses": 0.003526,
+   "Backend": 0.01111
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Threads.c",
+   "program": "7zip",
+   "wall": 0.05910061500003394,
+   "ExecuteCompiler": 0.034774,
+   "Frontend": 0.011733,
+   "Optimizer": 0.007937,
+   "CodeGenPasses": 0.012726,
+   "Backend": 0.02169
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/Xz.c",
+   "program": "7zip",
+   "wall": 0.039364524000006895,
+   "ExecuteCompiler": 0.017482,
+   "Frontend": 0.003124,
+   "Optimizer": 0.005766,
+   "CodeGenPasses": 0.006134,
+   "Backend": 0.012974
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/XzCrc64.c",
+   "program": "7zip",
+   "wall": 0.03644678900002418,
+   "ExecuteCompiler": 0.016908,
+   "Frontend": 0.001791,
+   "Optimizer": 0.006913,
+   "CodeGenPasses": 0.006029,
+   "Backend": 0.013884
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/XzDec.c",
+   "program": "7zip",
+   "wall": 0.27026419600008467,
+   "ExecuteCompiler": 0.245845,
+   "Frontend": 0.01619,
+   "Optimizer": 0.060775,
+   "CodeGenPasses": 0.166617,
+   "Backend": 0.228422
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/XzEnc.c",
+   "program": "7zip",
+   "wall": 0.07791085300004852,
+   "ExecuteCompiler": 0.052266,
+   "Frontend": 0.012606,
+   "Optimizer": 0.020291,
+   "CodeGenPasses": 0.016777,
+   "Backend": 0.038227
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/XzIn.c",
+   "program": "7zip",
+   "wall": 0.07878051600005165,
+   "ExecuteCompiler": 0.056866,
+   "Frontend": 0.007299,
+   "Optimizer": 0.028109,
+   "CodeGenPasses": 0.019346,
+   "Backend": 0.0484
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/7zCrc.c",
+   "program": "7zip",
+   "wall": 0.029833822999989934,
+   "ExecuteCompiler": 0.012394,
+   "Frontend": 0.00164,
+   "Optimizer": 0.004895,
+   "CodeGenPasses": 0.003995,
+   "Backend": 0.009755
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/7zip/C/7zCrcOpt.c",
+   "program": "7zip",
+   "wall": 0.03484015200001522,
+   "ExecuteCompiler": 0.01828,
+   "Frontend": 0.001627,
+   "Optimizer": 0.008755,
+   "CodeGenPasses": 0.005551,
+   "Backend": 0.015072
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/BenchmarkDemo.cpp",
+   "program": "Bullet",
+   "wall": 1.6414205469999388,
+   "ExecuteCompiler": 1.165161,
+   "Frontend": 0.875198,
+   "Optimizer": 0.171592,
+   "CodeGenPasses": 0.11304,
+   "Backend": 0.286048
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/SphereTriangleDetector.cpp",
+   "program": "Bullet",
+   "wall": 0.15100165399996968,
+   "ExecuteCompiler": 0.120253,
+   "Frontend": 0.064296,
+   "Optimizer": 0.034984,
+   "CodeGenPasses": 0.01809,
+   "Backend": 0.054333
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btActivatingCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.14030523200005973,
+   "ExecuteCompiler": 0.113999,
+   "Frontend": 0.053117,
+   "Optimizer": 0.002029,
+   "CodeGenPasses": 0.002101,
+   "Backend": 0.005264
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btAlignedAllocator.cpp",
+   "program": "Bullet",
+   "wall": 0.06434998800000358,
+   "ExecuteCompiler": 0.04016,
+   "Frontend": 0.029338,
+   "Optimizer": 0.004024,
+   "CodeGenPasses": 0.004256,
+   "Backend": 0.009349
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btAxisSweep3.cpp",
+   "program": "Bullet",
+   "wall": 0.40100317199994606,
+   "ExecuteCompiler": 0.353084,
+   "Frontend": 0.080509,
+   "Optimizer": 0.148197,
+   "CodeGenPasses": 0.121248,
+   "Backend": 0.270707
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btBox2dBox2dCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.17843803299990668,
+   "ExecuteCompiler": 0.143573,
+   "Frontend": 0.068111,
+   "Optimizer": 0.04651,
+   "CodeGenPasses": 0.025824,
+   "Backend": 0.073512
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btBox2dShape.cpp",
+   "program": "Bullet",
+   "wall": 0.13030660999993415,
+   "ExecuteCompiler": 0.099646,
+   "Frontend": 0.050486,
+   "Optimizer": 0.024725,
+   "CodeGenPasses": 0.02174,
+   "Backend": 0.047658
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btBoxBoxCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.11638532599999962,
+   "ExecuteCompiler": 0.089278,
+   "Frontend": 0.059211,
+   "Optimizer": 0.016826,
+   "CodeGenPasses": 0.010588,
+   "Backend": 0.028463
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btBoxBoxDetector.cpp",
+   "program": "Bullet",
+   "wall": 0.20448089400008485,
+   "ExecuteCompiler": 0.174755,
+   "Frontend": 0.062317,
+   "Optimizer": 0.061999,
+   "CodeGenPasses": 0.04775,
+   "Backend": 0.110835
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btBoxShape.cpp",
+   "program": "Bullet",
+   "wall": 0.13189647800004423,
+   "ExecuteCompiler": 0.101981,
+   "Frontend": 0.054102,
+   "Optimizer": 0.024615,
+   "CodeGenPasses": 0.02044,
+   "Backend": 0.046098
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btBroadphaseProxy.cpp",
+   "program": "Bullet",
+   "wall": 0.055684991000021,
+   "ExecuteCompiler": 0.034021,
+   "Frontend": 0.031472,
+   "Optimizer": 0.000124,
+   "CodeGenPasses": 0.000104,
+   "Backend": 0.001203
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btBvhTriangleMeshShape.cpp",
+   "program": "Bullet",
+   "wall": 0.13272887000005085,
+   "ExecuteCompiler": 0.103962,
+   "Frontend": 0.051667,
+   "Optimizer": 0.028557,
+   "CodeGenPasses": 0.021188,
+   "Backend": 0.05073
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btCapsuleShape.cpp",
+   "program": "Bullet",
+   "wall": 0.11761783200006448,
+   "ExecuteCompiler": 0.090421,
+   "Frontend": 0.049675,
+   "Optimizer": 0.022159,
+   "CodeGenPasses": 0.016195,
+   "Backend": 0.03929
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.054199573999994755,
+   "ExecuteCompiler": 0.033588,
+   "Frontend": 0.028388,
+   "Optimizer": 0.001595,
+   "CodeGenPasses": 0.001407,
+   "Backend": 0.003888
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btCollisionDispatcher.cpp",
+   "program": "Bullet",
+   "wall": 0.13322999299998628,
+   "ExecuteCompiler": 0.105945,
+   "Frontend": 0.055308,
+   "Optimizer": 0.029234,
+   "CodeGenPasses": 0.019257,
+   "Backend": 0.049355
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btCollisionObject.cpp",
+   "program": "Bullet",
+   "wall": 0.07743269400009467,
+   "ExecuteCompiler": 0.053943,
+   "Frontend": 0.041473,
+   "Optimizer": 0.006325,
+   "CodeGenPasses": 0.003818,
+   "Backend": 0.011151
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btCollisionShape.cpp",
+   "program": "Bullet",
+   "wall": 0.09233687099992949,
+   "ExecuteCompiler": 0.064626,
+   "Frontend": 0.044432,
+   "Optimizer": 0.009963,
+   "CodeGenPasses": 0.007583,
+   "Backend": 0.018618
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btCollisionWorld.cpp",
+   "program": "Bullet",
+   "wall": 0.29681879700001446,
+   "ExecuteCompiler": 0.255675,
+   "Frontend": 0.090175,
+   "Optimizer": 0.098451,
+   "CodeGenPasses": 0.063944,
+   "Backend": 0.163719
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btCompoundCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.2556366070000422,
+   "ExecuteCompiler": 0.217367,
+   "Frontend": 0.08138,
+   "Optimizer": 0.088646,
+   "CodeGenPasses": 0.044555,
+   "Backend": 0.134311
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btCompoundShape.cpp",
+   "program": "Bullet",
+   "wall": 0.19028766099995664,
+   "ExecuteCompiler": 0.156984,
+   "Frontend": 0.067959,
+   "Optimizer": 0.05397,
+   "CodeGenPasses": 0.032135,
+   "Backend": 0.087262
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConcaveShape.cpp",
+   "program": "Bullet",
+   "wall": 0.07146951699996862,
+   "ExecuteCompiler": 0.048454,
+   "Frontend": 0.041473,
+   "Optimizer": 0.002695,
+   "CodeGenPasses": 0.001929,
+   "Backend": 0.005512
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConeShape.cpp",
+   "program": "Bullet",
+   "wall": 0.11479019200010043,
+   "ExecuteCompiler": 0.089106,
+   "Frontend": 0.04981,
+   "Optimizer": 0.019474,
+   "CodeGenPasses": 0.017359,
+   "Backend": 0.037862
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConeTwistConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.38303030800000215,
+   "ExecuteCompiler": 0.34463,
+   "Frontend": 0.078556,
+   "Optimizer": 0.150359,
+   "CodeGenPasses": 0.112688,
+   "Backend": 0.26427
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btContactConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.11159633800002666,
+   "ExecuteCompiler": 0.083689,
+   "Frontend": 0.058134,
+   "Optimizer": 0.016065,
+   "CodeGenPasses": 0.006914,
+   "Backend": 0.024006
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btContactProcessing.cpp",
+   "program": "Bullet",
+   "wall": 0.16889210799990906,
+   "ExecuteCompiler": 0.138568,
+   "Frontend": 0.067683,
+   "Optimizer": 0.045989,
+   "CodeGenPasses": 0.022231,
+   "Backend": 0.069334
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btContinuousConvexCollision.cpp",
+   "program": "Bullet",
+   "wall": 0.15934544900005676,
+   "ExecuteCompiler": 0.127924,
+   "Frontend": 0.061674,
+   "Optimizer": 0.040693,
+   "CodeGenPasses": 0.022918,
+   "Backend": 0.064713
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btContinuousDynamicsWorld.cpp",
+   "program": "Bullet",
+   "wall": 0.1269493429999784,
+   "ExecuteCompiler": 0.098401,
+   "Frontend": 0.074193,
+   "Optimizer": 0.012234,
+   "CodeGenPasses": 0.009176,
+   "Backend": 0.022539
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvex2dConvex2dAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.14716177299999345,
+   "ExecuteCompiler": 0.116169,
+   "Frontend": 0.069736,
+   "Optimizer": 0.025608,
+   "CodeGenPasses": 0.018135,
+   "Backend": 0.044833
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvex2dShape.cpp",
+   "program": "Bullet",
+   "wall": 0.08449026900007084,
+   "ExecuteCompiler": 0.059366,
+   "Frontend": 0.043925,
+   "Optimizer": 0.005067,
+   "CodeGenPasses": 0.008007,
+   "Backend": 0.014074
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexCast.cpp",
+   "program": "Bullet",
+   "wall": 0.07430844900000011,
+   "ExecuteCompiler": 0.050783,
+   "Frontend": 0.045439,
+   "Optimizer": 0.001883,
+   "CodeGenPasses": 0.001052,
+   "Backend": 0.003968
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexConcaveCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.22880033800004185,
+   "ExecuteCompiler": 0.192458,
+   "Frontend": 0.076692,
+   "Optimizer": 0.066199,
+   "CodeGenPasses": 0.046572,
+   "Backend": 0.113947
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexConvexAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.2548080479999726,
+   "ExecuteCompiler": 0.214829,
+   "Frontend": 0.079432,
+   "Optimizer": 0.085689,
+   "CodeGenPasses": 0.046922,
+   "Backend": 0.133691
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexHull.cpp",
+   "program": "Bullet",
+   "wall": 0.4481659829999671,
+   "ExecuteCompiler": 0.4038,
+   "Frontend": 0.06335,
+   "Optimizer": 0.198682,
+   "CodeGenPasses": 0.138751,
+   "Backend": 0.338672
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexHullShape.cpp",
+   "program": "Bullet",
+   "wall": 0.1462784279999596,
+   "ExecuteCompiler": 0.115697,
+   "Frontend": 0.054337,
+   "Optimizer": 0.034067,
+   "CodeGenPasses": 0.024508,
+   "Backend": 0.059651
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexInternalShape.cpp",
+   "program": "Bullet",
+   "wall": 0.11870442500003264,
+   "ExecuteCompiler": 0.08949,
+   "Frontend": 0.049873,
+   "Optimizer": 0.02279,
+   "CodeGenPasses": 0.014399,
+   "Backend": 0.038177
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexPlaneCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.15586567200000445,
+   "ExecuteCompiler": 0.123616,
+   "Frontend": 0.064983,
+   "Optimizer": 0.037565,
+   "CodeGenPasses": 0.018214,
+   "Backend": 0.056673
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexPointCloudShape.cpp",
+   "program": "Bullet",
+   "wall": 0.09933547200000703,
+   "ExecuteCompiler": 0.075454,
+   "Frontend": 0.046848,
+   "Optimizer": 0.014953,
+   "CodeGenPasses": 0.011475,
+   "Backend": 0.027391
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexShape.cpp",
+   "program": "Bullet",
+   "wall": 0.13624345599998833,
+   "ExecuteCompiler": 0.110015,
+   "Frontend": 0.05767,
+   "Optimizer": 0.032838,
+   "CodeGenPasses": 0.017094,
+   "Backend": 0.050888
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btConvexTriangleMeshShape.cpp",
+   "program": "Bullet",
+   "wall": 0.13675689199999397,
+   "ExecuteCompiler": 0.108015,
+   "Frontend": 0.050091,
+   "Optimizer": 0.030317,
+   "CodeGenPasses": 0.025228,
+   "Backend": 0.056447
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btCylinderShape.cpp",
+   "program": "Bullet",
+   "wall": 0.12941704599995774,
+   "ExecuteCompiler": 0.101002,
+   "Frontend": 0.049718,
+   "Optimizer": 0.025573,
+   "CodeGenPasses": 0.023306,
+   "Backend": 0.049824
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btDbvt.cpp",
+   "program": "Bullet",
+   "wall": 0.30523964799999703,
+   "ExecuteCompiler": 0.268024,
+   "Frontend": 0.063389,
+   "Optimizer": 0.122315,
+   "CodeGenPasses": 0.079511,
+   "Backend": 0.202862
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btDbvtBroadphase.cpp",
+   "program": "Bullet",
+   "wall": 0.2477598799999896,
+   "ExecuteCompiler": 0.209125,
+   "Frontend": 0.076084,
+   "Optimizer": 0.083197,
+   "CodeGenPasses": 0.047001,
+   "Backend": 0.131217
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btDefaultCollisionConfiguration.cpp",
+   "program": "Bullet",
+   "wall": 0.1477341020000722,
+   "ExecuteCompiler": 0.114283,
+   "Frontend": 0.064073,
+   "Optimizer": 0.023696,
+   "CodeGenPasses": 0.023574,
+   "Backend": 0.048492
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btDiscreteDynamicsWorld.cpp",
+   "program": "Bullet",
+   "wall": 0.6378693810000868,
+   "ExecuteCompiler": 0.577906,
+   "Frontend": 0.126258,
+   "Optimizer": 0.270226,
+   "CodeGenPasses": 0.177911,
+   "Backend": 0.449538
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btDispatcher.cpp",
+   "program": "Bullet",
+   "wall": 0.05533049199993911,
+   "ExecuteCompiler": 0.032672,
+   "Frontend": 0.028087,
+   "Optimizer": 0.001321,
+   "CodeGenPasses": 0.000928,
+   "Backend": 0.003221
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btEmptyCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.07522310100000595,
+   "ExecuteCompiler": 0.053868,
+   "Frontend": 0.047814,
+   "Optimizer": 0.001889,
+   "CodeGenPasses": 0.001975,
+   "Backend": 0.004757
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btEmptyShape.cpp",
+   "program": "Bullet",
+   "wall": 0.07205469200005155,
+   "ExecuteCompiler": 0.052226,
+   "Frontend": 0.040288,
+   "Optimizer": 0.004925,
+   "CodeGenPasses": 0.00505,
+   "Backend": 0.01083
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGImpactBvh.cpp",
+   "program": "Bullet",
+   "wall": 0.2371514850000267,
+   "ExecuteCompiler": 0.205564,
+   "Frontend": 0.070955,
+   "Optimizer": 0.091758,
+   "CodeGenPasses": 0.040219,
+   "Backend": 0.133056
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGImpactCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.4257409000000507,
+   "ExecuteCompiler": 0.372691,
+   "Frontend": 0.116362,
+   "Optimizer": 0.154372,
+   "CodeGenPasses": 0.098515,
+   "Backend": 0.254239
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGImpactQuantizedBvh.cpp",
+   "program": "Bullet",
+   "wall": 0.2908340460001,
+   "ExecuteCompiler": 0.251241,
+   "Frontend": 0.07774,
+   "Optimizer": 0.11954,
+   "CodeGenPasses": 0.050898,
+   "Backend": 0.171715
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGImpactShape.cpp",
+   "program": "Bullet",
+   "wall": 0.29176735099997586,
+   "ExecuteCompiler": 0.238541,
+   "Frontend": 0.092513,
+   "Optimizer": 0.082707,
+   "CodeGenPasses": 0.059207,
+   "Backend": 0.144086
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGeneric6DofConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.2606477790000099,
+   "ExecuteCompiler": 0.222426,
+   "Frontend": 0.069902,
+   "Optimizer": 0.085564,
+   "CodeGenPasses": 0.064096,
+   "Backend": 0.150814
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGeneric6DofSpringConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.10839831900000263,
+   "ExecuteCompiler": 0.081729,
+   "Frontend": 0.059582,
+   "Optimizer": 0.010235,
+   "CodeGenPasses": 0.009263,
+   "Backend": 0.020587
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGenericPoolAllocator.cpp",
+   "program": "Bullet",
+   "wall": 0.12002668100001301,
+   "ExecuteCompiler": 0.093341,
+   "Frontend": 0.036816,
+   "Optimizer": 0.027466,
+   "CodeGenPasses": 0.026625,
+   "Backend": 0.055055
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGeometryUtil.cpp",
+   "program": "Bullet",
+   "wall": 0.1231997989999627,
+   "ExecuteCompiler": 0.096903,
+   "Frontend": 0.037585,
+   "Optimizer": 0.034928,
+   "CodeGenPasses": 0.021764,
+   "Backend": 0.057739
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGhostObject.cpp",
+   "program": "Bullet",
+   "wall": 0.1952921280000055,
+   "ExecuteCompiler": 0.163396,
+   "Frontend": 0.064765,
+   "Optimizer": 0.060357,
+   "CodeGenPasses": 0.035589,
+   "Backend": 0.097112
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGjkConvexCast.cpp",
+   "program": "Bullet",
+   "wall": 0.11043815999994422,
+   "ExecuteCompiler": 0.082636,
+   "Frontend": 0.057929,
+   "Optimizer": 0.013575,
+   "CodeGenPasses": 0.0084,
+   "Backend": 0.023163
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGjkEpa2.cpp",
+   "program": "Bullet",
+   "wall": 0.30003031599994756,
+   "ExecuteCompiler": 0.266247,
+   "Frontend": 0.064991,
+   "Optimizer": 0.118592,
+   "CodeGenPasses": 0.079696,
+   "Backend": 0.199459
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGjkEpaPenetrationDepthSolver.cpp",
+   "program": "Bullet",
+   "wall": 0.07797212499997386,
+   "ExecuteCompiler": 0.054101,
+   "Frontend": 0.044129,
+   "Optimizer": 0.004746,
+   "CodeGenPasses": 0.00283,
+   "Backend": 0.008537
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btGjkPairDetector.cpp",
+   "program": "Bullet",
+   "wall": 0.12428044499995394,
+   "ExecuteCompiler": 0.096328,
+   "Frontend": 0.05025,
+   "Optimizer": 0.027296,
+   "CodeGenPasses": 0.015925,
+   "Backend": 0.044364
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btHeightfieldTerrainShape.cpp",
+   "program": "Bullet",
+   "wall": 0.14896289800003615,
+   "ExecuteCompiler": 0.118427,
+   "Frontend": 0.052309,
+   "Optimizer": 0.034745,
+   "CodeGenPasses": 0.028412,
+   "Backend": 0.064276
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btHinge2Constraint.cpp",
+   "program": "Bullet",
+   "wall": 0.12532543300005727,
+   "ExecuteCompiler": 0.096901,
+   "Frontend": 0.060241,
+   "Optimizer": 0.024382,
+   "CodeGenPasses": 0.009497,
+   "Backend": 0.03496
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btHingeConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.2869228449999355,
+   "ExecuteCompiler": 0.248897,
+   "Frontend": 0.071286,
+   "Optimizer": 0.103187,
+   "CodeGenPasses": 0.070928,
+   "Backend": 0.175405
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btKinematicCharacterController.cpp",
+   "program": "Bullet",
+   "wall": 0.20484380900006727,
+   "ExecuteCompiler": 0.167934,
+   "Frontend": 0.077514,
+   "Optimizer": 0.053745,
+   "CodeGenPasses": 0.033397,
+   "Backend": 0.08829
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btManifoldResult.cpp",
+   "program": "Bullet",
+   "wall": 0.10714775600001758,
+   "ExecuteCompiler": 0.079472,
+   "Frontend": 0.051517,
+   "Optimizer": 0.016913,
+   "CodeGenPasses": 0.00826,
+   "Backend": 0.026336
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btMinkowskiPenetrationDepthSolver.cpp",
+   "program": "Bullet",
+   "wall": 0.1527220689999922,
+   "ExecuteCompiler": 0.123011,
+   "Frontend": 0.058601,
+   "Optimizer": 0.045233,
+   "CodeGenPasses": 0.016166,
+   "Backend": 0.062629
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btMinkowskiSumShape.cpp",
+   "program": "Bullet",
+   "wall": 0.1132651090000536,
+   "ExecuteCompiler": 0.079746,
+   "Frontend": 0.051283,
+   "Optimizer": 0.014815,
+   "CodeGenPasses": 0.010704,
+   "Backend": 0.026658
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btMultiSapBroadphase.cpp",
+   "program": "Bullet",
+   "wall": 0.23323020099996938,
+   "ExecuteCompiler": 0.194119,
+   "Frontend": 0.065928,
+   "Optimizer": 0.080683,
+   "CodeGenPasses": 0.044388,
+   "Backend": 0.126314
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btMultiSphereShape.cpp",
+   "program": "Bullet",
+   "wall": 0.1443923360000099,
+   "ExecuteCompiler": 0.113793,
+   "Frontend": 0.0539,
+   "Optimizer": 0.036864,
+   "CodeGenPasses": 0.020287,
+   "Backend": 0.058301
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btMultimaterialTriangleMeshShape.cpp",
+   "program": "Bullet",
+   "wall": 0.08257409800000914,
+   "ExecuteCompiler": 0.058718,
+   "Frontend": 0.052827,
+   "Optimizer": 0.001704,
+   "CodeGenPasses": 0.001621,
+   "Backend": 0.004437
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btOptimizedBvh.cpp",
+   "program": "Bullet",
+   "wall": 0.20357627700002467,
+   "ExecuteCompiler": 0.170735,
+   "Frontend": 0.063243,
+   "Optimizer": 0.06947,
+   "CodeGenPasses": 0.034891,
+   "Backend": 0.105612
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btOverlappingPairCache.cpp",
+   "program": "Bullet",
+   "wall": 0.23554714900001272,
+   "ExecuteCompiler": 0.196498,
+   "Frontend": 0.059259,
+   "Optimizer": 0.079862,
+   "CodeGenPasses": 0.054564,
+   "Backend": 0.135522
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btPersistentManifold.cpp",
+   "program": "Bullet",
+   "wall": 0.11271038400002453,
+   "ExecuteCompiler": 0.0849,
+   "Frontend": 0.046351,
+   "Optimizer": 0.021863,
+   "CodeGenPasses": 0.014013,
+   "Backend": 0.03689
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btPoint2PointConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.14786095599993132,
+   "ExecuteCompiler": 0.118465,
+   "Frontend": 0.060237,
+   "Optimizer": 0.036204,
+   "CodeGenPasses": 0.019286,
+   "Backend": 0.056592
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btPolyhedralConvexShape.cpp",
+   "program": "Bullet",
+   "wall": 0.12106031100006476,
+   "ExecuteCompiler": 0.091933,
+   "Frontend": 0.050804,
+   "Optimizer": 0.023491,
+   "CodeGenPasses": 0.014914,
+   "Backend": 0.039515
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btQuantizedBvh.cpp",
+   "program": "Bullet",
+   "wall": 0.33505399600005603,
+   "ExecuteCompiler": 0.296362,
+   "Frontend": 0.069498,
+   "Optimizer": 0.141713,
+   "CodeGenPasses": 0.082278,
+   "Backend": 0.225173
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btQuickprof.cpp",
+   "program": "Bullet",
+   "wall": 0.10516354100002445,
+   "ExecuteCompiler": 0.07838,
+   "Frontend": 0.034258,
+   "Optimizer": 0.022305,
+   "CodeGenPasses": 0.019428,
+   "Backend": 0.042699
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btRaycastCallback.cpp",
+   "program": "Bullet",
+   "wall": 0.20304306499997438,
+   "ExecuteCompiler": 0.148372,
+   "Frontend": 0.059939,
+   "Optimizer": 0.028292,
+   "CodeGenPasses": 0.027774,
+   "Backend": 0.05728
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btRaycastVehicle.cpp",
+   "program": "Bullet",
+   "wall": 0.2910113079999519,
+   "ExecuteCompiler": 0.250662,
+   "Frontend": 0.079686,
+   "Optimizer": 0.103225,
+   "CodeGenPasses": 0.064889,
+   "Backend": 0.169205
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btRigidBody.cpp",
+   "program": "Bullet",
+   "wall": 0.19608395199998085,
+   "ExecuteCompiler": 0.161617,
+   "Frontend": 0.060607,
+   "Optimizer": 0.060458,
+   "CodeGenPasses": 0.038023,
+   "Backend": 0.099551
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btScaledBvhTriangleMeshShape.cpp",
+   "program": "Bullet",
+   "wall": 0.11540448799996739,
+   "ExecuteCompiler": 0.085138,
+   "Frontend": 0.053188,
+   "Optimizer": 0.017571,
+   "CodeGenPasses": 0.011685,
+   "Backend": 0.030376
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSequentialImpulseConstraintSolver.cpp",
+   "program": "Bullet",
+   "wall": 0.471896448999928,
+   "ExecuteCompiler": 0.427599,
+   "Frontend": 0.088782,
+   "Optimizer": 0.196549,
+   "CodeGenPasses": 0.138966,
+   "Backend": 0.336697
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btShapeHull.cpp",
+   "program": "Bullet",
+   "wall": 0.1650518829999328,
+   "ExecuteCompiler": 0.133456,
+   "Frontend": 0.056822,
+   "Optimizer": 0.055676,
+   "CodeGenPasses": 0.017979,
+   "Backend": 0.07487
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSimpleBroadphase.cpp",
+   "program": "Bullet",
+   "wall": 0.16149337100000594,
+   "ExecuteCompiler": 0.128908,
+   "Frontend": 0.055384,
+   "Optimizer": 0.041961,
+   "CodeGenPasses": 0.028417,
+   "Backend": 0.071557
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSimpleDynamicsWorld.cpp",
+   "program": "Bullet",
+   "wall": 0.1570347719999745,
+   "ExecuteCompiler": 0.124407,
+   "Frontend": 0.070812,
+   "Optimizer": 0.027689,
+   "CodeGenPasses": 0.022777,
+   "Backend": 0.051641
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSimulationIslandManager.cpp",
+   "program": "Bullet",
+   "wall": 0.19268316599993796,
+   "ExecuteCompiler": 0.160653,
+   "Frontend": 0.06754,
+   "Optimizer": 0.059304,
+   "CodeGenPasses": 0.030658,
+   "Backend": 0.09105
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSliderConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.2904439930000535,
+   "ExecuteCompiler": 0.252727,
+   "Frontend": 0.073,
+   "Optimizer": 0.105811,
+   "CodeGenPasses": 0.070765,
+   "Backend": 0.177754
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSoftBody.cpp",
+   "program": "Bullet",
+   "wall": 1.8430022000000008,
+   "ExecuteCompiler": 1.719914,
+   "Frontend": 0.20317,
+   "Optimizer": 0.893442,
+   "CodeGenPasses": 0.619592,
+   "Backend": 1.514301
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSoftBodyConcaveCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.31115446799992696,
+   "ExecuteCompiler": 0.268137,
+   "Frontend": 0.100914,
+   "Optimizer": 0.105466,
+   "CodeGenPasses": 0.058558,
+   "Backend": 0.165134
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSoftBodyHelpers.cpp",
+   "program": "Bullet",
+   "wall": 0.4293677300000809,
+   "ExecuteCompiler": 0.381021,
+   "Frontend": 0.128774,
+   "Optimizer": 0.152487,
+   "CodeGenPasses": 0.096008,
+   "Backend": 0.249516
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSoftBodyRigidBodyCollisionConfiguration.cpp",
+   "program": "Bullet",
+   "wall": 0.10863159799998812,
+   "ExecuteCompiler": 0.082193,
+   "Frontend": 0.056636,
+   "Optimizer": 0.011704,
+   "CodeGenPasses": 0.011175,
+   "Backend": 0.023913
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSoftRigidCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.11868160200003786,
+   "ExecuteCompiler": 0.093983,
+   "Frontend": 0.082534,
+   "Optimizer": 0.005689,
+   "CodeGenPasses": 0.003438,
+   "Backend": 0.010088
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSoftRigidDynamicsWorld.cpp",
+   "program": "Bullet",
+   "wall": 0.18859237300000586,
+   "ExecuteCompiler": 0.157418,
+   "Frontend": 0.090318,
+   "Optimizer": 0.041496,
+   "CodeGenPasses": 0.022754,
+   "Backend": 0.065251
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSoftSoftCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.12774346499998046,
+   "ExecuteCompiler": 0.101098,
+   "Frontend": 0.081727,
+   "Optimizer": 0.011243,
+   "CodeGenPasses": 0.005461,
+   "Backend": 0.017756
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSolve2LinearConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.10377967299996271,
+   "ExecuteCompiler": 0.080748,
+   "Frontend": 0.048597,
+   "Optimizer": 0.016811,
+   "CodeGenPasses": 0.013176,
+   "Backend": 0.030907
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSphereBoxCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.14236617100004878,
+   "ExecuteCompiler": 0.115403,
+   "Frontend": 0.060821,
+   "Optimizer": 0.033319,
+   "CodeGenPasses": 0.018872,
+   "Backend": 0.053255
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSphereShape.cpp",
+   "program": "Bullet",
+   "wall": 0.08901210300007278,
+   "ExecuteCompiler": 0.064856,
+   "Frontend": 0.045546,
+   "Optimizer": 0.010242,
+   "CodeGenPasses": 0.006879,
+   "Backend": 0.017984
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSphereSphereCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.12199552899994615,
+   "ExecuteCompiler": 0.09509,
+   "Frontend": 0.060456,
+   "Optimizer": 0.020962,
+   "CodeGenPasses": 0.011121,
+   "Backend": 0.033213
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSphereTriangleCollisionAlgorithm.cpp",
+   "program": "Bullet",
+   "wall": 0.11743227899989961,
+   "ExecuteCompiler": 0.090617,
+   "Frontend": 0.059419,
+   "Optimizer": 0.017545,
+   "CodeGenPasses": 0.010658,
+   "Backend": 0.029318
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btStaticPlaneShape.cpp",
+   "program": "Bullet",
+   "wall": 0.10453590700001314,
+   "ExecuteCompiler": 0.075863,
+   "Frontend": 0.050336,
+   "Optimizer": 0.013169,
+   "CodeGenPasses": 0.009692,
+   "Backend": 0.02396
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btStridingMeshInterface.cpp",
+   "program": "Bullet",
+   "wall": 0.10298292499999206,
+   "ExecuteCompiler": 0.076727,
+   "Frontend": 0.044951,
+   "Optimizer": 0.0167,
+   "CodeGenPasses": 0.012594,
+   "Backend": 0.030425
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btSubSimplexConvexCast.cpp",
+   "program": "Bullet",
+   "wall": 0.11871652700006052,
+   "ExecuteCompiler": 0.09153,
+   "Frontend": 0.058383,
+   "Optimizer": 0.019275,
+   "CodeGenPasses": 0.011207,
+   "Backend": 0.03164
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btTetrahedronShape.cpp",
+   "program": "Bullet",
+   "wall": 0.10346096599994326,
+   "ExecuteCompiler": 0.075687,
+   "Frontend": 0.049487,
+   "Optimizer": 0.00981,
+   "CodeGenPasses": 0.013766,
+   "Backend": 0.024608
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btTriangleBuffer.cpp",
+   "program": "Bullet",
+   "wall": 0.08471049199999925,
+   "ExecuteCompiler": 0.05882,
+   "Frontend": 0.036099,
+   "Optimizer": 0.013339,
+   "CodeGenPasses": 0.006838,
+   "Backend": 0.021242
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btTriangleCallback.cpp",
+   "program": "Bullet",
+   "wall": 0.062444009999921946,
+   "ExecuteCompiler": 0.038315,
+   "Frontend": 0.031871,
+   "Optimizer": 0.00158,
+   "CodeGenPasses": 0.001974,
+   "Backend": 0.004642
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btTriangleIndexVertexArray.cpp",
+   "program": "Bullet",
+   "wall": 0.10758741899996949,
+   "ExecuteCompiler": 0.080651,
+   "Frontend": 0.048914,
+   "Optimizer": 0.018551,
+   "CodeGenPasses": 0.010619,
+   "Backend": 0.030275
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btTriangleIndexVertexMaterialArray.cpp",
+   "program": "Bullet",
+   "wall": 0.10525604899999053,
+   "ExecuteCompiler": 0.078045,
+   "Frontend": 0.049846,
+   "Optimizer": 0.0164,
+   "CodeGenPasses": 0.009209,
+   "Backend": 0.026714
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btTriangleMesh.cpp",
+   "program": "Bullet",
+   "wall": 0.1812369200000603,
+   "ExecuteCompiler": 0.149001,
+   "Frontend": 0.052616,
+   "Optimizer": 0.062983,
+   "CodeGenPasses": 0.030634,
+   "Backend": 0.094722
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btTriangleMeshShape.cpp",
+   "program": "Bullet",
+   "wall": 0.12897305100000267,
+   "ExecuteCompiler": 0.09818,
+   "Frontend": 0.051105,
+   "Optimizer": 0.026146,
+   "CodeGenPasses": 0.018294,
+   "Backend": 0.045579
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btTriangleShapeEx.cpp",
+   "program": "Bullet",
+   "wall": 0.15284605399995144,
+   "ExecuteCompiler": 0.124113,
+   "Frontend": 0.063985,
+   "Optimizer": 0.032786,
+   "CodeGenPasses": 0.024677,
+   "Backend": 0.058576
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btTypedConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.10039273699999285,
+   "ExecuteCompiler": 0.074404,
+   "Frontend": 0.056576,
+   "Optimizer": 0.007698,
+   "CodeGenPasses": 0.007392,
+   "Backend": 0.016279
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btUniformScalingShape.cpp",
+   "program": "Bullet",
+   "wall": 0.1002088630000344,
+   "ExecuteCompiler": 0.073527,
+   "Frontend": 0.046254,
+   "Optimizer": 0.011402,
+   "CodeGenPasses": 0.012955,
+   "Backend": 0.025469
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btUnionFind.cpp",
+   "program": "Bullet",
+   "wall": 0.09893957600002068,
+   "ExecuteCompiler": 0.073932,
+   "Frontend": 0.03159,
+   "Optimizer": 0.022728,
+   "CodeGenPasses": 0.016632,
+   "Backend": 0.040446
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btUniversalConstraint.cpp",
+   "program": "Bullet",
+   "wall": 0.1216063839999606,
+   "ExecuteCompiler": 0.094087,
+   "Frontend": 0.058853,
+   "Optimizer": 0.023714,
+   "CodeGenPasses": 0.008834,
+   "Backend": 0.033697
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btVoronoiSimplexSolver.cpp",
+   "program": "Bullet",
+   "wall": 0.14633660300000884,
+   "ExecuteCompiler": 0.119103,
+   "Frontend": 0.041125,
+   "Optimizer": 0.041627,
+   "CodeGenPasses": 0.033744,
+   "Backend": 0.076489
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/btWheelInfo.cpp",
+   "program": "Bullet",
+   "wall": 0.08366198299995631,
+   "ExecuteCompiler": 0.059433,
+   "Frontend": 0.048594,
+   "Optimizer": 0.005308,
+   "CodeGenPasses": 0.00318,
+   "Backend": 0.009522
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/gim_box_set.cpp",
+   "program": "Bullet",
+   "wall": 0.1388761189999741,
+   "ExecuteCompiler": 0.110936,
+   "Frontend": 0.065481,
+   "Optimizer": 0.026903,
+   "CodeGenPasses": 0.015722,
+   "Backend": 0.043787
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/gim_contact.cpp",
+   "program": "Bullet",
+   "wall": 0.14723850200005018,
+   "ExecuteCompiler": 0.117182,
+   "Frontend": 0.06445,
+   "Optimizer": 0.034269,
+   "CodeGenPasses": 0.015704,
+   "Backend": 0.051184
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/gim_memory.cpp",
+   "program": "Bullet",
+   "wall": 0.06813151500000458,
+   "ExecuteCompiler": 0.043728,
+   "Frontend": 0.030921,
+   "Optimizer": 0.004625,
+   "CodeGenPasses": 0.005418,
+   "Backend": 0.011311
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/gim_tri_collision.cpp",
+   "program": "Bullet",
+   "wall": 0.15706696500001271,
+   "ExecuteCompiler": 0.129701,
+   "Frontend": 0.068296,
+   "Optimizer": 0.03493,
+   "CodeGenPasses": 0.023871,
+   "Backend": 0.059812
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/Bullet/main.cpp",
+   "program": "Bullet",
+   "wall": 0.19363093800006936,
+   "ExecuteCompiler": 0.161896,
+   "Frontend": 0.124233,
+   "Optimizer": 0.016885,
+   "CodeGenPasses": 0.017592,
+   "Backend": 0.03563
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/tramp3d-v4/tramp3d-v4.cpp",
+   "program": "tramp3d-v4",
+   "wall": 17.04628961000003,
+   "ExecuteCompiler": 15.597911,
+   "Frontend": 2.4526,
+   "Optimizer": 9.133907,
+   "CodeGenPasses": 3.982152,
+   "Backend": 13.120088
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/abs.cc",
+   "program": "kimwitu++",
+   "wall": 0.179565425000078,
+   "ExecuteCompiler": 0.15254,
+   "Frontend": 0.143561,
+   "Optimizer": 0.00269,
+   "CodeGenPasses": 0.002486,
+   "Backend": 0.00633
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/error.cc",
+   "program": "kimwitu++",
+   "wall": 0.25517129800005023,
+   "ExecuteCompiler": 0.218672,
+   "Frontend": 0.151432,
+   "Optimizer": 0.035495,
+   "CodeGenPasses": 0.027761,
+   "Backend": 0.064568
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/gen.cc",
+   "program": "kimwitu++",
+   "wall": 0.19297935599990979,
+   "ExecuteCompiler": 0.163869,
+   "Frontend": 0.145036,
+   "Optimizer": 0.008926,
+   "CodeGenPasses": 0.005783,
+   "Backend": 0.015961
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/gutil.cc",
+   "program": "kimwitu++",
+   "wall": 0.3414260510000986,
+   "ExecuteCompiler": 0.29717,
+   "Frontend": 0.167572,
+   "Optimizer": 0.067836,
+   "CodeGenPasses": 0.057765,
+   "Backend": 0.126849
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/k.cc",
+   "program": "kimwitu++",
+   "wall": 3.5446252440000308,
+   "ExecuteCompiler": 2.976499,
+   "Frontend": 0.554193,
+   "Optimizer": 1.151203,
+   "CodeGenPasses": 1.260184,
+   "Backend": 2.414591
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/kimwl.cc",
+   "program": "kimwitu++",
+   "wall": 0.3513726080000197,
+   "ExecuteCompiler": 0.313527,
+   "Frontend": 0.152867,
+   "Optimizer": 0.089201,
+   "CodeGenPasses": 0.068129,
+   "Backend": 0.158421
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/kimwy.cc",
+   "program": "kimwitu++",
+   "wall": 0.6051189319999821,
+   "ExecuteCompiler": 0.545104,
+   "Frontend": 0.236038,
+   "Optimizer": 0.173027,
+   "CodeGenPasses": 0.13116,
+   "Backend": 0.305622
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/main.cc",
+   "program": "kimwitu++",
+   "wall": 0.6266948999999613,
+   "ExecuteCompiler": 0.577353,
+   "Frontend": 0.274759,
+   "Optimizer": 0.174069,
+   "CodeGenPasses": 0.123462,
+   "Backend": 0.298999
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/occur.cc",
+   "program": "kimwitu++",
+   "wall": 0.245349995999959,
+   "ExecuteCompiler": 0.212631,
+   "Frontend": 0.159057,
+   "Optimizer": 0.018821,
+   "CodeGenPasses": 0.030781,
+   "Backend": 0.050833
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/parse.cc",
+   "program": "kimwitu++",
+   "wall": 0.2900210429999106,
+   "ExecuteCompiler": 0.25086,
+   "Frontend": 0.154773,
+   "Optimizer": 0.049928,
+   "CodeGenPasses": 0.042241,
+   "Backend": 0.093331
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/pat.cc",
+   "program": "kimwitu++",
+   "wall": 0.3726929030000292,
+   "ExecuteCompiler": 0.330703,
+   "Frontend": 0.184417,
+   "Optimizer": 0.070625,
+   "CodeGenPasses": 0.070769,
+   "Backend": 0.14278
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/rk.cc",
+   "program": "kimwitu++",
+   "wall": 0.7245195289999629,
+   "ExecuteCompiler": 0.627936,
+   "Frontend": 0.202007,
+   "Optimizer": 0.138542,
+   "CodeGenPasses": 0.279809,
+   "Backend": 0.422046
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/unpk.cc",
+   "program": "kimwitu++",
+   "wall": 2.4130703280000034,
+   "ExecuteCompiler": 2.180602,
+   "Frontend": 0.55513,
+   "Optimizer": 0.840874,
+   "CodeGenPasses": 0.774812,
+   "Backend": 1.619882
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/kimwitu++/util.cc",
+   "program": "kimwitu++",
+   "wall": 0.3727889369999957,
+   "ExecuteCompiler": 0.329671,
+   "Frontend": 0.169674,
+   "Optimizer": 0.074159,
+   "CodeGenPasses": 0.081792,
+   "Backend": 0.157242
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/annexb.c",
+   "program": "lencod",
+   "wall": 0.03707773600001474,
+   "ExecuteCompiler": 0.019914,
+   "Frontend": 0.012192,
+   "Optimizer": 0.002783,
+   "CodeGenPasses": 0.002948,
+   "Backend": 0.00662
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/biariencode.c",
+   "program": "lencod",
+   "wall": 0.084258034999948,
+   "ExecuteCompiler": 0.064437,
+   "Frontend": 0.015849,
+   "Optimizer": 0.027789,
+   "CodeGenPasses": 0.016999,
+   "Backend": 0.045739
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/block.c",
+   "program": "lencod",
+   "wall": 0.822077858000057,
+   "ExecuteCompiler": 0.788326,
+   "Frontend": 0.049425,
+   "Optimizer": 0.506304,
+   "CodeGenPasses": 0.229945,
+   "Backend": 0.737424
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/cabac.c",
+   "program": "lencod",
+   "wall": 0.17538330899992616,
+   "ExecuteCompiler": 0.142327,
+   "Frontend": 0.028773,
+   "Optimizer": 0.054336,
+   "CodeGenPasses": 0.056232,
+   "Backend": 0.111775
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/configfile.c",
+   "program": "lencod",
+   "wall": 0.1816474700000299,
+   "ExecuteCompiler": 0.151531,
+   "Frontend": 0.028013,
+   "Optimizer": 0.078448,
+   "CodeGenPasses": 0.042035,
+   "Backend": 0.12177
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/context_ini.c",
+   "program": "lencod",
+   "wall": 0.3909075079999411,
+   "ExecuteCompiler": 0.355607,
+   "Frontend": 0.039257,
+   "Optimizer": 0.187216,
+   "CodeGenPasses": 0.126014,
+   "Backend": 0.314565
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/decoder.c",
+   "program": "lencod",
+   "wall": 0.22017160199993668,
+   "ExecuteCompiler": 0.191615,
+   "Frontend": 0.020808,
+   "Optimizer": 0.106925,
+   "CodeGenPasses": 0.061013,
+   "Backend": 0.169193
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/explicit_gop.c",
+   "program": "lencod",
+   "wall": 0.1020580350000273,
+   "ExecuteCompiler": 0.075867,
+   "Frontend": 0.01954,
+   "Optimizer": 0.031886,
+   "CodeGenPasses": 0.021869,
+   "Backend": 0.054908
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/filehandle.c",
+   "program": "lencod",
+   "wall": 0.05424255799994171,
+   "ExecuteCompiler": 0.030073,
+   "Frontend": 0.015678,
+   "Optimizer": 0.005784,
+   "CodeGenPasses": 0.006131,
+   "Backend": 0.013045
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/fmo.c",
+   "program": "lencod",
+   "wall": 0.13048015899994425,
+   "ExecuteCompiler": 0.101944,
+   "Frontend": 0.018483,
+   "Optimizer": 0.055768,
+   "CodeGenPasses": 0.024931,
+   "Backend": 0.081913
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/header.c",
+   "program": "lencod",
+   "wall": 0.09941530300000068,
+   "ExecuteCompiler": 0.074254,
+   "Frontend": 0.0259,
+   "Optimizer": 0.027234,
+   "CodeGenPasses": 0.018402,
+   "Backend": 0.046862
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/image.c",
+   "program": "lencod",
+   "wall": 0.48383329299997513,
+   "ExecuteCompiler": 0.44883,
+   "Frontend": 0.045306,
+   "Optimizer": 0.239299,
+   "CodeGenPasses": 0.161102,
+   "Backend": 0.401796
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/img_chroma.c",
+   "program": "lencod",
+   "wall": 0.09272049499998047,
+   "ExecuteCompiler": 0.067336,
+   "Frontend": 0.014614,
+   "Optimizer": 0.023243,
+   "CodeGenPasses": 0.026965,
+   "Backend": 0.051308
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/img_luma.c",
+   "program": "lencod",
+   "wall": 0.22116782700004478,
+   "ExecuteCompiler": 0.194603,
+   "Frontend": 0.01772,
+   "Optimizer": 0.085723,
+   "CodeGenPasses": 0.088507,
+   "Backend": 0.175417
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/intrarefresh.c",
+   "program": "lencod",
+   "wall": 0.052910697000015716,
+   "ExecuteCompiler": 0.030183,
+   "Frontend": 0.013555,
+   "Optimizer": 0.007342,
+   "CodeGenPasses": 0.006676,
+   "Backend": 0.015137
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/leaky_bucket.c",
+   "program": "lencod",
+   "wall": 0.0744329319999224,
+   "ExecuteCompiler": 0.051432,
+   "Frontend": 0.015002,
+   "Optimizer": 0.016601,
+   "CodeGenPasses": 0.017187,
+   "Backend": 0.0348
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/lencod.c",
+   "program": "lencod",
+   "wall": 0.3204542229999561,
+   "ExecuteCompiler": 0.282675,
+   "Frontend": 0.046318,
+   "Optimizer": 0.119763,
+   "CodeGenPasses": 0.113504,
+   "Backend": 0.234564
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/loopFilter.c",
+   "program": "lencod",
+   "wall": 0.10773967900001935,
+   "ExecuteCompiler": 0.082628,
+   "Frontend": 0.020199,
+   "Optimizer": 0.034601,
+   "CodeGenPasses": 0.025318,
+   "Backend": 0.061108
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/macroblock.c",
+   "program": "lencod",
+   "wall": 0.8133819280000125,
+   "ExecuteCompiler": 0.771398,
+   "Frontend": 0.052061,
+   "Optimizer": 0.426981,
+   "CodeGenPasses": 0.289212,
+   "Backend": 0.717542
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/mb_access.c",
+   "program": "lencod",
+   "wall": 0.07337487300003431,
+   "ExecuteCompiler": 0.049495,
+   "Frontend": 0.013179,
+   "Optimizer": 0.017878,
+   "CodeGenPasses": 0.015834,
+   "Backend": 0.03479
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/mbuffer.c",
+   "program": "lencod",
+   "wall": 0.6073169969999981,
+   "ExecuteCompiler": 0.564434,
+   "Frontend": 0.044569,
+   "Optimizer": 0.325355,
+   "CodeGenPasses": 0.191625,
+   "Backend": 0.518295
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/md_high.c",
+   "program": "lencod",
+   "wall": 0.10491461900005561,
+   "ExecuteCompiler": 0.078095,
+   "Frontend": 0.024811,
+   "Optimizer": 0.028444,
+   "CodeGenPasses": 0.022144,
+   "Backend": 0.051733
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/md_highfast.c",
+   "program": "lencod",
+   "wall": 0.12447911599997497,
+   "ExecuteCompiler": 0.09985,
+   "Frontend": 0.026272,
+   "Optimizer": 0.038581,
+   "CodeGenPasses": 0.032337,
+   "Backend": 0.072198
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/md_highloss.c",
+   "program": "lencod",
+   "wall": 0.1086792249999462,
+   "ExecuteCompiler": 0.08431,
+   "Frontend": 0.024876,
+   "Optimizer": 0.031867,
+   "CodeGenPasses": 0.024934,
+   "Backend": 0.057969
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/md_low.c",
+   "program": "lencod",
+   "wall": 0.1179056529999798,
+   "ExecuteCompiler": 0.093488,
+   "Frontend": 0.026159,
+   "Optimizer": 0.031663,
+   "CodeGenPasses": 0.032934,
+   "Backend": 0.065877
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/me_distortion.c",
+   "program": "lencod",
+   "wall": 0.4074131520000037,
+   "ExecuteCompiler": 0.378376,
+   "Frontend": 0.026834,
+   "Optimizer": 0.226115,
+   "CodeGenPasses": 0.122808,
+   "Backend": 0.350155
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/me_epzs.c",
+   "program": "lencod",
+   "wall": 0.49898718800000097,
+   "ExecuteCompiler": 0.465637,
+   "Frontend": 0.042805,
+   "Optimizer": 0.276932,
+   "CodeGenPasses": 0.143175,
+   "Backend": 0.421338
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/me_fullfast.c",
+   "program": "lencod",
+   "wall": 0.2871883880000041,
+   "ExecuteCompiler": 0.259971,
+   "Frontend": 0.022116,
+   "Optimizer": 0.121498,
+   "CodeGenPasses": 0.113506,
+   "Backend": 0.236379
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/me_fullsearch.c",
+   "program": "lencod",
+   "wall": 0.1317200140000523,
+   "ExecuteCompiler": 0.105631,
+   "Frontend": 0.021334,
+   "Optimizer": 0.049008,
+   "CodeGenPasses": 0.032515,
+   "Backend": 0.082712
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/me_umhex.c",
+   "program": "lencod",
+   "wall": 0.4413413610000134,
+   "ExecuteCompiler": 0.409235,
+   "Frontend": 0.034011,
+   "Optimizer": 0.203462,
+   "CodeGenPasses": 0.168855,
+   "Backend": 0.373615
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/me_umhexsmp.c",
+   "program": "lencod",
+   "wall": 0.3184720499999685,
+   "ExecuteCompiler": 0.288814,
+   "Frontend": 0.029065,
+   "Optimizer": 0.146044,
+   "CodeGenPasses": 0.110743,
+   "Backend": 0.258062
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/memalloc.c",
+   "program": "lencod",
+   "wall": 0.25946834299998045,
+   "ExecuteCompiler": 0.225855,
+   "Frontend": 0.021725,
+   "Optimizer": 0.093223,
+   "CodeGenPasses": 0.108119,
+   "Backend": 0.202582
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/mode_decision.c",
+   "program": "lencod",
+   "wall": 0.23718919099997038,
+   "ExecuteCompiler": 0.207905,
+   "Frontend": 0.032697,
+   "Optimizer": 0.097213,
+   "CodeGenPasses": 0.075066,
+   "Backend": 0.173546
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/mv-search.c",
+   "program": "lencod",
+   "wall": 0.36026336800000536,
+   "ExecuteCompiler": 0.328693,
+   "Frontend": 0.040475,
+   "Optimizer": 0.172715,
+   "CodeGenPasses": 0.112696,
+   "Backend": 0.286708
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/nal.c",
+   "program": "lencod",
+   "wall": 0.05298462700000073,
+   "ExecuteCompiler": 0.029712,
+   "Frontend": 0.015324,
+   "Optimizer": 0.006412,
+   "CodeGenPasses": 0.005385,
+   "Backend": 0.01297
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/nalu.c",
+   "program": "lencod",
+   "wall": 0.03632051499994304,
+   "ExecuteCompiler": 0.016471,
+   "Frontend": 0.011015,
+   "Optimizer": 0.001675,
+   "CodeGenPasses": 0.001517,
+   "Backend": 0.004185
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/nalucommon.c",
+   "program": "lencod",
+   "wall": 0.03964005599993925,
+   "ExecuteCompiler": 0.019578,
+   "Frontend": 0.01319,
+   "Optimizer": 0.001925,
+   "CodeGenPasses": 0.002218,
+   "Backend": 0.005168
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/output.c",
+   "program": "lencod",
+   "wall": 0.09804891800001769,
+   "ExecuteCompiler": 0.073049,
+   "Frontend": 0.018383,
+   "Optimizer": 0.02767,
+   "CodeGenPasses": 0.024419,
+   "Backend": 0.053308
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/parset.c",
+   "program": "lencod",
+   "wall": 0.13768085599997448,
+   "ExecuteCompiler": 0.110831,
+   "Frontend": 0.023932,
+   "Optimizer": 0.047851,
+   "CodeGenPasses": 0.036141,
+   "Backend": 0.085133
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/parsetcommon.c",
+   "program": "lencod",
+   "wall": 0.04524257100001705,
+   "ExecuteCompiler": 0.02278,
+   "Frontend": 0.015104,
+   "Optimizer": 0.002077,
+   "CodeGenPasses": 0.003056,
+   "Backend": 0.006253
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/q_matrix.c",
+   "program": "lencod",
+   "wall": 0.13827444000003197,
+   "ExecuteCompiler": 0.112216,
+   "Frontend": 0.020261,
+   "Optimizer": 0.054966,
+   "CodeGenPasses": 0.034414,
+   "Backend": 0.090513
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/q_offsets.c",
+   "program": "lencod",
+   "wall": 0.10117091999995864,
+   "ExecuteCompiler": 0.075407,
+   "Frontend": 0.01839,
+   "Optimizer": 0.030334,
+   "CodeGenPasses": 0.023719,
+   "Backend": 0.055292
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/ratectl.c",
+   "program": "lencod",
+   "wall": 0.07514492199993583,
+   "ExecuteCompiler": 0.050358,
+   "Frontend": 0.021882,
+   "Optimizer": 0.01388,
+   "CodeGenPasses": 0.012074,
+   "Backend": 0.02708
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/rc_quadratic.c",
+   "program": "lencod",
+   "wall": 0.3306453819999433,
+   "ExecuteCompiler": 0.297719,
+   "Frontend": 0.040036,
+   "Optimizer": 0.138987,
+   "CodeGenPasses": 0.115919,
+   "Backend": 0.256126
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/rdopt.c",
+   "program": "lencod",
+   "wall": 0.9296841560000075,
+   "ExecuteCompiler": 0.887402,
+   "Frontend": 0.062294,
+   "Optimizer": 0.494325,
+   "CodeGenPasses": 0.32787,
+   "Backend": 0.823463
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/rdopt_coding_state.c",
+   "program": "lencod",
+   "wall": 0.060832986000036726,
+   "ExecuteCompiler": 0.037322,
+   "Frontend": 0.016333,
+   "Optimizer": 0.008793,
+   "CodeGenPasses": 0.009694,
+   "Backend": 0.019596
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/rdpicdecision.c",
+   "program": "lencod",
+   "wall": 0.04956050199996298,
+   "ExecuteCompiler": 0.026065,
+   "Frontend": 0.016563,
+   "Optimizer": 0.003763,
+   "CodeGenPasses": 0.003391,
+   "Backend": 0.008162
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/refbuf.c",
+   "program": "lencod",
+   "wall": 0.04598568099993372,
+   "ExecuteCompiler": 0.023251,
+   "Frontend": 0.014207,
+   "Optimizer": 0.003235,
+   "CodeGenPasses": 0.003534,
+   "Backend": 0.007772
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/rtp.c",
+   "program": "lencod",
+   "wall": 0.058248361999972076,
+   "ExecuteCompiler": 0.034755,
+   "Frontend": 0.017354,
+   "Optimizer": 0.006974,
+   "CodeGenPasses": 0.008094,
+   "Backend": 0.016093
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/sei.c",
+   "program": "lencod",
+   "wall": 0.18592914999999266,
+   "ExecuteCompiler": 0.152524,
+   "Frontend": 0.026657,
+   "Optimizer": 0.058558,
+   "CodeGenPasses": 0.064351,
+   "Backend": 0.124153
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/slice.c",
+   "program": "lencod",
+   "wall": 0.224639017999948,
+   "ExecuteCompiler": 0.197489,
+   "Frontend": 0.03146,
+   "Optimizer": 0.10125,
+   "CodeGenPasses": 0.062076,
+   "Backend": 0.164568
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/symbol.c",
+   "program": "lencod",
+   "wall": 0.03380705600000056,
+   "ExecuteCompiler": 0.012905,
+   "Frontend": 0.01016,
+   "Optimizer": 0.000141,
+   "CodeGenPasses": 0.00017,
+   "Backend": 0.001342
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/transform8x8.c",
+   "program": "lencod",
+   "wall": 0.4117608310000378,
+   "ExecuteCompiler": 0.384243,
+   "Frontend": 0.037432,
+   "Optimizer": 0.266048,
+   "CodeGenPasses": 0.077963,
+   "Backend": 0.345217
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/vlc.c",
+   "program": "lencod",
+   "wall": 0.21484404000000268,
+   "ExecuteCompiler": 0.182824,
+   "Frontend": 0.029202,
+   "Optimizer": 0.085545,
+   "CodeGenPasses": 0.065595,
+   "Backend": 0.152146
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/lencod/weighted_prediction.c",
+   "program": "lencod",
+   "wall": 0.2409152320000203,
+   "ExecuteCompiler": 0.212704,
+   "Frontend": 0.021031,
+   "Optimizer": 0.101932,
+   "CodeGenPasses": 0.08713,
+   "Backend": 0.190234
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/analyze.c",
+   "program": "SPASS",
+   "wall": 0.17065552200006096,
+   "ExecuteCompiler": 0.137648,
+   "Frontend": 0.041008,
+   "Optimizer": 0.06442,
+   "CodeGenPasses": 0.029668,
+   "Backend": 0.095199
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/clause.c",
+   "program": "SPASS",
+   "wall": 0.8456463750000012,
+   "ExecuteCompiler": 0.775314,
+   "Frontend": 0.060948,
+   "Optimizer": 0.407436,
+   "CodeGenPasses": 0.303651,
+   "Backend": 0.712584
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/clock.c",
+   "program": "SPASS",
+   "wall": 0.04068630999995548,
+   "ExecuteCompiler": 0.017593,
+   "Frontend": 0.00959,
+   "Optimizer": 0.003192,
+   "CodeGenPasses": 0.002428,
+   "Backend": 0.00666
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/closure.c",
+   "program": "SPASS",
+   "wall": 0.14760766999995667,
+   "ExecuteCompiler": 0.119251,
+   "Frontend": 0.034327,
+   "Optimizer": 0.055906,
+   "CodeGenPasses": 0.026604,
+   "Backend": 0.083509
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/cnf.c",
+   "program": "SPASS",
+   "wall": 0.7041761920000909,
+   "ExecuteCompiler": 0.648649,
+   "Frontend": 0.069437,
+   "Optimizer": 0.360185,
+   "CodeGenPasses": 0.216133,
+   "Backend": 0.577629
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/component.c",
+   "program": "SPASS",
+   "wall": 0.07658894999997301,
+   "ExecuteCompiler": 0.053868,
+   "Frontend": 0.019857,
+   "Optimizer": 0.019947,
+   "CodeGenPasses": 0.011788,
+   "Backend": 0.03268
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/condensing.c",
+   "program": "SPASS",
+   "wall": 0.07544254200001888,
+   "ExecuteCompiler": 0.051345,
+   "Frontend": 0.02988,
+   "Optimizer": 0.013739,
+   "CodeGenPasses": 0.005611,
+   "Backend": 0.020269
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/context.c",
+   "program": "SPASS",
+   "wall": 0.11943084399990767,
+   "ExecuteCompiler": 0.093312,
+   "Frontend": 0.022922,
+   "Optimizer": 0.043103,
+   "CodeGenPasses": 0.025074,
+   "Backend": 0.069154
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/defs.c",
+   "program": "SPASS",
+   "wall": 0.21520654500000092,
+   "ExecuteCompiler": 0.180846,
+   "Frontend": 0.041719,
+   "Optimizer": 0.08439,
+   "CodeGenPasses": 0.052295,
+   "Backend": 0.13774
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/dfgparser.c",
+   "program": "SPASS",
+   "wall": 0.2696970899999087,
+   "ExecuteCompiler": 0.231274,
+   "Frontend": 0.049915,
+   "Optimizer": 0.098851,
+   "CodeGenPasses": 0.080025,
+   "Backend": 0.179926
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/dfgscanner.c",
+   "program": "SPASS",
+   "wall": 0.16957304499999282,
+   "ExecuteCompiler": 0.126877,
+   "Frontend": 0.065311,
+   "Optimizer": 0.034447,
+   "CodeGenPasses": 0.024828,
+   "Backend": 0.060256
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/doc-proof.c",
+   "program": "SPASS",
+   "wall": 0.09020067699998435,
+   "ExecuteCompiler": 0.065643,
+   "Frontend": 0.034123,
+   "Optimizer": 0.019632,
+   "CodeGenPasses": 0.009665,
+   "Backend": 0.030314
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/flags.c",
+   "program": "SPASS",
+   "wall": 0.13334299799998917,
+   "ExecuteCompiler": 0.108125,
+   "Frontend": 0.019398,
+   "Optimizer": 0.055451,
+   "CodeGenPasses": 0.030834,
+   "Backend": 0.08724
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/foldfg.c",
+   "program": "SPASS",
+   "wall": 0.3588857590000316,
+   "ExecuteCompiler": 0.313841,
+   "Frontend": 0.04026,
+   "Optimizer": 0.166051,
+   "CodeGenPasses": 0.104832,
+   "Backend": 0.272061
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/graph.c",
+   "program": "SPASS",
+   "wall": 0.06778797800006942,
+   "ExecuteCompiler": 0.043557,
+   "Frontend": 0.012533,
+   "Optimizer": 0.017727,
+   "CodeGenPasses": 0.010835,
+   "Backend": 0.029524
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/hash.c",
+   "program": "SPASS",
+   "wall": 0.04893231999994896,
+   "ExecuteCompiler": 0.027523,
+   "Frontend": 0.011097,
+   "Optimizer": 0.009459,
+   "CodeGenPasses": 0.004856,
+   "Backend": 0.015264
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/hasharray.c",
+   "program": "SPASS",
+   "wall": 0.052375564000044506,
+   "ExecuteCompiler": 0.030998,
+   "Frontend": 0.011703,
+   "Optimizer": 0.011911,
+   "CodeGenPasses": 0.005285,
+   "Backend": 0.018074
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/iaparser.c",
+   "program": "SPASS",
+   "wall": 0.14061015400000088,
+   "ExecuteCompiler": 0.111333,
+   "Frontend": 0.037532,
+   "Optimizer": 0.045419,
+   "CodeGenPasses": 0.025933,
+   "Backend": 0.072317
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/iascanner.c",
+   "program": "SPASS",
+   "wall": 0.1145272720000321,
+   "ExecuteCompiler": 0.088113,
+   "Frontend": 0.027806,
+   "Optimizer": 0.032523,
+   "CodeGenPasses": 0.025434,
+   "Backend": 0.058943
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/kbo.c",
+   "program": "SPASS",
+   "wall": 0.12174415899994528,
+   "ExecuteCompiler": 0.096303,
+   "Frontend": 0.026935,
+   "Optimizer": 0.041088,
+   "CodeGenPasses": 0.025894,
+   "Backend": 0.067938
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/list.c",
+   "program": "SPASS",
+   "wall": 0.1964162969999279,
+   "ExecuteCompiler": 0.163195,
+   "Frontend": 0.016517,
+   "Optimizer": 0.082416,
+   "CodeGenPasses": 0.061436,
+   "Backend": 0.14493
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/memory.c",
+   "program": "SPASS",
+   "wall": 0.06828511400010484,
+   "ExecuteCompiler": 0.045372,
+   "Frontend": 0.012397,
+   "Optimizer": 0.015644,
+   "CodeGenPasses": 0.014975,
+   "Backend": 0.031499
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/misc.c",
+   "program": "SPASS",
+   "wall": 0.038888168999960726,
+   "ExecuteCompiler": 0.019539,
+   "Frontend": 0.008944,
+   "Optimizer": 0.003193,
+   "CodeGenPasses": 0.005423,
+   "Backend": 0.009517
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/options.c",
+   "program": "SPASS",
+   "wall": 0.21870325300005788,
+   "ExecuteCompiler": 0.190761,
+   "Frontend": 0.026252,
+   "Optimizer": 0.099061,
+   "CodeGenPasses": 0.063186,
+   "Backend": 0.163259
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/order.c",
+   "program": "SPASS",
+   "wall": 0.09594937399992887,
+   "ExecuteCompiler": 0.069817,
+   "Frontend": 0.028071,
+   "Optimizer": 0.020687,
+   "CodeGenPasses": 0.018636,
+   "Backend": 0.040294
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/partition.c",
+   "program": "SPASS",
+   "wall": 0.05467903699991439,
+   "ExecuteCompiler": 0.033104,
+   "Frontend": 0.009927,
+   "Optimizer": 0.013857,
+   "CodeGenPasses": 0.006773,
+   "Backend": 0.021674
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/proofcheck.c",
+   "program": "SPASS",
+   "wall": 0.2226870089999693,
+   "ExecuteCompiler": 0.188791,
+   "Frontend": 0.04144,
+   "Optimizer": 0.099842,
+   "CodeGenPasses": 0.045072,
+   "Backend": 0.145945
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/renaming.c",
+   "program": "SPASS",
+   "wall": 0.24467945700007476,
+   "ExecuteCompiler": 0.212251,
+   "Frontend": 0.035023,
+   "Optimizer": 0.107392,
+   "CodeGenPasses": 0.067331,
+   "Backend": 0.175799
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/resolution.c",
+   "program": "SPASS",
+   "wall": 0.08967887500000415,
+   "ExecuteCompiler": 0.062466,
+   "Frontend": 0.033692,
+   "Optimizer": 0.017475,
+   "CodeGenPasses": 0.008806,
+   "Backend": 0.02744
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/rpos.c",
+   "program": "SPASS",
+   "wall": 0.12947832899999412,
+   "ExecuteCompiler": 0.100689,
+   "Frontend": 0.029085,
+   "Optimizer": 0.048156,
+   "CodeGenPasses": 0.02084,
+   "Backend": 0.070072
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/rules-inf.c",
+   "program": "SPASS",
+   "wall": 0.8241860669999141,
+   "ExecuteCompiler": 0.772602,
+   "Frontend": 0.060239,
+   "Optimizer": 0.447706,
+   "CodeGenPasses": 0.261677,
+   "Backend": 0.710656
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/rules-red.c",
+   "program": "SPASS",
+   "wall": 0.7991353310000022,
+   "ExecuteCompiler": 0.72081,
+   "Frontend": 0.062917,
+   "Optimizer": 0.426503,
+   "CodeGenPasses": 0.228042,
+   "Backend": 0.655954
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/rules-sort.c",
+   "program": "SPASS",
+   "wall": 0.3864905350000072,
+   "ExecuteCompiler": 0.345435,
+   "Frontend": 0.043102,
+   "Optimizer": 0.187787,
+   "CodeGenPasses": 0.111818,
+   "Backend": 0.30085
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/rules-split.c",
+   "program": "SPASS",
+   "wall": 0.14279894399999193,
+   "ExecuteCompiler": 0.110291,
+   "Frontend": 0.037603,
+   "Optimizer": 0.048969,
+   "CodeGenPasses": 0.02112,
+   "Backend": 0.07124
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/rules-ur.c",
+   "program": "SPASS",
+   "wall": 0.1503834510000388,
+   "ExecuteCompiler": 0.119646,
+   "Frontend": 0.033168,
+   "Optimizer": 0.058174,
+   "CodeGenPasses": 0.025595,
+   "Backend": 0.084852
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/search.c",
+   "program": "SPASS",
+   "wall": 0.2621752350000861,
+   "ExecuteCompiler": 0.221606,
+   "Frontend": 0.042433,
+   "Optimizer": 0.113391,
+   "CodeGenPasses": 0.063104,
+   "Backend": 0.177722
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/sharing.c",
+   "program": "SPASS",
+   "wall": 0.1670173769999792,
+   "ExecuteCompiler": 0.132658,
+   "Frontend": 0.031091,
+   "Optimizer": 0.061122,
+   "CodeGenPasses": 0.037889,
+   "Backend": 0.100166
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/sort.c",
+   "program": "SPASS",
+   "wall": 0.4337280949999922,
+   "ExecuteCompiler": 0.383958,
+   "Frontend": 0.04732,
+   "Optimizer": 0.217965,
+   "CodeGenPasses": 0.115711,
+   "Backend": 0.334925
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/st.c",
+   "program": "SPASS",
+   "wall": 0.27720285800000966,
+   "ExecuteCompiler": 0.241796,
+   "Frontend": 0.03382,
+   "Optimizer": 0.124891,
+   "CodeGenPasses": 0.08009,
+   "Backend": 0.20631
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/stack.c",
+   "program": "SPASS",
+   "wall": 0.03175173000011,
+   "ExecuteCompiler": 0.01142,
+   "Frontend": 0.008927,
+   "Optimizer": 0.000185,
+   "CodeGenPasses": 0.000129,
+   "Backend": 0.001291
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/strings.c",
+   "program": "SPASS",
+   "wall": 0.07515583599990805,
+   "ExecuteCompiler": 0.051308,
+   "Frontend": 0.01949,
+   "Optimizer": 0.015573,
+   "CodeGenPasses": 0.013849,
+   "Backend": 0.030571
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/subst.c",
+   "program": "SPASS",
+   "wall": 0.12727113900007225,
+   "ExecuteCompiler": 0.097478,
+   "Frontend": 0.025273,
+   "Optimizer": 0.040726,
+   "CodeGenPasses": 0.028952,
+   "Backend": 0.07079
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/subsumption.c",
+   "program": "SPASS",
+   "wall": 0.4897771549999561,
+   "ExecuteCompiler": 0.446029,
+   "Frontend": 0.043343,
+   "Optimizer": 0.243586,
+   "CodeGenPasses": 0.155956,
+   "Backend": 0.400815
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/symbol.c",
+   "program": "SPASS",
+   "wall": 0.18901952600003824,
+   "ExecuteCompiler": 0.156435,
+   "Frontend": 0.024577,
+   "Optimizer": 0.072892,
+   "CodeGenPasses": 0.056162,
+   "Backend": 0.13017
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/table.c",
+   "program": "SPASS",
+   "wall": 0.0904483850000588,
+   "ExecuteCompiler": 0.06376,
+   "Frontend": 0.021845,
+   "Optimizer": 0.025311,
+   "CodeGenPasses": 0.014093,
+   "Backend": 0.040606
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/tableau.c",
+   "program": "SPASS",
+   "wall": 0.17223238799999763,
+   "ExecuteCompiler": 0.138919,
+   "Frontend": 0.036269,
+   "Optimizer": 0.06261,
+   "CodeGenPasses": 0.037388,
+   "Backend": 0.10127
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/term.c",
+   "program": "SPASS",
+   "wall": 0.3201072929999782,
+   "ExecuteCompiler": 0.273417,
+   "Frontend": 0.031641,
+   "Optimizer": 0.133779,
+   "CodeGenPasses": 0.105154,
+   "Backend": 0.240258
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/terminator.c",
+   "program": "SPASS",
+   "wall": 0.14098550199992133,
+   "ExecuteCompiler": 0.11039,
+   "Frontend": 0.033282,
+   "Optimizer": 0.055471,
+   "CodeGenPasses": 0.019022,
+   "Backend": 0.075701
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/top.c",
+   "program": "SPASS",
+   "wall": 0.32896204700000453,
+   "ExecuteCompiler": 0.291548,
+   "Frontend": 0.050419,
+   "Optimizer": 0.159625,
+   "CodeGenPasses": 0.078731,
+   "Backend": 0.239614
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/unify.c",
+   "program": "SPASS",
+   "wall": 0.15522905799991804,
+   "ExecuteCompiler": 0.125006,
+   "Frontend": 0.026713,
+   "Optimizer": 0.059391,
+   "CodeGenPasses": 0.036069,
+   "Backend": 0.096531
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/SPASS/vector.c",
+   "program": "SPASS",
+   "wall": 0.041401339000003645,
+   "ExecuteCompiler": 0.020025,
+   "Frontend": 0.009108,
+   "Optimizer": 0.004886,
+   "CodeGenPasses": 0.003749,
+   "Backend": 0.009716
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/clamscan_clamscan.c",
+   "program": "ClamAV",
+   "wall": 0.04905039000004763,
+   "ExecuteCompiler": 0.027932,
+   "Frontend": 0.014194,
+   "Optimizer": 0.003942,
+   "CodeGenPasses": 0.007546,
+   "Backend": 0.01252
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/clamscan_manager.c",
+   "program": "ClamAV",
+   "wall": 0.12838326500002495,
+   "ExecuteCompiler": 0.104501,
+   "Frontend": 0.024193,
+   "Optimizer": 0.038847,
+   "CodeGenPasses": 0.039023,
+   "Backend": 0.079
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/clamscan_others.c",
+   "program": "ClamAV",
+   "wall": 0.045653209999954925,
+   "ExecuteCompiler": 0.024163,
+   "Frontend": 0.014048,
+   "Optimizer": 0.003572,
+   "CodeGenPasses": 0.004351,
+   "Backend": 0.0089
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/clamscan_treewalk.c",
+   "program": "ClamAV",
+   "wall": 0.0636201219999748,
+   "ExecuteCompiler": 0.039772,
+   "Frontend": 0.015562,
+   "Optimizer": 0.011234,
+   "CodeGenPasses": 0.010402,
+   "Backend": 0.022632
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_aspack.c",
+   "program": "ClamAV",
+   "wall": 0.13230102300008184,
+   "ExecuteCompiler": 0.107809,
+   "Frontend": 0.015033,
+   "Optimizer": 0.060321,
+   "CodeGenPasses": 0.029722,
+   "Backend": 0.091194
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_autoit.c",
+   "program": "ClamAV",
+   "wall": 0.3264665570000034,
+   "ExecuteCompiler": 0.300482,
+   "Frontend": 0.020029,
+   "Optimizer": 0.177651,
+   "CodeGenPasses": 0.099895,
+   "Backend": 0.27878
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_binhex.c",
+   "program": "ClamAV",
+   "wall": 0.04434597699992082,
+   "ExecuteCompiler": 0.023207,
+   "Frontend": 0.012243,
+   "Optimizer": 0.004626,
+   "CodeGenPasses": 0.004065,
+   "Backend": 0.009773
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_blob.c",
+   "program": "ClamAV",
+   "wall": 0.08521967300009692,
+   "ExecuteCompiler": 0.0614,
+   "Frontend": 0.018136,
+   "Optimizer": 0.017291,
+   "CodeGenPasses": 0.023673,
+   "Backend": 0.041961
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_cab.c",
+   "program": "ClamAV",
+   "wall": 0.10167276600009245,
+   "ExecuteCompiler": 0.077359,
+   "Frontend": 0.01956,
+   "Optimizer": 0.02809,
+   "CodeGenPasses": 0.027319,
+   "Backend": 0.056399
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_chmunpack.c",
+   "program": "ClamAV",
+   "wall": 0.10800980300007268,
+   "ExecuteCompiler": 0.083431,
+   "Frontend": 0.019205,
+   "Optimizer": 0.03882,
+   "CodeGenPasses": 0.022916,
+   "Backend": 0.062877
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_cvd.c",
+   "program": "ClamAV",
+   "wall": 0.0703504210000574,
+   "ExecuteCompiler": 0.046788,
+   "Frontend": 0.017739,
+   "Optimizer": 0.011688,
+   "CodeGenPasses": 0.014895,
+   "Backend": 0.027566
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_dconf.c",
+   "program": "ClamAV",
+   "wall": 0.07085022800004026,
+   "ExecuteCompiler": 0.046662,
+   "Frontend": 0.01587,
+   "Optimizer": 0.01426,
+   "CodeGenPasses": 0.014066,
+   "Backend": 0.029509
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_dsig.c",
+   "program": "ClamAV",
+   "wall": 0.020899534000022868,
+   "ExecuteCompiler": 0.002605,
+   "Frontend": 0.000383,
+   "Optimizer": 9.3e-05,
+   "CodeGenPasses": 0.000106,
+   "Backend": 0.001123
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_elf.c",
+   "program": "ClamAV",
+   "wall": 0.08150911200004884,
+   "ExecuteCompiler": 0.05947,
+   "Frontend": 0.017454,
+   "Optimizer": 0.019435,
+   "CodeGenPasses": 0.019618,
+   "Backend": 0.040291
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_entconv.c",
+   "program": "ClamAV",
+   "wall": 0.17443683900000906,
+   "ExecuteCompiler": 0.137338,
+   "Frontend": 0.048052,
+   "Optimizer": 0.052801,
+   "CodeGenPasses": 0.033939,
+   "Backend": 0.087916
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_filetypes.c",
+   "program": "ClamAV",
+   "wall": 0.06575338800007557,
+   "ExecuteCompiler": 0.040422,
+   "Frontend": 0.018134,
+   "Optimizer": 0.010631,
+   "CodeGenPasses": 0.009225,
+   "Backend": 0.020904
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_fsg.c",
+   "program": "ClamAV",
+   "wall": 0.050403369000036946,
+   "ExecuteCompiler": 0.028769,
+   "Frontend": 0.01306,
+   "Optimizer": 0.007072,
+   "CodeGenPasses": 0.006179,
+   "Backend": 0.014375
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_hashtab.c",
+   "program": "ClamAV",
+   "wall": 0.08960169500005577,
+   "ExecuteCompiler": 0.065008,
+   "Frontend": 0.014494,
+   "Optimizer": 0.023874,
+   "CodeGenPasses": 0.024217,
+   "Backend": 0.049148
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_htmlnorm.c",
+   "program": "ClamAV",
+   "wall": 0.4058633170000121,
+   "ExecuteCompiler": 0.376032,
+   "Frontend": 0.030272,
+   "Optimizer": 0.158769,
+   "CodeGenPasses": 0.184393,
+   "Backend": 0.344363
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_is_tar.c",
+   "program": "ClamAV",
+   "wall": 0.05054727399999592,
+   "ExecuteCompiler": 0.02874,
+   "Frontend": 0.012394,
+   "Optimizer": 0.008288,
+   "CodeGenPasses": 0.005715,
+   "Backend": 0.01508
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_jscript.c",
+   "program": "ClamAV",
+   "wall": 0.03738135499997952,
+   "ExecuteCompiler": 0.015855,
+   "Frontend": 0.011211,
+   "Optimizer": 0.001074,
+   "CodeGenPasses": 0.001152,
+   "Backend": 0.003321
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_line.c",
+   "program": "ClamAV",
+   "wall": 0.04435520499998802,
+   "ExecuteCompiler": 0.021064,
+   "Frontend": 0.011893,
+   "Optimizer": 0.002825,
+   "CodeGenPasses": 0.00393,
+   "Backend": 0.007823
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_lockdb.c",
+   "program": "ClamAV",
+   "wall": 0.03859229299996514,
+   "ExecuteCompiler": 0.018136,
+   "Frontend": 0.01314,
+   "Optimizer": 0.001559,
+   "CodeGenPasses": 0.001302,
+   "Backend": 0.003824
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_matcher-ac.c",
+   "program": "ClamAV",
+   "wall": 0.18747338499997568,
+   "ExecuteCompiler": 0.160656,
+   "Frontend": 0.021294,
+   "Optimizer": 0.078133,
+   "CodeGenPasses": 0.058673,
+   "Backend": 0.137899
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_matcher-bm.c",
+   "program": "ClamAV",
+   "wall": 0.05963693199998943,
+   "ExecuteCompiler": 0.038644,
+   "Frontend": 0.012893,
+   "Optimizer": 0.013849,
+   "CodeGenPasses": 0.009655,
+   "Backend": 0.024529
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_matcher.c",
+   "program": "ClamAV",
+   "wall": 0.07355347999998685,
+   "ExecuteCompiler": 0.052577,
+   "Frontend": 0.017053,
+   "Optimizer": 0.016344,
+   "CodeGenPasses": 0.016967,
+   "Backend": 0.034326
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_mbox.c",
+   "program": "ClamAV",
+   "wall": 0.30516679699996985,
+   "ExecuteCompiler": 0.274789,
+   "Frontend": 0.041563,
+   "Optimizer": 0.129978,
+   "CodeGenPasses": 0.100741,
+   "Backend": 0.231733
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_md5.c",
+   "program": "ClamAV",
+   "wall": 0.06394473399996059,
+   "ExecuteCompiler": 0.043677,
+   "Frontend": 0.00615,
+   "Optimizer": 0.019797,
+   "CodeGenPasses": 0.015381,
+   "Backend": 0.03615
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_message.c",
+   "program": "ClamAV",
+   "wall": 0.29735280900001726,
+   "ExecuteCompiler": 0.267049,
+   "Frontend": 0.029852,
+   "Optimizer": 0.131252,
+   "CodeGenPasses": 0.103456,
+   "Backend": 0.235822
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_mew.c",
+   "program": "ClamAV",
+   "wall": 0.19930391599996256,
+   "ExecuteCompiler": 0.173855,
+   "Frontend": 0.020034,
+   "Optimizer": 0.091769,
+   "CodeGenPasses": 0.059437,
+   "Backend": 0.15225
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_msexpand.c",
+   "program": "ClamAV",
+   "wall": 0.04207203099997514,
+   "ExecuteCompiler": 0.022289,
+   "Frontend": 0.010766,
+   "Optimizer": 0.004874,
+   "CodeGenPasses": 0.004567,
+   "Backend": 0.010388
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_mspack.c",
+   "program": "ClamAV",
+   "wall": 0.6999432090000255,
+   "ExecuteCompiler": 0.666644,
+   "Frontend": 0.037129,
+   "Optimizer": 0.378179,
+   "CodeGenPasses": 0.248435,
+   "Backend": 0.627901
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_nsis_LZMADecode.c",
+   "program": "ClamAV",
+   "wall": 0.14739627100004782,
+   "ExecuteCompiler": 0.123148,
+   "Frontend": 0.01547,
+   "Optimizer": 0.073655,
+   "CodeGenPasses": 0.031536,
+   "Backend": 0.106185
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_nsis_bzlib.c",
+   "program": "ClamAV",
+   "wall": 0.4097388369999635,
+   "ExecuteCompiler": 0.383898,
+   "Frontend": 0.021884,
+   "Optimizer": 0.216207,
+   "CodeGenPasses": 0.143431,
+   "Backend": 0.360703
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_nsis_infblock.c",
+   "program": "ClamAV",
+   "wall": 0.18544205499995314,
+   "ExecuteCompiler": 0.160049,
+   "Frontend": 0.009867,
+   "Optimizer": 0.083172,
+   "CodeGenPasses": 0.064657,
+   "Backend": 0.148905
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_nsis_nulsft.c",
+   "program": "ClamAV",
+   "wall": 0.09857319100001405,
+   "ExecuteCompiler": 0.073658,
+   "Frontend": 0.01825,
+   "Optimizer": 0.029683,
+   "CodeGenPasses": 0.023025,
+   "Backend": 0.053905
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_ole2_extract.c",
+   "program": "ClamAV",
+   "wall": 0.10489290900000015,
+   "ExecuteCompiler": 0.079615,
+   "Frontend": 0.019448,
+   "Optimizer": 0.032978,
+   "CodeGenPasses": 0.02472,
+   "Backend": 0.058811
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_others.c",
+   "program": "ClamAV",
+   "wall": 0.10585625499993512,
+   "ExecuteCompiler": 0.080367,
+   "Frontend": 0.020514,
+   "Optimizer": 0.026831,
+   "CodeGenPasses": 0.030386,
+   "Backend": 0.058236
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_packlibs.c",
+   "program": "ClamAV",
+   "wall": 0.08567953700003272,
+   "ExecuteCompiler": 0.06454,
+   "Frontend": 0.012871,
+   "Optimizer": 0.029535,
+   "CodeGenPasses": 0.019745,
+   "Backend": 0.050326
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_pdf.c",
+   "program": "ClamAV",
+   "wall": 0.11588565099998505,
+   "ExecuteCompiler": 0.093044,
+   "Frontend": 0.019915,
+   "Optimizer": 0.033918,
+   "CodeGenPasses": 0.036921,
+   "Backend": 0.07186
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_pe.c",
+   "program": "ClamAV",
+   "wall": 0.3064349610000363,
+   "ExecuteCompiler": 0.279112,
+   "Frontend": 0.038816,
+   "Optimizer": 0.118337,
+   "CodeGenPasses": 0.119331,
+   "Backend": 0.238748
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_petite.c",
+   "program": "ClamAV",
+   "wall": 0.09889281499999925,
+   "ExecuteCompiler": 0.077674,
+   "Frontend": 0.014371,
+   "Optimizer": 0.034814,
+   "CodeGenPasses": 0.025986,
+   "Backend": 0.061759
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_phish_domaincheck_db.c",
+   "program": "ClamAV",
+   "wall": 0.04172477200006597,
+   "ExecuteCompiler": 0.021989,
+   "Frontend": 0.011883,
+   "Optimizer": 0.003643,
+   "CodeGenPasses": 0.00423,
+   "Backend": 0.008942
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_phish_whitelist.c",
+   "program": "ClamAV",
+   "wall": 0.03889262100005908,
+   "ExecuteCompiler": 0.019345,
+   "Frontend": 0.011477,
+   "Optimizer": 0.002585,
+   "CodeGenPasses": 0.003259,
+   "Backend": 0.006763
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_phishcheck.c",
+   "program": "ClamAV",
+   "wall": 0.2067625989999442,
+   "ExecuteCompiler": 0.182043,
+   "Frontend": 0.020088,
+   "Optimizer": 0.080409,
+   "CodeGenPasses": 0.079432,
+   "Backend": 0.160792
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_pst.c",
+   "program": "ClamAV",
+   "wall": 0.03476550599998518,
+   "ExecuteCompiler": 0.014261,
+   "Frontend": 0.010321,
+   "Optimizer": 0.001042,
+   "CodeGenPasses": 0.000758,
+   "Backend": 0.002717
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_readdb.c",
+   "program": "ClamAV",
+   "wall": 0.17522722699993665,
+   "ExecuteCompiler": 0.150837,
+   "Frontend": 0.024117,
+   "Optimizer": 0.057339,
+   "CodeGenPasses": 0.067025,
+   "Backend": 0.125433
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_rebuildpe.c",
+   "program": "ClamAV",
+   "wall": 0.04551154599994334,
+   "ExecuteCompiler": 0.026937,
+   "Frontend": 0.010842,
+   "Optimizer": 0.007522,
+   "CodeGenPasses": 0.006525,
+   "Backend": 0.014867
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_regex_list.c",
+   "program": "ClamAV",
+   "wall": 0.18395401499992659,
+   "ExecuteCompiler": 0.159422,
+   "Frontend": 0.021986,
+   "Optimizer": 0.083526,
+   "CodeGenPasses": 0.051513,
+   "Backend": 0.136085
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_regex_regcomp.c",
+   "program": "ClamAV",
+   "wall": 0.3008566429999746,
+   "ExecuteCompiler": 0.274215,
+   "Frontend": 0.025229,
+   "Optimizer": 0.155962,
+   "CodeGenPasses": 0.090529,
+   "Backend": 0.247501
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_regex_regerror.c",
+   "program": "ClamAV",
+   "wall": 0.04238022599997748,
+   "ExecuteCompiler": 0.022252,
+   "Frontend": 0.012033,
+   "Optimizer": 0.004699,
+   "CodeGenPasses": 0.003325,
+   "Backend": 0.008959
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_regex_regexec.c",
+   "program": "ClamAV",
+   "wall": 0.2231772779999801,
+   "ExecuteCompiler": 0.19628,
+   "Frontend": 0.026323,
+   "Optimizer": 0.105466,
+   "CodeGenPasses": 0.062016,
+   "Backend": 0.168489
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_regex_regfree.c",
+   "program": "ClamAV",
+   "wall": 0.03921278699999675,
+   "ExecuteCompiler": 0.017156,
+   "Frontend": 0.011615,
+   "Optimizer": 0.001818,
+   "CodeGenPasses": 0.001469,
+   "Backend": 0.004232
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_regex_strlcpy.c",
+   "program": "ClamAV",
+   "wall": 0.030920568000055937,
+   "ExecuteCompiler": 0.010989,
+   "Frontend": 0.003993,
+   "Optimizer": 0.00303,
+   "CodeGenPasses": 0.001786,
+   "Backend": 0.005756
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_rtf.c",
+   "program": "ClamAV",
+   "wall": 0.1117126650000273,
+   "ExecuteCompiler": 0.08681,
+   "Frontend": 0.018544,
+   "Optimizer": 0.037496,
+   "CodeGenPasses": 0.028167,
+   "Backend": 0.066628
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_scanners.c",
+   "program": "ClamAV",
+   "wall": 0.1974424130000898,
+   "ExecuteCompiler": 0.169111,
+   "Frontend": 0.031904,
+   "Optimizer": 0.067373,
+   "CodeGenPasses": 0.067075,
+   "Backend": 0.135496
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_sis.c",
+   "program": "ClamAV",
+   "wall": 0.09751525500007574,
+   "ExecuteCompiler": 0.075835,
+   "Frontend": 0.018483,
+   "Optimizer": 0.025351,
+   "CodeGenPasses": 0.029284,
+   "Backend": 0.055647
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_snprintf.c",
+   "program": "ClamAV",
+   "wall": 0.02125006200003554,
+   "ExecuteCompiler": 0.002677,
+   "Frontend": 0.000395,
+   "Optimizer": 0.000107,
+   "CodeGenPasses": 0.000108,
+   "Backend": 0.001141
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_special.c",
+   "program": "ClamAV",
+   "wall": 0.06629132900002332,
+   "ExecuteCompiler": 0.045893,
+   "Frontend": 0.016295,
+   "Optimizer": 0.014962,
+   "CodeGenPasses": 0.012466,
+   "Backend": 0.028416
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_spin.c",
+   "program": "ClamAV",
+   "wall": 0.08903686399992239,
+   "ExecuteCompiler": 0.067954,
+   "Frontend": 0.014835,
+   "Optimizer": 0.027736,
+   "CodeGenPasses": 0.023203,
+   "Backend": 0.051841
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_str.c",
+   "program": "ClamAV",
+   "wall": 0.09519998900009341,
+   "ExecuteCompiler": 0.072619,
+   "Frontend": 0.015674,
+   "Optimizer": 0.029311,
+   "CodeGenPasses": 0.025352,
+   "Backend": 0.055621
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_suecrypt.c",
+   "program": "ClamAV",
+   "wall": 0.052558809000061046,
+   "ExecuteCompiler": 0.032024,
+   "Frontend": 0.013259,
+   "Optimizer": 0.00985,
+   "CodeGenPasses": 0.006492,
+   "Backend": 0.017264
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_table.c",
+   "program": "ClamAV",
+   "wall": 0.047500575000071876,
+   "ExecuteCompiler": 0.027763,
+   "Frontend": 0.011465,
+   "Optimizer": 0.007479,
+   "CodeGenPasses": 0.00678,
+   "Backend": 0.015172
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_text.c",
+   "program": "ClamAV",
+   "wall": 0.05999468400000296,
+   "ExecuteCompiler": 0.039697,
+   "Frontend": 0.013696,
+   "Optimizer": 0.01407,
+   "CodeGenPasses": 0.009804,
+   "Backend": 0.024805
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_tnef.c",
+   "program": "ClamAV",
+   "wall": 0.05505237700003818,
+   "ExecuteCompiler": 0.035614,
+   "Frontend": 0.014822,
+   "Optimizer": 0.01099,
+   "CodeGenPasses": 0.007763,
+   "Backend": 0.019629
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_unarj.c",
+   "program": "ClamAV",
+   "wall": 0.17472723899993525,
+   "ExecuteCompiler": 0.151875,
+   "Frontend": 0.018826,
+   "Optimizer": 0.082076,
+   "CodeGenPasses": 0.048733,
+   "Backend": 0.131806
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_unsp.c",
+   "program": "ClamAV",
+   "wall": 0.1770856209999465,
+   "ExecuteCompiler": 0.149898,
+   "Frontend": 0.016161,
+   "Optimizer": 0.076523,
+   "CodeGenPasses": 0.054494,
+   "Backend": 0.132259
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_untar.c",
+   "program": "ClamAV",
+   "wall": 0.061721078000005036,
+   "ExecuteCompiler": 0.035153,
+   "Frontend": 0.016863,
+   "Optimizer": 0.008669,
+   "CodeGenPasses": 0.00718,
+   "Backend": 0.016853
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_unzip.c",
+   "program": "ClamAV",
+   "wall": 0.09467533899999125,
+   "ExecuteCompiler": 0.071913,
+   "Frontend": 0.019603,
+   "Optimizer": 0.028445,
+   "CodeGenPasses": 0.021688,
+   "Backend": 0.051094
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_upack.c",
+   "program": "ClamAV",
+   "wall": 0.13004856100008055,
+   "ExecuteCompiler": 0.105928,
+   "Frontend": 0.019877,
+   "Optimizer": 0.048338,
+   "CodeGenPasses": 0.035031,
+   "Backend": 0.084533
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_upx.c",
+   "program": "ClamAV",
+   "wall": 0.14884119400005602,
+   "ExecuteCompiler": 0.124378,
+   "Frontend": 0.016902,
+   "Optimizer": 0.060496,
+   "CodeGenPasses": 0.044474,
+   "Backend": 0.106038
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_uuencode.c",
+   "program": "ClamAV",
+   "wall": 0.046353502999977536,
+   "ExecuteCompiler": 0.024613,
+   "Frontend": 0.014162,
+   "Optimizer": 0.004352,
+   "CodeGenPasses": 0.003684,
+   "Backend": 0.009093
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_vba_extract.c",
+   "program": "ClamAV",
+   "wall": 0.1597009930000013,
+   "ExecuteCompiler": 0.133569,
+   "Frontend": 0.025984,
+   "Optimizer": 0.061407,
+   "CodeGenPasses": 0.04356,
+   "Backend": 0.106069
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_wwunpack.c",
+   "program": "ClamAV",
+   "wall": 0.11386524800002462,
+   "ExecuteCompiler": 0.08925,
+   "Frontend": 0.014825,
+   "Optimizer": 0.047794,
+   "CodeGenPasses": 0.024016,
+   "Backend": 0.072994
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/libclamav_yc.c",
+   "program": "ClamAV",
+   "wall": 0.059234679999917716,
+   "ExecuteCompiler": 0.035848,
+   "Frontend": 0.013598,
+   "Optimizer": 0.011306,
+   "CodeGenPasses": 0.008328,
+   "Backend": 0.020828
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/shared_cdiff.c",
+   "program": "ClamAV",
+   "wall": 0.1381176999999525,
+   "ExecuteCompiler": 0.112127,
+   "Frontend": 0.020523,
+   "Optimizer": 0.046587,
+   "CodeGenPasses": 0.04228,
+   "Backend": 0.090035
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/shared_cfgparser.c",
+   "program": "ClamAV",
+   "wall": 0.080258740999966,
+   "ExecuteCompiler": 0.054732,
+   "Frontend": 0.014894,
+   "Optimizer": 0.019073,
+   "CodeGenPasses": 0.018309,
+   "Backend": 0.038447
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/shared_getopt.c",
+   "program": "ClamAV",
+   "wall": 0.025216543000055935,
+   "ExecuteCompiler": 0.006073,
+   "Frontend": 0.00364,
+   "Optimizer": 0.0001,
+   "CodeGenPasses": 0.000143,
+   "Backend": 0.001226
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/shared_misc.c",
+   "program": "ClamAV",
+   "wall": 0.05914273099995171,
+   "ExecuteCompiler": 0.038593,
+   "Frontend": 0.0169,
+   "Optimizer": 0.008782,
+   "CodeGenPasses": 0.010819,
+   "Backend": 0.020541
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/shared_network.c",
+   "program": "ClamAV",
+   "wall": 0.03627554100000907,
+   "ExecuteCompiler": 0.014478,
+   "Frontend": 0.008652,
+   "Optimizer": 0.001791,
+   "CodeGenPasses": 0.001672,
+   "Backend": 0.004564
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/shared_options.c",
+   "program": "ClamAV",
+   "wall": 0.06686710899998616,
+   "ExecuteCompiler": 0.043685,
+   "Frontend": 0.011047,
+   "Optimizer": 0.015499,
+   "CodeGenPasses": 0.014655,
+   "Backend": 0.031255
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/shared_output.c",
+   "program": "ClamAV",
+   "wall": 0.05462636799995835,
+   "ExecuteCompiler": 0.0315,
+   "Frontend": 0.01528,
+   "Optimizer": 0.00551,
+   "CodeGenPasses": 0.008466,
+   "Backend": 0.01498
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/shared_sha256.c",
+   "program": "ClamAV",
+   "wall": 0.20893122100005712,
+   "ExecuteCompiler": 0.183939,
+   "Frontend": 0.012528,
+   "Optimizer": 0.135204,
+   "CodeGenPasses": 0.033247,
+   "Backend": 0.169721
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_adler32.c",
+   "program": "ClamAV",
+   "wall": 0.07062721399995553,
+   "ExecuteCompiler": 0.047475,
+   "Frontend": 0.010649,
+   "Optimizer": 0.022437,
+   "CodeGenPasses": 0.011606,
+   "Backend": 0.035491
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_compress.c",
+   "program": "ClamAV",
+   "wall": 0.03922859600004358,
+   "ExecuteCompiler": 0.017882,
+   "Frontend": 0.005909,
+   "Optimizer": 0.005207,
+   "CodeGenPasses": 0.004586,
+   "Backend": 0.010705
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_crc32.c",
+   "program": "ClamAV",
+   "wall": 0.07719804099997418,
+   "ExecuteCompiler": 0.052891,
+   "Frontend": 0.015396,
+   "Optimizer": 0.023209,
+   "CodeGenPasses": 0.012053,
+   "Backend": 0.036234
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_deflate.c",
+   "program": "ClamAV",
+   "wall": 0.2662090689999559,
+   "ExecuteCompiler": 0.235215,
+   "Frontend": 0.027594,
+   "Optimizer": 0.116082,
+   "CodeGenPasses": 0.088644,
+   "Backend": 0.20598
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_gzclose.c",
+   "program": "ClamAV",
+   "wall": 0.03971959800003333,
+   "ExecuteCompiler": 0.017395,
+   "Frontend": 0.011977,
+   "Optimizer": 0.001827,
+   "CodeGenPasses": 0.00126,
+   "Backend": 0.004158
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_gzlib.c",
+   "program": "ClamAV",
+   "wall": 0.07835602599993763,
+   "ExecuteCompiler": 0.053774,
+   "Frontend": 0.01586,
+   "Optimizer": 0.016814,
+   "CodeGenPasses": 0.018615,
+   "Backend": 0.036534
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_gzread.c",
+   "program": "ClamAV",
+   "wall": 0.10618782599999577,
+   "ExecuteCompiler": 0.078716,
+   "Frontend": 0.016716,
+   "Optimizer": 0.032356,
+   "CodeGenPasses": 0.027071,
+   "Backend": 0.060542
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_gzwrite.c",
+   "program": "ClamAV",
+   "wall": 0.0901129269999501,
+   "ExecuteCompiler": 0.06351,
+   "Frontend": 0.016663,
+   "Optimizer": 0.021621,
+   "CodeGenPasses": 0.022466,
+   "Backend": 0.045219
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_infback.c",
+   "program": "ClamAV",
+   "wall": 0.13802870899996833,
+   "ExecuteCompiler": 0.110477,
+   "Frontend": 0.018106,
+   "Optimizer": 0.051048,
+   "CodeGenPasses": 0.038735,
+   "Backend": 0.090891
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_inffast.c",
+   "program": "ClamAV",
+   "wall": 0.08145084099999167,
+   "ExecuteCompiler": 0.057662,
+   "Frontend": 0.01061,
+   "Optimizer": 0.024537,
+   "CodeGenPasses": 0.019808,
+   "Backend": 0.045521
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_inflate.c",
+   "program": "ClamAV",
+   "wall": 0.3134501959999625,
+   "ExecuteCompiler": 0.281965,
+   "Frontend": 0.024864,
+   "Optimizer": 0.14285,
+   "CodeGenPasses": 0.111514,
+   "Backend": 0.255609
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_inftrees.c",
+   "program": "ClamAV",
+   "wall": 0.06506365799998548,
+   "ExecuteCompiler": 0.04287,
+   "Frontend": 0.010405,
+   "Optimizer": 0.017637,
+   "CodeGenPasses": 0.012515,
+   "Backend": 0.03118
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_trees.c",
+   "program": "ClamAV",
+   "wall": 0.18579863899992688,
+   "ExecuteCompiler": 0.155921,
+   "Frontend": 0.023463,
+   "Optimizer": 0.088018,
+   "CodeGenPasses": 0.04152,
+   "Backend": 0.130662
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_uncompr.c",
+   "program": "ClamAV",
+   "wall": 0.036704405000023144,
+   "ExecuteCompiler": 0.016066,
+   "Frontend": 0.006019,
+   "Optimizer": 0.004123,
+   "CodeGenPasses": 0.003723,
+   "Backend": 0.008874
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/ClamAV/zlib_zutil.c",
+   "program": "ClamAV",
+   "wall": 0.03740850200006207,
+   "ExecuteCompiler": 0.018016,
+   "Frontend": 0.011656,
+   "Optimizer": 0.001964,
+   "CodeGenPasses": 0.00235,
+   "Backend": 0.005228
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/sqlite3/sqlite3.c",
+   "program": "sqlite3",
+   "wall": 7.545633833000011,
+   "ExecuteCompiler": 7.271911,
+   "Frontend": 0.332763,
+   "Optimizer": 4.091906,
+   "CodeGenPasses": 2.842697,
+   "Backend": 6.936628
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/sqlite3/shell.c",
+   "program": "sqlite3",
+   "wall": 0.2995442079999293,
+   "ExecuteCompiler": 0.266494,
+   "Frontend": 0.030388,
+   "Optimizer": 0.126252,
+   "CodeGenPasses": 0.107134,
+   "Backend": 0.234525
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z01.c",
+   "program": "consumer-typeset",
+   "wall": 0.14043885000000955,
+   "ExecuteCompiler": 0.109803,
+   "Frontend": 0.018134,
+   "Optimizer": 0.031777,
+   "CodeGenPasses": 0.057065,
+   "Backend": 0.090113
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z02.c",
+   "program": "consumer-typeset",
+   "wall": 0.18205463900005725,
+   "ExecuteCompiler": 0.154312,
+   "Frontend": 0.022338,
+   "Optimizer": 0.067925,
+   "CodeGenPasses": 0.061067,
+   "Backend": 0.130186
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z03.c",
+   "program": "consumer-typeset",
+   "wall": 0.14283904299998085,
+   "ExecuteCompiler": 0.114853,
+   "Frontend": 0.0212,
+   "Optimizer": 0.043942,
+   "CodeGenPasses": 0.047144,
+   "Backend": 0.092206
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z04.c",
+   "program": "consumer-typeset",
+   "wall": 0.04608768200000668,
+   "ExecuteCompiler": 0.023193,
+   "Frontend": 0.009272,
+   "Optimizer": 0.005426,
+   "CodeGenPasses": 0.006212,
+   "Backend": 0.012668
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z05.c",
+   "program": "consumer-typeset",
+   "wall": 0.16130038300002525,
+   "ExecuteCompiler": 0.13432,
+   "Frontend": 0.02653,
+   "Optimizer": 0.052913,
+   "CodeGenPasses": 0.051941,
+   "Backend": 0.106079
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z06.c",
+   "program": "consumer-typeset",
+   "wall": 0.39911233199995877,
+   "ExecuteCompiler": 0.364381,
+   "Frontend": 0.056899,
+   "Optimizer": 0.140439,
+   "CodeGenPasses": 0.164128,
+   "Backend": 0.305683
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z07.c",
+   "program": "consumer-typeset",
+   "wall": 0.17293005400006223,
+   "ExecuteCompiler": 0.146489,
+   "Frontend": 0.025802,
+   "Optimizer": 0.066287,
+   "CodeGenPasses": 0.051787,
+   "Backend": 0.119233
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z08.c",
+   "program": "consumer-typeset",
+   "wall": 0.5248808730000292,
+   "ExecuteCompiler": 0.489811,
+   "Frontend": 0.071021,
+   "Optimizer": 0.227636,
+   "CodeGenPasses": 0.188532,
+   "Backend": 0.417302
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z09.c",
+   "program": "consumer-typeset",
+   "wall": 0.08352740399993763,
+   "ExecuteCompiler": 0.060648,
+   "Frontend": 0.015267,
+   "Optimizer": 0.021455,
+   "CodeGenPasses": 0.02169,
+   "Backend": 0.044128
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z10.c",
+   "program": "consumer-typeset",
+   "wall": 0.1870901940000067,
+   "ExecuteCompiler": 0.157409,
+   "Frontend": 0.030389,
+   "Optimizer": 0.063925,
+   "CodeGenPasses": 0.060406,
+   "Backend": 0.12558
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z11.c",
+   "program": "consumer-typeset",
+   "wall": 0.062265798999987965,
+   "ExecuteCompiler": 0.038811,
+   "Frontend": 0.011425,
+   "Optimizer": 0.011795,
+   "CodeGenPasses": 0.012628,
+   "Backend": 0.025534
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z12.c",
+   "program": "consumer-typeset",
+   "wall": 0.33820281600003455,
+   "ExecuteCompiler": 0.305326,
+   "Frontend": 0.045001,
+   "Optimizer": 0.14355,
+   "CodeGenPasses": 0.113815,
+   "Backend": 0.258681
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z13.c",
+   "program": "consumer-typeset",
+   "wall": 0.1166747629999918,
+   "ExecuteCompiler": 0.090998,
+   "Frontend": 0.018196,
+   "Optimizer": 0.039051,
+   "CodeGenPasses": 0.031278,
+   "Backend": 0.071477
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z14.c",
+   "program": "consumer-typeset",
+   "wall": 0.23664308499996878,
+   "ExecuteCompiler": 0.207601,
+   "Frontend": 0.031923,
+   "Optimizer": 0.093164,
+   "CodeGenPasses": 0.079522,
+   "Backend": 0.174108
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z15.c",
+   "program": "consumer-typeset",
+   "wall": 0.10870740699999715,
+   "ExecuteCompiler": 0.082409,
+   "Frontend": 0.021824,
+   "Optimizer": 0.030762,
+   "CodeGenPasses": 0.027017,
+   "Backend": 0.05896
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z16.c",
+   "program": "consumer-typeset",
+   "wall": 0.09735599099997216,
+   "ExecuteCompiler": 0.07209,
+   "Frontend": 0.014764,
+   "Optimizer": 0.028954,
+   "CodeGenPasses": 0.025358,
+   "Backend": 0.055493
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z17.c",
+   "program": "consumer-typeset",
+   "wall": 0.060149013000000195,
+   "ExecuteCompiler": 0.038258,
+   "Frontend": 0.01151,
+   "Optimizer": 0.011289,
+   "CodeGenPasses": 0.013051,
+   "Backend": 0.025478
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z18.c",
+   "program": "consumer-typeset",
+   "wall": 0.14783728099996551,
+   "ExecuteCompiler": 0.121556,
+   "Frontend": 0.026136,
+   "Optimizer": 0.049782,
+   "CodeGenPasses": 0.043219,
+   "Backend": 0.094094
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z19.c",
+   "program": "consumer-typeset",
+   "wall": 0.2560182109999687,
+   "ExecuteCompiler": 0.224604,
+   "Frontend": 0.034748,
+   "Optimizer": 0.096096,
+   "CodeGenPasses": 0.090888,
+   "Backend": 0.188197
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z20.c",
+   "program": "consumer-typeset",
+   "wall": 0.26223495400006414,
+   "ExecuteCompiler": 0.23092,
+   "Frontend": 0.03096,
+   "Optimizer": 0.09452,
+   "CodeGenPasses": 0.102491,
+   "Backend": 0.198483
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z21.c",
+   "program": "consumer-typeset",
+   "wall": 0.13130418999992344,
+   "ExecuteCompiler": 0.105343,
+   "Frontend": 0.020934,
+   "Optimizer": 0.040928,
+   "CodeGenPasses": 0.040782,
+   "Backend": 0.082931
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z22.c",
+   "program": "consumer-typeset",
+   "wall": 0.3042698739999423,
+   "ExecuteCompiler": 0.271816,
+   "Frontend": 0.046214,
+   "Optimizer": 0.126776,
+   "CodeGenPasses": 0.096085,
+   "Backend": 0.224089
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z23.c",
+   "program": "consumer-typeset",
+   "wall": 0.2165775420000955,
+   "ExecuteCompiler": 0.187577,
+   "Frontend": 0.027801,
+   "Optimizer": 0.08027,
+   "CodeGenPasses": 0.076753,
+   "Backend": 0.158316
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z24.c",
+   "program": "consumer-typeset",
+   "wall": 0.03189833299995826,
+   "ExecuteCompiler": 0.010725,
+   "Frontend": 0.008001,
+   "Optimizer": 0.000253,
+   "CodeGenPasses": 0.000336,
+   "Backend": 0.001546
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z25.c",
+   "program": "consumer-typeset",
+   "wall": 0.02832849100002477,
+   "ExecuteCompiler": 0.00939,
+   "Frontend": 0.007146,
+   "Optimizer": 9.7e-05,
+   "CodeGenPasses": 8.5e-05,
+   "Backend": 0.001071
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z26.c",
+   "program": "consumer-typeset",
+   "wall": 0.04367640999998912,
+   "ExecuteCompiler": 0.023888,
+   "Frontend": 0.00946,
+   "Optimizer": 0.00512,
+   "CodeGenPasses": 0.007093,
+   "Backend": 0.013232
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z27.c",
+   "program": "consumer-typeset",
+   "wall": 0.029634867000027043,
+   "ExecuteCompiler": 0.009838,
+   "Frontend": 0.007456,
+   "Optimizer": 0.000142,
+   "CodeGenPasses": 9.7e-05,
+   "Backend": 0.001163
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z28.c",
+   "program": "consumer-typeset",
+   "wall": 0.0526809199999434,
+   "ExecuteCompiler": 0.031585,
+   "Frontend": 0.009559,
+   "Optimizer": 0.008566,
+   "CodeGenPasses": 0.011212,
+   "Backend": 0.020781
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z29.c",
+   "program": "consumer-typeset",
+   "wall": 0.1628485640000008,
+   "ExecuteCompiler": 0.133952,
+   "Frontend": 0.02119,
+   "Optimizer": 0.058681,
+   "CodeGenPasses": 0.051189,
+   "Backend": 0.111059
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z30.c",
+   "program": "consumer-typeset",
+   "wall": 0.052824541999939356,
+   "ExecuteCompiler": 0.029985,
+   "Frontend": 0.009879,
+   "Optimizer": 0.009491,
+   "CodeGenPasses": 0.008245,
+   "Backend": 0.018881
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z31.c",
+   "program": "consumer-typeset",
+   "wall": 0.036287774000015816,
+   "ExecuteCompiler": 0.016126,
+   "Frontend": 0.008705,
+   "Optimizer": 0.002553,
+   "CodeGenPasses": 0.002682,
+   "Backend": 0.00614
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z32.c",
+   "program": "consumer-typeset",
+   "wall": 0.04864661300007356,
+   "ExecuteCompiler": 0.026961,
+   "Frontend": 0.009705,
+   "Optimizer": 0.008764,
+   "CodeGenPasses": 0.006186,
+   "Backend": 0.016003
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z33.c",
+   "program": "consumer-typeset",
+   "wall": 0.14699213899996266,
+   "ExecuteCompiler": 0.120448,
+   "Frontend": 0.021705,
+   "Optimizer": 0.05344,
+   "CodeGenPasses": 0.042626,
+   "Backend": 0.097324
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z34.c",
+   "program": "consumer-typeset",
+   "wall": 0.04681317300003229,
+   "ExecuteCompiler": 0.024045,
+   "Frontend": 0.014173,
+   "Optimizer": 0.00391,
+   "CodeGenPasses": 0.003556,
+   "Backend": 0.008523
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z35.c",
+   "program": "consumer-typeset",
+   "wall": 0.10006610200002797,
+   "ExecuteCompiler": 0.073557,
+   "Frontend": 0.020914,
+   "Optimizer": 0.02278,
+   "CodeGenPasses": 0.027227,
+   "Backend": 0.051167
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z36.c",
+   "program": "consumer-typeset",
+   "wall": 0.15355295599999863,
+   "ExecuteCompiler": 0.125305,
+   "Frontend": 0.018378,
+   "Optimizer": 0.056508,
+   "CodeGenPasses": 0.047756,
+   "Backend": 0.105414
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z37.c",
+   "program": "consumer-typeset",
+   "wall": 0.30110689899993304,
+   "ExecuteCompiler": 0.267009,
+   "Frontend": 0.03299,
+   "Optimizer": 0.127253,
+   "CodeGenPasses": 0.103856,
+   "Backend": 0.232345
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z38.c",
+   "program": "consumer-typeset",
+   "wall": 0.15563778199998524,
+   "ExecuteCompiler": 0.127199,
+   "Frontend": 0.021056,
+   "Optimizer": 0.056539,
+   "CodeGenPasses": 0.046835,
+   "Backend": 0.104598
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z39.c",
+   "program": "consumer-typeset",
+   "wall": 0.05236587199999576,
+   "ExecuteCompiler": 0.028668,
+   "Frontend": 0.011009,
+   "Optimizer": 0.007724,
+   "CodeGenPasses": 0.007588,
+   "Backend": 0.016376
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z40.c",
+   "program": "consumer-typeset",
+   "wall": 0.07189588600010666,
+   "ExecuteCompiler": 0.047353,
+   "Frontend": 0.013887,
+   "Optimizer": 0.014846,
+   "CodeGenPasses": 0.016035,
+   "Backend": 0.032029
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z41.c",
+   "program": "consumer-typeset",
+   "wall": 0.10080721500003165,
+   "ExecuteCompiler": 0.07491,
+   "Frontend": 0.016413,
+   "Optimizer": 0.02799,
+   "CodeGenPasses": 0.027942,
+   "Backend": 0.057112
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z42.c",
+   "program": "consumer-typeset",
+   "wall": 0.05788234800002101,
+   "ExecuteCompiler": 0.034448,
+   "Frontend": 0.01041,
+   "Optimizer": 0.012871,
+   "CodeGenPasses": 0.008916,
+   "Backend": 0.022818
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z43.c",
+   "program": "consumer-typeset",
+   "wall": 0.08764424899993628,
+   "ExecuteCompiler": 0.062375,
+   "Frontend": 0.014164,
+   "Optimizer": 0.025173,
+   "CodeGenPasses": 0.020581,
+   "Backend": 0.046853
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z44.c",
+   "program": "consumer-typeset",
+   "wall": 0.17450518000009652,
+   "ExecuteCompiler": 0.146261,
+   "Frontend": 0.029078,
+   "Optimizer": 0.06317,
+   "CodeGenPasses": 0.051235,
+   "Backend": 0.115629
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z45.c",
+   "program": "consumer-typeset",
+   "wall": 0.0557088109999313,
+   "ExecuteCompiler": 0.033118,
+   "Frontend": 0.009444,
+   "Optimizer": 0.01104,
+   "CodeGenPasses": 0.010183,
+   "Backend": 0.022411
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z46.c",
+   "program": "consumer-typeset",
+   "wall": 0.1226479780000318,
+   "ExecuteCompiler": 0.096264,
+   "Frontend": 0.021423,
+   "Optimizer": 0.039038,
+   "CodeGenPasses": 0.033053,
+   "Backend": 0.073252
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z47.c",
+   "program": "consumer-typeset",
+   "wall": 0.08241197600000305,
+   "ExecuteCompiler": 0.057053,
+   "Frontend": 0.015794,
+   "Optimizer": 0.020887,
+   "CodeGenPasses": 0.01794,
+   "Backend": 0.039929
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z48.c",
+   "program": "consumer-typeset",
+   "wall": 0.2267674380000244,
+   "ExecuteCompiler": 0.194035,
+   "Frontend": 0.029031,
+   "Optimizer": 0.088463,
+   "CodeGenPasses": 0.073968,
+   "Backend": 0.163614
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z49.c",
+   "program": "consumer-typeset",
+   "wall": 0.18220905199996196,
+   "ExecuteCompiler": 0.151783,
+   "Frontend": 0.022728,
+   "Optimizer": 0.063468,
+   "CodeGenPasses": 0.062909,
+   "Backend": 0.127532
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z50.c",
+   "program": "consumer-typeset",
+   "wall": 0.0932080009999936,
+   "ExecuteCompiler": 0.06555,
+   "Frontend": 0.017892,
+   "Optimizer": 0.020036,
+   "CodeGenPasses": 0.025078,
+   "Backend": 0.046225
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/consumer-typeset/z51.c",
+   "program": "consumer-typeset",
+   "wall": 0.07791514100006225,
+   "ExecuteCompiler": 0.052639,
+   "Frontend": 0.010489,
+   "Optimizer": 0.020143,
+   "CodeGenPasses": 0.019644,
+   "Backend": 0.040861
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/Calignm1.c",
+   "program": "mafft",
+   "wall": 0.16431869999996707,
+   "ExecuteCompiler": 0.138503,
+   "Frontend": 0.02261,
+   "Optimizer": 0.063561,
+   "CodeGenPasses": 0.04967,
+   "Backend": 0.114384
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/constants.c",
+   "program": "mafft",
+   "wall": 0.4819529760000023,
+   "ExecuteCompiler": 0.447321,
+   "Frontend": 0.039045,
+   "Optimizer": 0.274599,
+   "CodeGenPasses": 0.130712,
+   "Backend": 0.406668
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/defs.c",
+   "program": "mafft",
+   "wall": 0.04437586699998519,
+   "ExecuteCompiler": 0.022296,
+   "Frontend": 0.019414,
+   "Optimizer": 0.000212,
+   "CodeGenPasses": 0.000259,
+   "Backend": 0.001591
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/Falign.c",
+   "program": "mafft",
+   "wall": 0.4321125100000245,
+   "ExecuteCompiler": 0.400471,
+   "Frontend": 0.035293,
+   "Optimizer": 0.197255,
+   "CodeGenPasses": 0.165161,
+   "Backend": 0.363704
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/fft.c",
+   "program": "mafft",
+   "wall": 0.08455494600002567,
+   "ExecuteCompiler": 0.058948,
+   "Frontend": 0.021433,
+   "Optimizer": 0.020124,
+   "CodeGenPasses": 0.014955,
+   "Backend": 0.03619
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/fftFunctions.c",
+   "program": "mafft",
+   "wall": 0.18968633800000134,
+   "ExecuteCompiler": 0.160786,
+   "Frontend": 0.026623,
+   "Optimizer": 0.071462,
+   "CodeGenPasses": 0.060212,
+   "Backend": 0.132786
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/Galign11.c",
+   "program": "mafft",
+   "wall": 0.12856870699999945,
+   "ExecuteCompiler": 0.102938,
+   "Frontend": 0.02285,
+   "Optimizer": 0.041728,
+   "CodeGenPasses": 0.035751,
+   "Backend": 0.078651
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/genalign11.c",
+   "program": "mafft",
+   "wall": 0.10446895500001574,
+   "ExecuteCompiler": 0.079264,
+   "Frontend": 0.022321,
+   "Optimizer": 0.029589,
+   "CodeGenPasses": 0.024859,
+   "Backend": 0.055552
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/genGalign11.c",
+   "program": "mafft",
+   "wall": 0.10387897900000098,
+   "ExecuteCompiler": 0.079013,
+   "Frontend": 0.02184,
+   "Optimizer": 0.029476,
+   "CodeGenPasses": 0.02511,
+   "Backend": 0.05576
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/Halignmm.c",
+   "program": "mafft",
+   "wall": 0.2456100609999794,
+   "ExecuteCompiler": 0.217898,
+   "Frontend": 0.026659,
+   "Optimizer": 0.102249,
+   "CodeGenPasses": 0.086367,
+   "Backend": 0.189834
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/io.c",
+   "program": "mafft",
+   "wall": 0.5978192100000115,
+   "ExecuteCompiler": 0.550526,
+   "Frontend": 0.055136,
+   "Optimizer": 0.253877,
+   "CodeGenPasses": 0.238308,
+   "Backend": 0.493479
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/Lalign11.c",
+   "program": "mafft",
+   "wall": 0.09838466400003654,
+   "ExecuteCompiler": 0.073601,
+   "Frontend": 0.022119,
+   "Optimizer": 0.027078,
+   "CodeGenPasses": 0.021891,
+   "Backend": 0.050067
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/Lalignmm.c",
+   "program": "mafft",
+   "wall": 0.31278438399999686,
+   "ExecuteCompiler": 0.283719,
+   "Frontend": 0.02806,
+   "Optimizer": 0.13164,
+   "CodeGenPasses": 0.121266,
+   "Backend": 0.254125
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/mltaln9.c",
+   "program": "mafft",
+   "wall": 1.0538484230000904,
+   "ExecuteCompiler": 0.99623,
+   "Frontend": 0.067358,
+   "Optimizer": 0.538738,
+   "CodeGenPasses": 0.386937,
+   "Backend": 0.927101
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/MSalign11.c",
+   "program": "mafft",
+   "wall": 0.15196351199983837,
+   "ExecuteCompiler": 0.126367,
+   "Frontend": 0.023139,
+   "Optimizer": 0.050888,
+   "CodeGenPasses": 0.049323,
+   "Backend": 0.101408
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/MSalignmm.c",
+   "program": "mafft",
+   "wall": 0.22371565100002044,
+   "ExecuteCompiler": 0.197082,
+   "Frontend": 0.02482,
+   "Optimizer": 0.084356,
+   "CodeGenPasses": 0.085268,
+   "Backend": 0.1708
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/mtxutl.c",
+   "program": "mafft",
+   "wall": 0.1422956220001197,
+   "ExecuteCompiler": 0.113193,
+   "Frontend": 0.013708,
+   "Optimizer": 0.047947,
+   "CodeGenPasses": 0.049071,
+   "Backend": 0.098119
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/pairlocalalign.c",
+   "program": "mafft",
+   "wall": 0.17831067399993117,
+   "ExecuteCompiler": 0.150684,
+   "Frontend": 0.028489,
+   "Optimizer": 0.068558,
+   "CodeGenPasses": 0.050888,
+   "Backend": 0.12063
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/partQalignmm.c",
+   "program": "mafft",
+   "wall": 0.31696756000019377,
+   "ExecuteCompiler": 0.287654,
+   "Frontend": 0.028631,
+   "Optimizer": 0.133084,
+   "CodeGenPasses": 0.123154,
+   "Backend": 0.257529
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/partSalignmm.c",
+   "program": "mafft",
+   "wall": 0.27497300899995025,
+   "ExecuteCompiler": 0.246353,
+   "Frontend": 0.025943,
+   "Optimizer": 0.117645,
+   "CodeGenPasses": 0.100119,
+   "Backend": 0.218965
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/Qalignmm.c",
+   "program": "mafft",
+   "wall": 0.4312980299998799,
+   "ExecuteCompiler": 0.399844,
+   "Frontend": 0.031317,
+   "Optimizer": 0.180549,
+   "CodeGenPasses": 0.184966,
+   "Backend": 0.366883
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/Ralignmm.c",
+   "program": "mafft",
+   "wall": 0.24017038599981788,
+   "ExecuteCompiler": 0.21199,
+   "Frontend": 0.025928,
+   "Optimizer": 0.099356,
+   "CodeGenPasses": 0.083917,
+   "Backend": 0.184537
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/rna.c",
+   "program": "mafft",
+   "wall": 0.15908477599987236,
+   "ExecuteCompiler": 0.13191,
+   "Frontend": 0.024059,
+   "Optimizer": 0.064128,
+   "CodeGenPasses": 0.041106,
+   "Backend": 0.10639
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/SAalignmm.c",
+   "program": "mafft",
+   "wall": 0.14326123099999677,
+   "ExecuteCompiler": 0.117662,
+   "Frontend": 0.022731,
+   "Optimizer": 0.049909,
+   "CodeGenPasses": 0.042408,
+   "Backend": 0.093453
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/Salignmm.c",
+   "program": "mafft",
+   "wall": 0.30751568300001964,
+   "ExecuteCompiler": 0.281167,
+   "Frontend": 0.026733,
+   "Optimizer": 0.130483,
+   "CodeGenPasses": 0.121019,
+   "Backend": 0.252636
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/suboptalign11.c",
+   "program": "mafft",
+   "wall": 0.11965086899999733,
+   "ExecuteCompiler": 0.096753,
+   "Frontend": 0.021472,
+   "Optimizer": 0.038768,
+   "CodeGenPasses": 0.034146,
+   "Backend": 0.073968
+  },
+  {
+   "file": "/home/user/llvm/llvm-test-suite/CTMark/mafft/tddis.c",
+   "program": "mafft",
+   "wall": 0.22613845299997593,
+   "ExecuteCompiler": 0.198406,
+   "Frontend": 0.024599,
+   "Optimizer": 0.091151,
+   "CodeGenPasses": 0.080058,
+   "Backend": 0.172333
+  }
+ ],
+ "top_passes": [
+  [
+   "InstCombinePass",
+   9.363632000000003
+  ],
+  [
+   "GVNPass",
+   4.059997
+  ],
+  [
+   "InlinerPass",
+   3.8992079999999962
+  ],
+  [
+   "SimplifyCFGPass",
+   2.947871
+  ],
+  [
+   "SLPVectorizerPass",
+   2.4186389999999998
+  ],
+  [
+   "IndVarSimplifyPass",
+   1.922376
+  ],
+  [
+   "EarlyCSEPass",
+   1.8108330000000006
+  ],
+  [
+   "LoopUnrollPass",
+   1.5280420000000015
+  ],
+  [
+   "DSEPass",
+   1.4035969999999998
+  ],
+  [
+   "LICMPass",
+   1.3529450000000018
+  ],
+  [
+   "JumpThreadingPass",
+   1.2543159999999993
+  ],
+  [
+   "CorrelatedValuePropagationPass",
+   1.230365000000001
+  ],
+  [
+   "SROAPass",
+   1.11698
+  ],
+  [
+   "MemorySSAAnalysis",
+   1.099905000000001
+  ],
+  [
+   "IPSCCPPass",
+   0.8906350000000007
+  ],
+  [
+   "LoopVectorizePass",
+   0.870456
+  ],
+  [
+   "BlockFrequencyAnalysis",
+   0.8230129999999999
+  ],
+  [
+   "LoopIdiomRecognizePass",
+   0.8086070000000005
+  ],
+  [
+   "PostOrderFunctionAttrsPass",
+   0.7391000000000001
+  ],
+  [
+   "SCCPPass",
+   0.7191139999999991
+  ],
+  [
+   "LoopDeletionPass",
+   0.6928100000000001
+  ],
+  [
+   "ConstraintEliminationPass",
+   0.6715329999999999
+  ],
+  [
+   "AAManager",
+   0.622828
+  ],
+  [
+   "LoopRotatePass",
+   0.600473
+  ],
+  [
+   "LoopFullUnrollPass",
+   0.5935550000000003
+  ],
+  [
+   "BranchProbabilityAnalysis",
+   0.5742889999999994
+  ],
+  [
+   "LoopSimplifyPass",
+   0.46268799999999993
+  ],
+  [
+   "ADCEPass",
+   0.45297700000000046
+  ],
+  [
+   "MemCpyOptPass",
+   0.4507420000000002
+  ],
+  [
+   "LoopAnalysis",
+   0.44808099999999934
+  ],
+  [
+   "GlobalOptPass",
+   0.4463160000000003
+  ],
+  [
+   "DominatorTreeAnalysis",
+   0.42036099999999976
+  ],
+  [
+   "TargetIRAnalysis",
+   0.4151210000000004
+  ],
+  [
+   "BDCEPass",
+   0.37263099999999993
+  ],
+  [
+   "LoopLoadEliminationPass",
+   0.344839
+  ],
+  [
+   "ReassociatePass",
+   0.3387619999999998
+  ],
+  [
+   "CalledValuePropagationPass",
+   0.298302
+  ],
+  [
+   "ScalarEvolutionAnalysis",
+   0.2836939999999999
+  ],
+  [
+   "LCSSAPass",
+   0.26347100000000023
+  ],
+  [
+   "SimpleLoopUnswitchPass",
+   0.24475300000000003
+  ]
+ ]
+}

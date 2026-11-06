@@ -1,0 +1,1930 @@
+{
+ "label": "llvm-project main (4b8f5da) built by clang 20.1.2, Release (-O3), with PCH (default), same 150 files",
+ "programs": {
+  "ObjCopy": {
+   "wall": 1.1281893329999093,
+   "files": 1.0,
+   "ExecuteCompiler": 1.02485,
+   "Frontend": 0.688944,
+   "Optimizer": 0.269012,
+   "CodeGenPasses": 0.058194,
+   "Backend": 0.329226
+  },
+  "CodeGen": {
+   "wall": 42.18984923900052,
+   "files": 24.0,
+   "ExecuteCompiler": 37.90505499999999,
+   "Frontend": 18.905576000000003,
+   "Optimizer": 14.733599999999997,
+   "CodeGenPasses": 4.038079,
+   "Backend": 18.815621
+  },
+  "DebugInfo": {
+   "wall": 15.912111004999815,
+   "files": 19.0,
+   "ExecuteCompiler": 14.249290999999998,
+   "Frontend": 10.624349999999998,
+   "Optimizer": 2.6215380000000006,
+   "CodeGenPasses": 0.8611780000000001,
+   "Backend": 3.5134229999999995
+  },
+  "TableGen": {
+   "wall": 1.8359359690000474,
+   "files": 2.0,
+   "ExecuteCompiler": 1.6767509999999999,
+   "Frontend": 1.402183,
+   "Optimizer": 0.218993,
+   "CodeGenPasses": 0.038619,
+   "Backend": 0.261139
+  },
+  "ABI": {
+   "wall": 0.5911217400000623,
+   "files": 2.0,
+   "ExecuteCompiler": 0.495983,
+   "Frontend": 0.326453,
+   "Optimizer": 0.117777,
+   "CodeGenPasses": 0.042138999999999996,
+   "Backend": 0.162337
+  },
+  "IR": {
+   "wall": 13.485145701000647,
+   "files": 15.0,
+   "ExecuteCompiler": 11.636141,
+   "Frontend": 5.489625,
+   "Optimizer": 4.928274999999999,
+   "CodeGenPasses": 1.121741,
+   "Backend": 6.071788
+  },
+  "SandboxIR": {
+   "wall": 0.5358088240000143,
+   "files": 1.0,
+   "ExecuteCompiler": 0.476578,
+   "Frontend": 0.381504,
+   "Optimizer": 0.072552,
+   "CodeGenPasses": 0.016444,
+   "Backend": 0.090443
+  },
+  "Transforms": {
+   "wall": 42.59292017799953,
+   "files": 18.0,
+   "ExecuteCompiler": 38.255023,
+   "Frontend": 18.361963000000003,
+   "Optimizer": 15.55746,
+   "CodeGenPasses": 4.130661,
+   "Backend": 19.726253
+  },
+  "Support": {
+   "wall": 3.4425327189997006,
+   "files": 7.0,
+   "ExecuteCompiler": 2.9357979999999992,
+   "Frontend": 1.1213330000000001,
+   "Optimizer": 1.2850879999999998,
+   "CodeGenPasses": 0.49709699999999996,
+   "Backend": 1.7909699999999997
+  },
+  "ExecutionEngine": {
+   "wall": 13.962943347999726,
+   "files": 9.0,
+   "ExecuteCompiler": 12.610931999999998,
+   "Frontend": 9.279077,
+   "Optimizer": 2.6179499999999996,
+   "CodeGenPasses": 0.6149500000000001,
+   "Backend": 3.250865
+  },
+  "Analysis": {
+   "wall": 25.299548405999985,
+   "files": 9.0,
+   "ExecuteCompiler": 22.757094999999996,
+   "Frontend": 7.806535,
+   "Optimizer": 10.980182000000001,
+   "CodeGenPasses": 3.88139,
+   "Backend": 14.879151
+  },
+  "MC": {
+   "wall": 7.648947469999939,
+   "files": 6.0,
+   "ExecuteCompiler": 6.954581,
+   "Frontend": 5.187635,
+   "Optimizer": 1.299161,
+   "CodeGenPasses": 0.409078,
+   "Backend": 1.719881
+  },
+  "Target/RISCV": {
+   "wall": 22.33931393900002,
+   "files": 5.0,
+   "ExecuteCompiler": 20.717079,
+   "Frontend": 9.627882,
+   "Optimizer": 7.234126,
+   "CodeGenPasses": 3.769494,
+   "Backend": 11.018377000000001
+  },
+  "XRay": {
+   "wall": 0.3161079889998746,
+   "files": 1.0,
+   "ExecuteCompiler": 0.26446,
+   "Frontend": 0.127792,
+   "Optimizer": 0.085193,
+   "CodeGenPasses": 0.047427,
+   "Backend": 0.133793
+  },
+  "Target/X86": {
+   "wall": 11.009068670999795,
+   "files": 8.0,
+   "ExecuteCompiler": 10.084755000000001,
+   "Frontend": 7.744716,
+   "Optimizer": 1.6954259999999999,
+   "CodeGenPasses": 0.564102,
+   "Backend": 2.274821
+  },
+  "CGData": {
+   "wall": 2.460127942000099,
+   "files": 2.0,
+   "ExecuteCompiler": 2.177541,
+   "Frontend": 1.285006,
+   "Optimizer": 0.688582,
+   "CodeGenPasses": 0.187696,
+   "Backend": 0.879761
+  },
+  "TextAPI": {
+   "wall": 0.16070528899990677,
+   "files": 1.0,
+   "ExecuteCompiler": 0.106421,
+   "Frontend": 0.059182,
+   "Optimizer": 0.03272,
+   "CodeGenPasses": 0.010402,
+   "Backend": 0.044422
+  },
+  "ObjectYAML": {
+   "wall": 9.853393362999668,
+   "files": 4.0,
+   "ExecuteCompiler": 8.56628,
+   "Frontend": 2.959024,
+   "Optimizer": 3.906516,
+   "CodeGenPasses": 1.6571669999999998,
+   "Backend": 5.57441
+  },
+  "ProfileData": {
+   "wall": 4.007676301999936,
+   "files": 2.0,
+   "ExecuteCompiler": 3.5128909999999998,
+   "Frontend": 1.678967,
+   "Optimizer": 1.4360330000000001,
+   "CodeGenPasses": 0.380156,
+   "Backend": 1.819705
+  },
+  "BinaryFormat": {
+   "wall": 0.1778274660000534,
+   "files": 2.0,
+   "ExecuteCompiler": 0.11085500000000001,
+   "Frontend": 0.083762,
+   "Optimizer": 0.014123,
+   "CodeGenPasses": 0.005611,
+   "Backend": 0.021873
+  },
+  "CAS": {
+   "wall": 1.7913874200003193,
+   "files": 2.0,
+   "ExecuteCompiler": 1.559338,
+   "Frontend": 0.764797,
+   "Optimizer": 0.59123,
+   "CodeGenPasses": 0.191129,
+   "Backend": 0.785304
+  },
+  "Remarks": {
+   "wall": 0.9433463139998821,
+   "files": 1.0,
+   "ExecuteCompiler": 0.768265,
+   "Frontend": 0.374346,
+   "Optimizer": 0.313656,
+   "CodeGenPasses": 0.073876,
+   "Backend": 0.389032
+  },
+  "Target/AArch64": {
+   "wall": 8.52675550999993,
+   "files": 3.0,
+   "ExecuteCompiler": 7.81962,
+   "Frontend": 4.904481,
+   "Optimizer": 2.049516,
+   "CodeGenPasses": 0.819809,
+   "Backend": 2.8773
+  },
+  "Option": {
+   "wall": 0.6844419439999001,
+   "files": 1.0,
+   "ExecuteCompiler": 0.611851,
+   "Frontend": 0.205613,
+   "Optimizer": 0.292806,
+   "CodeGenPasses": 0.108917,
+   "Backend": 0.403025
+  },
+  "Bitstream": {
+   "wall": 0.8209710219998669,
+   "files": 1.0,
+   "ExecuteCompiler": 0.727223,
+   "Frontend": 0.256733,
+   "Optimizer": 0.354578,
+   "CodeGenPasses": 0.110508,
+   "Backend": 0.466393
+  },
+  "Bitcode": {
+   "wall": 3.661226928999895,
+   "files": 1.0,
+   "ExecuteCompiler": 3.259079,
+   "Frontend": 0.983321,
+   "Optimizer": 1.714269,
+   "CodeGenPasses": 0.55016,
+   "Backend": 2.266791
+  },
+  "Frontend": {
+   "wall": 0.973928972000067,
+   "files": 1.0,
+   "ExecuteCompiler": 0.892073,
+   "Frontend": 0.449178,
+   "Optimizer": 0.288188,
+   "CodeGenPasses": 0.149297,
+   "Backend": 0.438898
+  },
+  "MCA": {
+   "wall": 0.07307274800041341,
+   "files": 1.0,
+   "ExecuteCompiler": 0.019165,
+   "Frontend": 0.012883,
+   "Optimizer": 0.001408,
+   "CodeGenPasses": 0.001392,
+   "Backend": 0.003861
+  },
+  "Demangle": {
+   "wall": 0.1880590270002358,
+   "files": 1.0,
+   "ExecuteCompiler": 0.155074,
+   "Frontend": 0.127818,
+   "Optimizer": 0.018898,
+   "CodeGenPasses": 0.005099,
+   "Backend": 0.025137
+  }
+ },
+ "files": [
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ObjCopy/DXContainer/DXContainerObjcopy.cpp",
+   "program": "ObjCopy",
+   "wall": 1.1281893329999093,
+   "ExecuteCompiler": 1.02485,
+   "Frontend": 0.688944,
+   "Optimizer": 0.269012,
+   "CodeGenPasses": 0.058194,
+   "Backend": 0.329226
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/AsmPrinter/DwarfDebug.cpp",
+   "program": "CodeGen",
+   "wall": 9.18721732799986,
+   "ExecuteCompiler": 8.272146,
+   "Frontend": 3.129569,
+   "Optimizer": 4.172376,
+   "CodeGenPasses": 0.940073,
+   "Backend": 5.117527
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/NativeEnumLineNumbers.cpp",
+   "program": "DebugInfo",
+   "wall": 0.32965942300006645,
+   "ExecuteCompiler": 0.217911,
+   "Frontend": 0.188557,
+   "Optimizer": 0.018061,
+   "CodeGenPasses": 0.006575,
+   "Backend": 0.025898
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/TableGen/Parser.cpp",
+   "program": "TableGen",
+   "wall": 1.202472286000102,
+   "ExecuteCompiler": 1.091843,
+   "Frontend": 0.848452,
+   "Optimizer": 0.199432,
+   "CodeGenPasses": 0.034208,
+   "Backend": 0.235535
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ABI/IRTypeMapper.cpp",
+   "program": "ABI",
+   "wall": 0.31941117800010943,
+   "ExecuteCompiler": 0.269959,
+   "Frontend": 0.161912,
+   "Optimizer": 0.074371,
+   "CodeGenPasses": 0.02882,
+   "Backend": 0.104377
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/GCMetadata.cpp",
+   "program": "CodeGen",
+   "wall": 0.7802343070000006,
+   "ExecuteCompiler": 0.698763,
+   "Frontend": 0.426927,
+   "Optimizer": 0.220393,
+   "CodeGenPasses": 0.045331,
+   "Backend": 0.267125
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/LogicalView/Core/LVLocation.cpp",
+   "program": "DebugInfo",
+   "wall": 1.9579110390000096,
+   "ExecuteCompiler": 1.816196,
+   "Frontend": 1.511365,
+   "Optimizer": 0.20817,
+   "CodeGenPasses": 0.083258,
+   "Backend": 0.293747
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/EHPersonalities.cpp",
+   "program": "IR",
+   "wall": 0.4422063139998045,
+   "ExecuteCompiler": 0.372555,
+   "Frontend": 0.225012,
+   "Optimizer": 0.119429,
+   "CodeGenPasses": 0.023248,
+   "Backend": 0.143948
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/SandboxIR/Function.cpp",
+   "program": "SandboxIR",
+   "wall": 0.5358088240000143,
+   "ExecuteCompiler": 0.476578,
+   "Frontend": 0.381504,
+   "Optimizer": 0.072552,
+   "CodeGenPasses": 0.016444,
+   "Backend": 0.090443
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Scalar/CallSiteSplitting.cpp",
+   "program": "Transforms",
+   "wall": 1.546008215000029,
+   "ExecuteCompiler": 1.393911,
+   "Frontend": 0.645633,
+   "Optimizer": 0.625309,
+   "CodeGenPasses": 0.114489,
+   "Backend": 0.741743
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Support/Win64EH.cpp",
+   "program": "Support",
+   "wall": 0.3974276630001441,
+   "ExecuteCompiler": 0.329188,
+   "Frontend": 0.154487,
+   "Optimizer": 0.1263,
+   "CodeGenPasses": 0.043639,
+   "Backend": 0.171354
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/BasicBlockSectionsProfileReader.cpp",
+   "program": "CodeGen",
+   "wall": 1.4961917150001227,
+   "ExecuteCompiler": 1.346734,
+   "Frontend": 0.659836,
+   "Optimizer": 0.522075,
+   "CodeGenPasses": 0.15657,
+   "Backend": 0.680368
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ExecutionEngine/Orc/UnwindInfoRegistrationPlugin.cpp",
+   "program": "ExecutionEngine",
+   "wall": 2.294945642999892,
+   "ExecuteCompiler": 2.092906,
+   "Frontend": 1.562007,
+   "Optimizer": 0.433154,
+   "CodeGenPasses": 0.083196,
+   "Backend": 0.518702
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ExecutionEngine/JITLink/x86_64.cpp",
+   "program": "ExecutionEngine",
+   "wall": 1.6376599309999165,
+   "ExecuteCompiler": 1.516239,
+   "Frontend": 1.328401,
+   "Optimizer": 0.144003,
+   "CodeGenPasses": 0.031459,
+   "Backend": 0.17775
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/VectorTypeUtils.cpp",
+   "program": "IR",
+   "wall": 0.29008386100008465,
+   "ExecuteCompiler": 0.243135,
+   "Frontend": 0.146401,
+   "Optimizer": 0.08183,
+   "CodeGenPasses": 0.01052,
+   "Backend": 0.093503
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/IPO/Inliner.cpp",
+   "program": "Transforms",
+   "wall": 2.3454064669999752,
+   "ExecuteCompiler": 2.110668,
+   "Frontend": 1.192809,
+   "Optimizer": 0.713263,
+   "CodeGenPasses": 0.192633,
+   "Backend": 0.907832
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/EarlyIfConversion.cpp",
+   "program": "CodeGen",
+   "wall": 2.2331231489999936,
+   "ExecuteCompiler": 2.005626,
+   "Frontend": 0.705347,
+   "Optimizer": 1.042437,
+   "CodeGenPasses": 0.248,
+   "Backend": 1.29226
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ExecutionEngine/Orc/InProcessMemoryAccess.cpp",
+   "program": "ExecutionEngine",
+   "wall": 1.065124436999895,
+   "ExecuteCompiler": 0.972254,
+   "Frontend": 0.729603,
+   "Optimizer": 0.192108,
+   "CodeGenPasses": 0.042218,
+   "Backend": 0.236027
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/Globals.cpp",
+   "program": "IR",
+   "wall": 1.4619922240001415,
+   "ExecuteCompiler": 1.327695,
+   "Frontend": 0.888554,
+   "Optimizer": 0.313692,
+   "CodeGenPasses": 0.115288,
+   "Backend": 0.431053
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/RegAllocPriorityAdvisor.cpp",
+   "program": "CodeGen",
+   "wall": 1.1981828389998554,
+   "ExecuteCompiler": 1.110534,
+   "Frontend": 0.933574,
+   "Optimizer": 0.119481,
+   "CodeGenPasses": 0.047654,
+   "Backend": 0.169236
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Scalar/LoopInstSimplify.cpp",
+   "program": "Transforms",
+   "wall": 1.188511230999893,
+   "ExecuteCompiler": 1.088795,
+   "Frontend": 0.814271,
+   "Optimizer": 0.223237,
+   "CodeGenPasses": 0.042457,
+   "Backend": 0.267323
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/LLVMContext.cpp",
+   "program": "IR",
+   "wall": 1.4789891989998978,
+   "ExecuteCompiler": 1.334282,
+   "Frontend": 1.067215,
+   "Optimizer": 0.179872,
+   "CodeGenPasses": 0.075887,
+   "Backend": 0.257831
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/NativeLineNumber.cpp",
+   "program": "DebugInfo",
+   "wall": 0.5217537339999581,
+   "ExecuteCompiler": 0.468866,
+   "Frontend": 0.450495,
+   "Optimizer": 0.00523,
+   "CodeGenPasses": 0.006333,
+   "Backend": 0.012937
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/TableGen/TableGenBackendSkeleton.cpp",
+   "program": "TableGen",
+   "wall": 0.6334636829999454,
+   "ExecuteCompiler": 0.584908,
+   "Frontend": 0.553731,
+   "Optimizer": 0.019561,
+   "CodeGenPasses": 0.004411,
+   "Backend": 0.025604
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Scalar/LogicalSROA.cpp",
+   "program": "Transforms",
+   "wall": 0.6834796449998066,
+   "ExecuteCompiler": 0.597618,
+   "Frontend": 0.265664,
+   "Optimizer": 0.283982,
+   "CodeGenPasses": 0.042801,
+   "Backend": 0.328191
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Support/LSP/Protocol.cpp",
+   "program": "Support",
+   "wall": 2.132487177999792,
+   "ExecuteCompiler": 1.921335,
+   "Frontend": 0.626396,
+   "Optimizer": 0.919302,
+   "CodeGenPasses": 0.368106,
+   "Backend": 1.2892
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/StackMapLivenessAnalysis.cpp",
+   "program": "CodeGen",
+   "wall": 0.3803597000000991,
+   "ExecuteCompiler": 0.319219,
+   "Frontend": 0.231546,
+   "Optimizer": 0.06347,
+   "CodeGenPasses": 0.018818,
+   "Backend": 0.08356
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Analysis/TargetLibraryInfo.cpp",
+   "program": "Analysis",
+   "wall": 1.7147956569999678,
+   "ExecuteCompiler": 1.576231,
+   "Frontend": 0.969056,
+   "Optimizer": 0.453439,
+   "CodeGenPasses": 0.14517,
+   "Backend": 0.600476
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ExecutionEngine/Orc/COFF.cpp",
+   "program": "ExecutionEngine",
+   "wall": 0.3247444619998987,
+   "ExecuteCompiler": 0.273201,
+   "Frontend": 0.163608,
+   "Optimizer": 0.087504,
+   "CodeGenPasses": 0.017768,
+   "Backend": 0.106452
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/SelectionDAG/ScheduleDAGFast.cpp",
+   "program": "CodeGen",
+   "wall": 1.1271775899999739,
+   "ExecuteCompiler": 1.018292,
+   "Frontend": 0.475487,
+   "Optimizer": 0.429459,
+   "CodeGenPasses": 0.106886,
+   "Backend": 0.537701
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/MIRPrinter.cpp",
+   "program": "CodeGen",
+   "wall": 5.046242337999956,
+   "ExecuteCompiler": 4.572787,
+   "Frontend": 1.305671,
+   "Optimizer": 2.340291,
+   "CodeGenPasses": 0.913329,
+   "Backend": 3.255765
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/MC/MCSymbolGOFF.cpp",
+   "program": "MC",
+   "wall": 0.8829586759998165,
+   "ExecuteCompiler": 0.783142,
+   "Frontend": 0.758926,
+   "Optimizer": 0.011586,
+   "CodeGenPasses": 0.003777,
+   "Backend": 0.017172
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Utils/CanonicalizeFreezeInLoops.cpp",
+   "program": "Transforms",
+   "wall": 0.8363738680000097,
+   "ExecuteCompiler": 0.759341,
+   "Frontend": 0.538436,
+   "Optimizer": 0.178293,
+   "CodeGenPasses": 0.035088,
+   "Backend": 0.215041
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/LoopTraversal.cpp",
+   "program": "CodeGen",
+   "wall": 0.3739486179999858,
+   "ExecuteCompiler": 0.327756,
+   "Frontend": 0.235813,
+   "Optimizer": 0.069555,
+   "CodeGenPasses": 0.016982,
+   "Backend": 0.087815
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Utils/IntegerDivision.cpp",
+   "program": "Transforms",
+   "wall": 0.4645600569999715,
+   "ExecuteCompiler": 0.413988,
+   "Frontend": 0.121303,
+   "Optimizer": 0.219986,
+   "CodeGenPasses": 0.068021,
+   "Backend": 0.289311
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/CodeView/DebugCrossExSubsection.cpp",
+   "program": "DebugInfo",
+   "wall": 0.30623730599995724,
+   "ExecuteCompiler": 0.257821,
+   "Frontend": 0.159516,
+   "Optimizer": 0.071538,
+   "CodeGenPasses": 0.022515,
+   "Backend": 0.095265
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/InterleavedAccessPass.cpp",
+   "program": "CodeGen",
+   "wall": 1.69230390000007,
+   "ExecuteCompiler": 1.538686,
+   "Frontend": 0.985726,
+   "Optimizer": 0.451455,
+   "CodeGenPasses": 0.091389,
+   "Backend": 0.544687
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/MDBuilder.cpp",
+   "program": "IR",
+   "wall": 0.35255691800011846,
+   "ExecuteCompiler": 0.294341,
+   "Frontend": 0.123991,
+   "Optimizer": 0.116079,
+   "CodeGenPasses": 0.049916,
+   "Backend": 0.167251
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/NVVMIntrinsicUtils.cpp",
+   "program": "IR",
+   "wall": 0.13104681999993772,
+   "ExecuteCompiler": 0.102156,
+   "Frontend": 0.056145,
+   "Optimizer": 0.025043,
+   "CodeGenPasses": 0.017096,
+   "Backend": 0.043247
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Instrumentation/LowerAllowCheckPass.cpp",
+   "program": "Transforms",
+   "wall": 0.7886170019999099,
+   "ExecuteCompiler": 0.722035,
+   "Frontend": 0.414948,
+   "Optimizer": 0.248959,
+   "CodeGenPasses": 0.052263,
+   "Backend": 0.302483
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/RISCV/RISCVPushPopOptimizer.cpp",
+   "program": "Target/RISCV",
+   "wall": 1.6804804109999623,
+   "ExecuteCompiler": 1.546061,
+   "Frontend": 1.375442,
+   "Optimizer": 0.130738,
+   "CodeGenPasses": 0.027354,
+   "Backend": 0.160216
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/XRay/RecordInitializer.cpp",
+   "program": "XRay",
+   "wall": 0.3161079889998746,
+   "ExecuteCompiler": 0.26446,
+   "Frontend": 0.127792,
+   "Optimizer": 0.085193,
+   "CodeGenPasses": 0.047427,
+   "Backend": 0.133793
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ExecutionEngine/Orc/LoadLinkableFile.cpp",
+   "program": "ExecutionEngine",
+   "wall": 0.5813124680000783,
+   "ExecuteCompiler": 0.518598,
+   "Frontend": 0.370022,
+   "Optimizer": 0.11982,
+   "CodeGenPasses": 0.023083,
+   "Backend": 0.144335
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/MC/MCParser/GOFFAsmParser.cpp",
+   "program": "MC",
+   "wall": 0.8451403369999753,
+   "ExecuteCompiler": 0.786293,
+   "Frontend": 0.772748,
+   "Optimizer": 0.002169,
+   "CodeGenPasses": 0.00232,
+   "Backend": 0.006429
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/X86/MCTargetDesc/X86MCCodeEmitter.cpp",
+   "program": "Target/X86",
+   "wall": 1.3021640889999162,
+   "ExecuteCompiler": 1.200399,
+   "Frontend": 0.943298,
+   "Optimizer": 0.170468,
+   "CodeGenPasses": 0.076891,
+   "Backend": 0.249087
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/X86/X86IndirectBranchTracking.cpp",
+   "program": "Target/X86",
+   "wall": 1.0024215050000294,
+   "ExecuteCompiler": 0.901645,
+   "Frontend": 0.739789,
+   "Optimizer": 0.123824,
+   "CodeGenPasses": 0.02885,
+   "Backend": 0.154471
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/GSYM/GsymCreatorV1.cpp",
+   "program": "DebugInfo",
+   "wall": 0.529346372999953,
+   "ExecuteCompiler": 0.457067,
+   "Frontend": 0.322622,
+   "Optimizer": 0.109155,
+   "CodeGenPasses": 0.01933,
+   "Backend": 0.12991
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/MC/MCCodeView.cpp",
+   "program": "MC",
+   "wall": 1.8250276050000593,
+   "ExecuteCompiler": 1.679751,
+   "Frontend": 1.280532,
+   "Optimizer": 0.300288,
+   "CodeGenPasses": 0.085609,
+   "Backend": 0.388382
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Vectorize/SandboxVectorizer/Passes/PackReuse.cpp",
+   "program": "Transforms",
+   "wall": 1.9093688729999485,
+   "ExecuteCompiler": 1.766975,
+   "Frontend": 1.433903,
+   "Optimizer": 0.248366,
+   "CodeGenPasses": 0.071391,
+   "Backend": 0.32219
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Utils/BypassSlowDivision.cpp",
+   "program": "Transforms",
+   "wall": 0.8408358780000071,
+   "ExecuteCompiler": 0.744657,
+   "Frontend": 0.392518,
+   "Optimizer": 0.279299,
+   "CodeGenPasses": 0.066186,
+   "Backend": 0.347025
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/IPO/SampleProfileMatcher.cpp",
+   "program": "Transforms",
+   "wall": 4.1346716850000576,
+   "ExecuteCompiler": 3.689229,
+   "Frontend": 1.806727,
+   "Optimizer": 1.444005,
+   "CodeGenPasses": 0.421465,
+   "Backend": 1.868281
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CGData/CodeGenDataReader.cpp",
+   "program": "CGData",
+   "wall": 1.2640694829999575,
+   "ExecuteCompiler": 1.110659,
+   "Frontend": 0.819561,
+   "Optimizer": 0.231708,
+   "CodeGenPasses": 0.049724,
+   "Backend": 0.283387
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/MC/MCDwarf.cpp",
+   "program": "MC",
+   "wall": 2.7160304829999404,
+   "ExecuteCompiler": 2.441188,
+   "Frontend": 1.297672,
+   "Optimizer": 0.861815,
+   "CodeGenPasses": 0.268136,
+   "Backend": 1.132426
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/TextAPI/PackedVersion.cpp",
+   "program": "TextAPI",
+   "wall": 0.16070528899990677,
+   "ExecuteCompiler": 0.106421,
+   "Frontend": 0.059182,
+   "Optimizer": 0.03272,
+   "CodeGenPasses": 0.010402,
+   "Backend": 0.044422
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/RISCV/RISCVMakeCompressible.cpp",
+   "program": "Target/RISCV",
+   "wall": 1.4764231760000257,
+   "ExecuteCompiler": 1.371892,
+   "Frontend": 1.198926,
+   "Optimizer": 0.122432,
+   "CodeGenPasses": 0.038348,
+   "Backend": 0.163024
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ObjectYAML/GOFFYAML.cpp",
+   "program": "ObjectYAML",
+   "wall": 0.23220929600006457,
+   "ExecuteCompiler": 0.181584,
+   "Frontend": 0.089827,
+   "Optimizer": 0.060697,
+   "CodeGenPasses": 0.026652,
+   "Backend": 0.088654
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/X86/X86FastTileConfig.cpp",
+   "program": "Target/X86",
+   "wall": 1.6163030909999634,
+   "ExecuteCompiler": 1.494477,
+   "Frontend": 1.338536,
+   "Optimizer": 0.120355,
+   "CodeGenPasses": 0.022045,
+   "Backend": 0.144967
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Analysis/ScalarEvolutionDivision.cpp",
+   "program": "Analysis",
+   "wall": 0.8352805409999746,
+   "ExecuteCompiler": 0.747832,
+   "Frontend": 0.469865,
+   "Optimizer": 0.207276,
+   "CodeGenPasses": 0.063283,
+   "Backend": 0.272162
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ABI/Targets/BPF.cpp",
+   "program": "ABI",
+   "wall": 0.2717105619999529,
+   "ExecuteCompiler": 0.226024,
+   "Frontend": 0.164541,
+   "Optimizer": 0.043406,
+   "CodeGenPasses": 0.013319,
+   "Backend": 0.05796
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/MIRPrintingPass.cpp",
+   "program": "CodeGen",
+   "wall": 0.4205846350000684,
+   "ExecuteCompiler": 0.375579,
+   "Frontend": 0.284894,
+   "Optimizer": 0.069536,
+   "CodeGenPasses": 0.015102,
+   "Backend": 0.08594
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ProfileData/GCOV.cpp",
+   "program": "ProfileData",
+   "wall": 1.9083438430000115,
+   "ExecuteCompiler": 1.666158,
+   "Frontend": 0.62529,
+   "Optimizer": 0.788748,
+   "CodeGenPasses": 0.24408,
+   "Backend": 1.034571
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/BinaryFormat/Wasm.cpp",
+   "program": "BinaryFormat",
+   "wall": 0.11986734899983276,
+   "ExecuteCompiler": 0.07695,
+   "Frontend": 0.064244,
+   "Optimizer": 0.00564,
+   "CodeGenPasses": 0.002966,
+   "Backend": 0.009772
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ObjectYAML/DXContainerEmitter.cpp",
+   "program": "ObjectYAML",
+   "wall": 2.1027515569999196,
+   "ExecuteCompiler": 1.876535,
+   "Frontend": 0.847249,
+   "Optimizer": 0.830287,
+   "CodeGenPasses": 0.188419,
+   "Backend": 1.020846
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/AsmPrinter/EHStreamer.cpp",
+   "program": "CodeGen",
+   "wall": 1.4003144119999433,
+   "ExecuteCompiler": 1.269748,
+   "Frontend": 0.868364,
+   "Optimizer": 0.311084,
+   "CodeGenPasses": 0.080089,
+   "Backend": 0.393309
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/RISCV/RISCVCallingConv.cpp",
+   "program": "Target/RISCV",
+   "wall": 1.9770743999999922,
+   "ExecuteCompiler": 1.811946,
+   "Frontend": 1.580933,
+   "Optimizer": 0.140014,
+   "CodeGenPasses": 0.075867,
+   "Backend": 0.218547
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ExecutionEngine/Orc/EPCGenericDylibManagerSPS.cpp",
+   "program": "ExecutionEngine",
+   "wall": 1.7643902800000433,
+   "ExecuteCompiler": 1.572337,
+   "Frontend": 1.071896,
+   "Optimizer": 0.392024,
+   "CodeGenPasses": 0.097164,
+   "Backend": 0.491253
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Support/raw_socket_stream.cpp",
+   "program": "Support",
+   "wall": 0.4298721119998845,
+   "ExecuteCompiler": 0.347372,
+   "Frontend": 0.162765,
+   "Optimizer": 0.142545,
+   "CodeGenPasses": 0.037296,
+   "Backend": 0.18108
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CAS/BuiltinUnifiedCASDatabases.cpp",
+   "program": "CAS",
+   "wall": 0.3654293009999492,
+   "ExecuteCompiler": 0.315475,
+   "Frontend": 0.259867,
+   "Optimizer": 0.040439,
+   "CodeGenPasses": 0.010025,
+   "Backend": 0.05177
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/MC/MCParser/COFFMasmParser.cpp",
+   "program": "MC",
+   "wall": 1.1724850979999246,
+   "ExecuteCompiler": 1.088147,
+   "Frontend": 0.912348,
+   "Optimizer": 0.120344,
+   "CodeGenPasses": 0.045608,
+   "Backend": 0.167713
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ObjectYAML/CodeViewYAMLSymbols.cpp",
+   "program": "ObjectYAML",
+   "wall": 4.193413802999885,
+   "ExecuteCompiler": 3.598731,
+   "Frontend": 1.129608,
+   "Optimizer": 1.555048,
+   "CodeGenPasses": 0.897392,
+   "Backend": 2.457513
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Remarks/YAMLRemarkParser.cpp",
+   "program": "Remarks",
+   "wall": 0.9433463139998821,
+   "ExecuteCompiler": 0.768265,
+   "Frontend": 0.374346,
+   "Optimizer": 0.313656,
+   "CodeGenPasses": 0.073876,
+   "Backend": 0.389032
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/RISCV/RISCVQCRelaxMarking.cpp",
+   "program": "Target/RISCV",
+   "wall": 1.3513385989999733,
+   "ExecuteCompiler": 1.260351,
+   "Frontend": 1.131024,
+   "Optimizer": 0.097016,
+   "CodeGenPasses": 0.02081,
+   "Backend": 0.119957
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/X86/X86LoadValueInjectionRetHardening.cpp",
+   "program": "Target/X86",
+   "wall": 0.9077864079999927,
+   "ExecuteCompiler": 0.828324,
+   "Frontend": 0.713197,
+   "Optimizer": 0.088041,
+   "CodeGenPasses": 0.017918,
+   "Backend": 0.107734
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/TypeFinder.cpp",
+   "program": "IR",
+   "wall": 0.6066759820000698,
+   "ExecuteCompiler": 0.513159,
+   "Frontend": 0.253825,
+   "Optimizer": 0.20827,
+   "CodeGenPasses": 0.045676,
+   "Backend": 0.255265
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/FuncletLayout.cpp",
+   "program": "CodeGen",
+   "wall": 0.3086651250000614,
+   "ExecuteCompiler": 0.258888,
+   "Frontend": 0.169598,
+   "Optimizer": 0.070983,
+   "CodeGenPasses": 0.013295,
+   "Backend": 0.085502
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Analysis/DependenceAnalysis.cpp",
+   "program": "Analysis",
+   "wall": 2.1656624699999156,
+   "ExecuteCompiler": 1.963766,
+   "Frontend": 0.933254,
+   "Optimizer": 0.714389,
+   "CodeGenPasses": 0.305849,
+   "Backend": 1.022548
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/AArch64/AArch64FastISel.cpp",
+   "program": "Target/AArch64",
+   "wall": 5.777091359000224,
+   "ExecuteCompiler": 5.25655,
+   "Frontend": 2.548734,
+   "Optimizer": 1.918001,
+   "CodeGenPasses": 0.766493,
+   "Backend": 2.688489
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/Pass.cpp",
+   "program": "IR",
+   "wall": 0.414314583000305,
+   "ExecuteCompiler": 0.311947,
+   "Frontend": 0.136192,
+   "Optimizer": 0.11618,
+   "CodeGenPasses": 0.054634,
+   "Backend": 0.172104
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/SSAContext.cpp",
+   "program": "IR",
+   "wall": 0.292234876999828,
+   "ExecuteCompiler": 0.242406,
+   "Frontend": 0.158261,
+   "Optimizer": 0.056895,
+   "CodeGenPasses": 0.022568,
+   "Backend": 0.080728
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/MC/MCWasmObjectTargetWriter.cpp",
+   "program": "MC",
+   "wall": 0.207305271000223,
+   "ExecuteCompiler": 0.17606,
+   "Frontend": 0.165409,
+   "Optimizer": 0.002959,
+   "CodeGenPasses": 0.003628,
+   "Backend": 0.007759
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/X86/X86AvoidTrailingCall.cpp",
+   "program": "Target/X86",
+   "wall": 0.8600866199999473,
+   "ExecuteCompiler": 0.782613,
+   "Frontend": 0.669028,
+   "Optimizer": 0.092255,
+   "CodeGenPasses": 0.013852,
+   "Backend": 0.107671
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Analysis/ObjCARCInstKind.cpp",
+   "program": "Analysis",
+   "wall": 0.3122945800000707,
+   "ExecuteCompiler": 0.265079,
+   "Frontend": 0.196509,
+   "Optimizer": 0.045745,
+   "CodeGenPasses": 0.018,
+   "Backend": 0.065086
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/PDBSymbolTypeBaseClass.cpp",
+   "program": "DebugInfo",
+   "wall": 0.27815681399988534,
+   "ExecuteCompiler": 0.245164,
+   "Frontend": 0.237163,
+   "Optimizer": 0.001583,
+   "CodeGenPasses": 0.001891,
+   "Backend": 0.004691
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Option/ArgList.cpp",
+   "program": "Option",
+   "wall": 0.6844419439999001,
+   "ExecuteCompiler": 0.611851,
+   "Frontend": 0.205613,
+   "Optimizer": 0.292806,
+   "CodeGenPasses": 0.108917,
+   "Backend": 0.403025
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Support/ModRef.cpp",
+   "program": "Support",
+   "wall": 0.12844990600024175,
+   "ExecuteCompiler": 0.094592,
+   "Frontend": 0.053404,
+   "Optimizer": 0.026762,
+   "CodeGenPasses": 0.01067,
+   "Backend": 0.03853
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/X86/GISel/X86LegalizerInfo.cpp",
+   "program": "Target/X86",
+   "wall": 2.091535305999969,
+   "ExecuteCompiler": 1.938833,
+   "Frontend": 1.20505,
+   "Optimizer": 0.478297,
+   "CodeGenPasses": 0.244788,
+   "Backend": 0.725124
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/DWARF/DWARFDebugMacro.cpp",
+   "program": "DebugInfo",
+   "wall": 1.0053092349999133,
+   "ExecuteCompiler": 0.907062,
+   "Frontend": 0.679875,
+   "Optimizer": 0.168593,
+   "CodeGenPasses": 0.050838,
+   "Backend": 0.221233
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Bitstream/Reader/BitstreamReader.cpp",
+   "program": "Bitstream",
+   "wall": 0.8209710219998669,
+   "ExecuteCompiler": 0.727223,
+   "Frontend": 0.256733,
+   "Optimizer": 0.354578,
+   "CodeGenPasses": 0.110508,
+   "Backend": 0.466393
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/MultiHazardRecognizer.cpp",
+   "program": "CodeGen",
+   "wall": 0.3032416840001133,
+   "ExecuteCompiler": 0.260227,
+   "Frontend": 0.16746,
+   "Optimizer": 0.059034,
+   "CodeGenPasses": 0.028851,
+   "Backend": 0.089082
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/RISCV/RISCVISelLowering.cpp",
+   "program": "Target/RISCV",
+   "wall": 15.853997353000068,
+   "ExecuteCompiler": 14.726829,
+   "Frontend": 4.341557,
+   "Optimizer": 6.743926,
+   "CodeGenPasses": 3.607115,
+   "Backend": 10.356633
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/GVMaterializer.cpp",
+   "program": "IR",
+   "wall": 0.18544454400034738,
+   "ExecuteCompiler": 0.038771,
+   "Frontend": 0.029606,
+   "Optimizer": 0.001929,
+   "CodeGenPasses": 0.001418,
+   "Backend": 0.004755
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Scalar/GVN.cpp",
+   "program": "Transforms",
+   "wall": 5.474688757999957,
+   "ExecuteCompiler": 4.849688,
+   "Frontend": 1.829619,
+   "Optimizer": 2.361583,
+   "CodeGenPasses": 0.637878,
+   "Backend": 3.002432
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Analysis/ScalarEvolution.cpp",
+   "program": "Analysis",
+   "wall": 14.335492765999788,
+   "ExecuteCompiler": 13.023866,
+   "Frontend": 3.01286,
+   "Optimizer": 7.28537,
+   "CodeGenPasses": 2.697812,
+   "Backend": 9.987253
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/SafeStack.cpp",
+   "program": "CodeGen",
+   "wall": 2.6008359359998394,
+   "ExecuteCompiler": 2.22778,
+   "Frontend": 1.296045,
+   "Optimizer": 0.758037,
+   "CodeGenPasses": 0.158991,
+   "Backend": 0.919356
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Vectorize/SandboxVectorizer/Legality.cpp",
+   "program": "Transforms",
+   "wall": 2.795107078000001,
+   "ExecuteCompiler": 2.544812,
+   "Frontend": 1.798119,
+   "Optimizer": 0.560086,
+   "CodeGenPasses": 0.169268,
+   "Backend": 0.732228
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/NativeTypeArray.cpp",
+   "program": "DebugInfo",
+   "wall": 0.5094773549999445,
+   "ExecuteCompiler": 0.448142,
+   "Frontend": 0.418203,
+   "Optimizer": 0.011867,
+   "CodeGenPasses": 0.011951,
+   "Backend": 0.025242
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/DbiStream.cpp",
+   "program": "DebugInfo",
+   "wall": 1.273492115999943,
+   "ExecuteCompiler": 1.158871,
+   "Frontend": 0.78905,
+   "Optimizer": 0.246045,
+   "CodeGenPasses": 0.11487,
+   "Backend": 0.362778
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CAS/OnDiskTrieRawHashMap.cpp",
+   "program": "CAS",
+   "wall": 1.42595811900037,
+   "ExecuteCompiler": 1.243863,
+   "Frontend": 0.50493,
+   "Optimizer": 0.550791,
+   "CodeGenPasses": 0.181104,
+   "Backend": 0.733534
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Bitcode/Reader/MetadataLoader.cpp",
+   "program": "Bitcode",
+   "wall": 3.661226928999895,
+   "ExecuteCompiler": 3.259079,
+   "Frontend": 0.983321,
+   "Optimizer": 1.714269,
+   "CodeGenPasses": 0.55016,
+   "Backend": 2.266791
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/X86/X86PreTileConfig.cpp",
+   "program": "Target/X86",
+   "wall": 2.1731802240001343,
+   "ExecuteCompiler": 1.961727,
+   "Frontend": 1.330178,
+   "Optimizer": 0.49281,
+   "CodeGenPasses": 0.126933,
+   "Backend": 0.621827
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/RawError.cpp",
+   "program": "DebugInfo",
+   "wall": 0.07540894900012063,
+   "ExecuteCompiler": 0.036994,
+   "Frontend": 0.017798,
+   "Optimizer": 0.010148,
+   "CodeGenPasses": 0.005838,
+   "Backend": 0.016971
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Analysis/LazyValueInfo.cpp",
+   "program": "Analysis",
+   "wall": 2.8731601320000664,
+   "ExecuteCompiler": 2.525411,
+   "Frontend": 0.827704,
+   "Optimizer": 1.269682,
+   "CodeGenPasses": 0.418196,
+   "Backend": 1.689563
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/TargetRegisterInfo.cpp",
+   "program": "CodeGen",
+   "wall": 1.2547729520001667,
+   "ExecuteCompiler": 1.094929,
+   "Frontend": 0.517257,
+   "Optimizer": 0.420627,
+   "CodeGenPasses": 0.15001,
+   "Backend": 0.572206
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ExecutionEngine/Orc/OrcV2CBindings.cpp",
+   "program": "ExecutionEngine",
+   "wall": 4.142479193999861,
+   "ExecuteCompiler": 3.743203,
+   "Frontend": 2.497066,
+   "Optimizer": 0.954966,
+   "CodeGenPasses": 0.269403,
+   "Backend": 1.227623
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Analysis/Lint.cpp",
+   "program": "Analysis",
+   "wall": 1.6043377159999181,
+   "ExecuteCompiler": 1.371149,
+   "Frontend": 0.622531,
+   "Optimizer": 0.619424,
+   "CodeGenPasses": 0.121287,
+   "Backend": 0.742442
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ExecutionEngine/JITLink/XCOFF_ppc64.cpp",
+   "program": "ExecutionEngine",
+   "wall": 1.88332728100022,
+   "ExecuteCompiler": 1.729633,
+   "Frontend": 1.414268,
+   "Optimizer": 0.255121,
+   "CodeGenPasses": 0.045868,
+   "Backend": 0.303551
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/DWARF/DWARFUnwindTablePrinter.cpp",
+   "program": "DebugInfo",
+   "wall": 0.7633797630001027,
+   "ExecuteCompiler": 0.678098,
+   "Frontend": 0.523752,
+   "Optimizer": 0.098658,
+   "CodeGenPasses": 0.049008,
+   "Backend": 0.149166
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/GenericError.cpp",
+   "program": "DebugInfo",
+   "wall": 0.06937156499998309,
+   "ExecuteCompiler": 0.038963,
+   "Frontend": 0.019498,
+   "Optimizer": 0.010358,
+   "CodeGenPasses": 0.005373,
+   "Backend": 0.016897
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Scalar/SROA.cpp",
+   "program": "Transforms",
+   "wall": 7.869284131999848,
+   "ExecuteCompiler": 7.103164,
+   "Frontend": 2.268057,
+   "Optimizer": 3.816827,
+   "CodeGenPasses": 0.996468,
+   "Backend": 4.816465
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/AsmPrinter/DwarfExpression.cpp",
+   "program": "CodeGen",
+   "wall": 2.0551176300000407,
+   "ExecuteCompiler": 1.88287,
+   "Frontend": 1.616306,
+   "Optimizer": 0.177251,
+   "CodeGenPasses": 0.074412,
+   "Backend": 0.254169
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CGData/StableFunctionMap.cpp",
+   "program": "CGData",
+   "wall": 1.1960584590001417,
+   "ExecuteCompiler": 1.066882,
+   "Frontend": 0.465445,
+   "Optimizer": 0.456874,
+   "CodeGenPasses": 0.137972,
+   "Backend": 0.596374
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Frontend/OpenMP/OMPContext.cpp",
+   "program": "Frontend",
+   "wall": 0.973928972000067,
+   "ExecuteCompiler": 0.892073,
+   "Frontend": 0.449178,
+   "Optimizer": 0.288188,
+   "CodeGenPasses": 0.149297,
+   "Backend": 0.438898
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/AsmPrinter/DwarfFile.cpp",
+   "program": "CodeGen",
+   "wall": 2.122432108999874,
+   "ExecuteCompiler": 1.976737,
+   "Frontend": 1.666779,
+   "Optimizer": 0.241549,
+   "CodeGenPasses": 0.053118,
+   "Backend": 0.297222
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Scalar/SeparateConstOffsetFromGEP.cpp",
+   "program": "Transforms",
+   "wall": 2.177815057999851,
+   "ExecuteCompiler": 1.926641,
+   "Frontend": 0.777768,
+   "Optimizer": 0.890617,
+   "CodeGenPasses": 0.248265,
+   "Backend": 1.141086
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Scalar/StraightLineStrengthReduce.cpp",
+   "program": "Transforms",
+   "wall": 3.024509216000297,
+   "ExecuteCompiler": 2.682282,
+   "Frontend": 1.155692,
+   "Optimizer": 1.226804,
+   "CodeGenPasses": 0.287178,
+   "Backend": 1.516467
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Support/DeltaTree.cpp",
+   "program": "Support",
+   "wall": 0.11537545000010141,
+   "ExecuteCompiler": 0.063817,
+   "Frontend": 0.02201,
+   "Optimizer": 0.024548,
+   "CodeGenPasses": 0.013893,
+   "Backend": 0.039537
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/AArch64/MCTargetDesc/AArch64AsmBackend.cpp",
+   "program": "Target/AArch64",
+   "wall": 1.3293210980000367,
+   "ExecuteCompiler": 1.228483,
+   "Frontend": 1.102534,
+   "Optimizer": 0.078779,
+   "CodeGenPasses": 0.03667,
+   "Backend": 0.117448
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Utils/ControlFlowUtils.cpp",
+   "program": "Transforms",
+   "wall": 0.6458445349999238,
+   "ExecuteCompiler": 0.569329,
+   "Frontend": 0.306679,
+   "Optimizer": 0.201517,
+   "CodeGenPasses": 0.055951,
+   "Backend": 0.258831
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Analysis/AliasAnalysisEvaluator.cpp",
+   "program": "Analysis",
+   "wall": 0.8984759489999306,
+   "ExecuteCompiler": 0.798851,
+   "Frontend": 0.461101,
+   "Optimizer": 0.258453,
+   "CodeGenPasses": 0.072757,
+   "Backend": 0.332803
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Analysis/MemoryLocation.cpp",
+   "program": "Analysis",
+   "wall": 0.5600485950003531,
+   "ExecuteCompiler": 0.48491,
+   "Frontend": 0.313655,
+   "Optimizer": 0.126404,
+   "CodeGenPasses": 0.039036,
+   "Backend": 0.166818
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Support/ARMWinEH.cpp",
+   "program": "Support",
+   "wall": 0.0787393619998511,
+   "ExecuteCompiler": 0.050216,
+   "Frontend": 0.035844,
+   "Optimizer": 0.007868,
+   "CodeGenPasses": 0.002591,
+   "Backend": 0.011641
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/SelectionDAG/SelectionDAGAddressAnalysis.cpp",
+   "program": "CodeGen",
+   "wall": 0.22957365799993568,
+   "ExecuteCompiler": 0.195113,
+   "Frontend": 0.122142,
+   "Optimizer": 0.054101,
+   "CodeGenPasses": 0.013728,
+   "Backend": 0.069097
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/LogicalView/Readers/LVDWARFReader.cpp",
+   "program": "DebugInfo",
+   "wall": 4.993380518999857,
+   "ExecuteCompiler": 4.594664,
+   "Frontend": 3.212533,
+   "Optimizer": 1.05021,
+   "CodeGenPasses": 0.303944,
+   "Backend": 1.358333
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/MCA/HardwareUnits/HardwareUnit.cpp",
+   "program": "MCA",
+   "wall": 0.07307274800041341,
+   "ExecuteCompiler": 0.019165,
+   "Frontend": 0.012883,
+   "Optimizer": 0.001408,
+   "CodeGenPasses": 0.001392,
+   "Backend": 0.003861
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/Rematerializer.cpp",
+   "program": "CodeGen",
+   "wall": 4.028977920000216,
+   "ExecuteCompiler": 3.619716,
+   "Frontend": 1.243041,
+   "Optimizer": 1.86702,
+   "CodeGenPasses": 0.495371,
+   "Backend": 2.364817
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ProfileData/ProfileSummaryBuilder.cpp",
+   "program": "ProfileData",
+   "wall": 2.0993324589999247,
+   "ExecuteCompiler": 1.846733,
+   "Frontend": 1.053677,
+   "Optimizer": 0.647285,
+   "CodeGenPasses": 0.136076,
+   "Backend": 0.785134
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/ConvergenceVerifier.cpp",
+   "program": "IR",
+   "wall": 0.7391718680000849,
+   "ExecuteCompiler": 0.641056,
+   "Frontend": 0.305691,
+   "Optimizer": 0.256812,
+   "CodeGenPasses": 0.073005,
+   "Backend": 0.331195
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/X86/X86MachineFunctionInfo.cpp",
+   "program": "Target/X86",
+   "wall": 1.0555914279998433,
+   "ExecuteCompiler": 0.976737,
+   "Frontend": 0.80564,
+   "Optimizer": 0.129376,
+   "CodeGenPasses": 0.032825,
+   "Backend": 0.16394
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/HashTable.cpp",
+   "program": "DebugInfo",
+   "wall": 0.34544324599983156,
+   "ExecuteCompiler": 0.293661,
+   "Frontend": 0.154931,
+   "Optimizer": 0.109963,
+   "CodeGenPasses": 0.024635,
+   "Backend": 0.13579
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/NativeTypeBuiltin.cpp",
+   "program": "DebugInfo",
+   "wall": 0.25813282299986895,
+   "ExecuteCompiler": 0.224601,
+   "Frontend": 0.211049,
+   "Optimizer": 0.004187,
+   "CodeGenPasses": 0.004801,
+   "Backend": 0.010277
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/NativeTypeTypedef.cpp",
+   "program": "DebugInfo",
+   "wall": 0.5445521810001992,
+   "ExecuteCompiler": 0.499013,
+   "Frontend": 0.463255,
+   "Optimizer": 0.019073,
+   "CodeGenPasses": 0.007356,
+   "Backend": 0.028352
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/NativeCompilandSymbol.cpp",
+   "program": "DebugInfo",
+   "wall": 0.5028516560000753,
+   "ExecuteCompiler": 0.459479,
+   "Frontend": 0.420255,
+   "Optimizer": 0.021357,
+   "CodeGenPasses": 0.010854,
+   "Backend": 0.033753
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/LowerEmuTLS.cpp",
+   "program": "CodeGen",
+   "wall": 0.5424920959999326,
+   "ExecuteCompiler": 0.492654,
+   "Frontend": 0.393242,
+   "Optimizer": 0.075484,
+   "CodeGenPasses": 0.018054,
+   "Backend": 0.094708
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Target/AArch64/AArch64StorePairSuppress.cpp",
+   "program": "Target/AArch64",
+   "wall": 1.4203430529996695,
+   "ExecuteCompiler": 1.334587,
+   "Frontend": 1.253213,
+   "Optimizer": 0.052736,
+   "CodeGenPasses": 0.016646,
+   "Backend": 0.071363
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/PDB/Native/PDBFileBuilder.cpp",
+   "program": "DebugInfo",
+   "wall": 1.4872959290000836,
+   "ExecuteCompiler": 1.322814,
+   "Frontend": 0.769913,
+   "Optimizer": 0.4232,
+   "CodeGenPasses": 0.120116,
+   "Backend": 0.545318
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/LLVMContextImpl.cpp",
+   "program": "IR",
+   "wall": 6.197412498000176,
+   "ExecuteCompiler": 5.504784,
+   "Frontend": 1.719103,
+   "Optimizer": 3.204879,
+   "CodeGenPasses": 0.562275,
+   "Backend": 3.769873
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Utils/LoopUnrollAndJam.cpp",
+   "program": "Transforms",
+   "wall": 2.804127274000166,
+   "ExecuteCompiler": 2.511248,
+   "Frontend": 1.383984,
+   "Optimizer": 0.833491,
+   "CodeGenPasses": 0.279029,
+   "Backend": 1.115108
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/PseudoProbe.cpp",
+   "program": "IR",
+   "wall": 0.27622317599980306,
+   "ExecuteCompiler": 0.212243,
+   "Frontend": 0.118292,
+   "Optimizer": 0.07722,
+   "CodeGenPasses": 0.012145,
+   "Backend": 0.090633
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Transforms/Instrumentation/HWAddressSanitizer.cpp",
+   "program": "Transforms",
+   "wall": 3.06371120599988,
+   "ExecuteCompiler": 2.780642,
+   "Frontend": 1.215833,
+   "Optimizer": 1.201836,
+   "CodeGenPasses": 0.34983,
+   "Backend": 1.554216
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ExecutionEngine/Orc/TargetProcess/RegisterEHFrames.cpp",
+   "program": "ExecutionEngine",
+   "wall": 0.26895965199992133,
+   "ExecuteCompiler": 0.192561,
+   "Frontend": 0.142206,
+   "Optimizer": 0.03925,
+   "CodeGenPasses": 0.004791,
+   "Backend": 0.045172
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/BinaryFormat/COFF.cpp",
+   "program": "BinaryFormat",
+   "wall": 0.057960117000220635,
+   "ExecuteCompiler": 0.033905,
+   "Frontend": 0.019518,
+   "Optimizer": 0.008483,
+   "CodeGenPasses": 0.002645,
+   "Backend": 0.012101
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/MachineLoopInfo.cpp",
+   "program": "CodeGen",
+   "wall": 1.8144518880003488,
+   "ExecuteCompiler": 1.609175,
+   "Frontend": 0.648323,
+   "Optimizer": 0.734776,
+   "CodeGenPasses": 0.218048,
+   "Backend": 0.95441
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/ObjectYAML/CodeViewYAMLDebugSections.cpp",
+   "program": "ObjectYAML",
+   "wall": 3.325018706999799,
+   "ExecuteCompiler": 2.90943,
+   "Frontend": 0.89234,
+   "Optimizer": 1.460484,
+   "CodeGenPasses": 0.544704,
+   "Backend": 2.007397
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/Comdat.cpp",
+   "program": "IR",
+   "wall": 0.1641376620000301,
+   "ExecuteCompiler": 0.10654,
+   "Frontend": 0.073858,
+   "Optimizer": 0.020045,
+   "CodeGenPasses": 0.00875,
+   "Backend": 0.029851
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/LiveStacks.cpp",
+   "program": "CodeGen",
+   "wall": 0.6802356650000547,
+   "ExecuteCompiler": 0.612958,
+   "Frontend": 0.40268,
+   "Optimizer": 0.159563,
+   "CodeGenPasses": 0.045185,
+   "Backend": 0.206057
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Demangle/Demangle.cpp",
+   "program": "Demangle",
+   "wall": 0.1880590270002358,
+   "ExecuteCompiler": 0.155074,
+   "Frontend": 0.127818,
+   "Optimizer": 0.018898,
+   "CodeGenPasses": 0.005099,
+   "Backend": 0.025137
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/CodeGen/LiveRangeEdit.cpp",
+   "program": "CodeGen",
+   "wall": 0.9131720450000103,
+   "ExecuteCompiler": 0.818138,
+   "Frontend": 0.419949,
+   "Optimizer": 0.303563,
+   "CodeGenPasses": 0.088793,
+   "Backend": 0.393702
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/DebugInfo/GSYM/LookupResult.cpp",
+   "program": "DebugInfo",
+   "wall": 0.16095097900006294,
+   "ExecuteCompiler": 0.123904,
+   "Frontend": 0.07452,
+   "Optimizer": 0.034142,
+   "CodeGenPasses": 0.011692,
+   "Backend": 0.046865
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/Support/PrettyStackTrace.cpp",
+   "program": "Support",
+   "wall": 0.1601810479996857,
+   "ExecuteCompiler": 0.129278,
+   "Frontend": 0.066427,
+   "Optimizer": 0.037763,
+   "CodeGenPasses": 0.020902,
+   "Backend": 0.059628
+  },
+  {
+   "file": "/home/user/llvm/llvm-project/llvm/lib/IR/VerifierAMDGPU.cpp",
+   "program": "IR",
+   "wall": 0.45265517500001806,
+   "ExecuteCompiler": 0.391071,
+   "Frontend": 0.187479,
+   "Optimizer": 0.1501,
+   "CodeGenPasses": 0.049315,
+   "Backend": 0.200551
+  }
+ ],
+ "top_passes": [
+  [
+   "InstCombinePass",
+   11.804464000000001
+  ],
+  [
+   "InlinerPass",
+   10.911806
+  ],
+  [
+   "GVNPass",
+   4.276118999999999
+  ],
+  [
+   "SimplifyCFGPass",
+   3.3783470000000007
+  ],
+  [
+   "EarlyCSEPass",
+   3.359303
+  ],
+  [
+   "SROAPass",
+   2.6538220000000012
+  ],
+  [
+   "BlockFrequencyAnalysis",
+   2.422242
+  ],
+  [
+   "JumpThreadingPass",
+   2.190277999999999
+  ],
+  [
+   "CorrelatedValuePropagationPass",
+   2.12104
+  ],
+  [
+   "AAManager",
+   1.9926650000000004
+  ],
+  [
+   "MemorySSAAnalysis",
+   1.96457
+  ],
+  [
+   "DSEPass",
+   1.669883
+  ],
+  [
+   "BranchProbabilityAnalysis",
+   1.5960919999999996
+  ],
+  [
+   "ConstraintEliminationPass",
+   1.5645019999999998
+  ],
+  [
+   "IPSCCPPass",
+   1.4814720000000006
+  ],
+  [
+   "PostOrderFunctionAttrsPass",
+   1.3289769999999999
+  ],
+  [
+   "LoopIdiomRecognizePass",
+   1.281943
+  ],
+  [
+   "SCCPPass",
+   1.2232849999999988
+  ],
+  [
+   "IndVarSimplifyPass",
+   1.0594319999999997
+  ],
+  [
+   "LICMPass",
+   1.0108949999999994
+  ],
+  [
+   "SLPVectorizerPass",
+   1.0024659999999999
+  ],
+  [
+   "ADCEPass",
+   0.9123370000000001
+  ],
+  [
+   "MemCpyOptPass",
+   0.8089819999999999
+  ],
+  [
+   "LoopAnalysis",
+   0.7670010000000003
+  ],
+  [
+   "DominatorTreeAnalysis",
+   0.7662370000000003
+  ],
+  [
+   "LoopUnrollPass",
+   0.726161
+  ],
+  [
+   "BDCEPass",
+   0.719923
+  ],
+  [
+   "LoopSimplifyPass",
+   0.7165819999999999
+  ],
+  [
+   "ReassociatePass",
+   0.674706
+  ],
+  [
+   "LoopDeletionPass",
+   0.6581180000000002
+  ],
+  [
+   "GlobalOptPass",
+   0.640376
+  ],
+  [
+   "BasicAA",
+   0.6278899999999998
+  ],
+  [
+   "ScalarEvolutionAnalysis",
+   0.5908920000000003
+  ],
+  [
+   "RequireAnalysisPass<llvm::GlobalsAA, llvm::Module, llvm::AnalysisManager<Module>>",
+   0.46902099999999985
+  ],
+  [
+   "GlobalsAA",
+   0.4678200000000001
+  ],
+  [
+   "LoopFullUnrollPass",
+   0.456326
+  ],
+  [
+   "PostDominatorTreeAnalysis",
+   0.45484199999999997
+  ],
+  [
+   "CallGraphAnalysis",
+   0.43661499999999986
+  ],
+  [
+   "CalledValuePropagationPass",
+   0.40665599999999996
+  ],
+  [
+   "LoopRotatePass",
+   0.4016569999999997
+  ]
+ ]
+}
