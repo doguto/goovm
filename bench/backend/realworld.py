@@ -2,7 +2,7 @@
 """Which real-world C code fits goovm's subset?
 
 Compiles every C file of the CTMark C programs (llvm-test-suite) with
-clang-20 -O0 -emit-llvm and runs goovm-llc --backend=cpp on it. Prints, per
+clang-20 -O0 -emit-llvm and runs goovm-llc --backend=goose on it. Prints, per
 program, how many files and functions compile, and a histogram of the first
 unsupported construct per failing file (goovm-llc stops at the first one).
 
@@ -54,7 +54,7 @@ def one(args, prog, flags, incs, root, src):
     if r.returncode:
         return rel, "clang-error", r.stderr.decode(errors="replace")[:300], 0
     obj = bc[:-3] + ".o"
-    r = subprocess.run([args.goovm, "--backend=cpp", bc, "-o", obj], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    r = subprocess.run([args.goovm, "--backend=goose", bc, "-o", obj], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     nfun = 0
     d = subprocess.run([args.llvm_dis, bc, "-o", "-"], stdout=subprocess.PIPE)
     nfun = d.stdout.count(b"\ndefine ")

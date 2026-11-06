@@ -13,6 +13,7 @@
 // the construct, the function and the instruction.
 
 #include "gir_export.h"
+#include "gir_asm.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -62,6 +63,7 @@ GirModule GirTables::view() const {
     m.dscopes = dscopes.data();   m.n_dscopes = (uint32_t)dscopes.size();
     m.dfiles = dfiles.data();     m.n_dfiles = (uint32_t)dfiles.size();
     m.dstr = dstr.data();         m.n_dstr = (uint32_t)dstr.size();
+    m.asms = asms.data();         m.n_asms = (uint32_t)asms.size();
     return m;
 }
 
@@ -1288,6 +1290,284 @@ struct Exporter {
         fail("intrinsic '" + CB.getCalledFunction()->getName().str() + "'");
     }
 
+    // ---------------------------------------------------------- inline asm
+    // Register names (x86 numbering) by operand size, AT&T syntax.
+    static const char *gpr_name(unsigned r, unsigned size) {
+        static const char *n8[] = {"al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil",
+                                   "r8b", "r9b", "r10b", "r11b", "r12b", "r13b", "r14b", "r15b"};
+        static const char *n16[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di",
+                                    "r8w", "r9w", "r10w", "r11w", "r12w", "r13w", "r14w", "r15w"};
+        static const char *n32[] = {"eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi",
+                                    "r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d"};
+        static const char *n64[] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+                                    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"};
+        r &= 15;
+        return size == 1 ? n8[r] : size == 2 ? n16[r] : size == 4 ? n32[r] : n64[r];
+    }
+    // "{ax}" -> register number (GIR_ASMREG_* numbering), or -1.
+    static int fixed_reg(StringRef c) {
+        if (!c.starts_with("{") || !c.ends_with("}")) return -1;
+        StringRef n = c.drop_front().drop_back();
+        static const char *g[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
+        for (int i = 0; i < 8; i++) {
+            if (n == g[i] || n == std::string("e") + g[i] || n == std::string("r") + g[i]) return i;
+        }
+        if (n == "al" || n == "ah") return 0;
+        if (n == "cl") return 1;
+        if (n == "dl") return 2;
+        if (n == "bl") return 3;
+        if (n.consume_front("r")) {
+            unsigned k;
+            if (!n.consumeInteger(10, k) && k >= 8 && k < 16 && (n.empty() || n == "d" || n == "w" || n == "b")) return (int)k;
+            return -1;
+        }
+        if (n.consume_front("xmm")) {
+            unsigned k;
+            if (!n.getAsInteger(10, k) && k < 16) return GIR_ASMREG_XMM0 + k;
+            return -1;
+        }
+        if (n == "st") return GIR_ASMREG_ST0;
+        if (n.consume_front("st(") && n.consume_back(")")) {
+            unsigned k;
+            if (!n.getAsInteger(10, k) && k < 8) return GIR_ASMREG_ST0 + k;
+        }
+        return -1;
+    }
+    // Inline assembly with a non-empty template: bind every operand to a
+    // register (fixed ones as given, "r"/"x" from the caller-saved pool, "m"
+    // as (%reg) holding the address, constant "i" as $imm), substitute them
+    // into the template and assemble it with LLVM's MC layer.
+    void asm_code(const CallBase &CB) {
+        const auto *IA = cast<InlineAsm>(CB.getCalledOperand());
+        if (IA->getDialect() != InlineAsm::AD_ATT) fail("Intel-syntax inline assembly");
+        InlineAsm::ConstraintInfoVector cons = IA->ParseConstraints();
+        struct Op { int kind; int reg; unsigned size; uint64_t imm; const Value *v; };  // kind: 0 reg, 1 mem, 2 imm
+        enum { K_REG = 0, K_MEM = 1, K_IMM = 2 };
+        std::vector<Op> ops;          // template operand number -> binding
+        std::vector<int> op_of_con(cons.size(), -1);
+        uint32_t used = 0;            // registers taken (bit r; xmm 16+k; st 32.. not tracked)
+        uint64_t used_x = 0;
+        // Clobbers.
+        unsigned st_clobbered = 0;
+        for (const auto &c : cons) {
+            if (c.Type != InlineAsm::isClobber) continue;
+            for (const std::string &code : c.Codes) {
+                int r = fixed_reg(code);
+                if (r >= (int)GIR_ASMREG_ST0) st_clobbered |= 1u << (r - GIR_ASMREG_ST0);
+                else if (r >= (int)GIR_ASMREG_XMM0) used_x |= 1ull << (r - GIR_ASMREG_XMM0);
+                else if (r >= 0) used |= 1u << r;
+            }
+        }
+        // Fixed registers first, so the pool avoids them.
+        for (const auto &c : cons)
+            if (c.Type != InlineAsm::isClobber && c.Codes.size() == 1) {
+                int r = fixed_reg(c.Codes[0]);
+                if (r >= 0 && r < (int)GIR_ASMREG_XMM0) used |= 1u << r;
+                else if (r >= (int)GIR_ASMREG_XMM0 && r < (int)GIR_ASMREG_ST0) used_x |= 1ull << (r - GIR_ASMREG_XMM0);
+            }
+        static const int pool[] = {0, 1, 2, 6, 7, 8, 9, 10, 11};
+        auto alloc_gpr = [&]() -> int {
+            for (int r : pool)
+                if (!(used & (1u << r))) {
+                    used |= 1u << r;
+                    return r;
+                }
+            fail("inline assembly needs too many registers");
+        };
+        auto alloc_xmm = [&]() -> int {
+            for (int k = 0; k < 16; k++)
+                if (!(used_x & (1ull << k))) {
+                    used_x |= 1ull << k;
+                    return GIR_ASMREG_XMM0 + k;
+                }
+            fail("inline assembly needs too many xmm registers");
+        };
+        auto has = [](const InlineAsm::ConstraintInfo &c, const char *k) {
+            for (const std::string &x : c.Codes)
+                if (x == k) return true;
+            return false;
+        };
+        // Bind operands in order: outputs, then inputs.
+        unsigned argi = 0;
+        Type *rt = CB.getType();
+        unsigned n_direct = 0;
+        SmallVector<int, 4> direct_op;  // direct output k -> template operand
+        for (unsigned ci = 0; ci < cons.size(); ci++) {
+            const auto &c = cons[ci];
+            if (c.Type == InlineAsm::isClobber) continue;
+            if (c.Type == InlineAsm::isLabel) fail("asm goto");
+            Op o{K_REG, -1, 8, 0, nullptr};
+            if (c.Type == InlineAsm::isOutput) {
+                if (c.isIndirect) {
+                    o.v = CB.getArgOperand(argi++);
+                    if (!has(c, "m") && !has(c, "imr") ) {
+                        bool m = false;
+                        for (const std::string &x : c.Codes) if (x.find('m') != std::string::npos) m = true;
+                        if (!m) fail("indirect inline-asm output without a memory alternative");
+                    }
+                    o.kind = K_MEM;
+                    o.reg = alloc_gpr();
+                } else {
+                    Type *ot = rt->isStructTy() ? cast<StructType>(rt)->getElementType(n_direct) : rt;
+                    o.size = (unsigned)DL.getTypeStoreSize(ot);
+                    int r = c.Codes.size() == 1 ? fixed_reg(c.Codes[0]) : -1;
+                    if (r < 0) {
+                        if (has(c, "x")) r = alloc_xmm();
+                        else if (has(c, "r") || has(c, "q") || has(c, "R") || has(c, "g") || has(c, "imr") || has(c, "rm")) r = alloc_gpr();
+                        else fail("inline-asm output constraint '" + (c.Codes.empty() ? std::string() : c.Codes[0]) + "'");
+                    }
+                    o.reg = r;
+                    direct_op.push_back((int)ops.size());
+                    n_direct++;
+                }
+            } else {
+                o.v = CB.getArgOperand(argi++);
+                if (c.isIndirect) {
+                    o.kind = K_MEM;
+                    o.reg = alloc_gpr();
+                } else if (!c.Codes.empty() && isdigit((unsigned char)c.Codes[0][0])) {
+                    unsigned n = (unsigned)std::stoul(c.Codes[0]);
+                    if (n >= ops.size() || ops[n].kind != K_REG) fail("inline-asm input tied to a memory output");
+                    o.reg = ops[n].reg;
+                    o.size = ops[n].size;
+                } else {
+                    int r = c.Codes.size() == 1 ? fixed_reg(c.Codes[0]) : -1;
+                    const auto *ci_ = dyn_cast<ConstantInt>(o.v);
+                    bool imm_ok = has(c, "i") || has(c, "n") || has(c, "imr") || has(c, "g") || has(c, "I") ||
+                                  has(c, "J") || has(c, "K") || has(c, "N") || has(c, "e") || has(c, "Z");
+                    if (r >= 0) {
+                        o.reg = r;
+                    } else if (ci_ && imm_ok && ci_->getBitWidth() <= 64) {
+                        o.kind = K_IMM;
+                        o.imm = ci_->getSExtValue();
+                    } else if (has(c, "x")) {
+                        o.reg = alloc_xmm();
+                    } else if (has(c, "r") || has(c, "q") || has(c, "R") || has(c, "g") || has(c, "imr") || has(c, "rm") ||
+                               has(c, "ir")) {
+                        o.reg = alloc_gpr();
+                    } else {
+                        fail("inline-asm input constraint '" + (c.Codes.empty() ? std::string() : c.Codes[0]) + "'");
+                    }
+                    o.size = (unsigned)DL.getTypeStoreSize(o.v->getType());
+                }
+            }
+            op_of_con[ci] = (int)ops.size();
+            ops.push_back(o);
+        }
+        // Substitute operands into the template.
+        StringRef s = IA->getAsmString();
+        std::string text;
+        for (size_t i = 0; i < s.size(); i++) {
+            char ch = s[i];
+            if (ch != '$') {
+                text += ch;
+                continue;
+            }
+            if (i + 1 >= s.size()) fail("inline-asm template ends in '$'");
+            char nx = s[i + 1];
+            if (nx == '$') { text += '$'; i++; continue; }
+            if (nx == '(' || nx == ')' || nx == '|') fail("inline-asm dialect alternatives");
+            unsigned n = 0;
+            char mod = 0;
+            size_t k = i + 1;
+            if (nx == '{') {
+                k++;
+                while (k < s.size() && isdigit((unsigned char)s[k])) n = n * 10 + (s[k++] - '0');
+                if (k < s.size() && s[k] == ':') { mod = s[k + 1]; k += 2; }
+                if (k >= s.size() || s[k] != '}') fail("inline-asm operand reference");
+                i = k;
+            } else if (isdigit((unsigned char)nx)) {
+                while (k < s.size() && isdigit((unsigned char)s[k])) n = n * 10 + (s[k++] - '0');
+                i = k - 1;
+            } else {
+                fail("inline-asm template escape '$" + std::string(1, nx) + "'");
+            }
+            if (n >= ops.size()) fail("inline-asm operand number out of range");
+            const Op &o = ops[n];
+            if (o.kind == K_IMM) {
+                if (mod == 'c') text += std::to_string((int64_t)o.imm);
+                else if (mod == 'n') text += std::to_string(-(int64_t)o.imm);
+                else if (mod == 0) text += "$" + std::to_string((int64_t)o.imm);
+                else fail(std::string("inline-asm modifier '") + mod + "' on an immediate");
+            } else if (o.kind == K_MEM) {
+                if (mod != 0 && mod != 'P' && mod != 'a') fail(std::string("inline-asm modifier '") + mod + "' on memory");
+                text += std::string("(%") + gpr_name(o.reg, 8) + ")";
+            } else if (o.reg >= (int)GIR_ASMREG_ST0) {
+                int k2 = o.reg - GIR_ASMREG_ST0;
+                text += k2 == 0 ? "%st" : "%st(" + std::to_string(k2) + ")";
+            } else if (o.reg >= (int)GIR_ASMREG_XMM0) {
+                text += "%xmm" + std::to_string(o.reg - GIR_ASMREG_XMM0);
+            } else {
+                unsigned size = o.size > 8 ? 8 : (o.size == 3 ? 4 : o.size > 4 ? 8 : o.size);
+                if (mod == 'b') size = 1;
+                else if (mod == 'w') size = 2;
+                else if (mod == 'k') size = 4;
+                else if (mod == 'q') size = 8;
+                else if (mod == 'h') {
+                    if (o.reg > 3) fail("inline-asm 'h' modifier on a register without a high byte");
+                    static const char *hn[] = {"ah", "ch", "dh", "bh"};
+                    text += std::string("%") + hn[o.reg];
+                    continue;
+                } else if (mod != 0) fail(std::string("inline-asm modifier '") + mod + "'");
+                text += std::string("%") + gpr_name(o.reg, size);
+            }
+        }
+        std::vector<uint8_t> code;
+        std::string err;
+        if (!gir_assemble(M.getTargetTriple(), text, false, code, err))
+            fail("inline assembly '" + s.substr(0, 60).str() + "': " + err);
+        // x87: inputs and outputs must be st(0..k); count the inputs left on
+        // the stack (neither tied to an output nor popped by the code).
+        unsigned st_in = 0, st_out = 0, st_tied = 0, st_popped = 0;
+        for (unsigned ci = 0; ci < cons.size(); ci++) {
+            int oi = op_of_con[ci];
+            if (oi < 0 || ops[oi].kind != K_REG || ops[oi].reg < (int)GIR_ASMREG_ST0) continue;
+            unsigned k2 = ops[oi].reg - GIR_ASMREG_ST0;
+            if (cons[ci].Type == InlineAsm::isOutput) st_out |= 1u << k2;
+            else {
+                st_in |= 1u << k2;
+                if (!cons[ci].Codes.empty() && isdigit((unsigned char)cons[ci].Codes[0][0])) st_tied++;
+                else if (st_clobbered & (1u << k2)) st_popped++;
+            }
+        }
+        auto contiguous = [](unsigned m) { return (m & (m + 1)) == 0; };
+        if (!contiguous(st_in) || !contiguous(st_out)) fail("inline-asm x87 operands that are not st(0..n)");
+        unsigned n_st_in = (unsigned)__builtin_popcount(st_in);
+        uint32_t pop = n_st_in - st_tied - st_popped;
+        // Emit: inputs (values; addresses for memory operands), then outputs.
+        GirAsm a{};
+        a.code = (uint32_t)T.data.size();
+        a.code_len = (uint32_t)code.size();
+        T.data.insert(T.data.end(), code.begin(), code.end());
+        SmallVector<uint32_t, 16> ins;
+        for (unsigned ci = 0; ci < cons.size(); ci++) {
+            int oi = op_of_con[ci];
+            if (oi < 0) continue;
+            const Op &o = ops[oi];
+            if (o.kind == K_IMM || !o.v) continue;
+            ins.push_back(ref(o.v));
+            ins.push_back((uint32_t)o.reg);
+            ty(o.v->getType());
+        }
+        a.n_in = (uint32_t)ins.size() / 2;
+        uint16_t rty = ret_ty(rt);  // before the run: a new struct type appends to opnds
+        a.ops = (uint32_t)T.opnds.size();
+        for (size_t i = 0; i < ins.size(); i += 2) {
+            push_ref(ins[i]);
+            T.opnds.push_back(ins[i + 1]);
+        }
+        const StructLayout *SL = rt->isStructTy() ? DL.getStructLayout(cast<StructType>(rt)) : nullptr;
+        for (unsigned k = 0; k < n_direct; k++) {
+            T.opnds.push_back((uint32_t)ops[direct_op[k]].reg);
+            T.opnds.push_back(SL ? (uint32_t)SL->getElementOffset(k).getFixedValue() : 0);
+        }
+        a.n_out = n_direct;
+        a.x87_pop = pop;
+        T.asms.push_back(a);
+        uint32_t r = emit(GIR_ASM, rty, 0, 0, 0, (uint32_t)T.asms.size() - 1, 0, 0, 0);
+        if (rty != GIR_T_VOID) vmap[&CB] = r;
+    }
+
     // Inline assembly with an empty template is an optimization barrier
     // only: a direct output tied to an input gets that input, other outputs
     // are undefined, indirect outputs are untouched.
@@ -1308,7 +1588,7 @@ struct Exporter {
             }
             if (!isspace((unsigned char)s[i])) body += s[i];
         }
-        if (!body.empty()) fail("inline assembly '" + s.substr(0, 60).str() + "'");
+        if (!body.empty()) return asm_code(CB);
         if (CB.getType()->isVoidTy()) return;
         InlineAsm::ConstraintInfoVector cons = IA->ParseConstraints();
         // Call argument of each indirect output / input constraint, the
@@ -2094,7 +2374,7 @@ static const char *op_name(unsigned op) {
         "insertelt", "shuffle", "dynalloca", "stacksave", "stackrestore", "vastart", "memcpy", "memset", "ctlz",
         "cttz", "ctpop", "bswap", "bitreverse", "fshl", "fshr", "ovf", "scmp", "ucmp", "fabs", "copysign", "fsqrt",
         "isfpclass", "cmpxchg", "atomicrmw", "fence", "tlsaddr", "frameaddr", "retaddr", "sjlj_setjmp",
-        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86"};
+        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm"};
     static_assert(sizeof(names) / sizeof(names[0]) == GIR_OP_COUNT, "op names");
     return op < GIR_OP_COUNT ? names[op] : "?";
 }

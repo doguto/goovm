@@ -31,6 +31,7 @@ struct GirTables {
     std::vector<GirDScope> dscopes;
     std::vector<GirDFile> dfiles;
     std::vector<uint8_t> dstr;
+    std::vector<GirAsm> asms;
     uint64_t n_llvm_insts = 0;  // statistics: LLVM instructions in defined functions
 
     GirModule view() const;

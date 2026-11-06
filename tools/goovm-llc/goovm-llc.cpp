@@ -93,6 +93,7 @@ SAME(DataReloc_g, GirDataReloc);
 SAME(DLoc_g, GirDLoc);
 SAME(DScope_g, GirDScope);
 SAME(DFile_g, GirDFile);
+SAME(Asm_g, GirAsm);
 #undef SAME
 static_assert(offsetof(Inst_g, a_g) == offsetof(GirInst, a), "Inst.a offset");
 static_assert(offsetof(Inst_g, dbg_g) == offsetof(GirInst, dbg), "Inst.dbg offset");
@@ -123,7 +124,8 @@ bool goose_codegen(const GirModule &m, const uint8_t *&obj, size_t &obj_len) {
         sl_DLoc_g{(DLoc_g *)m.dlocs, (int64_t)m.n_dlocs},
         sl_DScope_g{(DScope_g *)m.dscopes, (int64_t)m.n_dscopes},
         sl_DFile_g{(DFile_g *)m.dfiles, (int64_t)m.n_dfiles},
-        sl_u8{(uint8_t *)m.dstr, (int64_t)m.n_dstr}, &len);
+        sl_u8{(uint8_t *)m.dstr, (int64_t)m.n_dstr},
+        sl_Asm_g{(Asm_g *)m.asms, (int64_t)m.n_asms}, &len);
     if (!p || len <= 0) {
         std::fprintf(stderr, "goovm-llc: the Goose back-end returned no object\n");
         return false;

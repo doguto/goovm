@@ -1385,3 +1385,64 @@ fn lower_scmp(I: Inst, j: u32) {
     zext_reg(RAX, bits_of(I.ty));
     put_gpr(j, RAX);
 }
+
+// Inline assembly: inputs into their registers (x87 ones pushed deepest
+// first), the assembled code, then the outputs out of theirs.
+fn lower_asm(I: Inst, j: u32) {
+    let A = M.asms[I.a];
+    let ins = A.ops;
+    // x87 inputs, deepest first
+    var k: i64 = A.n_in as i64 - 1;  // (u32 - 1 would wrap before widening)
+    while k >= 0 {
+        let v = M.opnds[ins + 2 * k as! u32];
+        let r = M.opnds[ins + 2 * k as! u32 + 1];
+        if r >= ASMREG_ST0 {
+            let t = type_of(v);
+            fld_m(store_of(t), val_mem(v));
+        }
+        k--;
+    }
+    for q in 0..A.n_in {
+        let v = M.opnds[ins + 2 * q];
+        let r = M.opnds[ins + 2 * q + 1];
+        if r >= ASMREG_XMM0 && r < ASMREG_ST0 {
+            let t = type_of(v);
+            if cls_of(t) == C_FP { use_xmm(v, r - ASMREG_XMM0); }
+            else { xmm_load_n(r - ASMREG_XMM0, val_mem(v), store_of(t)); }
+        }
+    }
+    for q in 0..A.n_in {
+        let v = M.opnds[ins + 2 * q];
+        let r = M.opnds[ins + 2 * q + 1];
+        if r < ASMREG_XMM0 { use_fixed(v, r); }
+    }
+    code.append(M.data[A.code..A.code + A.code_len]);
+    if I.ty == GIR_T_VOID { return; }
+    let outs = ins + 2 * A.n_in;
+    let res = res_mem(j);
+    let single = A.n_out == 1 && cls_of(I.ty) != C_MEM;
+    // GPR and xmm outputs first, then the x87 ones (st0 first).
+    for q in 0..A.n_out {
+        let r = M.opnds[outs + 2 * q];
+        let off = M.opnds[outs + 2 * q + 1];
+        let ft = if single { I.ty } else { M.opnds[M.types[I.ty].elems + 2 * q] };
+        let m = m_add(res, off);
+        if r < ASMREG_XMM0 {
+            if single && cls_of(ft) == C_INT {
+                zext_reg(r, bits_of(ft));
+                store64(m, r);
+            } else {
+                store_n(m, r, store_of(ft));
+            }
+        } else if r < ASMREG_ST0 {
+            xmm_store_n(m, r - ASMREG_XMM0, store_of(ft));
+        }
+    }
+    for q in 0..A.n_out {
+        let r = M.opnds[outs + 2 * q];
+        let off = M.opnds[outs + 2 * q + 1];
+        let ft = if single { I.ty } else { M.opnds[M.types[I.ty].elems + 2 * q] };
+        if r >= ASMREG_ST0 { fstp_m(store_of(ft), m_add(res, off)); }
+    }
+    for q in 0..A.x87_pop { fstp_st0(); }
+}

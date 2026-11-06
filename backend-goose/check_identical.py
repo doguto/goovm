@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Check that the Goose back-end writes byte-identical objects to the C++ one.
 
+GIR v0 ONLY: this compares goovm-llc --backend=cpp with --backend=goose, a
+pair that exists only at commit 8f55b18 (see backend-cpp/README.md). From
+milestone A1 on, GIR is version 2 and the C++ back-end is retired.
+
 For every tests/c/*.c program it builds the two bitcode variants that
 tests/run.py uses:
   O0       clang-20 -O0 -emit-llvm

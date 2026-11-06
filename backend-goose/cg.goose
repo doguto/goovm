@@ -271,6 +271,7 @@ fn gen_inst(gi: u32, cur: u32) {
         GIR_SJLJ_LONGJMP => lower_longjmp(I),
         GIR_BLOCKADDR => lower_blockaddr(I, j),
         GIR_X86 => lower_x86(I, j),
+        GIR_ASM => lower_asm(I, j),
         _ => ud2(),  // unknown opcode: trap
     }
 }
@@ -432,10 +433,11 @@ export fn gir_codegen(header: const Header[:], types: const TypeDef[:], funcs: c
                       blocks: const Block[:], insts: const Inst[:], opnds: const u32[:], consts: const Const[:],
                       globals: const Global[:], sections: const Section[:], data: const u8[:],
                       drelocs: const DataReloc[:], strtab: const u8[:], dlocs: const DLoc[:],
-                      dscopes: const DScope[:], dfiles: const DFile[:], dstr: const u8[:]) -> const u8[:] {
+                      dscopes: const DScope[:], dfiles: const DFile[:], dstr: const u8[:],
+                      asms: const Asm[:]) -> const u8[:] {
     M = Module { header: header, types: types, funcs: funcs, blocks: blocks, insts: insts, opnds: opnds,
                  consts: consts, globals: globals, sections: sections, data: data, drelocs: drelocs,
-                 strtab: strtab, dlocs: dlocs, dscopes: dscopes, dfiles: dfiles, dstr: dstr };
+                 strtab: strtab, dlocs: dlocs, dscopes: dscopes, dfiles: dfiles, dstr: dstr, asms: asms };
     code.clear();
     rela_code.clear();
     sdata.clear();

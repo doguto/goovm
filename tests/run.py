@@ -57,7 +57,7 @@ def test_one(src, args):
     results = []
     try:
         ref = os.path.join(wd, "ref")
-        step([cc, "-O0", "-w", src, "-o", ref], "reference build")
+        step([cc, "-O0", "-w", src, "-o", ref, "-lm"], "reference build")
         expect = execute(ref)
 
         bcs = []
@@ -81,7 +81,7 @@ def test_one(src, args):
                 r = run([args.goovm, f"--backend={args.backend}", bcf, "-o", obj])
                 if r.returncode != 0:
                     raise Fail(f"goovm-llc exit {r.returncode}: {r.stderr.decode(errors='replace').strip()}")
-                step([cc, obj, "-o", exe], "link")
+                step([cc, obj, "-o", exe, "-lm"], "link")
                 got = execute(exe)
                 if got != expect:
                     raise Fail(f"output mismatch: expected exit {expect[1]}, got {got[1]}\n"
@@ -95,7 +95,7 @@ def test_one(src, args):
             exe = os.path.join(wd, "tpde.exe")
             try:
                 step([args.tpde, bc, "-o", obj], "tpde-llc")
-                step([cc, obj, "-o", exe], "link")
+                step([cc, obj, "-o", exe, "-lm"], "link")
                 got = execute(exe)
                 if got != expect:
                     raise Fail(f"tpde output mismatch: expected exit {expect[1]}, got {got[1]}")

@@ -1,4 +1,4 @@
-add_executable(goovm-llc goovm-llc.cpp gir_export.cpp)
+add_executable(goovm-llc goovm-llc.cpp gir_export.cpp gir_asm.cpp)
 target_include_directories(goovm-llc PRIVATE ${PROJECT_SOURCE_DIR}/gir)
 target_include_directories(goovm-llc SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 separate_arguments(GOOVM_LLVM_DEFS NATIVE_COMMAND ${LLVM_DEFINITIONS})
@@ -13,7 +13,7 @@ endif ()
 if (LLVM_LINK_LLVM_DYLIB)
     target_link_libraries(goovm-llc PRIVATE LLVM)
 else ()
-    llvm_map_components_to_libnames(GOOVM_LLVM_LIBS core bitreader support target analysis
+    llvm_map_components_to_libnames(GOOVM_LLVM_LIBS core bitreader support target analysis mc mcparser object
         x86codegen x86asmparser x86desc x86info)
     target_link_libraries(goovm-llc PRIVATE ${GOOVM_LLVM_LIBS})
 endif ()

@@ -8,7 +8,7 @@ Two executables are linked: one from the clang objects only, one where each
 supported file uses the goovm object. Both run once on the program's test
 input and their stdout and exit status are compared.
 
-usage: tests/realworld_mixed.py [--suite DIR] [--goovm PATH] [--backend cpp] [--work DIR] [-j 2] [program ...]
+usage: tests/realworld_mixed.py [--suite DIR] [--goovm PATH] [--backend goose] [--work DIR] [-j 2] [program ...]
 """
 import argparse, concurrent.futures as cf, os, subprocess, sys
 
@@ -53,7 +53,7 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap.add_argument("--suite", default="/home/user/llvm/llvm-test-suite")
     ap.add_argument("--goovm", default=os.path.join(here, "../build/tools/goovm-llc/goovm-llc"))
-    ap.add_argument("--backend", default="cpp")
+    ap.add_argument("--backend", default="goose")
     ap.add_argument("--clang", default="clang-20")
     ap.add_argument("--work", default="/tmp/goovm-mixed")
     ap.add_argument("-j", type=int, default=2)

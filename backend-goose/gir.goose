@@ -18,6 +18,7 @@ struct DataReloc { owner: u32, offset: u32, target: u32, kind: u32, addend: i64,
 struct DLoc { line: u32, col: u32, scope: u32, inlined_at: u32 }
 struct DScope { kind: u32, parent: u32, file: u32, line: u32, name: u32, extra: u32 }
 struct DFile { name: u32, dir: u32 }
+struct Asm { code: u32, code_len: u32, n_in: u32, n_out: u32, ops: u32, x87_pop: u32 }
 
 // The module, as read-only views of the host's tables (set at entry).
 struct Module {
@@ -37,6 +38,7 @@ struct Module {
     dscopes: const DScope[:],
     dfiles: const DFile[:],
     dstr: const u8[:],
+    asms: const Asm[:],
 }
 
 let GIR_V_INST = 0;
@@ -162,6 +164,9 @@ let GIR_DEBUGTRAP = 78;
 let GIR_INDIRECTBR = 79;
 let GIR_BLOCKADDR = 80;
 let GIR_X86 = 81;
+let GIR_ASM = 82;
+let ASMREG_XMM0 = 16;
+let ASMREG_ST0 = 32;
 
 // ICMP predicates.
 let GIR_EQ = 0;

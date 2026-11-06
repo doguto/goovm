@@ -235,6 +235,8 @@ enum GirOp {
     GIR_BLOCKADDR,     /* a = function global index (imm), b = local block of*/
                        /*   that function (imm); ty = ptr                    */
     GIR_X86,           /* x86 SSE intrinsic: sub = GirX86, a, b; ty          */
+    GIR_ASM,           /* inline assembly: a = index into asms; ty = void,   */
+                       /*   the single output, or a struct of the outputs    */
     GIR_OP_COUNT
 };
 
@@ -420,6 +422,30 @@ typedef struct GirDataReloc {
     uint32_t block2;             /* BLOCKDIFF32: the subtracted block */
 } GirDataReloc;
 
+/* ---------------------------------------------------------- inline asm
+ * A GIR_ASM instruction is machine code assembled by the exporter (LLVM's
+ * MC layer) from the template with every operand bound to a register: the
+ * exporter allocates registers for "r"/"x"/"m" operands and substitutes
+ * them into the template, so the back-end only moves values in and out.
+ *   opnds[ops + 2k], opnds[ops + 2k + 1]  (k < n_in): input value, register
+ *     (an "m" operand's input is its address, loaded into the register the
+ *     template uses as the base)
+ *   opnds[ops + 2 n_in + 2k], [... + 1]   (k < n_out): register, byte offset
+ *     of the output in the result (0 for a single output)
+ * Registers: 0..15 rax..r15 (x86 numbering), 16..31 xmm0..15, 32..39
+ * st(0)..st(7). x87 inputs are pushed deepest first; after the code the x87
+ * stack holds the st outputs (st(0) first) followed by x87_pop values that
+ * the back-end pops. An empty template needs no GIR_ASM (see the exporter).
+ */
+typedef struct GirAsm {          /* 24 bytes */
+    uint32_t code, code_len;     /* machine code in data[] */
+    uint32_t n_in, n_out;
+    uint32_t ops;                /* opnds index */
+    uint32_t x87_pop;
+} GirAsm;
+#define GIR_ASMREG_XMM0 16u
+#define GIR_ASMREG_ST0  32u
+
 /* ------------------------------------------------------------ debug info
  * Carried for a later DWARF emitter; the A1 back-end ignores it. Entry 0
  * of dlocs, dscopes and dfiles means "none". dstr is a string table of
@@ -479,6 +505,7 @@ typedef struct GirModule {
     const GirDLoc      *dlocs;   uint32_t n_dlocs;
     const GirDScope    *dscopes; uint32_t n_dscopes;
     const GirDFile     *dfiles;  uint32_t n_dfiles;
+    const GirAsm       *asms;    uint32_t n_asms;
     const uint8_t      *dstr;    uint32_t n_dstr;
 } GirModule;
 
@@ -500,5 +527,6 @@ GIR_STATIC_ASSERT(sizeof(GirDLoc) == 16, "GirDLoc must be 16 bytes");
 GIR_STATIC_ASSERT(sizeof(GirDScope) == 24, "GirDScope must be 24 bytes");
 GIR_STATIC_ASSERT(sizeof(GirDFile) == 8, "GirDFile must be 8 bytes");
 GIR_STATIC_ASSERT(sizeof(GirHeader) == 32, "GirHeader must be 32 bytes");
+GIR_STATIC_ASSERT(sizeof(GirAsm) == 24, "GirAsm must be 24 bytes");
 
 #endif /* GIR_H */
