@@ -1864,7 +1864,11 @@ recursive fn parse_stmt() -> u32 {
         let st = switch_types[switch_types.len - 1];
         let v = trunc_to(v0, st);
         let mark = switch_marks[switch_marks.len - 1] as i64;
+        // (128-bit values are only folded to 64 bits here: B2 refolds them
+        // from the expression kept in the case's b)
+        let wide = type_size(st) > 8;
         for j in mark..switch_cases.len {
+            if wide { break; }
             let cn = nodes[switch_cases[j]];
             if cn.kind == N_CASE {
                 let lo2 = cn.v;
@@ -1878,7 +1882,7 @@ recursive fn parse_stmt() -> u32 {
         }
         var hn: u32 = 0;
         if hi != 0 { hn = int_node(trunc_to(hv, st), st, loc); }
-        let cn = node_v(N_CASE, 0, st, 0, 0, hn as i64, loc, v);
+        let cn = node_v(N_CASE, 0, st, 0, if wide { convert(rv(e), st) as i64 } else { 0 }, hn as i64, loc, v);
         switch_cases.push(cn);
         let s = if at(TK_R_BRACE) { node(N_NULL, 0, 0, 0, 0, 0, loc) } else { parse_stmt() };
         nodes[cn].a = s;

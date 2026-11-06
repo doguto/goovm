@@ -7,6 +7,7 @@
 namespace gen;
 
 import std;
+import dictionary;
 import .common;
 import .types;
 import .ast;
@@ -24,8 +25,22 @@ fn strip_builtin(name: const u8[:]) -> const u8[:] {
 
 // A call of a library function that clang lowers itself; KEEP_CALL to
 // emit an ordinary call.
+var opt_no_builtin: bool = false;
+var no_builtin_names = dictionary<u32, bool> {};
+var no_builtin_opts: u32[>..] = [];      // -fno-builtin-X: (offset, length) in names
+
+fn init_no_builtin() {
+    var k = 0;
+    while k + 1 < no_builtin_opts.len {
+        let o = no_builtin_opts[k] as i64;
+        no_builtin_names.insert(intern(names[o..o + no_builtin_opts[k + 1]]), true);
+        k += 2;
+    }
+}
+
 recursive fn builtin_lib_call(s: i64, n: u32, dst: u32) -> u32 {
-    if is_internal_sym(s) { return KEEP_CALL; }
+    if is_internal_sym(s) || opt_no_builtin { return KEEP_CALL; }
+    if no_builtin_names.contains(syms[s].name) { return KEEP_CALL; }
     let a = syms[s].attr;
     if a != 0 && sym_attrs[a].asm_len != 0 { return KEEP_CALL; }
     let id = syms[s].name;
@@ -121,11 +136,96 @@ recursive fn lib_builtin(name: const u8[:], n: u32, dst: u32, forced: bool) -> u
         libcall3("memmove", GIR_T_PTR, d, s2, ln);
         return NONE;
     }
-    if name == "strlen" && nargs == 1 {
-        let ok, len = const_strlen(barg(n, 0));
-        if ok { return c_i64(len); }
+    if (name == "strlen" || name == "strcmp" || name == "strncmp" || name == "memcmp" || name == "bcmp") && nargs >= 1 {
+        let ok, v = fold_str_builtin(name, n);
+        if ok { return c_int(v as! u64, vty(unqual(nd.ty))); }
     }
     return KEEP_CALL;
+}
+
+// A pointer into a string literal known at compile time: (ok, string, offset).
+// Looks through decay, casts, constant offsets and const pointer variables
+// initialized with such a pointer (as clang's constant evaluator does).
+recursive fn const_str_ptr(n: u32) -> bool, u32, i64 {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if (k == N_ICAST || k == N_CAST) && (nd.op == CK_ARRAY2PTR || nd.op == CK_NOOP || nd.op == CK_BITCAST) {
+        if nd.op == CK_ARRAY2PTR && nkind(nd.a) == N_STRING { return true, nodes[nd.a].a, 0; }
+        return const_str_ptr(nd.a);
+    }
+    if (k == N_ICAST || k == N_CAST) && nd.op == CK_LVAL2RVAL && nkind(nd.a) == N_DECLREF {
+        let s = nodes[nd.a].a as i64;
+        let q = syms[s].ty;
+        if syms[s].kind != SK_VAR || quals(q) & Q_CONST == 0 || quals(q) & Q_VOLATILE != 0 { return false, 0, 0; }
+        // the initializer of a const local (N_DECL) or a const global
+        var init: u32 = 0;
+        if s < sym_init.len && sym_init[s] != 0 { init = sym_init[s]; }
+        if init == 0 && s < local_init.len { init = local_init[s]; }
+        if init == 0 { return false, 0, 0; }
+        return const_str_ptr(init);
+    }
+    if k == N_BINARY && (nd.op == B_PTRADD || nd.op == B_PTRSUB) {
+        let ok, si, off = const_str_ptr(nd.a);
+        if !ok || !pure_const(nd.b) { return false, 0, 0; }
+        let ok2, d = fold_int(nd.b);
+        if !ok2 { return false, 0, 0; }
+        return true, si, if nd.op == B_PTRADD { off + d } else { off - d };
+    }
+    if k == N_UNARY && nd.op == U_ADDR && nkind(nd.a) == N_INDEX {
+        let ix = nodes[nd.a];
+        let ok, si, off = const_str_ptr(ix.a);
+        if !ok || !pure_const(ix.b) { return false, 0, 0; }
+        let ok2, d = fold_int(ix.b);
+        if !ok2 { return false, 0, 0; }
+        return true, si, off + d;
+    }
+    return false, 0, 0;
+}
+
+var local_init: u32[>..] = [];   // per symbol: the initializer of a const local (for folding)
+
+fn str_at(si: u32, off: i64) -> bool, const u8[:] {
+    let sl = strs[si];
+    if type_size(sl.elem) != 1 { return false, ""; }
+    let b = strbytes[sl.start..sl.start + sl.len];
+    if off < 0 || off > b.len { return false, ""; }
+    return true, b[off..];
+}
+
+fn fold_str_builtin(name: const u8[:], n: u32) -> bool, i64 {
+    let nd = nodes[n];
+    let nargs = nd.c as i64;
+    let ok1, s1, o1 = const_str_ptr(barg(n, 0));
+    if !ok1 { return false, 0; }
+    let okb1, b1 = str_at(s1, o1);
+    if !okb1 { return false, 0; }
+    if name == "strlen" {
+        for c, i in b1 { if c == 0 { return true, i; } }
+        return false, 0;
+    }
+    if nargs < 2 { return false, 0; }
+    let ok2, s2, o2 = const_str_ptr(barg(n, 1));
+    if !ok2 { return false, 0; }
+    let okb2, b2 = str_at(s2, o2);
+    if !okb2 { return false, 0; }
+    var lim: i64 = 9223372036854775807;
+    if name != "strcmp" {
+        if nargs < 3 || !pure_const(barg(n, 2)) { return false, 0; }
+        let ok3, l = fold_int(barg(n, 2));
+        if !ok3 { return false, 0; }
+        lim = l;
+    }
+    let mem = name == "memcmp" || name == "bcmp";
+    var i: i64 = 0;
+    while i < lim {
+        if i >= b1.len || i >= b2.len { return false, 0; }
+        let x = b1[i];
+        let y = b2[i];
+        if x != y { return true, if x < y { -1 } else { 1 }; }
+        if !mem && x == 0 { return true, 0; }
+        i++;
+    }
+    return true, 0;
 }
 
 fn math_base(name: const u8[:]) -> const u8[:] {
@@ -668,7 +768,7 @@ recursive fn overflow_builtin(name: const u8[:], n: u32) -> u32 {
     let a2 = barg(n, 2);
     var opk: i64 = 0;   // 0 add, 1 sub, 2 mul
     var base = name;
-    if starts_with(base, "s") || starts_with(base, "u") { base = base[1..]; }
+    if !starts_with(base, "add") && !starts_with(base, "sub") && !starts_with(base, "mul") { base = base[1..]; }   // sadd, umul, ...
     if starts_with(base, "add") { opk = 0; } else if starts_with(base, "sub") { opk = 1; } else { opk = 2; }
     let qa = nty(a0);
     let qb = nty(a1);

@@ -114,6 +114,8 @@ fn main() {
         else if s == "-fPIC" || s == "-fpic" { gen::opt_pic = true; gen::opt_pie = false; }
         else if s == "-fPIE" || s == "-fpie" { gen::opt_pic = false; gen::opt_pie = true; }
         else if s == "-fno-pic" || s == "-fno-PIC" || s == "-fno-pie" || s == "-fno-PIE" { gen::opt_pic = false; }
+        else if s == "-fno-builtin" { gen::opt_no_builtin = true; }
+        else if starts_with(s, "-fno-builtin-") { gen::no_builtin_opts.push(name_add(s[13..])); gen::no_builtin_opts.push((s.len - 13) as! u32); }
         else if s == "-fcommon" { gen::opt_common = true; }
         else if s == "-fno-common" { gen::opt_common = false; }
         else if s == "--time" { opt_time = true; }

@@ -39,6 +39,7 @@ var lower_us: i64 = 0;
 // Lowers the translation unit; false on errors.
 fn lower_tu(main_file: const u8[:]) -> bool {
     ir_init();
+    init_no_builtin();
     dbg_init(main_file);
     ensure_sym_tables();
     while sym_init.len < syms.len { sym_init.push(0); sym_decl.push(0); }

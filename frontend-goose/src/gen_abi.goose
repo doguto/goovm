@@ -382,6 +382,10 @@ fn abi_of_classes(q: u32, lo: i64, hi: i64, is_ret: bool) -> Abi, i64, i64 {
 fn ret_abi(q: u32) -> Abi {
     if is_void(q) { return abi_ignore(); }
     let lo, hi = classify(q, 0);
+    if lo == CL_MEM && is_vector(q) {
+        // getIndirectReturnResult: a vector is not an aggregate, LLVM returns it in registers
+        return direct(q);
+    }
     if lo == CL_MEM {
         return Abi { kind: AK_SRET, ext: 0, n: 0, tmp: 0, t0: GIR_T_PTR, t1: 0, off0: 0, off1: 0, size: csize(q) as! u32,
             align: calign(q) as! u32 };

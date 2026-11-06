@@ -385,20 +385,30 @@ fn gpr_name(r: i32, size: u32) -> const u8[:] {
 
 // ------------------------------------------------------------ the assembler
 
-// One statement per line (or ';'): mnemonic and up to two AT&T operands.
+// One statement per line (or ';'): an AT&T mnemonic and up to two operands
+// (registers, $immediates, disp(%base,%index,scale) memory).
 fn assemble(text: const u8[:]) -> bool {
     var i = 0;
     while i < text.len {
         var e = i;
         while e < text.len && text[e] != '\n' && text[e] != ';' { e++; }
-        let line = trim(text[i..e]);
+        var line = trim(text[i..e]);
         i = e + 1;
+        // comments
+        var h = 0;
+        while h < line.len && line[h] != '#' { h++; }
+        line = trim(line[..h]);
         if line.len == 0 { continue; }
-        if line[0] == '#' { continue; }
+        if line[line.len - 1] == ':' { continue; }
         if !asm_line(line) { return false; }
     }
     return true;
 }
+
+// An operand: kind 0 none, 1 GPR, 2 xmm, 3 x87, 4 immediate, 5 memory.
+struct AOp { kind: u8, reg: i32, size: u32, imm: i64, base: i32, index: i32, scale: u32, disp: i64 }
+
+fn aop_none() -> AOp { AOp { kind: 0, reg: -1, size: 0, imm: 0, base: -1, index: -1, scale: 1, disp: 0 } }
 
 fn parse_reg(s: const u8[:]) -> i32, u32 {
     if s.len < 2 || s[0] != '%' { return -1, 0; }
@@ -409,21 +419,172 @@ fn parse_reg(s: const u8[:]) -> i32, u32 {
         if nm == GPR16[k] { return k as! i32, 2; }
         if nm == GPR8[k] { return k as! i32, 1; }
     }
+    if nm == "ah" { return 4, 1; }
+    if nm == "ch" { return 5, 1; }
+    if nm == "dh" { return 6, 1; }
+    if nm == "bh" { return 7, 1; }
     return -1, 0;
 }
 
-fn rex(w: bool, r: i32, b: i32) {
-    var x: u8 = 0x40;
-    if w { x = x | 8; }
-    if r >= 8 { x = x | 4; }
-    if b >= 8 { x = x | 1; }
-    if x != 0x40 { asm_code.push(x); }
+fn parse_int(s: const u8[:]) -> bool, i64 {
+    var t = trim(s);
+    var neg = false;
+    if t.len > 0 && t[0] == '-' { neg = true; t = t[1..]; }
+    if t.len == 0 { return false, 0; }
+    var v: u64 = 0;
+    var base: u64 = 10;
+    var i = 0;
+    if t.len > 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X') { base = 16; i = 2; }
+    while i < t.len {
+        let c = t[i];
+        var d: u64 = 99;
+        if c >= '0' && c <= '9' { d = (c - '0') as u64; }
+        else if c >= 'a' && c <= 'f' { d = (c - 'a') as u64 + 10; }
+        else if c >= 'A' && c <= 'F' { d = (c - 'A') as u64 + 10; }
+        if d >= base { return false, 0; }
+        v = v * base + d;
+        i++;
+    }
+    let r = v as! i64;
+    return true, if neg { 0 - r } else { r };
+}
+
+fn parse_aop(s0: const u8[:]) -> bool, AOp {
+    let s = trim(s0);
+    var o = aop_none();
+    if s.len == 0 { return true, o; }
+    if s[0] == '$' {
+        let ok, v = parse_int(s[1..]);
+        o.kind = 4;
+        o.imm = v;
+        return ok, o;
+    }
+    if s[0] == '%' {
+        let r, sz = parse_reg(s);
+        if r >= 0 { o.kind = 1; o.reg = r; o.size = sz; return true, o; }
+        if starts_with(s, "%xmm") {
+            let ok, k = parse_int(s[4..]);
+            o.kind = 2;
+            o.reg = k as! i32;
+            o.size = 16;
+            return ok, o;
+        }
+        if s == "%st" || s == "%st(0)" { o.kind = 3; o.reg = 0; return true, o; }
+        if starts_with(s, "%st(") && s.len == 6 { o.kind = 3; o.reg = (s[4] - '0') as i32; return true, o; }
+        return false, o;
+    }
+    // memory: disp(%base,%index,scale)
+    var p = 0;
+    while p < s.len && s[p] != '(' { p++; }
+    o.kind = 5;
+    if p > 0 {
+        let ok, d = parse_int(s[..p]);
+        if !ok { return false, o; }
+        o.disp = d;
+    }
+    if p >= s.len { return false, o; }
+    var q = p + 1;
+    var e = q;
+    while e < s.len && s[e] != ',' && s[e] != ')' { e++; }
+    if e > q {
+        let r, sz = parse_reg(s[q..e]);
+        if r < 0 || sz != 8 { return false, o; }
+        o.base = r;
+    }
+    if e < s.len && s[e] == ',' {
+        q = e + 1;
+        e = q;
+        while e < s.len && s[e] != ',' && s[e] != ')' { e++; }
+        let r, sz = parse_reg(s[q..e]);
+        if r < 0 || sz != 8 { return false, o; }
+        o.index = r;
+        if e < s.len && s[e] == ',' {
+            q = e + 1;
+            e = q;
+            while e < s.len && s[e] != ')' { e++; }
+            let ok, sc = parse_int(s[q..e]);
+            if !ok { return false, o; }
+            o.scale = sc as! u32;
+        }
+    }
+    return true, o;
+}
+
+fn needs_rex8(o: AOp) -> bool { o.kind == 1 && o.size == 1 && o.reg >= 4 && o.reg < 8 && false }
+
+// REX + opcode bytes + ModRM (+ SIB, disp) for reg field `reg` and r/m operand rm.
+fn enc(w: bool, size16: bool, reg: i32, rm: AOp, opc: const u8[:], byte_regs: bool) {
+    if size16 { asm_code.push(0x66); }
+    var rx: u8 = 0x40;
+    if w { rx = rx | 8; }
+    if reg >= 8 { rx = rx | 4; }
+    if rm.kind == 5 {
+        if rm.index >= 8 { rx = rx | 2; }
+        if rm.base >= 8 { rx = rx | 1; }
+    } else if rm.reg >= 8 { rx = rx | 1; }
+    if rx != 0x40 || byte_regs { asm_code.push(rx); }
+    asm_code.append(opc);
+    let r3 = ((reg & 7) << 3) as! u8;
+    if rm.kind != 5 {
+        asm_code.push(0xC0 | r3 | ((rm.reg & 7) as! u8));
+        return;
+    }
+    let d = rm.disp;
+    let b = rm.base;
+    var md: u8 = 0;
+    if b < 0 {
+        // no base: SIB with base 101 and disp32
+        asm_code.push(r3 | 4);
+        let ix = if rm.index >= 0 { (rm.index & 7) as! u8 } else { 4 };
+        asm_code.push((scale_bits(rm.scale) << 6) | (ix << 3) | 5);
+        for k in 4 { asm_code.push(((d >> (8 * k)) & 255) as! u8); }
+        return;
+    }
+    if d == 0 && (b & 7) != 5 { md = 0; } else if d >= -128 && d <= 127 { md = 0x40; } else { md = 0x80; }
+    if rm.index >= 0 || (b & 7) == 4 {
+        asm_code.push(md | r3 | 4);
+        let ix = if rm.index >= 0 { (rm.index & 7) as! u8 } else { 4 };
+        asm_code.push((scale_bits(rm.scale) << 6) | (ix << 3) | ((b & 7) as! u8));
+    } else {
+        asm_code.push(md | r3 | ((b & 7) as! u8));
+    }
+    if md == 0x40 { asm_code.push((d & 255) as! u8); }
+    if md == 0x80 { for k in 4 { asm_code.push(((d >> (8 * k)) & 255) as! u8); } }
+}
+
+fn scale_bits(s: u32) -> u8 { if s == 2 { 1 } else if s == 4 { 2 } else if s == 8 { 3 } else { 0 } }
+
+fn imm_bytes(v: i64, n: u32) { for k in n { asm_code.push(((v >> (8 * k)) & 255) as! u8); } }
+
+let ALU_NAMES = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
+
+fn suffix_size(mn: const u8[:], base: const u8[:]) -> u32 {
+    if mn.len == base.len + 1 {
+        let c = mn[mn.len - 1];
+        if c == 'b' { return 1; }
+        if c == 'w' { return 2; }
+        if c == 'l' { return 4; }
+        if c == 'q' { return 8; }
+    }
+    return 0;
+}
+
+// Splits a mnemonic into its base and operand size suffix (0 = none).
+fn mn_split(mn: const u8[:]) -> const u8[:], u32 {
+    let bases = ["mov", "add", "or", "adc", "sbb", "and", "sub", "xor", "cmp", "test", "xchg", "lea", "inc", "dec",
+        "neg", "not", "mul", "imul", "div", "idiv", "shl", "shr", "sar", "sal", "rol", "ror", "bsr", "bsf", "bswap", "push", "pop"];
+    for b in bases {
+        if mn == b { return mn, 0; }
+        let sz = suffix_size(mn, b);
+        if sz != 0 && starts_with(mn, b) { return b, sz; }
+    }
+    return mn, 0;
 }
 
 fn asm_line(line: const u8[:]) -> bool {
     var sp = 0;
     while sp < line.len && line[sp] != ' ' && line[sp] != '\t' { sp++; }
-    let mn = line[..sp];
+    let mn0 = line[..sp];
     let rest = trim(line[sp..]);
     var op1: const u8[:] = "";
     var op2: const u8[:] = "";
@@ -437,78 +598,204 @@ fn asm_line(line: const u8[:]) -> bool {
         }
         if cut >= 0 { op1 = trim(rest[..cut]); op2 = trim(rest[cut + 1..]); } else { op1 = rest; }
     }
-    if mn == "rdtsc" || mn == "RDTSC" { asm_code.push(0x0F); asm_code.push(0x31); return true; }
-    if mn == "rdtscp" { asm_code.push(0x0F); asm_code.push(0x01); asm_code.push(0xF9); return true; }
-    if mn == "cpuid" { asm_code.push(0x0F); asm_code.push(0xA2); return true; }
-    if mn == "nop" { asm_code.push(0x90); return true; }
-    if mn == "pause" { asm_code.push(0xF3); asm_code.push(0x90); return true; }
-    if mn == "mfence" { asm_code.push(0x0F); asm_code.push(0xAE); asm_code.push(0xF0); return true; }
-    if mn == "lfence" { asm_code.push(0x0F); asm_code.push(0xAE); asm_code.push(0xE8); return true; }
-    if mn == "sfence" { asm_code.push(0x0F); asm_code.push(0xAE); asm_code.push(0xF8); return true; }
-    if mn == "fsqrt" { asm_code.push(0xD9); asm_code.push(0xFA); return true; }
-    if mn == "fpatan" { asm_code.push(0xD9); asm_code.push(0xF3); return true; }
-    if mn == "fsin" { asm_code.push(0xD9); asm_code.push(0xFE); return true; }
-    if mn == "fcos" { asm_code.push(0xD9); asm_code.push(0xFF); return true; }
-    if mn == "fabs" { asm_code.push(0xD9); asm_code.push(0xE1); return true; }
-    if mn == "fchs" { asm_code.push(0xD9); asm_code.push(0xE0); return true; }
-    if mn == "ud2" { asm_code.push(0x0F); asm_code.push(0x0B); return true; }
-    if mn == "int3" { asm_code.push(0xCC); return true; }
-    // one-register forms: mul / imul / div / idiv / neg / not / inc / dec / bswap
-    let r1, s1 = parse_reg(op1);
-    if op2.len == 0 && r1 >= 0 {
-        let base = strip_suffix(mn);
+    // no operands
+    if mn0 == "rdtsc" || mn0 == "RDTSC" { asm_code.push(0x0F); asm_code.push(0x31); return true; }
+    if mn0 == "rdtscp" { asm_code.push(0x0F); asm_code.push(0x01); asm_code.push(0xF9); return true; }
+    if mn0 == "cpuid" { asm_code.push(0x0F); asm_code.push(0xA2); return true; }
+    if mn0 == "nop" { asm_code.push(0x90); return true; }
+    if mn0 == "pause" { asm_code.push(0xF3); asm_code.push(0x90); return true; }
+    if mn0 == "mfence" { asm_code.push(0x0F); asm_code.push(0xAE); asm_code.push(0xF0); return true; }
+    if mn0 == "lfence" { asm_code.push(0x0F); asm_code.push(0xAE); asm_code.push(0xE8); return true; }
+    if mn0 == "sfence" { asm_code.push(0x0F); asm_code.push(0xAE); asm_code.push(0xF8); return true; }
+    if mn0 == "ud2" { asm_code.push(0x0F); asm_code.push(0x0B); return true; }
+    if mn0 == "int3" { asm_code.push(0xCC); return true; }
+    if mn0 == "cltd" || mn0 == "cdq" { asm_code.push(0x99); return true; }
+    if mn0 == "cqto" || mn0 == "cqo" { asm_code.push(0x48); asm_code.push(0x99); return true; }
+    if mn0 == "cltq" || mn0 == "cdqe" { asm_code.push(0x48); asm_code.push(0x98); return true; }
+    if mn0 == "clc" { asm_code.push(0xF8); return true; }
+    if mn0 == "stc" { asm_code.push(0xF9); return true; }
+    if mn0 == "cld" { asm_code.push(0xFC); return true; }
+    if mn0 == "fsqrt" { asm_code.push(0xD9); asm_code.push(0xFA); return true; }
+    if mn0 == "fpatan" { asm_code.push(0xD9); asm_code.push(0xF3); return true; }
+    if mn0 == "fptan" { asm_code.push(0xD9); asm_code.push(0xF2); return true; }
+    if mn0 == "fsin" { asm_code.push(0xD9); asm_code.push(0xFE); return true; }
+    if mn0 == "fcos" { asm_code.push(0xD9); asm_code.push(0xFF); return true; }
+    if mn0 == "fsincos" { asm_code.push(0xD9); asm_code.push(0xFB); return true; }
+    if mn0 == "fabs" { asm_code.push(0xD9); asm_code.push(0xE1); return true; }
+    if mn0 == "fchs" { asm_code.push(0xD9); asm_code.push(0xE0); return true; }
+    if mn0 == "fld1" { asm_code.push(0xD9); asm_code.push(0xE8); return true; }
+    if mn0 == "fldz" { asm_code.push(0xD9); asm_code.push(0xEE); return true; }
+    if mn0 == "frndint" { asm_code.push(0xD9); asm_code.push(0xFC); return true; }
+    if mn0 == "fscale" { asm_code.push(0xD9); asm_code.push(0xFD); return true; }
+    if mn0 == "f2xm1" { asm_code.push(0xD9); asm_code.push(0xF0); return true; }
+    if mn0 == "fyl2x" { asm_code.push(0xD9); asm_code.push(0xF1); return true; }
+    if mn0 == "fprem" { asm_code.push(0xD9); asm_code.push(0xF8); return true; }
+    if mn0 == "fxch" && op1.len == 0 { asm_code.push(0xD9); asm_code.push(0xC9); return true; }
+    let ok1, a = parse_aop(op1);
+    let ok2, b = parse_aop(op2);
+    if !ok1 || !ok2 { return false; }
+    // SSE scalar / packed arithmetic: xmm or memory -> xmm
+    let sse = sse_opcode(mn0);
+    if sse >= 0 && b.kind == 2 && (a.kind == 2 || a.kind == 5) {
+        let pfx = (sse >> 8) & 255;
+        if pfx != 0 { asm_code.push(pfx as! u8); }
+        let opc: u8[2] = [0x0F, (sse & 255) as! u8];
+        enc(false, false, b.reg, a, opc, false);
+        return true;
+    }
+    let mn, sfx = mn_split(mn0);
+    var size = sfx;
+    if size == 0 { size = if b.kind == 1 { b.size } else if a.kind == 1 { a.size } else { 4 }; }
+    let w = size == 8;
+    let s16 = size == 2;
+    let byte = size == 1;
+    let br = byte && ((a.kind == 1 && a.reg >= 4 && a.reg < 8 && op1.len > 2 && op1[op1.len - 1] == 'l') ||
+        (b.kind == 1 && b.reg >= 4 && b.reg < 8 && op2.len > 2 && op2[op2.len - 1] == 'l'));
+    // one operand
+    if op2.len == 0 && (a.kind == 1 || a.kind == 5) {
         var ext: i32 = -1;
-        if base == "mul" { ext = 4; } else if base == "imul" { ext = 5; } else if base == "div" { ext = 6; }
-        else if base == "idiv" { ext = 7; } else if base == "neg" { ext = 3; } else if base == "not" { ext = 2; }
+        var opc: u8 = 0;
+        if mn == "inc" { ext = 0; opc = if byte { 0xFE } else { 0xFF }; }
+        else if mn == "dec" { ext = 1; opc = if byte { 0xFE } else { 0xFF }; }
+        else if mn == "not" { ext = 2; opc = if byte { 0xF6 } else { 0xF7 }; }
+        else if mn == "neg" { ext = 3; opc = if byte { 0xF6 } else { 0xF7 }; }
+        else if mn == "mul" { ext = 4; opc = if byte { 0xF6 } else { 0xF7 }; }
+        else if mn == "imul" { ext = 5; opc = if byte { 0xF6 } else { 0xF7 }; }
+        else if mn == "div" { ext = 6; opc = if byte { 0xF6 } else { 0xF7 }; }
+        else if mn == "idiv" { ext = 7; opc = if byte { 0xF6 } else { 0xF7 }; }
         if ext >= 0 {
-            if s1 == 2 { asm_code.push(0x66); }
-            rex(s1 == 8, 0, r1);
-            asm_code.push(if s1 == 1 { 0xF6 } else { 0xF7 });
-            asm_code.push((0xC0 | (ext << 3) | (r1 & 7)) as! u8);
+            let o: u8[1] = [opc];
+            enc(w, s16, ext, a, o, br);
             return true;
         }
-        if base == "inc" || base == "dec" {
-            if s1 == 2 { asm_code.push(0x66); }
-            rex(s1 == 8, 0, r1);
-            asm_code.push(if s1 == 1 { 0xFE } else { 0xFF });
-            asm_code.push((0xC0 | (if base == "inc" { 0 } else { 8 }) | (r1 & 7)) as! u8);
-            return true;
-        }
-        if base == "bswap" {
-            rex(s1 == 8, 0, r1);
+        if mn == "bswap" && a.kind == 1 {
+            if a.reg >= 8 || w { asm_code.push((0x40 | (if w { 8 } else { 0 }) | (if a.reg >= 8 { 1 } else { 0 })) as! u8); }
             asm_code.push(0x0F);
-            asm_code.push((0xC8 + (r1 & 7)) as! u8);
+            asm_code.push((0xC8 + (a.reg & 7)) as! u8);
             return true;
         }
     }
-    // register-register ALU / mov
-    let r2, s2 = parse_reg(op2);
-    if r1 >= 0 && r2 >= 0 {
-        let base = strip_suffix(mn);
-        var opc: i32 = -1;
-        if base == "mov" { opc = 0x89; } else if base == "add" { opc = 0x01; } else if base == "sub" { opc = 0x29; }
-        else if base == "and" { opc = 0x21; } else if base == "or" { opc = 0x09; } else if base == "xor" { opc = 0x31; }
-        else if base == "cmp" { opc = 0x39; } else if base == "test" { opc = 0x85; } else if base == "adc" { opc = 0x11; }
-        else if base == "sbb" { opc = 0x19; } else if base == "xchg" { opc = 0x87; }
-        if opc >= 0 {
-            if s2 == 2 { asm_code.push(0x66); }
-            rex(s2 == 8, r1, r2);
-            asm_code.push((if s2 == 1 { opc - 1 } else { opc }) as! u8);
-            asm_code.push((0xC0 | ((r1 & 7) << 3) | (r2 & 7)) as! u8);
+    if op2.len == 0 { return false; }
+    // shifts: $imm or %cl
+    if mn == "shl" || mn == "sal" || mn == "shr" || mn == "sar" || mn == "rol" || mn == "ror" {
+        let ext: i32 = if mn == "shl" || mn == "sal" { 4 } else if mn == "shr" { 5 } else if mn == "sar" { 7 } else if mn == "rol" { 0 } else { 1 };
+        if a.kind == 4 {
+            let o: u8[1] = [if byte { 0xC0 } else { 0xC1 }];
+            enc(w, s16, ext, b, o, br);
+            asm_code.push((a.imm & 255) as! u8);
+            return true;
+        }
+        if a.kind == 1 && a.reg == 1 && a.size == 1 {
+            let o: u8[1] = [if byte { 0xD2 } else { 0xD3 }];
+            enc(w, s16, ext, b, o, br);
+            return true;
+        }
+        return false;
+    }
+    if mn == "lea" && a.kind == 5 && b.kind == 1 {
+        let o: u8[1] = [0x8D];
+        enc(w, s16, b.reg, a, o, false);
+        return true;
+    }
+    if (mn == "bsr" || mn == "bsf") && b.kind == 1 && (a.kind == 1 || a.kind == 5) {
+        let o: u8[2] = [0x0F, if mn == "bsr" { 0xBD } else { 0xBC }];
+        enc(w, s16, b.reg, a, o, false);
+        return true;
+    }
+    if mn == "imul" && a.kind != 4 && b.kind == 1 {
+        let o: u8[2] = [0x0F, 0xAF];
+        enc(w, s16, b.reg, a, o, false);
+        return true;
+    }
+    var alu: i32 = -1;
+    for nm, k in ALU_NAMES { if mn == nm { alu = k as! i32; } }
+    if mn == "mov" || mn == "test" || mn == "xchg" || alu >= 0 {
+        // immediate source
+        if a.kind == 4 {
+            if mn == "mov" {
+                if b.kind == 1 && !w {
+                    if s16 { asm_code.push(0x66); }
+                    if b.reg >= 8 || br { asm_code.push((0x40 | (if b.reg >= 8 { 1 } else { 0 })) as! u8); }
+                    let base_op: i32 = if byte { 0xB0 } else { 0xB8 };
+                    asm_code.push((base_op + (b.reg & 7)) as! u8);
+                    imm_bytes(a.imm, size);
+                    return true;
+                }
+                let o: u8[1] = [if byte { 0xC6 } else { 0xC7 }];
+                enc(w, s16, 0, b, o, br);
+                imm_bytes(a.imm, if byte { 1 } else if s16 { 2 } else { 4 });
+                return true;
+            }
+            if mn == "test" {
+                let o: u8[1] = [if byte { 0xF6 } else { 0xF7 }];
+                enc(w, s16, 0, b, o, br);
+                imm_bytes(a.imm, if byte { 1 } else if s16 { 2 } else { 4 });
+                return true;
+            }
+            if alu >= 0 {
+                if byte {
+                    let o: u8[1] = [0x80];
+                    enc(false, false, alu, b, o, br);
+                    imm_bytes(a.imm, 1);
+                } else if a.imm >= -128 && a.imm <= 127 {
+                    let o: u8[1] = [0x83];
+                    enc(w, s16, alu, b, o, br);
+                    imm_bytes(a.imm, 1);
+                } else {
+                    let o: u8[1] = [0x81];
+                    enc(w, s16, alu, b, o, br);
+                    imm_bytes(a.imm, if s16 { 2 } else { 4 });
+                }
+                return true;
+            }
+            return false;
+        }
+        let base: u8 = if mn == "mov" { 0x88 } else if mn == "test" { 0x84 } else if mn == "xchg" { 0x86 } else { ((alu as u32) * 8) as! u8 };
+        if a.kind == 1 && (b.kind == 1 || b.kind == 5) {
+            // reg -> r/m
+            let o: u8[1] = [if byte { base } else { base + 1 }];
+            enc(w, s16, a.reg, b, o, br);
+            return true;
+        }
+        if a.kind == 5 && b.kind == 1 && mn != "test" {
+            // r/m -> reg
+            let o: u8[1] = [if mn == "xchg" { if byte { base } else { base + 1 } } else if byte { base + 2 } else { base + 3 }];
+            enc(w, s16, b.reg, a, o, br);
             return true;
         }
     }
     return false;
 }
 
-fn strip_suffix(mn: const u8[:]) -> const u8[:] {
-    if mn.len > 2 {
-        let c = mn[mn.len - 1];
-        let b = mn[..mn.len - 1];
-        if (c == 'l' || c == 'q' || c == 'w' || c == 'b') &&
-           (b == "mul" || b == "imul" || b == "div" || b == "idiv" || b == "neg" || b == "not" || b == "inc" || b == "dec" ||
-            b == "mov" || b == "add" || b == "sub" || b == "and" || b == "or" || b == "xor" || b == "cmp" || b == "test" ||
-            b == "adc" || b == "sbb" || b == "xchg" || b == "bswap") { return b; }
-    }
-    return mn;
+// SSE instructions xmm/m -> xmm: (prefix << 8) | opcode, or -1.
+fn sse_opcode(mn: const u8[:]) -> i32 {
+    if mn == "addsd" { return 0xF258; }
+    if mn == "subsd" { return 0xF25C; }
+    if mn == "mulsd" { return 0xF259; }
+    if mn == "divsd" { return 0xF25E; }
+    if mn == "sqrtsd" { return 0xF251; }
+    if mn == "minsd" { return 0xF25D; }
+    if mn == "maxsd" { return 0xF25F; }
+    if mn == "movsd" { return 0xF210; }
+    if mn == "addss" { return 0xF358; }
+    if mn == "subss" { return 0xF35C; }
+    if mn == "mulss" { return 0xF359; }
+    if mn == "divss" { return 0xF35E; }
+    if mn == "sqrtss" { return 0xF351; }
+    if mn == "movss" { return 0xF310; }
+    if mn == "addps" { return 0x58; }
+    if mn == "mulps" { return 0x59; }
+    if mn == "subps" { return 0x5C; }
+    if mn == "divps" { return 0x5E; }
+    if mn == "xorps" { return 0x57; }
+    if mn == "andps" { return 0x54; }
+    if mn == "orps" { return 0x56; }
+    if mn == "movaps" { return 0x28; }
+    if mn == "movups" { return 0x10; }
+    if mn == "addpd" { return 0x6658; }
+    if mn == "mulpd" { return 0x6659; }
+    if mn == "xorpd" { return 0x6657; }
+    if mn == "ucomisd" { return 0x662E; }
+    if mn == "ucomiss" { return 0x2E; }
+    return -1;
 }

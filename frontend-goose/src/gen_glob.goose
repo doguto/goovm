@@ -570,6 +570,14 @@ recursive fn sinit_scalar(g: u32, at: i64, off: i64, q: u32, n: u32) {
     let k = kind_of(q);
     let size = type_size(q);
     if is_real_float(q) {
+        if nkind(n) == N_BUILTIN && nodes[n].op == BI_CALL && starts_with(strip_builtin(sym_name(nodes[n].a as i64)), "nan") &&
+           unqual(nty(n)) == unqual(q) && k != TY_LDOUBLE {
+            // NaN bits as written (a signaling NaN must not pass through the x87)
+            let nn = strip_builtin(sym_name(nodes[n].a as i64));
+            let c = fp_nan_const(vty(unqual(q)), !starts_with(nn, "nans"), nan_payload(barg(n, 0)));
+            put_bytes(at, m_consts[cidx(c)].lo, size);
+            return;
+        }
         let ok, x = static_f80(n);
         if !ok {
             init_error(n);
@@ -728,7 +736,7 @@ recursive fn static_f80(n: u32) -> bool, F80 {
     }
     if k == N_ICAST || k == N_CAST {
         let op = nd.op as i64;
-        if op == CK_INT2FLOAT || op == CK_FLOATCAST || op == CK_NOOP {
+        if op == CK_INT2FLOAT || op == CK_FLOATCAST || op == CK_NOOP || op == CK_ATOMIC {
             let ok, x = static_f80(nd.a);
             if !ok { return false, z; }
             return true, round_to(x, nd.ty);
@@ -760,6 +768,37 @@ recursive fn static_f80(n: u32) -> bool, F80 {
         if !ok { return false, z; }
         if c { return static_f80(if nd.b == 0 { nd.a } else { nd.b }); }
         return static_f80(nd.c);
+    }
+    if k == N_BUILTIN && nd.op == BI_CALL { return static_fp_builtin(n); }
+    return false, z;
+}
+
+// __builtin_inf / nan / copysign / fabs in static initializers.
+recursive fn static_fp_builtin(n: u32) -> bool, F80 {
+    let nd = nodes[n];
+    let z = F80 { lo: 0, hi: 0 };
+    let name = strip_builtin(sym_name(nd.a as i64));
+    let t = vty(unqual(nd.ty));
+    if starts_with(name, "inf") || starts_with(name, "huge_val") {
+        if t == GIR_T_F80 { return true, F80 { lo: 0x8000000000000000, hi: 0x7FFF }; }
+        return true, f64_to_f80(reinterpret_f64(0x7FF0000000000000));
+    }
+    if starts_with(name, "nan") {
+        let quiet = !starts_with(name, "nans");
+        let c = fp_nan_const(t, quiet, nan_payload(barg(n, 0)));
+        let cc = m_consts[cidx(c)];
+        if t == GIR_T_F80 { return true, F80 { lo: cc.lo, hi: cc.hi }; }
+        if t == GIR_T_F32 { return true, f64_to_f80(f32bits_to_f64(cc.lo as! u32)); }
+        return true, f64_to_f80(reinterpret_f64(cc.lo as! i64));
+    }
+    if starts_with(name, "fabs") {
+        let ok, x = static_f80(barg(n, 0));
+        return ok, F80 { lo: x.lo, hi: x.hi & 0x7FFF };
+    }
+    if starts_with(name, "copysign") {
+        let ok, x = static_f80(barg(n, 0));
+        let ok2, y = static_f80(barg(n, 1));
+        return ok && ok2, F80 { lo: x.lo, hi: (x.hi & 0x7FFF) | (y.hi & 0x8000) };
     }
     return false, z;
 }
@@ -842,11 +881,14 @@ recursive fn static_cplx_or_real(n: u32) -> bool, F80, F80 {
 recursive fn fold_int128(n: u32) -> bool, u64, u64 {
     let nd = nodes[n];
     let k = nd.kind as i64;
-    let ok, v = fold_int(n);
-    if ok {
-        let src_t = nty(n);
-        if (kind_of(src_t) == TY_UINT128) && false { return true, v as! u64, 0; }
-        return true, v as! u64, if v < 0 && !(kind_of(src_t) == TY_UINT128) { 0xFFFFFFFFFFFFFFFF } else { 0 };
+    let tk = kind_of(nty(n));
+    let wide = tk == TY_INT128 || tk == TY_UINT128;
+    if !wide || k == N_INT {
+        // fold_int is exact for types of 64 bits or less (and for literals)
+        let ok, v = fold_int(n);
+        if !ok { return false, 0, 0; }
+        let signed = tk != TY_BOOL && is_signed(nty(n));
+        return true, v as! u64, if v < 0 && (signed || k == N_INT) { 0xFFFFFFFFFFFFFFFF } else { 0 };
     }
     if k == N_ICAST || k == N_CAST {
         if nd.op == CK_INTEGRAL || nd.op == CK_NOOP {

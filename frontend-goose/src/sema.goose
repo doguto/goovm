@@ -698,7 +698,7 @@ recursive fn fold_float(n: u32) -> bool, f64 {
     if k == N_UNARY {
         let ok, f = fold_float(nd.a);
         if !ok { return false, 0.0; }
-        if nd.op == U_NEG { return true, 0.0 - f; }
+        if nd.op == U_NEG { return true, -f; }
         if nd.op == U_PLUS || nd.op == U_EXTENSION { return true, f; }
         return false, 0.0;
     }

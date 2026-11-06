@@ -215,7 +215,9 @@ recursive fn gen_return(n: u32) {
     let e = nd.a;
     let a = f_ret;
     if a.kind == AK_SRET {
-        if e != 0 {
+        if e != 0 && vkind(f_ret_q) != VK_AGG {
+            store_any(f_ret_q, e, f_sret);
+        } else if e != 0 {
             let k = nkind(e);
             if k == N_CALL || k == N_STMTEXPR || k == N_COND {
                 ex_agg(e, f_sret);

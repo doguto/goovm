@@ -377,14 +377,15 @@ recursive fn gen_switch(n: u32) {
             }
             continue;
         }
-        op_ref(case_const(lo, t, cq));
+        op_ref(case_value(cn, t, cq));
         op_blk(b);
         np++;
     }
     if is_const(v) {
         // a constant condition: still a switch (the back-end compares)
     }
-    emit_term(GIR_SWITCH, v, s, np);
+    emit(GIR_SWITCH, GIR_T_VOID, 0, 0, t, v, s, np);
+    cur_blk = -1;
     let sw_t = t;
     if range_checks {
         start_block(dtarget);
@@ -410,6 +411,16 @@ recursive fn gen_switch(n: u32) {
     brk_depth.pop();
     if has_insert() { br(end); }
     start_block(end);
+}
+
+// A case value: 128-bit ones are refolded from the case expression.
+fn case_value(cn: u32, t: u32, cq: u32) -> u32 {
+    let nd = nodes[cn];
+    if tcls(t) == C_INT2 && nd.b != 0 {
+        let ok, lo, hi = fold_int128(nd.b);
+        if ok { return c_wide(lo, hi, t); }
+    }
+    return case_const(nd.v, t, cq);
 }
 
 fn case_const(v: i64, t: u32, cq: u32) -> u32 {
@@ -471,7 +482,13 @@ recursive fn gen_local_decl(n: u32) {
         p = alloca(type_size(q), local_align(s, q));
         sym_addr[s] = p;
     }
-    if nd.b != 0 { init_object(p, q, nd.b); }
+    if nd.b != 0 {
+        init_object(p, q, nd.b);
+        if quals(q) & Q_CONST != 0 && is_pointer(q) {
+            while local_init.len <= s { local_init.push(0); }
+            local_init[s] = nd.b;
+        }
+    }
     let a = sy.attr;
     if a != 0 && sym_attrs[a].cleanup >= 0 {
         cleanups.push(Cleanup { kind: 2, val: 0, sym: s, fsym: sym_attrs[a].cleanup as i64 });

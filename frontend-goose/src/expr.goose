@@ -169,7 +169,7 @@ fn float_literal(s: const u8[:], loc: u32, hex: bool, off: u32) -> u32 {
     }
     if kind_of(ty) == TY_FLOAT { v = round_f32(v); }
     // b, c: the literal's text without suffix (B2 lowering converts it exactly)
-    var n = node_v(N_FLOAT, 0, ty, off as i64, e, 0, loc, reinterpret_i64(v));
+    var n = node_v(N_FLOAT, 0, ty, 0, off as i64, e, loc, reinterpret_i64(v));
     if imag {
         n = node(N_BUILTIN, BI_IMAG_CONST, mk_complex(ty), n as i64, 0, 0, loc);
     }
