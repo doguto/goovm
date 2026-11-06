@@ -110,7 +110,7 @@ var id_pragma_op: u32 = 0;
 // ---------------------------------------------------------------------------
 // Token buffers.
 
-fn buf_get(b: u8, i: i64) -> Tok {
+inline fn buf_get(b: u8, i: i64) -> Tok {
     if b == BUF_XBUF { return xbuf[i]; }
     if b == BUF_MTOKS { return mtoks[i]; }
     if b == BUF_ARGS { return argtoks[i]; }
