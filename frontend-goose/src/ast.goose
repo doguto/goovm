@@ -56,8 +56,10 @@ let N_CONTINUE = 53;
 let N_RETURN = 54;      // a = expression (converted to the return type) or 0
 let N_EXPR = 55;        // a = expression
 let N_NULL = 56;
-let N_ASM = 57;         // a = template string, v/c = operands in nlist (N_ASMOP)
-let N_ASMOP = 58;       // a = constraint string, b = expression, op = 1 output / 2 clobber / 3 label
+let N_ASM = 57;         // a = template string, v/c = operands in nlist (N_ASMOP);
+                        // op bits: 1 goto, 2 volatile, 4 inline, 8 file-scope asm
+let N_ASMOP = 58;       // op = 1 output / 2 input (a = constraint string, b = expression as written),
+                        // 3 clobber (a = string), 4 label (a = label symbol)
 let N_FUNCDEF = 60;     // a = symbol, b = body, v = first param symbol in nlist, c = count
 let N_TU = 61;          // v = first top-level item in nlist, c = count
 let N_TYPEDEF = 62;     // a = symbol

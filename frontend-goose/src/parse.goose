@@ -1905,9 +1905,11 @@ recursive fn parse_stmt() -> u32 {
 recursive fn parse_asm_stmt() -> u32 {
     let loc = tloc();
     adv();
-    var is_goto = false;
+    var quals_bits = 0;     // 1 goto, 2 volatile, 4 inline
     while at_kw(KW_VOLATILE) || at_kw(KW_INLINE) || at_kw(KW_GOTO) {
-        if at_kw(KW_GOTO) { is_goto = true; }
+        if at_kw(KW_GOTO) { quals_bits = quals_bits | 1; }
+        if at_kw(KW_VOLATILE) { quals_bits = quals_bits | 2; }
+        if at_kw(KW_INLINE) { quals_bits = quals_bits | 4; }
         adv();
     }
     expect(TK_L_PAREN, "'('");
@@ -1955,7 +1957,7 @@ recursive fn parse_asm_stmt() -> u32 {
     expect(TK_SEMI, "';' after asm statement");
     let count = nscratch.len - mark;
     let start = commit_list(mark);
-    return node_v(N_ASM, if is_goto { 1 } else { 0 }, 0, tmpl as i64, 0, count, loc, start);
+    return node_v(N_ASM, quals_bits, 0, tmpl as i64, 0, count, loc, start);
 }
 
 // ---------------------------------------------------------------------------
@@ -1976,7 +1978,7 @@ recursive fn parse_tu() {
             if at(TK_STRING) { s = string_literal(); }
             expect(TK_R_PAREN, "')'");
             expect(TK_SEMI, "';'");
-            nscratch.push(node(N_ASM, 2, 0, s as i64, 0, 0, loc));
+            nscratch.push(node(N_ASM, 8, 0, s as i64, 0, 0, loc));
             continue;
         }
         if at(TK_R_BRACE) {
