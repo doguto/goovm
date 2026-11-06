@@ -51,12 +51,10 @@ def main():
     ap.add_argument("--show", type=int, default=30)
     ap.add_argument("--keep", default="")
     ap.add_argument("rest", nargs="*")
-    a = ap.parse_args()
+    argv, cli_flags = corpus_mod.split_flags(sys.argv[1:])
+    a = ap.parse_args(argv)
     if a.rest:
-        files, flags = a.rest, []
-        if "--" in a.rest:
-            k = a.rest.index("--")
-            files, flags = a.rest[:k], a.rest[k + 1:]
+        files, flags = a.rest, cli_flags
         jobs = [("args", f, flags) for f in files]
     else:
         jobs = list(corpus_mod.corpus([c for c in a.corpus.split(",") if c]))

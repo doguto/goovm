@@ -198,11 +198,21 @@ fn ty_grow() {
         if t.kind == TY_STRUCT || t.kind == TY_UNION || t.kind == TY_ENUM {
             if t.flags & TF_ALIGNED == 0 { types[i].hnext = -1; continue; }
         }
-        let h = ty_hash(t.kind as i64, t.flags as i64, t.base, t.n, t.extra, if t.flags & TF_ALIGNED != 0 { t.align } else { 0 });
+        // the same key as mk_type: a function type is hashed by its
+        // parameter types, not by where they are stored
+        var ex = t.extra;
+        if t.kind as i64 == TY_FUNC { ex = params_hash(t.extra as i64, t.n); }
+        let h = ty_hash(t.kind as i64, t.flags as i64, t.base, t.n, ex, if t.flags & TF_ALIGNED != 0 { t.align } else { 0 });
         let b = (h as! i64) & tymask;
         types[i].hnext = tyhash[b];
         tyhash[b] = i as! i32;
     }
+}
+
+fn params_hash(first: i64, n: i64) -> u32 {
+    var h2: u64 = 7;
+    for i in n { h2 = (h2 ^ (tparams[first + i] as u64)) * 1099511628211; }
+    return (h2 ^ (h2 >> 32)) as! u32;
 }
 
 // The function-type params being built are in fn_scratch.
@@ -222,6 +232,7 @@ recursive fn mk_type(kind: i64, flags: i64, base: u32, n: i64, extra: u32, align
     var ex = extra;
     var hn = n;
     if kind == TY_FUNC {
+        // keep in step with params_hash (used when the table grows)
         var h2: u64 = 7;
         for p in fn_scratch { h2 = (h2 ^ (p as u64)) * 1099511628211; }
         ex = (h2 ^ (h2 >> 32)) as! u32;

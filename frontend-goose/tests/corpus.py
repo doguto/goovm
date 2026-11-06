@@ -35,6 +35,15 @@ CTMARK = {
 }
 
 
+def split_flags(argv):
+    """Splits a command line at the first "--": (script arguments, compiler flags).
+    (argparse would drop the "--" and take the flags for its own options.)"""
+    if "--" in argv:
+        k = argv.index("--")
+        return argv[:k], argv[k + 1:]
+    return argv, []
+
+
 def c_files(root, skip=()):
     out = []
     for dp, dn, fs in os.walk(root):

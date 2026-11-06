@@ -123,7 +123,7 @@ let CK_REAL2COMPLEX = 18;
 let CK_COMPLEX2REAL = 19;
 let CK_COMPLEXCAST = 20;
 let CK_VECSPLAT = 21;
-let CK_VECBITCAST = 22; // vector <-> vector/scalar of the same size
+let CK_VECBITCAST = 22; // unused: vector <-> vector of the same size is CK_BITCAST, as in clang
 let CK_ATOMIC = 23;     // to/from _Atomic
 let CK_BUILTIN2PTR = 24;
 
@@ -131,7 +131,7 @@ let CK_BUILTIN2PTR = 24;
 let NF_LVALUE = 1;
 let NF_BITFIELD = 2;    // an lvalue designating a bit-field
 let NF_PAREN = 4;
-let NF_NULLCONST = 8;   // a null pointer constant
+let NF_NULLCONST = 8;   // unused (is_null_const() decides from the tree, as clang does)
 let NF_STRINIT = 16;    // N_STRING used to initialize an array
 let NF_ICE = 32;        // known to be an integer constant expression
 let NF_PREDEF = 64;     // __func__ etc.

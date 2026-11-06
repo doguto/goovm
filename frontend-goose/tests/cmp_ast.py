@@ -5,11 +5,16 @@ For every function body (and file-scope initializer) both compilers see,
 the trees are walked in parallel. Node kinds, types (clang's canonical
 spelling) and cast kinds must agree, so the implicit conversions goosecc
 makes explicit are the ones clang makes. ParenExpr and ConstantExpr are
-transparent; a few representation differences are normalized (see
-normalize_clang).
+transparent; the representation differences that are not semantic are
+normalized in from_clang() and compare() (each one says why). Types that
+clang prints with typedef sugar below the top level are not compared.
+
+Files over --max-bytes (default 4 MB) are skipped: clang's JSON dump is
+about 100 times the source (277 MB for sqlite3.c, which takes a minute and
+a few GB of memory here).
 
 usage: tests/cmp_ast.py [--goosecc build/goosecc] [-j 3] [--corpus ...] [--show N]
-                        [--max-bytes N] [files... -- flags]
+                        [--max-bytes N] [--hist] [--grep RE] [files... -- flags]
 """
 import argparse, collections, concurrent.futures as cf, json, os, re, subprocess, sys
 
@@ -352,16 +357,14 @@ def main():
     ap.add_argument("-j", type=int, default=3)
     ap.add_argument("--corpus", default="")
     ap.add_argument("--show", type=int, default=30)
-    ap.add_argument("--max-bytes", type=int, default=400000)
+    ap.add_argument("--max-bytes", type=int, default=4000000)
     ap.add_argument("--hist", action="store_true")
     ap.add_argument("--grep", default="", help="show the files and paths of differences matching this regex")
     ap.add_argument("rest", nargs="*")
-    a = ap.parse_args()
+    argv, cli_flags = corpus_mod.split_flags(sys.argv[1:])
+    a = ap.parse_args(argv)
     if a.rest:
-        files, flags = a.rest, []
-        if "--" in a.rest:
-            k = a.rest.index("--")
-            files, flags = a.rest[:k], a.rest[k + 1:]
+        files, flags = a.rest, cli_flags
         jobs = [("args", f, flags) for f in files]
     else:
         jobs = list(corpus_mod.corpus([c for c in a.corpus.split(",") if c]))

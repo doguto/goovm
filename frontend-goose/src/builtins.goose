@@ -279,6 +279,14 @@ fn builtin_call(s: i64, mark: i64, loc: u32) -> u32 {
         } else {
             rt = pointee;
         }
+        if starts_with(name, "__sync_") && is_pointer(a0t) && (is_arith(pointee) || is_pointer(pointee)) {
+            // the value operands are converted to the pointee type (clang's
+            // SemaBuiltinAtomicOverloaded)
+            for i in 1..nargs {
+                let x = arg(mark, i);
+                if nodes[x].kind != N_ERROR { nscratch[mark + i] = assign_convert(x, pointee, nodes[x].loc, 2); }
+            }
+        }
     } else if name == "__builtin_add_overflow" || name == "__builtin_sub_overflow" || name == "__builtin_mul_overflow" ||
               name == "__builtin_mul_overflow_p" || name == "__builtin_add_overflow_p" || name == "__builtin_sub_overflow_p" {
         rt = t_bool;

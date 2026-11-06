@@ -41,12 +41,10 @@ def main():
     ap.add_argument("--per-file", action="store_true")
     ap.add_argument("--md", default="")
     ap.add_argument("rest", nargs="*")
-    a = ap.parse_args()
+    argv, cli_flags = corpus_mod.split_flags(sys.argv[1:])
+    a = ap.parse_args(argv)
     if a.rest:
-        files, flags = a.rest, []
-        if "--" in a.rest:
-            k = a.rest.index("--")
-            files, flags = a.rest[:k], a.rest[k + 1:]
+        files, flags = a.rest, cli_flags
         jobs = [("args", f, flags) for f in files]
     else:
         jobs = list(corpus_mod.corpus(a.corpus.split(",")))
@@ -78,10 +76,31 @@ def main():
         k = tot[m]
         lines.append("| %s | %d | %.3f | %.3f | %.2fx | %.0f | %.0f | %d |" % (m, len(rows), k[0], k[1], k[0] / k[1] if k[1] else 0,
                                                                      k[2] / 1024, k[3] / 1024, k[4]))
+    # per program (the directory under MultiSource/.../)
+    progs = {}
+    for r in rows:
+        parts = r[0].split("/")
+        key = "/".join(parts[:3]) if parts[0] == "MultiSource" else "/".join(parts[:-1])
+        g = progs.setdefault(key, [0] + [0.0] * (2 * len(modes)))
+        g[0] += 1
+        for i in range(len(modes)):
+            g[1 + 2 * i] += r[1 + 5 * i]
+            g[2 + 2 * i] += r[2 + 5 * i]
+    plines = ["| program | files |" + "".join(" %s clang (ms) | %s goosecc (ms) | x |" % (m, m) for m in modes),
+              "|---|---:|" + "---:|---:|---:|" * len(modes)]
+    for key in sorted(progs):
+        g = progs[key]
+        s = "| %s | %d |" % (key, g[0])
+        for i in range(len(modes)):
+            tc, tg = g[1 + 2 * i], g[2 + 2 * i]
+            s += " %.0f | %.0f | %.2f |" % (tc * 1e3, tg * 1e3, tc / tg if tg else 0)
+        plines.append(s)
     print("\n".join(lines))
+    print("\n".join(plines))
     if a.md:
         with open(a.md, "w") as f:
             f.write("\n".join(lines) + "\n\n")
+            f.write("\n".join(plines) + "\n\n")
             hdr = "| file |" + "".join(" %s clang (ms) | %s goosecc (ms) | x | goosecc RSS (MB) |" % (m, m) for m in modes)
             f.write(hdr + "\n|---|" + "---:|---:|---:|---:|" * len(modes) + "\n")
             for r in rows:

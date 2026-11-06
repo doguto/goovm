@@ -10,7 +10,11 @@ GOOSE="${GOOSE:-$S/work/goose-build/goose}"
 export GOOSE_STDLIB="${GOOSE_STDLIB:-$S/src/goose/stdlib}"
 CC="${CC:-clang-20}"
 CFLAGS="${CFLAGS:--O2}"
+# a static executable starts ~0.3 ms faster (no dynamic linking), which is
+# 5% of a typical compile; LDFLAGS= builds a dynamic one
+LDFLAGS="${LDFLAGS--static}"
 mkdir -p "$OUT"
 "$GOOSE" --standalone ${GOOSE_FLAGS:-} --include "$HERE/src/goosecc_rt.h" -o "$OUT/goosecc.c" "$HERE/src/main.goose"
-"$CC" $CFLAGS -w "$OUT/goosecc.c" -lm -pthread -o "$OUT/goosecc"
+"$CC" $CFLAGS $LDFLAGS -w "$OUT/goosecc.c" -lm -pthread -o "$OUT/goosecc" 2>/dev/null ||
+    "$CC" $CFLAGS -w "$OUT/goosecc.c" -lm -pthread -o "$OUT/goosecc"
 echo "built $OUT/goosecc"
