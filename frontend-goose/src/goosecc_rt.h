@@ -13,6 +13,102 @@ int64_t goosecc_find_byte(sl_u8 s, uint8_t c) {
     return p ? (int64_t)(p - s.data) : -1;
 }
 
+/* B3: file I/O with fewer system calls than os's file_exists + read_file
+ * (stat, fopen, fstat, 64 KB freads to EOF, fclose: 7 calls per header) and
+ * write_file (fopen "wb" truncates, and ext4 then flushes the old blocks'
+ * replacement at close: 0.2 ms per object). */
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+static int goosecc_cpath(sl_u8 path, char *p, size_t cap) {
+    if (path.len <= 0 || (size_t)path.len >= cap || memchr(path.data, 0, (size_t)path.len)) return 0;
+    memcpy(p, path.data, (size_t)path.len);
+    p[path.len] = 0;
+    return 1;
+}
+
+/* Appends the contents of the file at path (anything but a directory, as
+ * file_exists + read_file accept) to out: open, fstat, one read of a
+ * regular file's size straight to the top of out's data stack (goose.h:
+ * C may append there, moving the top and the count together), close.
+ * 1 on success; 0 when there is no such file or it cannot be read, with
+ * out unchanged. A read that cannot store (EFAULT: past the data stack's
+ * reservation) goes through a buffer, so the overflow is the runtime's. */
+int64_t goosecc_read_file(sl_u8 path, gs_rref out) {
+    char p[4096];
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    int fd = open(p, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || S_ISDIR(st.st_mode)) {
+        close(fd);
+        return 0;
+    }
+    int64_t len0 = out.hdr->len;
+    uint8_t *top0 = out.stk->top;
+    int reg = S_ISREG(st.st_mode), ok = 1, direct = 1;
+    size_t size = reg ? (size_t)st.st_size : 0, total = 0;
+    for (;;) {
+        /* one byte more than a regular file has left, to see its end */
+        size_t want = reg && total <= size ? size + 1 - total : 65536;
+        ssize_t n;
+        if (direct) {
+            n = read(fd, out.stk->top, want);
+            if (n < 0 && errno == EFAULT) { direct = 0; continue; }
+        } else {
+            uint8_t buf[65536];
+            n = read(fd, buf, sizeof buf);
+            if (n > 0) gs_bld_append(out, buf, (int64_t)n);
+        }
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            ok = 0;
+            break;
+        }
+        if (n == 0) break;
+        if (direct) {
+            out.stk->top += n;
+            out.hdr->len += n;
+        }
+        total += (size_t)n;
+        if (reg && total == size && (size_t)n < want) break;
+    }
+    close(fd);
+    if (!ok) {
+        out.hdr->len = len0;
+        out.stk->top = top0;
+        return 0;
+    }
+    return 1;
+}
+
+/* Writes data to path. An existing regular file (not a symbolic link or a
+ * device such as /dev/null) is removed first, as GNU ld does with its
+ * output, and a new one is created: rewriting it in place would truncate
+ * it. 1 on success. */
+int64_t goosecc_write_file(sl_u8 path, sl_u8 data) {
+    char p[4096];
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    struct stat st;
+    if (lstat(p, &st) == 0 && S_ISREG(st.st_mode)) unlink(p);
+    int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+    if (fd < 0) return 0;
+    const uint8_t *d = data.data;
+    int64_t left = data.len;
+    int ok = 1;
+    while (left > 0) {
+        ssize_t w = write(fd, d, left > (1 << 30) ? (size_t)1 << 30 : (size_t)left);
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) { ok = 0; break; }
+        d += w;
+        left -= w;
+    }
+    if (close(fd) != 0) ok = 0;
+    return ok;
+}
+
 /* B2 lowering: exact floating-point constants (float, half, long double). */
 uint32_t goosecc_f64_to_f32bits(double d) { float f = (float)d; uint32_t b; memcpy(&b, &f, 4); return b; }
 double goosecc_f32bits_to_f64(uint32_t b) { float f; memcpy(&f, &b, 4); return (double)f; }

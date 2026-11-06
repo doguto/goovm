@@ -68,6 +68,10 @@ fn usage() {
 // -o - writes to standard output
 fn out_is_stdout() -> bool { out_len == 1 && names[out_off] == '-' }
 
+// Writes an output file, replacing an existing regular file by a new one
+// rather than truncating it (goosecc_rt.h): 1 on success.
+extern fn write_output(path: const u8[:], data: const u8[:]) -> i64 = "goosecc_write_file";
+
 fn main() {
     let a = args();
     var i = 1;
@@ -178,7 +182,7 @@ fn main() {
         }
         out.push('\n');
         if out_len > 0 && !out_is_stdout() {
-            if !write_file(names[out_off..out_off + out_len], out) { fatal("cannot write output"); }
+            if write_output(names[out_off..out_off + out_len], out) == 0 { fatal("cannot write output"); }
         } else {
             pr_flush();
         }
@@ -230,7 +234,7 @@ fn main() {
                     path.append(".o");
                 }
                 if out_is_stdout() { write_stdout(obj); }
-                else if !write_file(path, obj) { fatal("cannot write the object file"); }
+                else if write_output(path, obj) == 0 { fatal("cannot write the object file"); }
                 let t5 = clock_ns();
                 if opt_time {
                     write_stderr(str("goosecc: preprocess ", (t1 - t0) / 1000, " us, parse+sema ", (t2 - t1) / 1000, " us, lowering ",

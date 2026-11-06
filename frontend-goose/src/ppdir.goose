@@ -90,36 +90,84 @@ fn normalize_path() {
     }
 }
 
+// Appends the file at path (anything but a directory) to out with one open,
+// fstat, read and close: 1, or 0 if there is no such file (goosecc_rt.h).
+extern fn read_source(path: const u8[:], out: u8[>..]&) -> i64 = "goosecc_read_file";
+
+// The slot of key in pathtab: its entry's, or the empty one where it goes.
+fn path_slot(key: const u8[:], h: u32) -> i64 {
+    var p = (h as i64) & pathmask;
+    loop {
+        let e = pathtab[p];
+        if e == 0 { return p; }
+        let pe = pathents[e - 1];
+        if pe.hash == h && pe.len == key.len && names[pe.off..pe.off + pe.len] == key { return p; }
+        p = (p + 1) & pathmask;
+    }
+}
+
+// The length of pbuf's directory part (before its last '/'); 0 for none
+// or the root.
+fn pbuf_dir_len() -> i64 {
+    var j = pbuf.len;
+    while j > 0 && pbuf[j - 1] != '/' { j--; }
+    return if j > 1 { j - 1 } else { 0 };
+}
+
+// The directories that files were looked for in and not found, are also
+// entries of pathents: their spelling as searched (not normalized: ".." is
+// the kernel's to resolve) with a '/' added, which no normalized file path
+// ends with; file -2 when it is not a directory, -3 when it is. No file
+// under a -2 one can be opened, so most of the misses of a search path
+// (bits/stdio.h in every -I directory) cost no system call.
+fn dir_missing(dl: i64) -> bool {
+    var key: u8[>..] = [];
+    key.append(pbuf[..dl]);
+    key.push('/');
+    let e = pathtab[path_slot(key, hash_bytes(key))];
+    return e != 0 && pathents[e - 1].file == -2;
+}
+
+fn note_dir(dl: i64) {
+    var key: u8[>..] = [];
+    key.append(pbuf[..dl]);
+    key.push('/');
+    if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
+    let h = hash_bytes(key);
+    let p = path_slot(key, h);
+    if pathtab[p] != 0 { return; }
+    let isdir = is_dir(key[..dl]);
+    let off = name_add(key);
+    pathents.push(PathEnt { off: off, len: key.len as! u32, hash: h, file: if isdir { -3 } else { -2 } });
+    pathtab[p] = pathents.len as! u32;
+}
+
 // The file at path pbuf, loaded once; -1 if there is none.
 fn lookup_file() -> i64 {
     normalize_path();
     let h = hash_bytes(nbuf);
     if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
-    var p = (h as i64) & pathmask;
-    loop {
-        let e = pathtab[p];
-        if e == 0 { break; }
-        let pe = pathents[e - 1];
-        if pe.hash == h && pe.len == nbuf.len && names[pe.off..pe.off + pe.len] == nbuf { return pe.file as i64; }
-        p = (p + 1) & pathmask;
-    }
+    let p = path_slot(nbuf, h);
+    let e = pathtab[p];
+    if e != 0 { return pathents[e - 1].file as i64; }
+    let dl = pbuf_dir_len();
     var f: i64 = -1;
-    if file_exists(pbuf) {
-        f = load_file(pbuf);
-    }
+    if dl == 0 || !dir_missing(dl) { f = load_file(pbuf); }
     let off = name_add(nbuf);
     pathents.push(PathEnt { off: off, len: nbuf.len as! u32, hash: h, file: f as! i32 });
     pathtab[p] = pathents.len as! u32;
     if f >= 0 {
         files[f].path = off;
         files[f].path_len = nbuf.len as! u32;
+    } else if dl > 0 {
+        note_dir(dl);
     }
     return f;
 }
 
 fn load_file(path: const u8[:]) -> i64 {
     let start = src.len;
-    if !read_file(path, src) { return -1; }
+    if read_source(path, src) == 0 { return -1; }
     var s = start;
     // A UTF-8 byte order mark is skipped.
     if src.len - s >= 3 && src[s] == 239 && src[s + 1] == 187 && src[s + 2] == 191 { s += 3; }
