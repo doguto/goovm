@@ -568,8 +568,6 @@ fn finish_declspec(ds: DeclSpec&, implicit: bool) -> u32 {
 // struct / union / enum
 
 var fscratch: Field[>..<] = [];
-var pack_changes: u32[>..] = [];    // pairs: token index, pack value
-var ms_changes: u32[>..] = [];      // pairs: token index, ms_struct on/off
 
 fn pack_at(i: i64) -> u32 {
     // the last change at or before token i
@@ -1647,17 +1645,17 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
 var loop_depth: i64 = 0;
 var break_depth: i64 = 0;
 var switch_cases: u32[>..<] = [];
-var switch_types: u32[>..<] = [];
-var switch_marks: u32[>..<] = [];
-var switch_defaults: u8[>..<] = [];
+// The switch statements being parsed: the promoted condition type, where its cases start in switch_cases, a default seen.
+struct SwitchCtx { ty: u32, mark: u32, dflt: bool }
+var switches: SwitchCtx[>..<] = [];
 
 fn label_ref(name: u32, loc: u32) -> i64 {
     ensure_ids();
-    let l = id_label[name] as i64;
+    let l = id_bind[name].label as i64;
     if l >= 0 && syms[l].v == func_gen { return l; }
     let s = new_sym(SK_LABEL, name, t_void, loc);
     syms[s].v = func_gen;
-    id_label[name] = s as! i32;
+    id_bind[name].label = s as! i32;
     label_syms.push(s as! u32);
     return s;
 }
@@ -1827,15 +1825,11 @@ recursive fn parse_stmt() -> u32 {
             c = promote(c);
         }
         let mark = switch_cases.len;
-        switch_marks.push(mark as! u32);
-        switch_types.push(nty(c));
-        switch_defaults.push(0);
+        switches.push(SwitchCtx { ty: nty(c), mark: mark as! u32, dflt: false });
         break_depth++;
         let b = parse_stmt();
         break_depth--;
-        switch_types.pop();
-        switch_marks.pop();
-        switch_defaults.pop();
+        switches.pop();
         let count = switch_cases.len - mark;
         let start = nlist.len;
         for j in mark..switch_cases.len { nlist.push(switch_cases[j]); }
@@ -1858,13 +1852,13 @@ recursive fn parse_stmt() -> u32 {
         expect(TK_COLON, "':' after 'case'");
         let ok, v0 = fold_int(rv(e));
         if !ok { err_at(nodes[e].loc, "expression is not an integer constant expression"); }
-        if switch_marks.len == 0 {
+        if switches.len == 0 {
             err_at(loc, "'case' statement not in switch statement");
             return parse_stmt();
         }
-        let st = switch_types[switch_types.len - 1];
+        let st = switches[switches.len - 1].ty;
         let v = trunc_to(v0, st);
-        let mark = switch_marks[switch_marks.len - 1] as i64;
+        let mark = switches[switches.len - 1].mark as i64;
         // (128-bit values are only folded to 64 bits here: B2 refolds them
         // from the expression kept in the case's b)
         let wide = type_size(st) > 8;
@@ -1892,13 +1886,13 @@ recursive fn parse_stmt() -> u32 {
     if w == KW_DEFAULT {
         adv();
         expect(TK_COLON, "':' after 'default'");
-        if switch_marks.len == 0 {
+        if switches.len == 0 {
             err_at(loc, "'default' statement not in switch statement");
             return parse_stmt();
         }
-        let di = switch_defaults.len - 1;
-        if switch_defaults[di] != 0 { err_at(loc, "multiple default labels in one switch"); }
-        switch_defaults[di] = 1;
+        let di = switches.len - 1;
+        if switches[di].dflt { err_at(loc, "multiple default labels in one switch"); }
+        switches[di].dflt = true;
         let dn = node(N_DEFAULT, 0, 0, 0, 0, 0, loc);
         switch_cases.push(dn);
         let s = if at(TK_R_BRACE) { node(N_NULL, 0, 0, 0, 0, 0, loc) } else { parse_stmt() };
@@ -2065,32 +2059,6 @@ recursive fn parse_tu() {
     let count = nscratch.len - mark;
     let start = commit_list(mark);
     tu_node = node_v(N_TU, 0, 0, 0, 0, count, 0, start);
-}
-
-// Prepares the token stream: keywords become keyword tokens, #pragma pack
-// annotations are taken out (their positions go to pack_changes).
-fn prepare_tokens() {
-    var w = 0;
-    for r in tu_toks.len {
-        var t = tu_toks[r];
-        if t.kind == TK_ANNOT_PACK {
-            pack_changes.push(w as! u32);
-            pack_changes.push(t.val);
-            continue;
-        }
-        if t.kind == TK_ANNOT_MSSTRUCT {
-            ms_changes.push(w as! u32);
-            ms_changes.push(t.val);
-            continue;
-        }
-        if t.kind == TK_IDENT {
-            let kwc = idents[t.val].kw;
-            if kwc != 0 { t.kind = (TK_KW + (kwc as i64)) as! u8; }
-        }
-        tu_toks[w] = t;
-        w++;
-    }
-    tu_toks.resize(w);
 }
 
 fn declare_builtin_typedef(name: const u8[:], ty: u32) {

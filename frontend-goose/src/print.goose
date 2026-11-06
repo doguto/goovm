@@ -98,7 +98,6 @@ fn needs_space(t: Tok, first: u8) -> bool {
     }
 }
 
-var pr_tmp: u8[>..] = [];
 
 fn pr_token(t: Tok) {
     if t.flags & F_BOL != 0 || !pr_started {
@@ -115,7 +114,7 @@ fn pr_token(t: Tok) {
     } else if !pr_bol && t.flags & F_LSPACE != 0 {
         out.push(' ');
     }
-    pr_tmp.clear();
+    var pr_tmp: u8[>..] = [];
     tok_spelling(pr_tmp, t);
     if pr_tmp.len == 0 { return; }
     if !pr_bol && out.len > 0 && out[out.len - 1] != ' ' && needs_space(t, pr_tmp[0]) { out.push(' '); }

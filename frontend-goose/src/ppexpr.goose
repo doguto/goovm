@@ -10,6 +10,7 @@ import .pp;
 import .ppdir;
 import .print;
 import .predef_gen;
+import .tables_gen;
 
 // ---------------------------------------------------------------------------
 // #if expressions. Values are 64-bit with a signedness flag (intmax_t /
@@ -259,7 +260,7 @@ fn parse_pp_number(t: Tok) -> i64, bool, bool {
         else if c >= 'A' && c <= 'F' { d = (c - 'A' + 10) as u64; }
         else if c == '\'' { i++; continue; }
         if d >= base { break; }
-        if v > (18446744073709551615 - d) / base { overflow = true; }
+        if mul_add_overflows(v, base, d) { overflow = true; }
         v = v * base + d;
         i++;
     }
@@ -403,8 +404,6 @@ let B_FLT_EVAL_METHOD = 30;
 let B_LITERAL_ENCODING = 31;
 let B_WIDE_LITERAL_ENCODING = 32;
 
-var tables = dictionary<u64, i64> {};
-var tables_loaded: bool[8] = [false; 8];
 var base_file_name: u32 = 0;
 var base_file_name_len: u32 = 0;
 var bt: u8[>..] = [];
@@ -416,30 +415,33 @@ fn table_text(k: i64) -> const u8[:] {
     };
 }
 
+// The value of `name` in table k: the number after it on its line (1 when
+// there is none), 0 for a name not in the table. The lookup goes through
+// the static hash tables of tables_gen.goose.
 fn table_lookup(k: i64, name: const u8[:]) -> i64 {
-    if !tables_loaded[k] {
-        tables_loaded[k] = true;
-        let text = table_text(k);
-        var i = 0;
-        while i < text.len {
-            var j = i;
-            while j < text.len && text[j] != ' ' && text[j] != '\n' { j++; }
-            let nm = text[i..j];
-            var v: i64 = 1;
-            if j < text.len && text[j] == ' ' {
-                j++;
-                v = 0;
-                while j < text.len && text[j] >= '0' && text[j] <= '9' { v = v * 10 + (text[j] - '0'); j++; }
-            }
-            if nm.len > 0 { tables.insert(((k as! u64) << 32) | (intern(nm) as u64), v); }
-            while j < text.len && text[j] != '\n' { j++; }
-            i = j + 1;
-        }
-    }
-    let id = intern(name);
-    let r = tables.get(((k as! u64) << 32) | (id as u64));
-    if r { return r; }
-    return 0;
+    let text = table_text(k);
+    let h = hash_bytes(name);
+    let e = match k {
+        0 => tbl_find(text, TBL_HAS_BUILTIN_OFF, TBL_HAS_BUILTIN_HT, TBL_HAS_BUILTIN_LEN, name, h, ' '),
+        1 => tbl_find(text, TBL_HAS_FEATURE_OFF, TBL_HAS_FEATURE_HT, TBL_HAS_FEATURE_LEN, name, h, ' '),
+        2 => tbl_find(text, TBL_HAS_EXTENSION_OFF, TBL_HAS_EXTENSION_HT, TBL_HAS_EXTENSION_LEN, name, h, ' '),
+        3 => tbl_find(text, TBL_HAS_ATTRIBUTE_OFF, TBL_HAS_ATTRIBUTE_HT, TBL_HAS_ATTRIBUTE_LEN, name, h, ' '),
+        4 => tbl_find(text, TBL_HAS_C_ATTRIBUTE_OFF, TBL_HAS_C_ATTRIBUTE_HT, TBL_HAS_C_ATTRIBUTE_LEN, name, h, ' '),
+        5 => tbl_find(text, TBL_HAS_DECLSPEC_ATTRIBUTE_OFF, TBL_HAS_DECLSPEC_ATTRIBUTE_HT, TBL_HAS_DECLSPEC_ATTRIBUTE_LEN, name, h, ' '),
+        _ => tbl_find(text, TBL_WARNING_OPTIONS_OFF, TBL_WARNING_OPTIONS_HT, TBL_WARNING_OPTIONS_LEN, name, h, ' '),
+    };
+    if e < 0 || name.len == 0 { return 0; }
+    let off: u32 = match k {
+        0 => TBL_HAS_BUILTIN_OFF[e], 1 => TBL_HAS_FEATURE_OFF[e], 2 => TBL_HAS_EXTENSION_OFF[e],
+        3 => TBL_HAS_ATTRIBUTE_OFF[e], 4 => TBL_HAS_C_ATTRIBUTE_OFF[e], 5 => TBL_HAS_DECLSPEC_ATTRIBUTE_OFF[e],
+        _ => TBL_WARNING_OPTIONS_OFF[e],
+    };
+    var j = off as i64 + name.len;
+    if j >= text.len || text[j] != ' ' { return 1; }
+    j++;
+    var v: i64 = 0;
+    while j < text.len && text[j] >= '0' && text[j] <= '9' { v = v * 10 + (text[j] - '0'); j++; }
+    return v;
 }
 
 fn warning_known(name: const u8[:]) -> bool { table_lookup(6, name) != 0 }
@@ -456,10 +458,9 @@ fn feature_value(kind: i64, name: const u8[:]) -> i64 {
     return table_lookup(2, nm);
 }
 
-var bt2: u8[>..] = [];
 fn attr_value(k: i64, name: const u8[:]) -> i64 {
     // Normalize __x__ (also after a scope).
-    bt2.clear();
+    var bt2: u8[>..] = [];
     var nm = name;
     var scope_len = -1;
     let cpos = find(nm, "::");
@@ -613,9 +614,8 @@ recursive fn has_include(name: Tok, next: bool) -> i64 {
     return if f >= 0 { 1 } else { 0 };
 }
 
-var num_buf: u8[>..] = [];
 fn number_token(v: i64, like: Tok) -> Tok {
-    num_buf.clear();
+    var num_buf: u8[>..] = [];
     format(num_buf, v);
     return make_token(TK_NUMBER, num_buf, like);
 }
@@ -776,10 +776,11 @@ fn set_ppkw(name: const u8[:], k: i64) {
     idents[id].ppkw = k as! u8;
 }
 
-struct CmdMacro { def: bool, off: u32, len: u32 }
+struct CmdMacro { def: bool, inc: bool, off: u32, len: u32 }   // -D, -U or -include (inc)
 var cmd_macros: CmdMacro[>..] = [];
-var cmd_includes: u32[>..] = [];       // -include files: (off, len) pairs in names
-var opt_std: u8[>..] = [];
+var std_off: u32 = 0;      // -std= (names)
+var std_len: i64 = 0;
+fn opt_std() -> const u8[:] { names[std_off..std_off + std_len] }
 var opt_os: bool = false;
 var opt_pic_mode: i64 = 0;     // 0 -fPIE (clang's default), 1 -fpie, 2 -fPIC, 3 -fpic, 4 -fno-pic
 var opt_pthread: bool = false;
@@ -821,18 +822,18 @@ fn pp_init_tables() {
 
 // The <built-in> buffer: predefined macros adjusted for the options, then
 // the command line -D/-U, then -include.
-var builtin_text: u8[>..] = [];
 
 fn std_version() -> const u8[:] {
-    let s = opt_std;
+    let s = opt_std();
     if s == "c89" || s == "c90" || s == "gnu89" || s == "gnu90" || s == "iso9899:1990" { return ""; }
     if s == "c99" || s == "gnu99" || s == "iso9899:1999" || s == "c9x" || s == "gnu9x" { return "199901L"; }
     if s == "c11" || s == "gnu11" || s == "iso9899:2011" || s == "c1x" || s == "gnu1x" { return "201112L"; }
     return "201710L";
 }
 
+// Appends it to src.
 fn build_builtin_text() {
-    let s = opt_std;
+    let s = opt_std();
     let strict = s.len > 0 && s[0] != 'g';
     let c89 = std_version().len == 0;
     let text = PREDEF_BASE;
@@ -849,56 +850,55 @@ fn build_builtin_text() {
             keep = false;
             let pie = line[12] == 'E' || line[12] == 'e';
             let lvl = if opt_pic_mode == 1 || opt_pic_mode == 3 { " 1\n" } else { " 2\n" };
-            if opt_pic_mode <= 1 || (opt_pic_mode <= 3 && !pie) { builtin_text.append(line[..15]); builtin_text.append(lvl); }
+            if opt_pic_mode <= 1 || (opt_pic_mode <= 3 && !pie) { src.append(line[..15]); src.append(lvl); }
         }
         if strict && (line == "#define linux 1" || line == "#define unix 1") { keep = false; }
         if starts_with(line, "#define __STDC_VERSION__ ") {
             keep = false;
-            if !c89 { builtin_text.append("#define __STDC_VERSION__ "); builtin_text.append(std_version()); builtin_text.push('\n'); }
+            if !c89 { src.append("#define __STDC_VERSION__ "); src.append(std_version()); src.push('\n'); }
         }
         if c89 && line == "#define __GNUC_STDC_INLINE__ 1" {
             keep = false;
-            builtin_text.append("#define __GNUC_GNU_INLINE__ 1\n");
+            src.append("#define __GNUC_GNU_INLINE__ 1\n");
         }
-        if keep { builtin_text.append(line); builtin_text.push('\n'); }
+        if keep { src.append(line); src.push('\n'); }
     }
-    if opt_optimize > 0 { builtin_text.append("#define __OPTIMIZE__ 1\n"); }
-    if opt_os { builtin_text.append("#define __OPTIMIZE_SIZE__ 1\n"); }
-    if strict { builtin_text.append("#define __STRICT_ANSI__ 1\n"); }
-    if opt_pthread { builtin_text.append("#define _REENTRANT 1\n"); }
-    if opt_unsigned_char { builtin_text.append("#define __CHAR_UNSIGNED__ 1\n"); }
+    if opt_optimize > 0 { src.append("#define __OPTIMIZE__ 1\n"); }
+    if opt_os { src.append("#define __OPTIMIZE_SIZE__ 1\n"); }
+    if strict { src.append("#define __STRICT_ANSI__ 1\n"); }
+    if opt_pthread { src.append("#define _REENTRANT 1\n"); }
+    if opt_unsigned_char { src.append("#define __CHAR_UNSIGNED__ 1\n"); }
     for m in cmd_macros {
+        if m.inc { continue; }
         let d = names[m.off..m.off + m.len];
         if m.def {
-            builtin_text.append("#define ");
+            src.append("#define ");
             let eq = find(d, "=");
             if eq >= 0 {
-                builtin_text.append(d[..eq]);
-                builtin_text.push(' ');
-                builtin_text.append(d[eq + 1..]);
+                src.append(d[..eq]);
+                src.push(' ');
+                src.append(d[eq + 1..]);
             } else {
-                builtin_text.append(d);
-                builtin_text.append(" 1");
+                src.append(d);
+                src.append(" 1");
             }
         } else {
-            builtin_text.append("#undef ");
-            builtin_text.append(d);
+            src.append("#undef ");
+            src.append(d);
         }
-        builtin_text.push('\n');
+        src.push('\n');
     }
-    var k = 0;
-    while k + 1 < cmd_includes.len {
-        let o = cmd_includes[k] as i64;
-        builtin_text.append("#include \"");
-        builtin_text.append(names[o..o + cmd_includes[k + 1]]);
-        builtin_text.append("\"\n");
-        k += 2;
+    for m in cmd_macros {
+        if !m.inc { continue; }
+        src.append("#include \"");
+        src.append(names[m.off..m.off + m.len]);
+        src.append("\"\n");
     }
 }
 
 // Sets the language options from -std.
 fn pp_set_lang() {
-    let s = opt_std;
+    let s = opt_std();
     opt_gnu = s.len == 0 || s[0] == 'g';
     let v = std_version();
     opt_c99 = v.len > 0;
@@ -910,7 +910,6 @@ fn pp_set_lang() {
 // Starts preprocessing `path`.
 fn pp_start(path: const u8[:]) -> bool {
     pp_set_lang();
-    build_builtin_text();
     pbuf.clear();
     pbuf.append(path);
     let f = lookup_file();
@@ -922,14 +921,12 @@ fn pp_start(path: const u8[:]) -> bool {
     base_file_name_len = path.len as! u32;
     // The builtin buffer is file `files.len` (not in the path cache).
     let bstart = src.len;
-    src.append(builtin_text);
+    build_builtin_text();
     let bend = src.len;
     src.push(0);
     src.push(0);
     let bf = files.len;
-    files.push(FileRec { path: name_add("<built-in>"), path_len: 10, start: bstart as! u32, end: bend as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0 });
-    file_spelling.push(0);
-    file_spelling_len.push(0);
+    files.push(FileRec { path: name_add("<built-in>"), path_len: 10, start: bstart as! u32, end: bend as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0, sp_off: 0, sp_len: 0 });
     let save = mode_E;
     mode_E = false;
     push_file(f, path, -1, false);

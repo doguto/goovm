@@ -105,8 +105,18 @@ struct Tok {
 // offset << 32 | ')' offset): the expansion ranges of -g's locations.
 var mx_ranges: u64[>..] = [];
 
-// The translation unit's tokens (-fsyntax-only).
+// The translation unit's tokens (-fsyntax-only); keywords already have
+// their TK_KW kinds. #pragma pack and ms_struct take effect from token
+// index pack_changes[2k] / ms_changes[2k] on (value at 2k + 1).
 var tu_toks: Tok[>..] = [];
+
+// The pages after the top of a growing array are committed ahead in 64 KB
+// steps (goosecc_rt.h): the token, node, symbol and GIR instruction arrays
+// call it when they pass their frontier.
+extern fn prefault_toks(a: Tok[>..]&, bytes: i64) = "goosecc_prefault";
+var tok_frontier: i64 = 0;
+var pack_changes: u32[>..] = [];
+var ms_changes: u32[>..] = [];
 
 fn is_punct(k: i64) -> bool { k >= TK_L_SQUARE && k < TK_NUM_KINDS }
 
@@ -149,11 +159,14 @@ var idents: Ident[>..] = [];
 var idtab: u32[>..<] = [];    // open addressing: ident id + 1, 0 = empty
 var idmask: i64 = 0;
 
-fn hash_bytes(s: const u8[:]) -> u32 {
-    var h: u32 = 2166136261;
-    for c in s { h = (h ^ c) * 16777619; }
-    return h;
-}
+// The identifier hash, 8 bytes at a time (goosecc_rt.h; tools/gen_tables.py
+// computes the same for the static tables).
+extern fn hash_bytes(s: const u8[:]) -> u32 = "goosecc_hash";
+// The run of identifier characters (CC_IDCONT) at s[p..]: its length << 32
+// | its hash_bytes, 16 bytes at a time.
+extern fn ident_scan(s: const u8[:], p: i64) -> u64 = "goosecc_ident_scan";
+// The first i >= p with s[i] one of \n / " ' \ NUL, or s.len.
+extern fn skip_text(s: const u8[:], p: i64) -> i64 = "goosecc_skip_text";
 
 fn ident_grow() {
     let n = if idtab.len == 0 { 4096 } else { idtab.len * 2 };
@@ -167,18 +180,39 @@ fn ident_grow() {
     }
 }
 
-// Interns the spelling src[off..off+len] with hash h.
-fn ident_lookup(off: i64, len: i64, h: u32) -> u32 {
-    if (idents.len + 1) * 2 > idtab.len { ident_grow(); }
+// The id of the identifier spelled src[off..off+len] (hash h), or -1: the
+// probe of ident_lookup, inlined into the lexer's loop.
+inline fn ident_find(off: i64, len: i64, h: u32) -> i64 {
     var p = (h as i64) & idmask;
     loop {
-        let e = idtab[p];
-        if e == 0 { break; }
-        let d = idents[e - 1];
-        if d.hash == h && d.len == len {
-            if src[d.off..d.off + d.len] == src[off..off + len] { return e - 1; }
+        let e = idtab[p] as i64;
+        if e == 0 { return -1; }
+        if idents[e - 1].hash == h && idents[e - 1].len == len {
+            let o = idents[e - 1].off as i64;
+            if src[o..o + len] == src[off..off + len] { return e - 1; }
         }
         p = (p + 1) & idmask;
+    }
+}
+
+// Interns the spelling src[off..off+len] with hash h. The table exists
+// (pp_init_tables interns the empty spelling first); it grows only when a
+// new identifier is added.
+fn ident_lookup(off: i64, len: i64, h: u32) -> u32 {
+    var p = (h as i64) & idmask;
+    loop {
+        let e = idtab[p] as i64;
+        if e == 0 { break; }
+        if idents[e - 1].hash == h && idents[e - 1].len == len {
+            let o = idents[e - 1].off as i64;
+            if src[o..o + len] == src[off..off + len] { return (e - 1) as! u32; }
+        }
+        p = (p + 1) & idmask;
+    }
+    if (idents.len + 1) * 2 > idtab.len {
+        ident_grow();
+        p = (h as i64) & idmask;
+        while idtab[p] != 0 { p = (p + 1) & idmask; }
     }
     let id = idents.len;
     idents.push(Ident { off: off as! u32, len: len as! u32, hash: h, macro: -1, kw: 0, ppkw: 0, flags: 0 });
@@ -210,6 +244,37 @@ fn ident_text(id: i64) -> const u8[:] {
     return src[d.off..d.off + d.len];
 }
 
+// Whether v * base + d (d < base, base 2, 8, 10 or 16) exceeds 2^64 - 1:
+// v > (2^64 - 1 - d) / base, without the division. Goose divides by a
+// value it does not know as a constant through a magic number that it
+// computes before the loop, bit by bit: 60 iterations per literal.
+fn mul_add_overflows(v: u64, base: u64, d: u64) -> bool {
+    var lim: u64 = 1844674407370955160;
+    if base == 16 { lim = 1152921504606846975; }
+    else if base == 8 { lim = 2305843009213693951; }
+    else if base == 2 { lim = 9223372036854775807; }
+    else if d <= 5 { lim = 1844674407370955161; }
+    return v > lim;
+}
+
+// The entry of `name` (h = its hash_bytes) in one of the hash tables of
+// tables_gen.goose, which index `text` (of length tlen when they were
+// generated): its index, or -1. An entry's name is its line up to `sep`
+// or the end of the line.
+fn tbl_find(text: const u8[:], offs: const u32[:], ht: const u16[:], tlen: i64, name: const u8[:], h: u32, sep: u8) -> i64 {
+    if text.len != tlen { fatal("tables_gen.goose does not match its tables: run tools/gen_tables.py"); }
+    let mask = ht.len - 1;
+    var p = (h as i64) & mask;
+    loop {
+        let e = ht[p] as i64;
+        if e == 0 { return -1; }
+        let o = offs[e - 1] as i64;
+        let q = o + name.len;
+        if q <= text.len && text[o..q] == name && (q == text.len || text[q] == sep || text[q] == '\n') { return e - 1; }
+        p = (p + 1) & mask;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Files. A file's text is loaded once into src; `start..end` is its range
 // (a NUL follows at `end`).
@@ -221,6 +286,8 @@ struct FileRec {
     system: bool,                 // #pragma GCC system_header seen
     lines_first: i32,             // index into line_starts, -1 = not built yet
     lines_count: i32,
+    sp_off: u32, sp_len: u32,     // the spelling it was first included by (names), the
+                                  // presumed file name of diagnostics; 0 = not included yet
 }
 var files: FileRec[>..] = [];
 var line_starts: u32[>..] = [];
@@ -243,8 +310,18 @@ fn build_lines(f: i64) {
     files[f].lines_count = (line_starts.len - first) as! i32;
 }
 
-// memchr: the index of the first c in s, or -1.
-extern fn find_byte(s: const u8[:], c: u8) -> i64 = "goosecc_find_byte";
+// The index of the first c in s, or -1: std's find_any, which scans 16
+// bytes at a time (with SSE2), whatever the C library's memchr does.
+let BS_NL = byte_set("\n");
+let BS_SLASH = byte_set("/");
+let BS_STAR = byte_set("*");
+fn find_byte(s: const u8[:], c: u8) -> i64 {
+    if c == '\n' { return find_any(s, BS_NL); }
+    if c == '/' { return find_any(s, BS_SLASH); }
+    if c == '*' { return find_any(s, BS_STAR); }
+    for x, i in s { if x == c { return i; } }
+    return -1;
+}
 
 // The file holding source offset `off`, or -1 (scratch text).
 var last_file_hit: i64 = 0;
@@ -294,20 +371,14 @@ fn line_col(f: i64, off: i64) -> i64, i64 {
 var n_errors: i64 = 0;
 var n_warnings: i64 = 0;
 var quiet_warnings: bool = true;
-var err_out: u8[>..] = [];
-
-// Presumed file name for diagnostics at a location (set by the preprocessor:
-// the spelling the file was included by).
-var file_spelling: u32[>..] = [];      // per file: offset in names of the spelling, len in file_spelling_len
-var file_spelling_len: u32[>..] = [];
 
 fn loc_prefix(out: u8[>..]&, loc: i64) {
     let f = file_of(loc);
     if f < 0 { out.append("<scratch>: "); return; }
     let line, col = line_col(f, loc);
-    if f < file_spelling.len {
-        let o = file_spelling[f] as i64;
-        out.append(names[o..o + file_spelling_len[f]]);
+    if f < files.len {
+        let o = files[f].sp_off as i64;
+        out.append(names[o..o + files[f].sp_len]);
     } else {
         let o = files[f].path as i64;
         out.append(names[o..o + files[f].path_len]);
@@ -320,7 +391,7 @@ var diag_suppressed_errors: i64 = 0;
 
 fn error_at(loc: i64, msg: const u8[:]) {
     if diag_suppress > 0 { diag_suppressed_errors++; return; }
-    err_out.clear();
+    var err_out: u8[>..] = [];
     loc_prefix(err_out, loc);
     err_out.append("error: ");
     err_out.append(msg);
@@ -334,7 +405,7 @@ fn warn_at(loc: i64, msg: const u8[:]) {
     if diag_suppress > 0 { return; }
     n_warnings++;
     if quiet_warnings { return; }
-    err_out.clear();
+    var err_out: u8[>..] = [];
     loc_prefix(err_out, loc);
     err_out.append("warning: ");
     err_out.append(msg);

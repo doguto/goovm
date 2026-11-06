@@ -17,23 +17,20 @@ import .ast;
 import .sema;
 import .parse;
 
-var name_glob = dictionary<u32, u32> {};   // linkage name (ident) -> global
-var glob_sym: i64[>..] = [];               // per global: the symbol, -1 for others
-var glob_state: u8[>..] = [];              // per global: 0 declared, 1 queued, 2 emitted
+// Per global: the symbol (-1 for others), and 0 declared, 1 queued, 2 emitted.
+struct GlobGen { sym: i64, state: u8 }
+var glob_gen: GlobGen[>..] = [];
 var work: u32[>..<] = [];                  // globals whose definitions are to be emitted
-var sym_init: u32[>..] = [];               // per symbol: the initializer node (file-scope objects)
-var sym_decl: u32[>..] = [];               // per symbol: the N_DECL that defines it
-var def_by_name = dictionary<u32, i64> {};  // linkage name -> the symbol of the function defined under it
 
 // The symbol whose definition has linkage name id, or -1.
 fn defining_sym(id: u32) -> i64 {
-    let r = def_by_name.get(id);
+    let r = gmap.get(gk(GM_DEFBY, id));
     if r { return r; }
     return -1;
 }
 
 fn ensure_glob_tables() {
-    while glob_sym.len < m_globals.len { glob_sym.push(-1); glob_state.push(0); }
+    while glob_gen.len < m_globals.len { glob_gen.push(GlobGen { sym: -1, state: 0 }); }
 }
 
 // The linkage name of symbol s (asm label or identifier), as an ident id.
@@ -67,10 +64,10 @@ fn is_internal_sym(s: i64) -> bool {
 }
 
 fn global_by_name(id: u32, is_func: bool) -> u32 {
-    let r = name_glob.get(id);
+    let r = gmap.get(gk(GM_NAMEGLOB, id));
     if r { return r; }
     let g = new_global(ident_text(id as i64), if is_func { G_FUNC } else { G_VAR }, 0, if is_func { 16 } else { 1 });
-    name_glob.insert(id, g);
+    gmap.insert(gk(GM_NAMEGLOB, id), g);
     ensure_glob_tables();
     return g;
 }
@@ -79,17 +76,17 @@ fn global_by_name(id: u32, is_func: bool) -> u32 {
 fn func_global(s0: i64) -> u32 {
     ensure_sym_tables();
     var s = s0;
-    if sym_glob[s] != NONE { note_use(sym_glob[s]); return sym_glob[s]; }
+    if sym_gen[s].glob != NONE { note_use(sym_gen[s].glob); return sym_gen[s].glob; }
     let id = link_name(s);
     let g = global_by_name(id, true);
     ensure_glob_tables();
-    if glob_sym[g] < 0 {
+    if glob_gen[g].sym < 0 {
         // a declaration of a function defined in this unit (under another symbol)
         let ds = defining_sym(id);
-        glob_sym[g] = if ds >= 0 { ds } else { s };
+        glob_gen[g].sym = if ds >= 0 { ds } else { s };
     }
-    if syms[s].def >= 0 && glob_sym[g] >= 0 && syms[glob_sym[g]].def < 0 { glob_sym[g] = s; }
-    sym_glob[s] = g;
+    if syms[s].def >= 0 && glob_gen[g].sym >= 0 && syms[glob_gen[g].sym].def < 0 { glob_gen[g].sym = s; }
+    sym_gen[s].glob = g;
     note_use(g);
     return g;
 }
@@ -97,13 +94,13 @@ fn func_global(s0: i64) -> u32 {
 // The variable's global (file-scope, extern, static local, compound literal).
 fn var_global(s: i64) -> u32 {
     ensure_sym_tables();
-    if sym_glob[s] != NONE { note_use(sym_glob[s]); return sym_glob[s]; }
+    if sym_gen[s].glob != NONE { note_use(sym_gen[s].glob); return sym_gen[s].glob; }
     var g: u32 = 0;
     if has_linkage(s) {
         g = global_by_name(link_name(s), false);
         ensure_glob_tables();
-        if glob_sym[g] < 0 { glob_sym[g] = s; }
-        else if sym_init[s] != 0 || (syms[s].flags & SF_FILESCOPE != 0 && syms[glob_sym[g]].flags & SF_FILESCOPE == 0) { glob_sym[g] = s; }
+        if glob_gen[g].sym < 0 { glob_gen[g].sym = s; }
+        else if sym_gen[s].init != 0 || (syms[s].flags & SF_FILESCOPE != 0 && syms[glob_gen[g].sym].flags & SF_FILESCOPE == 0) { glob_gen[g].sym = s; }
     } else {
         // a static local (f.x) or a compound literal
         var nm: u8[>..] = [];
@@ -115,9 +112,9 @@ fn var_global(s: i64) -> u32 {
         }
         g = new_global(nm, G_VAR, GF_INTERNAL | GF_LOCALREF, 1);
         ensure_glob_tables();
-        glob_sym[g] = s;
+        glob_gen[g].sym = s;
     }
-    sym_glob[s] = g;
+    sym_gen[s].glob = g;
     note_use(g);
     return g;
 }
@@ -126,18 +123,18 @@ fn var_global(s: i64) -> u32 {
 fn complit_global(n: u32) -> u32 {
     let s = nodes[n].b as i64;
     ensure_sym_tables();
-    while sym_init.len < syms.len { sym_init.push(0); sym_decl.push(0); }
-    sym_init[s] = nodes[n].a;
+    ensure_sym_gen();
+    sym_gen[s].init = nodes[n].a;
     return var_global(s);
 }
 
 // A reference to g from emitted code: an on-use definition is queued.
 fn note_use(g: u32) {
-    if glob_state[g] != 0 { return; }
-    let s = glob_sym[g];
+    if glob_gen[g].state != 0 { return; }
+    let s = glob_gen[g].sym;
     if s < 0 { return; }
     if !defined_on_use(s) { return; }
-    glob_state[g] = 1;
+    glob_gen[g].state = 1;
     work.push(g);
 }
 
@@ -221,7 +218,7 @@ fn sym_visibility(s: i64) -> u32 {
 // The address of variable s in the current function.
 fn var_addr(s: i64) -> u32 {
     ensure_sym_tables();
-    if sym_addr[s] != NONE { return sym_addr[s]; }
+    if sym_gen[s].addr != NONE { return sym_gen[s].addr; }
     var c = s;
     if syms[s].canon >= 0 && syms[s].canon as i64 != s { c = syms[s].canon as i64; }
     let g = var_global(c);
@@ -281,7 +278,7 @@ fn string_global(si: u32) -> u32 {
     m_globals[g].data = at;
     m_globals[g].size = b.len as! u32;
     ensure_glob_tables();
-    glob_state[g] = 2;
+    glob_gen[g].state = 2;
     str_glob.insert(key, g);
     return g;
 }
@@ -299,13 +296,13 @@ recursive fn is_const_object(q: u32) -> bool {
 
 // Emits the definition of variable global g (symbol s).
 fn emit_var(g: u32) {
-    let s = glob_sym[g];
-    glob_state[g] = 2;
+    let s = glob_gen[g].sym;
+    glob_gen[g].state = 2;
     let q = syms[s].ty;
     var size = type_size(q);
     if size < 0 { size = 0; }
-    let init = sym_init[s] as u32;
-    if sym_decl[s] != 0 { last_loc = nodes[sym_decl[s]].loc; }
+    let init = sym_gen[s].init as u32;
+    if sym_gen[s].decl != 0 { last_loc = nodes[sym_gen[s].decl].loc; }
     if init != 0 {
         // a flexible array member with an initializer extends the object (GNU)
         let ext = init_extent(q, init);

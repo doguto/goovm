@@ -16,31 +16,36 @@ import .sema;
 import .parse;
 
 var f_global: u32 = 0;
-var brk_blk: u32[>..<] = [];
-var brk_depth: u32[>..<] = [];     // cleanup depth at the break target
-var cont_blk: u32[>..<] = [];
-var cont_depth: u32[>..<] = [];
+// The targets of break and continue: the block, and the cleanup depth there.
+struct Target { blk: u32, depth: u32 }
+var brk_to: Target[>..<] = [];
+var cont_to: Target[>..<] = [];
 
 // Cleanups: kind 1 = stackrestore(saved), kind 2 = call fn(&var)
 struct Cleanup { kind: u8, val: u32, sym: i64, fsym: i64 }
 var cleanups: Cleanup[>..<] = [];
 var cleanup_marks: u32[>..<] = [];
 
-var case_blk = dictionary<u32, u32> {};     // N_CASE / N_DEFAULT node -> block
+// Per function: N_CASE / N_DEFAULT node -> its block (fk(FM_CASE, node)),
+// label -> the cleanup depth where it is defined (fk(FM_LABEL, label)).
+let FM_CASE = 1;
+let FM_LABEL = 2;
+var fmap = dictionary<u64, u32> {};
+fn fk(table: u64, key: u32) -> u64 { (table << 32) | (key as u64) }
 var f_addr_labels: u32[>..<] = [];          // labels whose address is taken
 var f_igoto: u32 = NONE;                    // the indirect-goto block
 var f_igoto_vals: u32[>..<] = [];           // (address, predecessor block) pairs
 
 fn case_block(n: u32) -> u32 {
-    let r = case_blk.get(n);
+    let r = fmap.get(fk(FM_CASE, n));
     if r { return r; }
     return NONE;
 }
 
 fn label_block(l: i64) -> u32 {
     ensure_sym_tables();
-    if sym_addr[l] == NONE { sym_addr[l] = new_block(); }
-    return sym_addr[l];
+    if sym_gen[l].addr == NONE { sym_gen[l].addr = new_block(); }
+    return sym_gen[l].addr;
 }
 
 fn add_addr_label(l: i64) {
@@ -132,12 +137,11 @@ recursive fn contains_label_noswitch(n: u32) -> bool {
     return false;
 }
 
-var label_depth = dictionary<u32, u32> {};   // label -> cleanup depth where it is defined
 
 fn gen_label(l: i64) {
     let b = label_block(l);
     start_block(b);
-    label_depth.insert(l as! u32, cleanups.len as! u32);
+    fmap.insert(fk(FM_LABEL, l as! u32), cleanups.len as! u32);
 }
 
 recursive fn gen_stmt(n: u32) {
@@ -186,7 +190,7 @@ recursive fn gen_stmt(n: u32) {
     if k == N_FOR { gen_for(n); return; }
     if k == N_SWITCH { gen_switch(n); return; }
     if k == N_CASE || k == N_DEFAULT {
-        let r = case_blk.get(n);
+        let r = fmap.get(fk(FM_CASE, n));
         if r { start_block(r); }
         if k == N_CASE && nd.c != 0 {
             // GNU range expanded into blocks of its own: same block
@@ -201,7 +205,7 @@ recursive fn gen_stmt(n: u32) {
     }
     if k == N_GOTO {
         // a jump back to before a VLA (or a cleanup variable) leaves its scope
-        let d = label_depth.get(nd.a);
+        let d = fmap.get(fk(FM_LABEL, nd.a));
         if d && (d as i64) < cleanups.len { run_cleanups(d as i64); }
         br(label_block(nd.a as i64));
         return;
@@ -217,15 +221,17 @@ recursive fn gen_stmt(n: u32) {
         return;
     }
     if k == N_BREAK {
-        if brk_blk.len == 0 { return; }
-        run_cleanups(brk_depth[brk_depth.len - 1] as i64);
-        br(brk_blk[brk_blk.len - 1]);
+        if brk_to.len == 0 { return; }
+        let bt = brk_to[brk_to.len - 1];
+        run_cleanups(bt.depth as i64);
+        br(bt.blk);
         return;
     }
     if k == N_CONTINUE {
-        if cont_blk.len == 0 { return; }
-        run_cleanups(cont_depth[cont_depth.len - 1] as i64);
-        br(cont_blk[cont_blk.len - 1]);
+        if cont_to.len == 0 { return; }
+        let ct = cont_to[cont_to.len - 1];
+        run_cleanups(ct.depth as i64);
+        br(ct.blk);
         return;
     }
     if k == N_RETURN { gen_return(n); return; }
@@ -286,16 +292,12 @@ recursive fn gen_if(n: u32) {
 }
 
 fn push_loop(brk: u32, cont: u32) {
-    brk_blk.push(brk);
-    brk_depth.push(cleanups.len as! u32);
-    cont_blk.push(cont);
-    cont_depth.push(cleanups.len as! u32);
+    brk_to.push(Target { blk: brk, depth: cleanups.len as! u32 });
+    cont_to.push(Target { blk: cont, depth: cleanups.len as! u32 });
 }
 fn pop_loop() {
-    brk_blk.pop();
-    brk_depth.pop();
-    cont_blk.pop();
-    cont_depth.pop();
+    brk_to.pop();
+    cont_to.pop();
 }
 
 recursive fn gen_while(n: u32) {
@@ -376,7 +378,7 @@ recursive fn gen_switch(n: u32) {
     for i in ncases {
         let cn = nlist[nd.v + i];
         let b = new_block();
-        case_blk.insert(cn, b);
+        fmap.insert(fk(FM_CASE, cn), b);
         if nkind(cn) == N_DEFAULT { dflt = b; }
         else if nodes[cn].c != 0 {
             let lo = nodes[cn].v;
@@ -438,11 +440,9 @@ recursive fn gen_switch(n: u32) {
         }
         br(dflt);
     }
-    brk_blk.push(end);
-    brk_depth.push(cleanups.len as! u32);
+    brk_to.push(Target { blk: end, depth: cleanups.len as! u32 });
     gen_stmt(nd.b);
-    brk_blk.pop();
-    brk_depth.pop();
+    brk_to.pop();
     if has_insert() { br(end); }
     start_block(end);
 }
@@ -478,8 +478,8 @@ recursive fn gen_local_decl(n: u32) {
         // a static local: defined here (its initializer may name labels)
         ensure_sym_tables();
         let g = var_global(s);
-        if glob_state[g] != 2 {
-            sym_init[s] = nd.b;
+        if glob_gen[g].state != 2 {
+            sym_gen[s].init = nd.b;
             emit_var(g);
         }
         return;
@@ -487,7 +487,7 @@ recursive fn gen_local_decl(n: u32) {
     if !has_insert() && !is_vm_any(q) {
         // unreachable: the storage still exists for jumps into the scope
         ensure_sym_tables();
-        if sym_addr[s] == NONE { sym_addr[s] = alloca(type_size(q), local_align(s, q)); }
+        if sym_gen[s].addr == NONE { sym_gen[s].addr = alloca(type_size(q), local_align(s, q)); }
         return;
     }
     ensure_sym_tables();
@@ -507,14 +507,14 @@ recursive fn gen_local_decl(n: u32) {
         var al = local_align(s, q);
         if al < 16 { al = 16; }
         let p = emit(GIR_DYNALLOCA, GIR_T_PTR, 0, 0, 0, size, al as! u32, 0);
-        sym_addr[s] = p;
+        sym_gen[s].addr = p;
         return;
     }
     if is_vm_any(q) { eval_vm_type(q); }
-    var p = sym_addr[s];
+    var p = sym_gen[s].addr;
     if p == NONE {
         p = alloca(type_size(q), local_align(s, q));
-        sym_addr[s] = p;
+        sym_gen[s].addr = p;
     }
     if nd.b != 0 {
         // the initialization is at the variable
@@ -522,8 +522,8 @@ recursive fn gen_local_decl(n: u32) {
         init_object(p, q, nd.b);
         if dbg_on() { pop_loc(saved); }
         if quals(q) & Q_CONST != 0 && is_pointer(q) {
-            while local_init.len <= s { local_init.push(0); }
-            local_init[s] = nd.b;
+            while sym_gen.len <= s { sym_gen.push(SymGen { addr: NONE, glob: NONE, init: 0, decl: 0, linit: 0 }); }
+            sym_gen[s].linit = nd.b;
         }
     }
     let a = sy.attr;
@@ -758,7 +758,7 @@ fn const_init_global(q: u32, n: u32) -> u32 {
     n_const_inits++;
     let size = type_size(q);
     ensure_glob_tables();
-    glob_state[g] = 2;
+    glob_gen[g].state = 2;
     m_globals[g].size = size as! u32;
     let at = m_data.len;
     data_grow(size);
@@ -798,7 +798,7 @@ fn gen_function(fd: u32) {
     let nd = nodes[fd];
     let s = nd.a as i64;
     let g = func_global(s);
-    glob_state[g] = 2;
+    glob_gen[g].state = 2;
     m_globals[g].kind = G_FUNC;
     m_globals[g].flags = link_flags(s, true) | GF_DEFINED;
     let sec = sym_section(s);
@@ -818,8 +818,7 @@ fn gen_function(fd: u32) {
     f_igoto = NONE;
     f_igoto_vals.clear();
     f_arg_types.clear();
-    case_blk.clear();
-    label_depth.clear();
+    if fmap.count > 0 { fmap.clear(); }   // clear walks every slot
     cleanups.clear();
     cleanup_marks.clear();
     dbg_function_begin(s, nd.loc);
@@ -868,23 +867,23 @@ fn gen_function(fd: u32) {
         let p = nlist[nd.v + i] as i64;
         let pq = syms[p].ty;
         if i >= fty.n {
-            sym_addr[p] = alloca(type_size(pq), type_align(pq));
+            sym_gen[p].addr = alloca(type_size(pq), type_align(pq));
             continue;
         }
         let a = abis[ai + 1 + i];
         let proto_q = unqual(tparams[fty.extra + i]);
         if a.kind == AK_BYVAL {
-            sym_addr[p] = KARG | argi;
+            sym_gen[p].addr = KARG | argi;
             argi++;
             continue;
         }
         if a.kind == AK_IGNORE {
-            sym_addr[p] = alloca(type_size(pq), type_align(pq));
+            sym_gen[p].addr = alloca(type_size(pq), type_align(pq));
             continue;
         }
         if a.kind == AK_DIRECT {
             let slot = alloca(type_size(pq), local_align(p, pq));
-            sym_addr[p] = slot;
+            sym_gen[p].addr = slot;
             var v = KARG | argi;
             argi++;
             if unqual(pq) != proto_q && vkind(pq) == VK_SCALAR { v = conv(v, proto_q, unqual(pq)); }
@@ -898,7 +897,7 @@ fn gen_function(fd: u32) {
         if al < 8 { al = 8; }
         if need > size { size = need; }
         let slot = alloca(size, al);
-        sym_addr[p] = slot;
+        sym_gen[p].addr = slot;
         ins_store(a.t0, KARG | argi, gep(slot, a.off0 as i64), false);
         argi++;
         if a.n == 2 {

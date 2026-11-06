@@ -10,51 +10,54 @@ import .types;
 import .ast;
 import .sema;
 import .builtins_gen;
+import .tables_gen;
 
 let BI_CALL = 1;          // a = builtin symbol, v/c = arguments
 let BI_IMAG_CONST = 2;    // a GNU imaginary constant: a = the real-typed literal
 let BI_BITCAST = 3;       // __builtin_bit_cast
 let BI_CONVERTVECTOR = 4; // __builtin_convertvector
 
-struct BuiltinEnt { name: u32, toff: u32, tlen: u32, flags: u8, typed: bool, ty: u32, custom: bool }
+// Per builtin (an entry of BUILTIN_TYPES, found through the hash table of
+// tables_gen.goose): its function type, parsed on first use.
+struct BuiltinEnt { typed: bool, custom: bool, ty: u32 }
 var bentries: BuiltinEnt[>..] = [];
-var bmap = dictionary<u32, i64> {};
-var bloaded: bool = false;
 
-fn load_builtins() {
-    bloaded = true;
-    let text = BUILTIN_TYPES;
-    var i = 0;
-    while i < text.len {
-        var j = i;
-        while j < text.len && text[j] != '|' && text[j] != '\n' { j++; }
-        let nm = text[i..j];
-        j++;
-        let ts = j;
-        while j < text.len && text[j] != '|' && text[j] != '\n' { j++; }
-        let te = j;
-        var fl: u8 = 0;
-        if j < text.len && text[j] == '|' {
-            j++;
-            while j < text.len && text[j] != '\n' {
-                if text[j] == 'n' { fl = fl | 1; }
-                j++;
-            }
-        }
-        if nm.len > 0 {
-            let id = intern(nm);
-            bmap.insert(id, bentries.len);
-            bentries.push(BuiltinEnt { name: id, toff: ts as! u32, tlen: (te - ts) as! u32, flags: fl, typed: false, ty: 0, custom: false });
-        }
-        i = j + 1;
+// The builtin named by identifier id, or -1.
+fn builtin_index(id: u32) -> i64 {
+    let d = idents[id];
+    let b = tbl_find(BUILTIN_TYPES, TBL_BUILTIN_TYPES_OFF, TBL_BUILTIN_TYPES_HT, TBL_BUILTIN_TYPES_LEN,
+                     src[d.off..d.off + d.len], d.hash, '|');
+    if b >= 0 && bentries.len == 0 {
+        bentries.resize(TBL_BUILTIN_TYPES_OFF.len, BuiltinEnt { typed: false, custom: false, ty: 0 });
     }
+    return b;
 }
 
-fn builtin_index(id: u32) -> i64 {
-    if !bloaded { load_builtins(); }
-    let r = bmap.get(id);
-    if r { return r; }
-    return -1;
+// Builtin b's line is name|type|flags: the range of its type text.
+fn builtin_text(b: i64) -> i64, i64 {
+    let text = BUILTIN_TYPES;
+    var j = TBL_BUILTIN_TYPES_OFF[b] as i64;
+    while j < text.len && text[j] != '|' && text[j] != '\n' { j++; }
+    j++;
+    let ts = j;
+    while j < text.len && text[j] != '|' && text[j] != '\n' { j++; }
+    return ts, j;
+}
+
+// The flags of builtin b: 1 = noreturn.
+fn builtin_flags(b: i64) -> u8 {
+    let text = BUILTIN_TYPES;
+    let ts, te = builtin_text(b);
+    var j = te;
+    var fl: u8 = 0;
+    if j < text.len && text[j] == '|' {
+        j++;
+        while j < text.len && text[j] != '\n' {
+            if text[j] == 'n' { fl = fl | 1; }
+            j++;
+        }
+    }
+    return fl;
 }
 
 fn is_library_name(name: const u8[:]) -> bool {
@@ -87,13 +90,13 @@ fn lex_string_tokens(s: const u8[:]) -> i64 {
     return first;
 }
 
-var bt_name: u8[>..] = [];
 
 // The function type of builtin entry b (parsed on first use).
 recursive fn builtin_type(b: i64) -> u32 {
     if bentries[b].typed { return bentries[b].ty; }
     bentries[b].typed = true;
-    let text = BUILTIN_TYPES[bentries[b].toff..bentries[b].toff + bentries[b].tlen];
+    let ts, te = builtin_text(b);
+    let text = BUILTIN_TYPES[ts..te];
     let first = lex_string_tokens(text);
     let save = pc;
     pc = first;
@@ -137,7 +140,7 @@ recursive fn builtin_or_implicit(id: u32, loc: u32, call: bool) -> i64 {
         syms[s].v = b;
         syms[s].sc = SC_EXTERN;
         syms[s].flags = SF_FILESCOPE;
-        if bentries[b].flags & 1 != 0 { syms[s].flags = syms[s].flags | SF_NORETURN; }
+        if builtin_flags(b) & 1 != 0 { syms[s].flags = syms[s].flags | SF_NORETURN; }
         if lib {
             syms[s].flags = syms[s].flags | SF_IMPLICIT;
             implicit_fn(loc, str("call to undeclared library function '", name, "'"));
@@ -167,11 +170,11 @@ fn bind_file_scope(s: i64) {
     syms[s].prev = -1;
     syms[s].scope = 0;
     if scope_depth == 0 {
-        id_ord[name] = s as! i32;
+        id_bind[name].ord = s as! i32;
         scope_log.push(s as! u32);
         return;
     }
-    id_ord[name] = s as! i32;
+    id_bind[name].ord = s as! i32;
     late_file_syms.push(s as! u32);
 }
 var late_file_syms: u32[>..] = [];

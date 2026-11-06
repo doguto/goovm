@@ -42,7 +42,7 @@ fn lower_tu(main_file: const u8[:]) -> bool {
     init_no_builtin();
     dbg_init(main_file);
     ensure_sym_tables();
-    while sym_init.len < syms.len { sym_init.push(0); sym_decl.push(0); }
+    ensure_sym_gen();
     let tu = nodes[tu_node];
     let cnt = tu.c as i64;
     // pass 1: definitions and initializers
@@ -53,11 +53,11 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             // its global is made when it is emitted or referenced: an unused
             // static or inline function leaves no symbol, as in clang
             let s = nd.a as i64;
-            def_by_name.insert(link_name(s), s);
+            gmap.insert(gk(GM_DEFBY, link_name(s)), s as! u32);
         } else if nd.kind == N_DECL {
             let s = nd.a as i64;
             if syms[s].kind == SK_VAR {
-                if nd.b != 0 { sym_init[s] = nd.b; sym_decl[s] = it; }
+                if nd.b != 0 { sym_gen[s].init = nd.b; sym_gen[s].decl = it; }
             }
         }
     }
@@ -73,8 +73,8 @@ fn lower_tu(main_file: const u8[:]) -> bool {
                 sym_has_attr(s, AM_DTOR);
             if !always { continue; }
             let g = func_global(s);
-            if glob_state[g] == 0 {
-                glob_state[g] = 1;
+            if glob_gen[g].state == 0 {
+                glob_gen[g].state = 1;
                 work.push(g);
             }
         } else if nd.kind == N_DECL {
@@ -83,8 +83,8 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             if syms[s].flags & (SF_DEFINED | SF_TENTATIVE) == 0 { continue; }
             if is_internal_sym(s) && !sym_has_attr(s, AM_USED) { continue; }
             let g = var_global(s);
-            if glob_state[g] == 0 {
-                glob_state[g] = 1;
+            if glob_gen[g].state == 0 {
+                glob_gen[g].state = 1;
                 work.push(g);
             }
         } else if nd.kind == N_ASM {
@@ -115,7 +115,7 @@ fn lower_tu(main_file: const u8[:]) -> bool {
         let g = work[wi];
         wi++;
         ensure_glob_tables();
-        let s = glob_sym[g];
+        let s = glob_gen[g].sym;
         if s < 0 { continue; }
         if m_globals[g].kind == G_FUNC {
             let d = syms[s].def;
@@ -138,7 +138,7 @@ fn finish_undefined() {
     for g in m_globals.len {
         let gd = m_globals[g];
         if gd.flags & (GF_DEFINED | GF_COMMON) != 0 { continue; }
-        let s = glob_sym[g];
+        let s = glob_gen[g].sym;
         if s < 0 { continue; }
         var f = gd.flags;
         if syms[s].flags & SF_WEAK != 0 { f = f | GF_WEAK; }
@@ -163,7 +163,7 @@ fn emit_aliases() {
         let off = sym_attrs[a].alias_off as i64;
         let tname = strbytes[off..off + sym_attrs[a].alias_len];
         let tid = intern(tname);
-        let r = name_glob.get(tid);
+        let r = gmap.get(gk(GM_NAMEGLOB, tid));
         if !r {
             err_at(nd.loc, str("alias must point to a defined variable or function ('", tname, "')"));
             continue;
@@ -177,7 +177,7 @@ fn emit_aliases() {
         m_globals[g].flags = link_flags(s, true) | GF_DEFINED | (m_globals[tg].flags & (GF_TLS | GF_CONST));
         m_globals[g].align = m_globals[tg].align;
         ensure_glob_tables();
-        glob_state[g] = 2;
+        glob_gen[g].state = 2;
     }
 }
 
@@ -237,7 +237,7 @@ fn emit_structors() {
             format(nm, m_globals.len);
             let g = new_global(nm, G_VAR, GF_INTERNAL | GF_DEFINED | GF_LOCALREF, 8);
             ensure_glob_tables();
-            glob_state[g] = 2;
+            glob_gen[g].state = 2;
             m_globals[g].section = si;
             m_globals[g].size = (8 * (e - k)) as! u32;
             let at = m_data.len;

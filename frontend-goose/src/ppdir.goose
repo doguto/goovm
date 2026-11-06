@@ -43,8 +43,6 @@ var pathents: PathEnt[>..] = [];
 var pathtab: u32[>..<] = [];
 var pathmask: i64 = 0;
 var pbuf: u8[>..] = [];        // path being built
-var nbuf: u8[>..] = [];        // normalized path
-var trig_buf: u8[>..] = [];
 
 fn path_grow() {
     let n = if pathtab.len == 0 { 1024 } else { pathtab.len * 2 };
@@ -60,8 +58,7 @@ fn path_grow() {
 
 // Normalizes pbuf into nbuf: drops "." components and empty ones, folds
 // "x/.." textually.
-fn normalize_path() {
-    nbuf.clear();
+fn normalize_path(nbuf: u8[>..]&) {
     var i = 0;
     let n = pbuf.len;
     if n > 0 && pbuf[0] == '/' { nbuf.push('/'); }
@@ -90,43 +87,108 @@ fn normalize_path() {
     }
 }
 
-// The file at path pbuf, loaded once; -1 if there is none.
-fn lookup_file() -> i64 {
-    normalize_path();
-    let h = hash_bytes(nbuf);
-    if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
+// Appends the file at path (anything but a directory) to out with one open,
+// fstat, read and close: 1, or 0 if there is no such file (goosecc_rt.h).
+extern fn read_source(path: const u8[:], out: u8[>..]&) -> i64 = "goosecc_read_file";
+
+// The slot of key's entry in pathtab, or the empty one where it goes. The
+// entries are files (file >= -1) and directories (file <= -2, below),
+// apart by `dir`.
+fn path_slot(key: const u8[:], h: u32, dir: bool) -> i64 {
     var p = (h as i64) & pathmask;
     loop {
         let e = pathtab[p];
-        if e == 0 { break; }
+        if e == 0 { return p; }
         let pe = pathents[e - 1];
-        if pe.hash == h && pe.len == nbuf.len && names[pe.off..pe.off + pe.len] == nbuf { return pe.file as i64; }
+        if pe.hash == h && pe.len == key.len && (pe.file <= -2) == dir && names[pe.off..pe.off + pe.len] == key { return p; }
         p = (p + 1) & pathmask;
     }
-    var f: i64 = -1;
-    if file_exists(pbuf) {
-        f = load_file(pbuf);
+}
+
+// The length of pbuf's directory part (before its last '/'); 0 for none
+// or the root.
+fn pbuf_dir_len() -> i64 {
+    var j = pbuf.len;
+    while j > 0 && pbuf[j - 1] != '/' { j--; }
+    return if j > 1 { j - 1 } else { 0 };
+}
+
+// Is p what normalize_path makes of it: no empty, "." or ".." component,
+// no '/' at the end?
+fn path_is_normal(p: const u8[:]) -> bool {
+    if p.len == 0 || p[p.len - 1] == '/' { return false; }
+    var i = 0;
+    while i < p.len {
+        let c = p[i];
+        if c == '/' {
+            if i > 0 && p[i - 1] == '/' { return false; }
+        } else if c == '.' && (i == 0 || p[i - 1] == '/') {
+            if i + 1 == p.len || p[i + 1] == '/' { return false; }
+            if p[i + 1] == '.' && (i + 2 == p.len || p[i + 2] == '/') { return false; }
+        }
+        i++;
     }
-    let off = name_add(nbuf);
-    pathents.push(PathEnt { off: off, len: nbuf.len as! u32, hash: h, file: f as! i32 });
+    return true;
+}
+
+// The directories that files were looked for in and not found are entries
+// of pathents too: their spelling as searched (not normalized: ".." is the
+// kernel's to resolve), file -2 when it is not a directory, -3 when it is.
+// No file under a -2 one can be opened, so most of the misses of a search
+// path (bits/stdio.h in every -I directory) cost no system call.
+fn dir_missing(dl: i64) -> bool {
+    let e = pathtab[path_slot(pbuf[..dl], hash_bytes(pbuf[..dl]), true)];
+    return e != 0 && pathents[e - 1].file == -2;
+}
+
+fn note_dir(dl: i64) {
+    if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
+    let h = hash_bytes(pbuf[..dl]);
+    let p = path_slot(pbuf[..dl], h, true);
+    if pathtab[p] != 0 { return; }
+    let isdir = is_dir(pbuf[..dl]);
+    let off = name_add(pbuf[..dl]);
+    pathents.push(PathEnt { off: off, len: dl as! u32, hash: h, file: if isdir { -3 } else { -2 } });
+    pathtab[p] = pathents.len as! u32;
+}
+
+// The file at path pbuf, loaded once; -1 if there is none. The cache key
+// is the normalized path (pbuf itself when it is normal already).
+fn lookup_file() -> i64 {
+    var nbuf: u8[>..] = [];
+    let normal = path_is_normal(pbuf);
+    if !normal { normalize_path(nbuf); }
+    let key: const u8[:] = if normal { pbuf[..] } else { nbuf[..] };
+    let h = hash_bytes(key);
+    if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
+    let p = path_slot(key, h, false);
+    let e = pathtab[p];
+    if e != 0 { return pathents[e - 1].file as i64; }
+    let dl = pbuf_dir_len();
+    var f: i64 = -1;
+    if dl == 0 || !dir_missing(dl) { f = load_file(pbuf); }
+    let off = name_add(key);
+    pathents.push(PathEnt { off: off, len: key.len as! u32, hash: h, file: f as! i32 });
     pathtab[p] = pathents.len as! u32;
     if f >= 0 {
         files[f].path = off;
-        files[f].path_len = nbuf.len as! u32;
+        files[f].path_len = key.len as! u32;
+    } else if dl > 0 {
+        note_dir(dl);
     }
     return f;
 }
 
 fn load_file(path: const u8[:]) -> i64 {
     let start = src.len;
-    if !read_file(path, src) { return -1; }
+    if read_source(path, src) == 0 { return -1; }
     var s = start;
     // A UTF-8 byte order mark is skipped.
     if src.len - s >= 3 && src[s] == 239 && src[s + 1] == 187 && src[s + 2] == 191 { s += 3; }
     var e = src.len;
     if opt_trigraphs && has_trigraphs(s, e) {
-        trig_buf.clear();
-        replace_trigraphs(s, e);
+        var trig_buf: u8[>..] = [];
+        replace_trigraphs(s, e, trig_buf);
         s = src.len;
         src.append(trig_buf);
         e = src.len;
@@ -134,9 +196,7 @@ fn load_file(path: const u8[:]) -> i64 {
     src.push(0);
     src.push(0);
     let f = files.len;
-    files.push(FileRec { path: 0, path_len: 0, start: s as! u32, end: e as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0 });
-    file_spelling.push(0);
-    file_spelling_len.push(0);
+    files.push(FileRec { path: 0, path_len: 0, start: s as! u32, end: e as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0, sp_off: 0, sp_len: 0 });
     return f;
 }
 
@@ -156,7 +216,7 @@ fn has_trigraphs(s: i64, e: i64) -> bool {
     return false;
 }
 
-fn replace_trigraphs(s: i64, e: i64) {
+fn replace_trigraphs(s: i64, e: i64, trig_buf: u8[>..]&) {
     var i = s;
     while i < e {
         if i + 2 < e && src[i] == '?' && src[i + 1] == '?' && trigraph_char(src[i + 2]) != 0 {
@@ -247,9 +307,9 @@ fn push_file(f: i64, spell: const u8[:], dir_idx: i64, sys: bool) {
     if ctxs.len > 0 { save_lexer(); }
     let so = name_add(spell);
     let sl = spell.len as! u32;
-    if file_spelling_len[f] == 0 {
-        file_spelling[f] = so;
-        file_spelling_len[f] = sl;
+    if files[f].sp_len == 0 {
+        files[f].sp_off = so;
+        files[f].sp_len = sl;
     }
     let s: u8 = if sys || files[f].system { F_SYSHDR } else { 0 };
     ctxs.push(Ctx {
@@ -478,9 +538,9 @@ fn skip_to_directive() -> bool {
             if src[p] == c { p++; }
             continue;
         }
-        // Skip the rest of a plain run quickly.
-        p++;
-        while cc[src[p]] & (CC_IDCONT | CC_HSPACE) != 0 { p++; }
+        // The rest of the line up to what the loop must look at (at_bol
+        // is false: '#' and '%' are plain here), 16 bytes at a time.
+        p = skip_text(src, p + 1);
     }
 }
 
@@ -626,6 +686,14 @@ fn do_define() {
             }
         }
     }
+    if flags & M_FUNC != 0 {
+        var simple = true;
+        for j in first..mtoks.len {
+            let k = mtoks[j].kind;
+            if k == TK_HASH || k == TK_HASHHASH || (k == TK_IDENT && mtoks[j].val == id_va_opt) { simple = false; }
+        }
+        if simple { flags = flags | M_SIMPLE; }
+    }
     let m = macros.len;
     macros.push(Macro { name: n.val, first: first as! u32, count: count as! u32, nparams: params.len as! u16,
         flags: flags, builtin: 0, enabled: true, loc: n.xloc });
@@ -703,7 +771,7 @@ recursive fn do_include(t: Tok, k: i64) {
     if g >= 0 && idents[g].macro >= 0 { return; }
     if k == PK_IMPORT {
         // #import: include at most once
-        if file_spelling_len[f] != 0 { return; }
+        if files[f].sp_len != 0 { return; }
     }
     let sys = found_dir >= sys_start || (ctxs[cur_file_ctx].sys != 0 && found_dir < 0);
     // pbuf holds the spelling of the path that was found
@@ -800,11 +868,12 @@ fn string_body(t: Tok, out: u8[>..]&) {
     out.append(src[s + 1..e - 1]);
 }
 
-var tu_annot: bool = false;    // -fsyntax-only: pragma pack goes into tu_toks
+var tu_annot: bool = false;    // not -E: #pragma pack and ms_struct are recorded for the parser
 
 fn emit_pack(loc: u32) {
     if tu_annot {
-        tu_toks.push(Tok { kind: TK_ANNOT_PACK, flags: 0, aux: 0, spell: loc, val: pack_cur, xloc: loc });
+        pack_changes.push(tu_toks.len as! u32);
+        pack_changes.push(pack_cur);
     }
 }
 
@@ -958,7 +1027,8 @@ recursive fn do_pragma(t: Tok, from_op: bool) {
         var v: u32 = 0;
         if ptok_is(1, "on") { v = 1; }
         if tu_annot {
-            tu_toks.push(Tok { kind: TK_ANNOT_MSSTRUCT, flags: 0, aux: 0, spell: ptoks[0].xloc, val: v, xloc: ptoks[0].xloc });
+            ms_changes.push(tu_toks.len as! u32);
+            ms_changes.push(v);
         }
     }
     if print && mode_E { print_pragma_tokens(0); }

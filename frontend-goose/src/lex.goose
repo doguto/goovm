@@ -13,6 +13,17 @@ let CC_HSPACE = 8;     // space, \t, \v, \f, \r
 let CC_NUMCONT = 16;   // [0-9A-Za-z_.$] and bytes >= 0x80
 var cc: u8[256] = [0; 256];
 
+// What lex_file_token does first with a byte: start an identifier
+// (LX_IDPREFIX: L, u, U, which may start a literal), skip a space, return a
+// one-character punctuator (PUNCT1 its kind), or anything else (LX_OTHER).
+let LX_OTHER = 0;
+let LX_IDENT = 1;
+let LX_IDPREFIX = 2;
+let LX_SPACE = 3;
+let LX_PUNCT1 = 4;
+var lxc: u8[256] = [0; 256];
+var PUNCT1: u8[256] = [0; 256];
+
 fn lex_init_tables() {
     for i in 256 {
         var v: u8 = 0;
@@ -24,6 +35,16 @@ fn lex_init_tables() {
         if c == '.' { v |= CC_NUMCONT; }
         if c == ' ' || c == '\t' || c == 11 || c == 12 || c == '\r' { v |= CC_HSPACE; }
         cc[i] = v;
+        var k: u8 = LX_OTHER;
+        if v & CC_IDSTART != 0 { k = if c == 'L' || c == 'u' || c == 'U' { LX_IDPREFIX } else { LX_IDENT }; }
+        if v & CC_HSPACE != 0 { k = LX_SPACE; }
+        let p1: u8 = match c {
+            '[' => TK_L_SQUARE, ']' => TK_R_SQUARE, '(' => TK_L_PAREN, ')' => TK_R_PAREN, '{' => TK_L_BRACE,
+            '}' => TK_R_BRACE, ';' => TK_SEMI, ',' => TK_COMMA, '~' => TK_TILDE, '?' => TK_QUESTION, _ => 0,
+        };
+        if p1 != 0 { k = LX_PUNCT1; }
+        PUNCT1[i] = p1;
+        lxc[i] = k;
     }
 }
 
@@ -40,9 +61,6 @@ var lx_flags: u8 = 0;    // flags for the next token (F_BOL / F_LSPACE)
 var lx_dir: bool = false; // lexing a directive: a newline ends it with TK_EOD
 var lx_sys: u8 = 0;      // F_SYSHDR when the current file is a system header
 
-// Scratch for the slow path.
-var lxtmp: u8[>..] = [];
-var lxmap: u32[>..] = [];
 
 // Recognizes the token at buf[i] (which is not whitespace, not an
 // identifier start handled by the caller... any token in fact). Returns the
@@ -245,8 +263,8 @@ fn splice_at(p: i64) -> i64 {
 // appended to src (its offset in lx_slow_spell).
 var lx_slow_spell: i64 = 0;
 fn lex_slow(p0: i64) -> i64, i64, u8 {
-    lxtmp.clear();
-    lxmap.clear();
+    var lxtmp: u8[>..] = [];
+    var lxmap: u32[>..] = [];
     var p = p0;
     // Gather the logical line from p0.
     loop {
@@ -333,8 +351,36 @@ fn lex_file_token() -> Tok {
     var p = lx_pos;
     var flags = lx_flags;
     loop {
-        let c = src[p];
-        if cc[c] & CC_HSPACE != 0 { p++; flags |= F_LSPACE; continue; }
+        var c = src[p];
+        if cc[c] & CC_HSPACE != 0 {
+            // a run of spaces (indentation)
+            p++;
+            while cc[src[p]] & CC_HSPACE != 0 { p++; }
+            flags |= F_LSPACE;
+            c = src[p];
+        }
+        let cl = lxc[c];
+        if cl == LX_IDENT || (cl == LX_IDPREFIX && !quote_follows(p)) {
+            // Identifier fast path.
+            let r = ident_scan(src, p);
+            let q = p + (r >> 32) as! i64;
+            let h = (r & 0xFFFFFFFF) as! u32;
+            if src[q] == '\\' && splice_at(q) > 0 {
+                let k, e, fl = lex_slow(p);
+                return finish_slow(k, p, e, fl, flags);
+            }
+            let id = ident_lookup(p, q - p, h);
+            lx_pos = q;
+            lx_flags = 0;
+            return Tok { kind: TK_IDENT, flags: flags | lx_sys, aux: 0, spell: p as! u32, val: id, xloc: p as! u32 };
+        }
+        // A punctuator that is always one character: what scan_token
+        // returns, unless a splice follows it.
+        if cl == LX_PUNCT1 && src[p + 1] != '\\' {
+            lx_pos = p + 1;
+            lx_flags = 0;
+            return Tok { kind: PUNCT1[c], flags: flags | lx_sys, aux: 0, spell: p as! u32, val: 0, xloc: p as! u32 };
+        }
         if c == '\n' {
             if lx_dir {
                 lx_pos = p;
@@ -350,23 +396,6 @@ fn lex_file_token() -> Tok {
             lx_flags = flags;
             let k = if lx_dir { TK_EOD } else { TK_EOF };
             return Tok { kind: k as! u8, flags: flags, aux: 0, spell: p as! u32, val: 0, xloc: p as! u32 };
-        }
-        if cc[c] & CC_IDSTART != 0 && !((c == 'L' || c == 'u' || c == 'U') && quote_follows(p)) {
-            // Identifier fast path.
-            var h: u32 = 2166136261;
-            var q = p;
-            while cc[src[q]] & CC_IDCONT != 0 {
-                h = (h ^ src[q]) * 16777619;
-                q++;
-            }
-            if src[q] == '\\' && splice_at(q) > 0 {
-                let k, e, fl = lex_slow(p);
-                return finish_slow(k, p, e, fl, flags);
-            }
-            let id = ident_lookup(p, q - p, h);
-            lx_pos = q;
-            lx_flags = 0;
-            return Tok { kind: TK_IDENT, flags: flags | lx_sys, aux: 0, spell: p as! u32, val: id, xloc: p as! u32 };
         }
         if c == '\\' {
             let s = splice_at(p);
@@ -427,9 +456,11 @@ fn lex_file_token() -> Tok {
     }
 }
 
+// Does the identifier start L, u or U at p begin a literal (L"", u'', u8"",
+// U"" ...)? u and U prefixes are C11's.
 fn quote_follows(p: i64) -> bool {
     let c1 = src[p + 1];
-    if c1 == '"' { return true; }
+    if c1 == '"' { return src[p] == 'L' || opt_c11; }
     if c1 == '\'' { return src[p] == 'L' || opt_c11; }
     if src[p] == 'u' && c1 == '8' && src[p + 2] == '"' && opt_c11 { return true; }
     return false;
@@ -483,7 +514,8 @@ fn lex_skip_line() {
             if src[p] == c { p++; }
             continue;
         }
-        p++;
+        // up to the next character the loop must look at, 16 bytes at a time
+        p = skip_text(src, p + 1);
     }
     lx_pos = p;
 }
