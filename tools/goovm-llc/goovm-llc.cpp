@@ -54,6 +54,7 @@ double us(clk::time_point a, clk::time_point b) { return std::chrono::duration<d
 bool llvm_codegen(llvm::Module &m, std::vector<uint8_t> &out) {
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();   // module-level asm (libstdc++'s <iostream>)
     std::string err;
     std::string triple = m.getTargetTriple();
     const llvm::Target *t = llvm::TargetRegistry::lookupTarget(triple, err);

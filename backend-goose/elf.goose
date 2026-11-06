@@ -554,13 +554,32 @@ fn write_elf(o: u8[>..]&) {
     // Group sections: GRP_COMDAT (or 0) and the member sections.
     if ng != 0 {
         opad(o, 4);
+        // the members of each group in section order (a counting sort by group)
+        let nc = M.comdats.len;
+        var gfirst: u32[>..] = [];
+        gfirst.resize(nc + 2, 0);
+        for s in 1..ns {
+            let g: i64 = osecs[s].grp;
+            if g != 0 { gfirst[g + 1] += 1; }
+        }
+        for g in 1..nc + 1 { gfirst[g + 1] += gfirst[g]; }
+        var gfill: u32[>..] = [];
+        gfill.resize(nc + 1, 0);
+        var gmem: u32[>..] = [];
+        gmem.resize(gfirst[nc + 1], 0);
+        for s in 1..ns {
+            let g: i64 = osecs[s].grp;
+            if g == 0 { continue; }
+            gmem[gfirst[g] + gfill[g]] = s as! u32;
+            gfill[g] += 1;
+        }
         for C, c in M.comdats {
             let q: i64 = cd_grp[c];
             if q == 0 { continue; }
             sh_off[q] = o.len as u64;
             o4(o, if C.kind == CD_NODEDUP { 0 } else { 1 });
-            for s in 1..ns {
-                if osecs[s].grp != c as! u32 + 1 { continue; }
+            for k in gfirst[c + 1]..gfirst[c + 2] {
+                let s: i64 = gmem[k];
                 o4(o, (s + ng) as! u32);
                 if rela_of[s] != 0 { o4(o, rela_of[s]); }
             }

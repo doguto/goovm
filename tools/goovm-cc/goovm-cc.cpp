@@ -103,6 +103,7 @@ int main(int argc, char **argv) {
 #endif
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();   // module-level asm (libstdc++'s <iostream>)
 
     // Run the clang driver to get the cc1 job, exactly as `clang -c` would
     // (createInvocation is meant for tools and forces -fsyntax-only).
