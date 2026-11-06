@@ -50,11 +50,10 @@ fn lower_tu(main_file: const u8[:]) -> bool {
         let it = nlist[tu.v + i];
         let nd = nodes[it];
         if nd.kind == N_FUNCDEF {
+            // its global is made when it is emitted or referenced: an unused
+            // static or inline function leaves no symbol, as in clang
             let s = nd.a as i64;
-            let g = global_by_name(link_name(s), true);
-            ensure_glob_tables();
-            glob_sym[g] = s;
-            sym_glob[s] = g;
+            def_by_name.insert(link_name(s), s);
         } else if nd.kind == N_DECL {
             let s = nd.a as i64;
             if syms[s].kind == SK_VAR {
@@ -72,8 +71,9 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             if syms[s].def as u32 != it { continue; }
             let always = (!is_internal_sym(s) && !fn_local_inline(s)) || sym_has_attr(s, AM_USED) || sym_has_attr(s, AM_CTOR) ||
                 sym_has_attr(s, AM_DTOR);
-            let g = sym_glob[s];
-            if always && glob_state[g] == 0 {
+            if !always { continue; }
+            let g = func_global(s);
+            if glob_state[g] == 0 {
                 glob_state[g] = 1;
                 work.push(g);
             }

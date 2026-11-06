@@ -107,21 +107,35 @@ def main():
                   + (f", tcc {tt * 1e3:.1f} ms" if have_tcc and et == 0 else "") + ("" if eg == 0 else " GOOSECC FAILED"),
                   flush=True)
         rows.append((t.name, tot))
-    out = ["| program | files | clang-20 -O0 -c | goosecc -c | speed-up | tcc -c (files) | clang peak RSS | goosecc peak RSS |",
-           "|---|---:|---:|---:|---:|---:|---:|---:|"]
-    T = {"files": 0, "clang": 0.0, "goosecc": 0.0, "tcc": 0.0, "tcc_files": 0, "rss_clang": 0, "rss_goosecc": 0, "ph": [0.0] * 5}
+    out = ["| program | files | clang-20 -O0 -c | goosecc -c | speed-up | clang peak RSS | goosecc peak RSS |",
+           "|---|---:|---:|---:|---:|---:|---:|"]
+    T = {"files": 0, "clang": 0.0, "goosecc": 0.0, "tcc": 0.0, "tcc_files": 0, "tcc_clang": 0.0, "tcc_goosecc": 0.0,
+         "rss_clang": 0, "rss_goosecc": 0, "rss_tcc": 0, "ph": [0.0] * 5, "fail_goosecc": 0}
     for name, t in rows:
         out.append(f"| {name} | {t['files']} | {t['clang'] * 1e3:.0f} ms | {t['goosecc'] * 1e3:.0f} ms | "
-                   f"{t['clang'] / t['goosecc']:.2f}x | {t['tcc'] * 1e3:.0f} ms ({t['tcc_files']}) | "
-                   f"{t['rss_clang'] / 1024:.0f} MB | {t['rss_goosecc'] / 1024:.0f} MB |")
-        for k in ("files", "clang", "goosecc", "tcc", "tcc_files"):
+                   f"{t['clang'] / t['goosecc']:.2f}x | {t['rss_clang'] / 1024:.0f} MB | {t['rss_goosecc'] / 1024:.0f} MB |")
+        for k in ("files", "clang", "goosecc", "tcc", "tcc_files", "tcc_clang", "tcc_goosecc", "fail_goosecc"):
             T[k] += t[k]
-        T["rss_clang"] = max(T["rss_clang"], t["rss_clang"])
-        T["rss_goosecc"] = max(T["rss_goosecc"], t["rss_goosecc"])
+        for k in ("rss_clang", "rss_goosecc", "rss_tcc"):
+            T[k] = max(T[k], t[k])
         for i in range(5):
             T["ph"][i] += t["ph"][i]
     out.append(f"| **total** | {T['files']} | {T['clang']:.2f} s | {T['goosecc']:.2f} s | {T['clang'] / T['goosecc']:.2f}x | "
-               f"{T['tcc']:.2f} s ({T['tcc_files']}) | {T['rss_clang'] / 1024:.0f} MB | {T['rss_goosecc'] / 1024:.0f} MB |")
+               f"{T['rss_clang'] / 1024:.0f} MB | {T['rss_goosecc'] / 1024:.0f} MB |")
+    if T["fail_goosecc"]:
+        out.append(f"\ngoosecc failed on {T['fail_goosecc']} files.")
+    if have_tcc:
+        out.append("")
+        out.append("On the files TinyCC compiles (`tcc -c`, same -D/-I flags):")
+        out.append("")
+        out.append("| program | files | clang-20 -O0 -c | goosecc -c | tcc -c | goosecc / tcc | tcc peak RSS |")
+        out.append("|---|---:|---:|---:|---:|---:|---:|")
+        for name, t in rows + [("**total**", T)]:
+            if t["tcc_files"] == 0:
+                out.append(f"| {name} | 0 | | | | | |")
+                continue
+            out.append(f"| {name} | {t['tcc_files']} | {t['tcc_clang'] * 1e3:.0f} ms | {t['tcc_goosecc'] * 1e3:.0f} ms | "
+                       f"{t['tcc'] * 1e3:.0f} ms | {t['tcc_goosecc'] / t['tcc']:.2f} | {t['rss_tcc'] / 1024:.0f} MB |")
     out.append("")
     out.append("goosecc phases (sum of one --time run per file):")
     out.append("")

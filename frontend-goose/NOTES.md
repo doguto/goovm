@@ -5,7 +5,7 @@ goosecc is about 17,600 lines of Goose without comments and blank lines
 B1 (sections 1-8) and the lowering to GIR of B2 (section 9), plus the
 Goose back-end imported as a package. It is compiled with `goose
 --standalone` to one 5.1 MB C file and then with `clang-20 -O2`
-(BUILDTIME for both). This page records what was
+(2 s and 18 s). This page records what was
 hard or surprising, with the compiler's own messages, and what was done about
 it. Most of it is the price of Goose's memory model, which is also why the
 result is fast and small (README.md, "Results").
@@ -326,8 +326,11 @@ the programs found these (all fixed in the front end):
 The lowering is about a fifth of a `-c` run (README.md, "Speed"); the
 profile of sqlite3.c has no single hot spot in it. What helped: a table
 from C type kind to GIR type in `vty` (it is called for nearly every
-node), `set_loc` as an `inline fn` that only records the location unless
-`-g` is on, constant conditions decided without materializing an `i1`,
+node), debug locations that cost nothing without `-g` (each emitter is
+a wrapper that goes straight to the real function unless `-g` is on) and
+little with it (a cache of the last source offset and of the last macro
+range: `set_loc_dbg` went from 13% to 3% of a `-g` run), constant
+conditions decided without materializing an `i1`,
 operand fixups recorded at emission so that `fn_finish` is a single pass,
 and interning the struct types of two-part ABI values once. What remains
 is the cost of the data-stack model: about 15% of a run is page faults and

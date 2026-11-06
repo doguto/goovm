@@ -459,8 +459,10 @@ Loads are explicit in the AST (`CK_LVAL2RVAL`), so every load the program
 does is one GIR `LOAD`. Bit-fields are read and written through the
 smallest integer covering their bytes (an `i24` for a field spanning three
 bytes), with shifts and masks, so an access never touches a byte the field
-does not use. Conditions are branched on directly (`&&`, `||`, `!` and
-compares become branches, constant conditions fold), and the values of
+does not use (clang loads the whole storage unit of the bit-field run).
+Conditions are branched on directly (`&&`, `||`, `!` and compares become
+branches, constant conditions fold), as clang does for `if` and `?:`
+(for loop conditions it computes the value first), and the values of
 `&&`, `||` and `?:` are PHIs. Complex multiplication and division follow
 clang: the inline formula with a NaN check and the `__mul?c3` call,
 `__div?c3`. `_Float16` arithmetic is done in float through the
@@ -495,10 +497,10 @@ occupy and the bytes they carry are the same. Calls of
 unprototyped functions are variadic calls (`al` is set), as clang makes
 them. `va_arg` is lowered inline as clang does it (register save area
 with `gp_offset`/`fp_offset`, or the overflow area, PHI of the two
-addresses). `tests/c` and a randomized cross test (struct, union, complex,
-`__int128`, `long double` and variadic signatures; callee and caller
-compiled by clang and goosecc in all combinations) check it against
-clang-20.
+addresses). `tests/c` and a randomized cross test (`tests/abi_cross.py`:
+struct, union, complex, `__int128`, `long double` and variadic
+signatures; callee and caller compiled by clang and goosecc in all four
+combinations) check it against clang-20.
 
 ### 7.4 Globals and data
 

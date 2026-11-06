@@ -23,6 +23,14 @@ var glob_state: u8[>..] = [];              // per global: 0 declared, 1 queued, 
 var work: u32[>..<] = [];                  // globals whose definitions are to be emitted
 var sym_init: u32[>..] = [];               // per symbol: the initializer node (file-scope objects)
 var sym_decl: u32[>..] = [];               // per symbol: the N_DECL that defines it
+var def_by_name = dictionary<u32, i64> {};  // linkage name -> the symbol of the function defined under it
+
+// The symbol whose definition has linkage name id, or -1.
+fn defining_sym(id: u32) -> i64 {
+    let r = def_by_name.get(id);
+    if r { return r; }
+    return -1;
+}
 
 fn ensure_glob_tables() {
     while glob_sym.len < m_globals.len { glob_sym.push(-1); glob_state.push(0); }
@@ -72,9 +80,15 @@ fn func_global(s0: i64) -> u32 {
     ensure_sym_tables();
     var s = s0;
     if sym_glob[s] != NONE { note_use(sym_glob[s]); return sym_glob[s]; }
-    let g = global_by_name(link_name(s), true);
+    let id = link_name(s);
+    let g = global_by_name(id, true);
     ensure_glob_tables();
-    if glob_sym[g] < 0 || (syms[s].def >= 0 && glob_sym[g] >= 0 && syms[glob_sym[g]].def < 0) { glob_sym[g] = s; }
+    if glob_sym[g] < 0 {
+        // a declaration of a function defined in this unit (under another symbol)
+        let ds = defining_sym(id);
+        glob_sym[g] = if ds >= 0 { ds } else { s };
+    }
+    if syms[s].def >= 0 && glob_sym[g] >= 0 && syms[glob_sym[g]].def < 0 { glob_sym[g] = s; }
     sym_glob[s] = g;
     note_use(g);
     return g;
