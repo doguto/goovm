@@ -907,6 +907,7 @@ struct Exporter {
     }
 
     void emit_call(const CallBase &CB, uint32_t callee, uint16_t rt, bool vararg) {
+        if (CB.hasFnAttr(Attribute::ReturnsTwice)) fn_flags |= GIR_FN_RETURNS_TWICE;  // setjmp, vfork, ...
         SmallVector<uint32_t, 32> args;
         for (unsigned i = 0, n = CB.arg_size(); i < n; i++) {
             uint32_t r, w;
@@ -2036,8 +2037,7 @@ struct Exporter {
 
         GirFunc gf{};
         gf.global = g;
-        fn_flags = (Fn.hasLocalLinkage() ? GIR_FN_INTERNAL : 0) | (FT->isVarArg() ? GIR_FN_VARARG : 0) |
-                   (Fn.callsFunctionThatReturnsTwice() ? GIR_FN_RETURNS_TWICE : 0);
+        fn_flags = (Fn.hasLocalLinkage() ? GIR_FN_INTERNAL : 0) | (FT->isVarArg() ? GIR_FN_VARARG : 0);
         uint64_t falign = Fn.getAlign() ? Fn.getAlign()->value() : 16;
         if (falign < 16) falign = 16;
         gf.first_block = (uint32_t)T.blocks.size();
