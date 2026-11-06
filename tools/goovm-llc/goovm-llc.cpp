@@ -94,6 +94,10 @@ SAME(DLoc_g, GirDLoc);
 SAME(DScope_g, GirDScope);
 SAME(DFile_g, GirDFile);
 SAME(Asm_g, GirAsm);
+SAME(Eh_g, GirEh);
+SAME(Comdat_g, GirComdat);
+SAME(Die_g, GirDie);
+SAME(DAttr_g, GirDAttr);
 #undef SAME
 static_assert(offsetof(Inst_g, a_g) == offsetof(GirInst, a), "Inst.a offset");
 static_assert(offsetof(Inst_g, dbg_g) == offsetof(GirInst, dbg), "Inst.dbg offset");
@@ -104,11 +108,13 @@ static_assert(offsetof(Const_g, data_g) == offsetof(GirConst, data), "Const.data
 static_assert(offsetof(Global_g, aux_g) == offsetof(GirGlobal, aux), "Global.aux offset");
 static_assert(offsetof(DataReloc_g, addend_g) == offsetof(GirDataReloc, addend), "DataReloc.addend offset");
 static_assert(offsetof(DataReloc_g, blk2_g) == offsetof(GirDataReloc, block2), "DataReloc.block2 offset");
+static_assert(offsetof(DAttr_g, val_g) == offsetof(GirDAttr, val), "DAttr.val offset");
+static_assert(offsetof(Die_g, n_attrs_g) == offsetof(GirDie, n_attrs), "Die.n_attrs offset");
 
 // The object stays in Goose-owned memory (valid until the next call).
 bool goose_codegen(const GirModule &m, const uint8_t *&obj, size_t &obj_len) {
     gs_i64 len = 0;
-    const uint8_t *p = gir_codegen(
+    const uint8_t *p = gir_codegen_ex(
         sl_Header_g{(Header_g *)m.header, 1},
         sl_TypeDef_g{(TypeDef_g *)m.types, (int64_t)m.n_types},
         sl_Func_g{(Func_g *)m.funcs, (int64_t)m.n_funcs},
@@ -125,7 +131,12 @@ bool goose_codegen(const GirModule &m, const uint8_t *&obj, size_t &obj_len) {
         sl_DScope_g{(DScope_g *)m.dscopes, (int64_t)m.n_dscopes},
         sl_DFile_g{(DFile_g *)m.dfiles, (int64_t)m.n_dfiles},
         sl_u8{(uint8_t *)m.dstr, (int64_t)m.n_dstr},
-        sl_Asm_g{(Asm_g *)m.asms, (int64_t)m.n_asms}, &len);
+        sl_Asm_g{(Asm_g *)m.asms, (int64_t)m.n_asms},
+        sl_Eh_g{(Eh_g *)m.ehs, (int64_t)m.n_ehs},
+        sl_Comdat_g{(Comdat_g *)m.comdats, (int64_t)m.n_comdats},
+        sl_u32{(gs_u32 *)m.gcomdat, (int64_t)m.n_gcomdat},
+        sl_Die_g{(Die_g *)m.dies, (int64_t)m.n_dies},
+        sl_DAttr_g{(DAttr_g *)m.dattrs, (int64_t)m.n_dattrs}, &len);
     if (!p || len <= 0) {
         std::fprintf(stderr, "goovm-llc: the Goose back-end returned no object\n");
         return false;

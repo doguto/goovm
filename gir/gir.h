@@ -237,6 +237,16 @@ enum GirOp {
     GIR_X86,           /* x86 SSE intrinsic: sub = GirX86, a, b; ty          */
     GIR_ASM,           /* inline assembly: a = index into asms; ty = void,   */
                        /*   the single output, or a struct of the outputs    */
+    /* --- version 2, exception handling (additive) --- */
+    GIR_LANDINGPAD,    /* first instruction of a landing pad (a block that   */
+                       /*   only INVOKE unwind edges reach; it has no PHIs): */
+                       /*   ty = { ptr, i32 } (exception object, selector),  */
+                       /*   from rax/edx as the personality routine left     */
+                       /*   them. a = s, b = n: ops[s..s+n) = the actions,   */
+                       /*   in order: k > 0 catches type index k of the      */
+                       /*   function's GirEh type table, k < 0 the exception */
+                       /*   specification at byte -k-1 of its spec table,    */
+                       /*   k = 0 (last only) cleanup; n = 0: cleanup only   */
     GIR_OP_COUNT
 };
 
@@ -288,6 +298,10 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
 #define GIR_IF_SINGLETHREAD  0x0100u  /* syncscope("singlethread")                       */
 #define GIR_IF_VARARG        0x0200u  /* CALL of a variadic function type                */
 #define GIR_IF_NORETURN      0x0400u  /* CALL that does not return                       */
+#define GIR_IF_INVOKE        0x0800u  /* CALL that is an invoke: ops[s + 2n] = the local  */
+                                      /*   block of its landing pad (the unwind edge);   */
+                                      /*   the block's terminator, next, is the BR to    */
+                                      /*   the normal destination                        */
 
 /* ABI words of CALL arguments and Func arguments. 0 = passed by value as
  * its type says. GIR_ABI_BYVAL: the argument is a pointer whose pointee
@@ -449,7 +463,8 @@ typedef struct GirAsm {          /* 24 bytes */
 #define GIR_ASMREG_ST0  32u
 
 /* ------------------------------------------------------------ debug info
- * Carried for a later DWARF emitter; the A1 back-end ignores it. Entry 0
+ * Locations and scopes: the back-end's .debug_line and lexical-block
+ * ranges come from these, the DIE tree from `dies` (below). Entry 0
  * of dlocs, dscopes and dfiles means "none". dstr is a string table of
  * NUL-terminated strings with dstr[0] = NUL. */
 typedef struct GirDLoc {         /* 16 bytes: a DILocation */
@@ -476,6 +491,85 @@ typedef struct GirDFile {        /* 8 bytes */
     uint32_t name;               /* offset in dstr */
     uint32_t dir;                /* offset in dstr */
 } GirDFile;
+
+/* ------------------------------------------------------ exception handling
+ * (additive to version 2: an empty table means no EH.) One GirEh per
+ * function that has landing pads; calls of that function's body that are
+ * not INVOKEs may throw through it (they unwind without a handler). The
+ * personality routine and the typeinfos are reached indirectly, as LLVM does
+ * for PIC: through pointer variables the exporter creates (DW.ref.<name>,
+ * hidden, in its own comdat; one private stub per typeinfo), so the
+ * read-only unwind tables need no dynamic relocations. */
+typedef struct GirEh {           /* 24 bytes */
+    uint32_t func;               /* index into funcs */
+    uint32_t personality;        /* globals index of a pointer variable holding the
+                                    personality routine's address */
+    uint32_t ttypes, n_ttypes;   /* opnds run: entry k-1 is type index k, a globals
+                                    index of a pointer variable holding the typeinfo
+                                    address, or GIR_NONE (catch-all, a null entry) */
+    uint32_t specs, n_specs;     /* exception specifications: data[specs ..
+                                    specs + n_specs), lists of uleb128 type indices,
+                                    each ending in 0 */
+} GirEh;
+
+/* ------------------------------------------------------------ comdat groups
+ * (additive; empty tables: no comdats.) gcomdat is empty or has one entry
+ * per global: its comdat (index into comdats) or GIR_NONE. A defined
+ * function or variable in a comdat gets a section of its own in that ELF
+ * section group (with its relocation and unwind-table sections). */
+#define GIR_CD_ANY     0u        /* comdat any: a COMDAT group */
+#define GIR_CD_NODEDUP 1u        /* nodeduplicate: a plain (non-COMDAT) group */
+typedef struct GirComdat {       /* 16 bytes */
+    uint32_t name, name_len;     /* group signature, into strtab */
+    uint32_t sig;                /* globals index of the symbol of that name, or
+                                    GIR_NONE (the back-end makes a local symbol) */
+    uint32_t kind;               /* GIR_CD_* */
+} GirComdat;
+
+/* ------------------------------------------------------- debug information
+ * entries (additive; empty: the back-end makes a compile unit and one
+ * subprogram per function with a DISubprogram from dscopes). The exporter
+ * builds the DWARF tree of the compile unit as LLVM's DwarfUnit would; the
+ * back-end assigns abbreviations, offsets, string and address indices and
+ * fills in what only it knows (code addresses, frame offsets). DIEs are in
+ * pre-order: a DIE's children follow it, each child after the subtree of
+ * the previous one; die 0 is the DW_TAG_compile_unit (parent GIR_NONE). */
+typedef struct GirDie {          /* 16 bytes */
+    uint16_t tag;                /* DW_TAG_* */
+    uint16_t flags;              /* 0 (reserved) */
+    uint32_t parent;             /* index into dies, GIR_NONE for die 0 */
+    uint32_t attrs, n_attrs;     /* dattrs run, in output order */
+} GirDie;
+
+/* A DIE attribute. `form` is a DWARF form, used as given:
+ *   DW_FORM_data1/2/4/8, sdata, udata, flag, flag_present: val
+ *   DW_FORM_ref4: val = index into dies (the back-end makes it an offset)
+ *   DW_FORM_exprloc, block1: the bytes dstr[val .. val + aux)
+ * or one of the GIR forms, which the back-end resolves: */
+#define GIR_DF_STR        0x7F01u /* string at dstr[val] -> DW_FORM_strx1..4 */
+#define GIR_DF_FILE       0x7F02u /* dfiles index val -> line-table file number (data1/2) */
+#define GIR_DF_PC         0x7F03u /* DW_AT_low_pc + DW_AT_high_pc of function val (funcs index) */
+#define GIR_DF_SCOPE_PC   0x7F04u /* the code ranges of lexical block val (dscopes index):
+                                     low_pc + high_pc, or DW_AT_ranges; without code the DIE
+                                     and its subtree are dropped */
+#define GIR_DF_FRAME_BASE 0x7F05u /* DW_AT_frame_base: the frame register */
+#define GIR_DF_LOCAL      0x7F06u /* DW_AT_location of a variable whose address is the value
+                                     (val & 0xFFFFFFFF) of function (val >> 32): an alloca, a
+                                     byval argument, or any pointer value (kept in a frame
+                                     slot); aux = 0 or the dstr offset of a count byte and that
+                                     many DWARF expression bytes to append */
+#define GIR_DF_GLOBAL     0x7F07u /* DW_AT_location: the address of global val (DW_OP_addrx,
+                                     or the TLS offset for a thread-local); aux as for LOCAL */
+#define GIR_DF_STMT_LIST  0x7F08u /* DW_AT_stmt_list: the line table */
+#define GIR_DF_STR_BASE   0x7F09u /* DW_AT_str_offsets_base */
+#define GIR_DF_CU_PC      0x7F0Au /* the unit's code: low_pc + high_pc, or low_pc 0 + ranges */
+#define GIR_DF_ADDR_BASE  0x7F0Bu /* DW_AT_addr_base (and DW_AT_rnglists_base if needed) */
+typedef struct GirDAttr {        /* 16 bytes */
+    uint16_t at;                 /* DW_AT_* */
+    uint16_t form;               /* DW_FORM_* or GIR_DF_* */
+    uint32_t aux;
+    uint64_t val;
+} GirDAttr;
 
 /* ---------------------------------------------------------- module header
  * 32 bytes, one record (passed to Goose as a one-element slice). */
@@ -509,6 +603,12 @@ typedef struct GirModule {
     const GirDFile     *dfiles;  uint32_t n_dfiles;
     const GirAsm       *asms;    uint32_t n_asms;
     const uint8_t      *dstr;    uint32_t n_dstr;
+    /* additive tables (empty in a module without them) */
+    const GirEh        *ehs;     uint32_t n_ehs;
+    const GirComdat    *comdats; uint32_t n_comdats;
+    const uint32_t     *gcomdat; uint32_t n_gcomdat;   /* 0 or n_globals entries */
+    const GirDie       *dies;    uint32_t n_dies;
+    const GirDAttr     *dattrs;  uint32_t n_dattrs;
 } GirModule;
 
 /* Record sizes are part of the format. */
@@ -530,5 +630,9 @@ GIR_STATIC_ASSERT(sizeof(GirDScope) == 24, "GirDScope must be 24 bytes");
 GIR_STATIC_ASSERT(sizeof(GirDFile) == 8, "GirDFile must be 8 bytes");
 GIR_STATIC_ASSERT(sizeof(GirHeader) == 32, "GirHeader must be 32 bytes");
 GIR_STATIC_ASSERT(sizeof(GirAsm) == 24, "GirAsm must be 24 bytes");
+GIR_STATIC_ASSERT(sizeof(GirEh) == 24, "GirEh must be 24 bytes");
+GIR_STATIC_ASSERT(sizeof(GirComdat) == 16, "GirComdat must be 16 bytes");
+GIR_STATIC_ASSERT(sizeof(GirDie) == 16, "GirDie must be 16 bytes");
+GIR_STATIC_ASSERT(sizeof(GirDAttr) == 16, "GirDAttr must be 16 bytes");
 
 #endif /* GIR_H */

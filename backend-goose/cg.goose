@@ -1,12 +1,14 @@
-// goovm back-end v2 (milestone A2): GIR version 2 tables -> ELF64 x86-64
-// relocatable object.
+// goovm back-end v2 (milestones A2, A3): GIR version 2 tables -> ELF64
+// x86-64 relocatable object.
 //
 // One pass per function after a liveness pre-pass: values live in registers
 // (ra.goose), instructions are selected with immediate, memory-operand,
 // address-mode and compare-branch folding (lowera.goose), and the less
 // common operations keep A1's legacy lowerings (lower.goose) behind a
-// spill-everything-caller-saved boundary. backend-goose/DESIGN.md describes
-// the architecture.
+// spill-everything-caller-saved boundary. Every function gets unwind
+// information and, with landing pads, an LSDA (eh.goose); with debug
+// information the DWARF sections are written last (dwarf.goose).
+// backend-goose/DESIGN.md describes the architecture.
 //
 //   goose --standalone --header cg.h -o cg.c backend-goose/cg.goose
 //   (backend-goose/CMakeLists.txt does this when goovm-llc is built.)
@@ -17,6 +19,8 @@ import x86;
 import ra;
 import loc;
 import elf;
+import eh;
+import dwarf;
 import abi;
 import lowera;
 import lower;
@@ -28,8 +32,7 @@ var obj: u8[>..] = [];
 // The module's code: every function placed (prologue, body) in order.
 var mcode: u8[>..] = [];
 
-// Function order (grouped by code section) and the current code section.
-var f_order: u32[>..] = [];
+// The current code section.
 var cur_code_sec: u32 = 0;
 
 // ------------------------------------------------------------------- PHIs
@@ -405,7 +408,11 @@ fn gen_inst(gi: u32, cur: u32) {
         match I.op {   // (the most frequent first: the match is a chain of compares)
             GIR_LOAD => lower_load_a(I, j),
             GIR_STORE => lower_store_a(I),
-            GIR_CALL => lower_call(I, j),
+            GIR_CALL => {
+                if I.flags & IF_INVOKE != 0 { call_lp = M.opnds[I.b + 2 * I.c]; }
+                lower_call(I, j);
+                call_lp = GIR_NONE;
+            },
             GIR_GEP => lower_gep_a(I, j),
             GIR_ICMP => lower_icmp_a(I, j),
             GIR_RET => lower_ret(I, j),
@@ -544,6 +551,13 @@ fn gen_inst_b(I: Inst, j: u32) {
         GIR_BLOCKADDR => lower_blockaddr(I, j),
         GIR_X86 => lower_x86(I, j),
         GIR_ASM => lower_asm(I, j),
+        GIR_LANDINGPAD => {
+            // the personality routine left the exception object in rax and
+            // the selector in edx (nothing ran before: the block has no PHIs)
+            let m = res_mem(j);
+            store64(m, RAX);
+            store32(m_add(m, 8), RDX);
+        },
         _ => ud2(),  // unknown opcode: trap
     }
 }
@@ -576,7 +590,9 @@ var f_ncs: u32 = 0;          // callee-saved registers this function may use
 var f_overaligned = false;
 
 // push rbp; mov rbp, rsp; saves; frame; argument stores; over-aligned allocas.
+// The pushes are CFI events (eh.goose); the rest does not move the CFA.
 fn emit_prologue(insts: const Inst[:], flags: u32) {
+    pro_base = here();
     b1(0x55);
     b1(0x48);
     b1(0x89);
@@ -585,6 +601,7 @@ fn emit_prologue(insts: const Inst[:], flags: u32) {
     for r in CS_REGS {
         if r_cs_used & bit(r) != 0 {
             push_r(r);
+            cfi_pro.push(CfiEv { pos: here() - pro_base, kind: CE_PUSH, a: r });
             nsave++;
         }
     }
@@ -619,6 +636,7 @@ fn emit_epilogue() {
     for r in CS_REGS { if r_cs_used & bit(r) != 0 { nsave++; } }
     if nsave == 0 {
         if frameless() && !f_rsp { b1(0x5D); } else { b1(0xC9); }  // pop rbp / leave
+        cfi_body.push(CfiEv { pos: here(), kind: CE_DEFCFA, a: 0 });
         b1(0xC3);  // ret
         return;
     }
@@ -626,10 +644,14 @@ fn emit_epilogue() {
     var k: i64 = 4;
     while k >= 0 {
         let r = CS_REGS[k];
-        if r_cs_used & bit(r) != 0 { pop_r(r); }
+        if r_cs_used & bit(r) != 0 {
+            pop_r(r);
+            cfi_body.push(CfiEv { pos: here(), kind: CE_POP, a: r });
+        }
         k--;
     }
     b1(0x5D);  // pop rbp
+    cfi_body.push(CfiEv { pos: here(), kind: CE_DEFCFA, a: 0 });
     b1(0xC3);  // ret
 }
 
@@ -658,6 +680,7 @@ fn gen_function(fi: u32) {
     assert(t_off.len >= insts.len && block_off.len > blocks.len);
 
     ra_prepass(insts, blocks);
+    if dbg_on { dbg_keep_homes(fi); }
     f_share = f.flags & (FN_SJLJ | FN_RETURNS_TWICE) == 0;
     var ncs = pp_ncs;
     if ncs > 5 { ncs = 5; }
@@ -668,6 +691,7 @@ fn gen_function(fi: u32) {
     r_alloc = GP_CALLER | XMM_ALL | cs;
     r_cs_used = if f_sjlj || f_asm { cs } else { 0 };
     ra_func_start();
+    eh_func_start();
 
     // Frame: the callee-saved save area, the va register save area, allocas,
     // then homes and spill slots as they are needed.
@@ -693,15 +717,31 @@ fn gen_function(fi: u32) {
     }
     setup_args();
 
-    for B, b in blocks {
-        cur_blk = b as! u32;
-        block_off[b] = here();
-        if b == 0 { ra_entry_state(); } else { ra_block_start(); }
-        for k in B.first_inst..B.first_inst + B.n_inst { gen_inst(k, b as! u32); }
+    if dbg_on {
+        dbg_func_start(f.dbg);
+        for B, b in blocks {
+            cur_blk = b as! u32;
+            block_off[b] = here();
+            if b == 0 { ra_entry_state(); } else { ra_block_start(); }
+            dbg_block_start();
+            for k in B.first_inst..B.first_inst + B.n_inst {
+                dbg_inst(M.insts[k].dbg);
+                gen_inst(k, b as! u32);
+            }
+            dbg_block_end();
+        }
+    } else {
+        for B, b in blocks {
+            cur_blk = b as! u32;
+            block_off[b] = here();
+            if b == 0 { ra_entry_state(); } else { ra_block_start(); }
+            for k in B.first_inst..B.first_inst + B.n_inst { gen_inst(k, b as! u32); }
+        }
     }
     // epilogue (pseudo block n_blocks), then the prologue
     cur_blk = f.n_blocks;
     block_off[f.n_blocks] = here();
+    if dbg_on { dbg_epilogue(); }
     emit_epilogue();
     for x in fixups {
         patch4(x.pos, block_off[x.blk] - (x.pos + 4));
@@ -717,31 +757,33 @@ fn gen_function(fi: u32) {
     mcode.append(code[body..pro]);
     let base: u32 = mcode.len as! u32;
     mcode.append(code[0..body]);
-    for k in rela_start..rela_code.len { rela_code[k].offset += base; }
+    for k in rela_start..rela_code.len {
+        rela_code[k].offset += base;
+        rela_code[k].sec = cur_code_sec;
+    }
     for k in baddr_start..baddr.len { baddr[k].pos += base; }
     for B, b in blocks { blk_code[f.first_block + b] = block_off[b] + base; }
 
     g_value[f.global] = start - osecs[cur_code_sec].start;
-    g_size[f.global] = mcode.len as u64 - start;
+    let size: u32 = mcode.len as! u32 - start;
+    g_size[f.global] = size;
+    if sec_eh != 0 { eh_func_end(fi, start, size, pro - body, cur_code_sec); }
+    if dbg_on { dbg_func_end(fi, start, pro - body, size, cur_code_sec); }
 }
 
-// Generates all functions, grouped by code section.
+// Generates all functions, grouped by code section (g_order lists the
+// globals of each section in table order).
 fn gen_functions() {
-    let nf = M.funcs.len;
-    f_order.clear();
-    f_order.resize(nf, 0);
     let ns = osecs.len;
-    // functions of each code section, in table order
-    var k: i64 = 0;
     for s in 1..ns {
         if osecs[s].buf != BUF_CODE { continue; }
         cur_code_sec = s as! u32;
         while mcode.len % 16 != 0 { mcode.push(0xCC); }
         osecs[s].start = mcode.len as u64;
-        for F, fi in M.funcs {
-            if g_sec[F.global] != s { continue; }
-            gen_function(fi as! u32);
-            k++;
+        for k in sec_end[s - 1]..sec_end[s] {
+            let G = M.globals[g_order[k]];
+            if G.kind != G_FUNC || G.func == GIR_NONE { continue; }
+            gen_function(G.func);
         }
         osecs[s].size = mcode.len as u64 - osecs[s].start;
     }
@@ -749,11 +791,19 @@ fn gen_functions() {
 
 // ------------------------------------------------------------------ entry
 
+// Empty additive tables for modules made without them (goosecc).
+var no_ehs: Eh[>..] = [];
+var no_comdats: Comdat[>..] = [];
+var no_u32: u32[>..] = [];
+var no_dies: Die[>..] = [];
+var no_dattrs: DAttr[>..] = [];
+
 // Compiles the whole module and returns the bytes of an ELF64 x86-64
 // relocatable object (valid until the next call). The module must follow
 // the structural rules of gir.h; the back-end does not validate its input
 // (an out-of-range index aborts on a bounds check instead of reading
-// garbage).
+// garbage). gir_codegen is the entry for GIR version 2 without the additive
+// tables (exception handling, comdats, debug information entries).
 export fn gir_codegen(header: const Header[:], types: const TypeDef[:], funcs: const Func[:],
                       blocks: const Block[:], insts: const Inst[:], opnds: const u32[:], consts: const Const[:],
                       globals: const Global[:], sections: const Section[:], data: const u8[:],
@@ -762,7 +812,26 @@ export fn gir_codegen(header: const Header[:], types: const TypeDef[:], funcs: c
                       asms: const Asm[:]) -> const u8[:] {
     M = Module { header: header, types: types, funcs: funcs, blocks: blocks, insts: insts, opnds: opnds,
                  consts: consts, globals: globals, sections: sections, data: data, drelocs: drelocs,
-                 strtab: strtab, dlocs: dlocs, dscopes: dscopes, dfiles: dfiles, dstr: dstr, asms: asms };
+                 strtab: strtab, dlocs: dlocs, dscopes: dscopes, dfiles: dfiles, dstr: dstr, asms: asms,
+                 ehs: no_ehs, comdats: no_comdats, gcomdat: no_u32, dies: no_dies, dattrs: no_dattrs };
+    return codegen();
+}
+// The same with the additive tables.
+export fn gir_codegen_ex(header: const Header[:], types: const TypeDef[:], funcs: const Func[:],
+                         blocks: const Block[:], insts: const Inst[:], opnds: const u32[:], consts: const Const[:],
+                         globals: const Global[:], sections: const Section[:], data: const u8[:],
+                         drelocs: const DataReloc[:], strtab: const u8[:], dlocs: const DLoc[:],
+                         dscopes: const DScope[:], dfiles: const DFile[:], dstr: const u8[:],
+                         asms: const Asm[:], ehs: const Eh[:], comdats: const Comdat[:], gcomdat: const u32[:],
+                         dies: const Die[:], dattrs: const DAttr[:]) -> const u8[:] {
+    M = Module { header: header, types: types, funcs: funcs, blocks: blocks, insts: insts, opnds: opnds,
+                 consts: consts, globals: globals, sections: sections, data: data, drelocs: drelocs,
+                 strtab: strtab, dlocs: dlocs, dscopes: dscopes, dfiles: dfiles, dstr: dstr, asms: asms,
+                 ehs: ehs, comdats: comdats, gcomdat: gcomdat, dies: dies, dattrs: dattrs };
+    return codegen();
+}
+
+fn codegen() -> const u8[:] {
     code.clear();
     mcode.clear();
     rela_code.clear();
@@ -773,18 +842,29 @@ export fn gir_codegen(header: const Header[:], types: const TypeDef[:], funcs: c
     cst16.clear();
     baddr.clear();
     pool_syms.clear();
+    xrels.clear();
+    s_eh.clear();
+    s_lsda.clear();
+    chunks.clear();
+    cie_plain = GIR_NONE;
+    cie_pers.clear();
     rodata_align = 16;
     c_pool.clear();
-    c_pool.resize(consts.len, GIR_NONE);
+    c_pool.resize(M.consts.len, GIR_NONE);
     for q in 4 { mask_pool[q] = GIR_NONE; }
     blk_code.clear();
-    blk_code.resize(blocks.len, 0);
+    blk_code.resize(M.blocks.len, 0);
+    f_eh.clear();
+    f_eh.resize(M.funcs.len, GIR_NONE);
+    for E, e in M.ehs { f_eh[E.func] = e as! u32; }
     build_type_rc();
+    dbg_init();
     make_sections();
     layout_globals();
     gen_functions();
     resolve_blockaddrs();
     resolve_aliases();
+    if dbg_on { dbg_write(); }
     write_elf(obj);
     return obj;
 }

@@ -236,14 +236,22 @@ fn ret_result(j: u32, t: u32) {
 
 // ----------------------------------------------------------------- calls
 
-// Emits the call instruction itself (the callee is in R11 if indirect).
-fn emit_call_insn(callee: u32, direct: bool) {
+// Emits the call instruction itself (the callee is in R11 if indirect). An
+// invoke's call is a call site of the LSDA; with `args` bytes of stack
+// arguments, the unwinder is told to pop them if it lands in the landing pad.
+fn emit_call_insn(callee: u32, direct: bool, args: u32) {
+    let st = here();
+    if call_lp != GIR_NONE && args != 0 { cfi_body.push(CfiEv { pos: st, kind: CE_ARGS, a: args }); }
     if direct {
         b1(0xE8);  // call rel32
         rela(here(), g_sym[gir_idx(callee)], R_X86_64_PLT32, -4);
         b4(0);
     } else {
         call_r(R11);
+    }
+    if call_lp != GIR_NONE {
+        f_sites.push(CallSite { start: st, end: here(), lp: call_lp });
+        if args != 0 { cfi_body.push(CfiEv { pos: here(), kind: CE_ARGS, a: 0 }); }
     }
 }
 
@@ -487,7 +495,7 @@ fn lower_call(I: Inst, j: u32) {
     }
     if !direct && !(is_val(callee) && vi[vid(callee)].reg < 16) { ra_mat_gpr(callee, R11); }
     if I.flags & IF_VARARG != 0 { mov_ri(RAX, cl_fp); }  // al = number of vector registers used
-    emit_call_insn(callee, direct);
+    emit_call_insn(callee, direct, sbytes);
     ra_after_call();
     if sbytes != 0 { grp1_ri64(G1_ADD, RSP, sbytes as! i32); }
     call_result(j, I.ty);
@@ -578,7 +586,7 @@ fn lower_call_fast(I: Inst, j: u32, direct: bool) -> bool {
     }
     if !direct && !creg { ra_mat_gpr(callee, R11); }
     if I.flags & IF_VARARG != 0 { mov_ri(RAX, fp); }  // al = number of vector registers used
-    emit_call_insn(callee, direct);
+    emit_call_insn(callee, direct, 0);
     ra_after_call();
     call_result(j, I.ty);
     return true;

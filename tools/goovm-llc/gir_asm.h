@@ -12,4 +12,17 @@
 bool gir_assemble(const std::string &triple, const std::string &text, bool intel, std::vector<uint8_t> &code,
                   std::string &err);
 
+// A symbol of assembled module-level asm.
+struct GirAsmSymbol {
+    std::string name;
+    bool defined = false;   // defined by the asm itself
+    bool global = false;    // STB_GLOBAL
+    bool weak = false;      // STB_WEAK
+    bool func = false;      // STT_FUNC
+};
+// Assembles module-level inline asm (AT&T) and lists the symbols it names.
+// Fails if the text does not assemble or puts bytes into any section.
+bool gir_assemble_module(const std::string &triple, const std::string &text, std::vector<GirAsmSymbol> &syms,
+                         std::string &err);
+
 #endif

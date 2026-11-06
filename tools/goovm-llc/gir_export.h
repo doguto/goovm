@@ -32,6 +32,12 @@ struct GirTables {
     std::vector<GirDFile> dfiles;
     std::vector<uint8_t> dstr;
     std::vector<GirAsm> asms;
+    // additive tables
+    std::vector<GirEh> ehs;
+    std::vector<GirComdat> comdats;
+    std::vector<uint32_t> gcomdat;   // empty, or one per global
+    std::vector<GirDie> dies;
+    std::vector<GirDAttr> dattrs;
     uint64_t n_llvm_insts = 0;  // statistics: LLVM instructions in defined functions
 
     GirModule view() const;
