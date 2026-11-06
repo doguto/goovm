@@ -1,14 +1,35 @@
-# goosecc: a C front end in Goose
+# goosecc: a C compiler in Goose
 
-`goosecc` is a C17 + GNU C front end written from scratch in
-[Goose](https://github.com/aardappel/goose): a preprocessor, a parser and a
-type checker that builds a fully typed AST (milestone B1; B2 lowers it to
-GIR). It is checked against clang-20 on 2,357 C files from llvm-test-suite
-and is 5-6 times faster than clang-20 with a sixth of its memory.
+`goosecc` is a C17 + GNU C compiler written from scratch in
+[Goose](https://github.com/aardappel/goose). The front end (milestone B1)
+is a preprocessor, a parser and a type checker that builds a fully typed
+AST; the lowering (milestone B2) turns that AST into GIR version 2
+([`../gir/README.md`](../gir/README.md)), and the Goose back-end
+(`../backend-goose/`, imported as a package) compiles the GIR to an x86-64
+ELF object in the same process. There is no LLVM anywhere: `goosecc -c
+file.c -o file.o` produces objects that link with clang-20's and glibc.
 
 - [DESIGN.md](DESIGN.md): architecture, data structures, recursion under
-  Goose's rules, and the AST contract for B2.
+  Goose's rules, the AST contract, and the lowering to GIR (section 7:
+  values, the SysV calling convention, globals, static data and
+  relocations, builtins, inline assembly, debug locations).
 - [NOTES.md](NOTES.md): what writing it in Goose was like (errors, workarounds).
+
+Status (milestone B2):
+
+- Every test of the llvm-test-suite corpora that passes when built with
+  `clang-20 -O0` passes when its C files are compiled by goosecc, with and
+  without `-g`: gcc-c-torture (1,427 tests), its `ieee` (57) and
+  `builtins` (48) parts, the SingleSource unit tests (129), regression
+  tests (37) and benchmarks (100), and the six CTMark C programs (sqlite3,
+  SPASS, ClamAV, lencod, mafft, consumer-typeset): 1,804 tests, 3,608 runs,
+  no failure.
+- `goosecc -c` is 6.05 times faster than `clang-20 -O0 -c` over the 284 C
+  files of CTMark (10.3 times on sqlite3.c), with a peak RSS of 17-26 MB
+  against clang's 103-137 MB; TinyCC is 1.4 times faster still. The
+  generated code is the A1 back-end's (`backend-goose`): correct, but
+  larger and slower than clang -O0's (sqlite3's `.text` is 3.5 times
+  clang's).
 
 ## Build
 
@@ -18,14 +39,17 @@ Needs the Goose compiler (commit 335fddc) and clang-20.
 GOOSE=/path/to/goose GOOSE_STDLIB=/path/to/goose/stdlib frontend-goose/build.sh   # -> frontend-goose/build/goosecc
 ```
 
-`build.sh [outdir]` translates `src/main.goose` to one C file with `goose
---standalone` and compiles it with `clang-20 -O2 -static` (`CFLAGS`, `LDFLAGS`
-override; `LDFLAGS=` gives a dynamic executable). Without `GOOSE` and
-`GOOSE_STDLIB` it uses the paths of the machine it was developed on.
+`build.sh [outdir]` translates `src/main.goose` (which imports
+`../backend-goose` as a package) to one C file with `goose --standalone`
+and compiles it with `clang-20 -O2 -static` (`CFLAGS`, `LDFLAGS` override;
+`LDFLAGS=` gives a dynamic executable). Without `GOOSE` and `GOOSE_STDLIB`
+it uses the paths of the machine it was developed on.
 
 ## Use
 
 ```
+goosecc -c [options] file.c [-o file.o]       compile to an x86-64 ELF object (default: file.o)
+goosecc --emit-gir [options] file.c [-o out]  print the GIR module (goovm-llc --dump-gir's format)
 goosecc -E [options] file.c [-o out]          preprocess (to stdout by default)
 goosecc -fsyntax-only [options] file.c        parse and type-check
 goosecc --layout-check [options] file.c -o check.c
@@ -35,16 +59,56 @@ goosecc --dump-ast [options] file.c [-o out]  print the typed AST in clang's ter
 
 Options are clang's: `-I`, `-iquote`, `-isystem`, `-idirafter`, `-nostdinc`,
 `-D`, `-U`, `-include`, `-std=` (c89, gnu89, c99, gnu99, c11, gnu11, c17,
-gnu17), `-O*`, `-pthread`, `-funsigned-char`, `-trigraphs`, `-Wno-return-type`
-/ `-Wno-int-conversion` / `-Wno-implicit-function-declaration` /
-`-Wno-implicit-int` (which downgrade clang-20's default errors), `-Wall`
-(print warnings); the rest (`-c`, `-g`, `-f...`, `-m...`) are accepted and
-ignored. `--time` prints the time spent in each phase. The target is
-x86-64 Linux with clang-20's system include directories. Errors go to
-stderr as `file:line:col: error: ...`, and the exit status is 1 if there
-were any.
+gnu17), `-O*` (the code is always -O0's; `__OPTIMIZE__` follows the flag),
+`-g` (debug locations in the GIR's tables; the A1 back-end does not write
+DWARF yet), `-fPIC`/`-fpic` (preemptible definitions, GOT
+references), `-fPIE`, `-fno-pic`, `-fcommon`/`-fno-common` (the default),
+`-fno-builtin`, `-fno-builtin-NAME`, `-pthread`, `-funsigned-char`,
+`-trigraphs`, `-w`, `-Wno-return-type` / `-Wno-int-conversion` /
+`-Wno-implicit-function-declaration` / `-Wno-implicit-int` (which downgrade
+clang-20's default errors), `-Wall` (print warnings); other `-f`, `-m` and
+`-W` options are accepted and ignored, and anything else unknown is ignored
+with a note. `-o -` writes to standard output. `--time` prints the time
+spent in each phase:
+
+```
+$ goosecc -c --time sqlite3.c -o sqlite3.o
+goosecc: preprocess 19718 us, parse+sema 16713 us, lowering 10615 us, back-end 7664 us, write 1326 us, total 56036 us; 200834 nodes, 104726 GIR insts, 1761120 bytes
+```
+
+The target is x86-64 Linux (SysV ABI, ELF, glibc) with clang-20's system
+include directories. Errors go to stderr as `file:line:col: error: ...`,
+and the exit status is 1 if there were any.
 
 ## Tests
+
+### Compiler tests (B2)
+
+The lowering and the back-end are checked by running programs: every test
+of the llvm-test-suite corpora that builds and passes with `clang-20 -O0`
+must pass when each of its C files is compiled by `goosecc -c` (and with
+`-g`) and the objects are linked by clang-20.
+
+```bash
+tests/suite_goosecc.py --goosecc frontend-goose/build/goosecc -j 3 --work /tmp/sgc \
+    --corpus torture,ieee,builtins,unittests,regression,benchmarks,ctmark --variants O0,g --report report.md
+tests/run.py --goosecc frontend-goose/build/goosecc -j 3          # the 44 programs of tests/c, with and without -g
+frontend-goose/tests/abi_cross.py --seeds 20 -n 50               # SysV calling convention, mixed with clang objects
+tests/bench_goosecc.py --goosecc frontend-goose/build/goosecc -n 3 --md bench.md   # speed vs clang-20 -O0 -c and tcc
+frontend-goose/tests/cmp_dbg.py --goovm-llc build/tools/goovm-llc/goovm-llc file.c... [-- flags]   # -g locations vs clang's
+```
+
+`suite_goosecc.py` uses `suite.py`'s corpus definitions, flags, inputs and
+verification (reference outputs compared with `fpcmp`, or exit status 0 for
+gcc-c-torture); see `tests/README.md`. `abi_cross.py` generates random
+signatures (structs and unions with scalars, arrays, bit-fields, nested
+records and `packed`; every scalar type including `__int128`, `long
+double` and `_Complex`; variadic callees reading with `va_arg`), compiles
+the callees and the callers by both compilers, and checks that the four
+mixes print the hashes of every argument and return value that the
+all-clang build prints.
+
+### Front-end oracles (B1)
 
 The corpora are the C files of llvm-test-suite (`LLVM_TEST_SUITE`, default
 `/home/user/llvm/llvm-test-suite`), each with the flags its CMake files use
@@ -92,7 +156,108 @@ The tables of clang-20 facts are generated, and the generators are kept:
 
 ## Results
 
-All five corpora, clang-20.1 and goosecc at the commit that adds this file:
+### Compiler (B2)
+
+`tests/suite_goosecc.py`, all corpora, variants `O0` and `g`, goosecc at
+the commit that adds these results (clang-20.1 for the baseline and for
+linking):
+
+| corpus | tests | clang -O0 pass | excluded | O0 pass | O0 fail | O0 error | g pass | g fail | g error |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| torture | 1427 | 1427 | 0 | 1427 | 0 | 0 | 1427 | 0 | 0 |
+| ieee | 57 | 57 | 0 | 57 | 0 | 0 | 57 | 0 | 0 |
+| builtins | 54 | 48 | 6 | 48 | 0 | 0 | 48 | 0 | 0 |
+| unittests | 129 | 129 | 0 | 129 | 0 | 0 | 129 | 0 | 0 |
+| regression | 37 | 37 | 0 | 37 | 0 | 0 | 37 | 0 | 0 |
+| benchmarks | 100 | 100 | 0 | 100 | 0 | 0 | 100 | 0 | 0 |
+| ctmark | 6 | 6 | 0 | 6 | 0 | 0 | 6 | 0 | 0 |
+| **total** | 1810 | 1804 | 6 | 1804 | 0 | 0 | 1804 | 0 | 0 |
+
+"excluded" are the tests that do not build or pass with plain clang-20
+-O0 (6 of gcc's `builtins` tests: four do not link and two abort, as in
+`suite.py`); everything else passes in both variants, 3,608 runs. The run
+takes 45 minutes at `-j 3`, mostly the Polybench kernels, whose code from
+the A1 back-end runs several times slower than clang -O0's.
+
+- `tests/run.py --goosecc`: the 44 programs of `tests/c`, 88 of 88 runs
+  pass (with and without `-g`).
+- `frontend-goose/tests/abi_cross.py --seeds 20 -n 50`: 20 of 20 seeds
+  pass (1,000 random signatures, each called across the four mixes of
+  clang and goosecc objects); 63 further seeds of 40-60 functions were
+  run during development.
+- `frontend-goose/tests/cmp_dbg.py` (debug locations against clang-20's
+  through `goovm-llc --dump-gir`): of sqlite3.c's 98,000 aligned
+  instructions, 99.3% have clang's line and 98.6% its line and column; of
+  the 16,700 of the Misc, Stanford and Shootout benchmarks, 99.6% and
+  97.0% (DESIGN.md, 7.7).
+- sqlite3.c compiled by goosecc defines the same functions and data
+  objects as clang's object; its `.text` is 1.52 MB against clang's
+  0.43 MB (the A1 back-end keeps every value in memory), `.data` and
+  `.bss` are within a few bytes of clang's.
+
+### Speed of `goosecc -c` (B2)
+
+`tests/bench_goosecc.py -n 3`: every C file of the six CTMark programs
+with the suite's flags, each compile run alone and single-threaded, best
+of 3 wall-clock times, the object written to a scratch file; peak RSS is
+the largest `ru_maxrss` of a run. goosecc is the static build of
+`build.sh`; TinyCC is Ubuntu's 0.9.27 (`tcc -c` with the same `-D`/`-I`
+flags; it compiles all 284 files). The machine (4 cores) was shared with
+another agent's test runs, so absolute times carry some noise.
+
+| program | files | clang-20 -O0 -c | goosecc -c | speed-up | clang peak RSS | goosecc peak RSS |
+|---|---:|---:|---:|---:|---:|---:|
+| sqlite3 | 2 | 697 ms | 71 ms | 9.80x | 134 MB | 26 MB |
+| SPASS | 51 | 3805 ms | 591 ms | 6.44x | 103 MB | 17 MB |
+| ClamAV | 98 | 4800 ms | 877 ms | 5.47x | 106 MB | 17 MB |
+| lencod | 55 | 3382 ms | 561 ms | 6.02x | 104 MB | 17 MB |
+| mafft | 27 | 1776 ms | 292 ms | 6.09x | 104 MB | 17 MB |
+| consumer-typeset | 51 | 2888 ms | 475 ms | 6.08x | 111 MB | 17 MB |
+| **total** | 284 | 17.35 s | 2.87 s | 6.05x | 134 MB | 26 MB |
+
+On the files TinyCC compiles (`tcc -c`, same -D/-I flags):
+
+| program | files | clang-20 -O0 -c | goosecc -c | tcc -c | goosecc / tcc | tcc peak RSS |
+|---|---:|---:|---:|---:|---:|---:|
+| sqlite3 | 2 | 697 ms | 71 ms | 45 ms | 1.59 | 17 MB |
+| SPASS | 51 | 3805 ms | 591 ms | 447 ms | 1.32 | 17 MB |
+| ClamAV | 98 | 4800 ms | 877 ms | 599 ms | 1.47 | 17 MB |
+| lencod | 55 | 3382 ms | 561 ms | 390 ms | 1.44 | 17 MB |
+| mafft | 27 | 1776 ms | 292 ms | 226 ms | 1.29 | 17 MB |
+| consumer-typeset | 51 | 2888 ms | 475 ms | 336 ms | 1.41 | 17 MB |
+| **total** | 284 | 17348 ms | 2867 ms | 2042 ms | 1.40 | 17 MB |
+
+goosecc phases (sum of one --time run per file):
+
+| program | preprocess | parse+sema | lowering | back-end | write |
+|---|---:|---:|---:|---:|---:|
+| sqlite3 | 24 ms | 18 ms | 12 ms | 8 ms | 2 ms |
+| SPASS | 287 ms | 89 ms | 42 ms | 17 ms | 23 ms |
+| ClamAV | 423 ms | 94 ms | 58 ms | 25 ms | 40 ms |
+| lencod | 256 ms | 85 ms | 35 ms | 23 ms | 23 ms |
+| mafft | 144 ms | 44 ms | 15 ms | 11 ms | 11 ms |
+| consumer-typeset | 207 ms | 70 ms | 31 ms | 26 ms | 23 ms |
+| **total** | 1341 ms | 401 ms | 192 ms | 110 ms | 122 ms |
+
+`sqlite3.c` alone (2.8 MB; 276,543 tokens after preprocessing, 200,834
+AST nodes, 104,726 GIR instructions): clang-20 -O0 -c 624 ms, goosecc
+60.4 ms (10.3x), tcc 37.6 ms. goosecc's time there is preprocessing 19.7 ms, parsing and type
+checking 16.7 ms, lowering 10.6 ms, the back-end 7.7 ms and writing the
+1.8 MB object 1.3 ms. Over the 284 files the median speed-up over clang
+is 5.7x (4.3x to 10.3x) and goosecc takes a median 1.44 times tcc's time
+(0.95 to 2.3). The phases add up to three quarters of the total: the rest
+is process start-up and exit, about 2.5 ms per file, which matters for
+CTMark's many small files. Lowering and code generation together are 10%
+of goosecc's time; the preprocessor (B1) is 47%, because every file
+re-reads the glibc headers.
+
+Memory: the largest peak RSS of a goosecc run is 26 MB (sqlite3.c; 17 MB
+for every other file), against 103-137 MB for clang-20 and 17 MB for
+tcc. goosecc never frees; its tables grow by pages (DESIGN.md, 2).
+
+### Front end (B1)
+
+All five corpora, clang-20.1 and goosecc (B1; rerun with the B2 compiler, every number is unchanged):
 
 | corpus | files | `-E` identical | clang-valid | accepted (false errors) | clang-invalid rejected | layout files / assertions | AST identical (bodies compared) |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -108,7 +273,7 @@ All five corpora, clang-20.1 and goosecc at the commit that adds this file:
 variable-length arrays in structs); goosecc rejects each of them too. The layout and AST checks cover the
 clang-valid files.
 
-### Speed
+### Front-end speed (B1)
 
 `tests/bench.py --corpus ctmark -n 3`: each command run alone, single
 threaded, best of 3 wall-clock times, output to `/dev/null`; peak RSS is the

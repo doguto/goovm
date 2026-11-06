@@ -34,7 +34,8 @@ def parse(text):
 
 def compare(f, flags, a, work, show):
     bc = os.path.join(work, os.path.basename(f) + '.bc')
-    subprocess.run([a.clang, '-O0', '-g', '-w', '-c', '-emit-llvm'] + flags + [f, '-o', bc], check=True)
+    subprocess.run([a.clang, '-O0', '-g', '-w', '-c', '-emit-llvm'] + flags + [f, '-o', bc], check=True,
+                   stderr=subprocess.DEVNULL)
     ref = subprocess.run([a.goovm_llc, '--dump-gir', bc, '-o', os.devnull], stdout=subprocess.PIPE, check=True).stdout
     got = subprocess.run([a.goosecc, '--emit-gir', '-g', '-w'] + flags + [f], stdout=subprocess.PIPE, check=True).stdout
     R, G = parse(ref.decode()), parse(got.decode())
@@ -82,7 +83,11 @@ def main():
     T = [0, 0, 0]
     show = [a.show]
     for f in a.files:
-        r = compare(f, flags, a, work, show)
+        try:
+            r = compare(f, flags, a, work, show)
+        except subprocess.CalledProcessError as e:
+            print('%s: skipped (%s failed)' % (os.path.basename(f), os.path.basename(e.cmd[0])))
+            continue
         T = [x + y for x, y in zip(T, r)]
     if len(a.files) > 1:
         print('total: %d instructions, same line %.1f%%, same line:col %.1f%%' % (

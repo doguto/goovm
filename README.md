@@ -26,6 +26,14 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 - 正しさは [`tests/suite.py`](tests/README.md) で確かめます（gcc-c-torture、llvm-test-suite の SingleSource と CTMark）。
 - C++ 版バックエンド（v0）はコミット `8f55b18` で凍結し、既定のビルドから外しました（[`backend-cpp/README.md`](backend-cpp/README.md)）。
 
+## マイルストーン B2：LLVM なしの C コンパイラ
+
+`frontend-goose/` の `goosecc` が、C のソースから x86-64 の ELF オブジェクトまでを一つの Goose プログラムで作るコンパイラになりました（`goosecc -c file.c -o file.o`）。型付き AST を GIR 版2に下ろし、Goose 版バックエンドを同じプロセス内でパッケージとして呼びます。LLVM は使いません。
+
+- 意味は clang-20 の `-O0` に合わせています（SysV の呼び出し規約、`va_arg`、ビットフィールド、VLA、静的データと再配置、組み込み関数、アトミック、TLS、インラインアセンブリ、`-g` のデバッグ位置）。設計は [`frontend-goose/DESIGN.md`](frontend-goose/DESIGN.md) の §7 です。
+- 正しさは [`tests/suite_goosecc.py`](tests/README.md) で確かめます。gcc-c-torture、SingleSource、CTMark の6本で、clang-20 `-O0` で通る1,804件すべてが、`-g` の有無の両方で通ります（3,608回、失敗0）。
+- 速さは [`tests/bench_goosecc.py`](tests/README.md) で測ります。CTMark の C ファイル284個で `clang-20 -O0 -c` の6.05倍速く（sqlite3.c で10.3倍）、最大メモリは17〜26 MB（clang は103〜137 MB）です。TinyCC はさらに1.4倍速いです。出力コードは A1 のバックエンドのもので、clang `-O0` より大きく遅いです（sqlite3 の `.text` は3.5倍）。
+
 ## 構成
 
 | 場所 | 内容 |
@@ -34,9 +42,9 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 | `tools/goovm-llc/` | LLVM 20 のビットコードを GIR に書き出し、Goose 版バックエンドで ELF にするドライバ |
 | `backend-goose/` | Goose で書いた x86-64 `-O0` バックエンド（設計は `DESIGN.md`、移植と開発の記録は `NOTES.md`） |
 | `backend-cpp/` | v0 の C++ 版バックエンド。`8f55b18` で凍結し、ビルドしない |
-| `frontend-goose/` | Goose で一から書いた C フロントエンド `goosecc`（プリプロセッサ・構文解析・型検査。clang-20 と出力を突き合わせて検証） |
+| `frontend-goose/` | Goose で一から書いた C コンパイラ `goosecc`（プリプロセッサ・構文解析・型検査・GIR への変換。Goose 版バックエンドを同じプロセスで呼び、LLVM なしで ELF オブジェクトを出す） |
 | `tools/goovm-cc/` | clang のフロントエンドを同じプロセス内で動かし、LLVM IR をそのままバックエンドへ渡す `clang -c` 代替 |
-| `tests/` | `suite.py`（各コーパスでの正しさの検証）と、C テストプログラム44本（`run.py`） |
+| `tests/` | `suite.py`（各コーパスでの正しさの検証）、`suite_goosecc.py`（同じコーパスを goosecc で）、`bench_goosecc.py`（goosecc の速さ）、C テストプログラム44本（`run.py`） |
 | `bench/` | CTMark、LLVM 自身のビルド、バックエンド、要因の切り分け、出力コードの質、全体への効果の計測 |
 | `poc/` | Goose コンパイラの伸び方、C++ との接続、変更可能な IR グラフの試作 |
 
@@ -47,6 +55,10 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 GOOSE=/path/to/goose GOOSE_STDLIB=/path/to/goose/stdlib backend-goose/build.sh build
 tests/run.py --goovm build/tools/goovm-llc/goovm-llc
 tests/suite.py --goovm build/tools/goovm-llc/goovm-llc --work /tmp/suite -j3 --report report.md
+# goosecc（LLVM 不要）
+GOOSE=/path/to/goose GOOSE_STDLIB=/path/to/goose/stdlib frontend-goose/build.sh
+tests/suite_goosecc.py --goosecc frontend-goose/build/goosecc --work /tmp/sgc -j3 --report report-goosecc.md
+tests/bench_goosecc.py --goosecc frontend-goose/build/goosecc -n 3 --md bench-goosecc.md
 ```
 
 `backend-goose/build.sh` は CMake に `-DGOOVM_GOOSE=… -DGOOVM_GOOSE_STDLIB=…` を渡すだけです。v0 を作り直す方法は `backend-cpp/README.md` にあります。フェーズ0〜2の詳しい再現方法は、検証結果の報告書の §8 にあります。
