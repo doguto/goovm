@@ -339,6 +339,14 @@ fn char_value(t: Tok) -> i64, bool {
             } else {
                 c = e;
             }
+        } else if (kind == 1 || kind == 2 || kind == 3) && c >= 192 {
+            // a UTF-8 sequence in a wide character constant: one code point
+            var cp = c & 31;
+            var extra = 1;
+            if c >= 240 { cp = c & 7; extra = 3; } else if c >= 224 { cp = c & 15; extra = 2; }
+            var k = 0;
+            while k < extra && i < s.len - 1 { cp = (cp << 6) | ((s[i] & 63) as i64); i++; k++; }
+            c = cp;
         }
         last = c;
         v = (v << 8) | (c & 255);

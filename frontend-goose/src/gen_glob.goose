@@ -108,6 +108,15 @@ fn var_global(s: i64) -> u32 {
     return g;
 }
 
+// The global of a compound literal with static storage.
+fn complit_global(n: u32) -> u32 {
+    let s = nodes[n].b as i64;
+    ensure_sym_tables();
+    while sym_init.len < syms.len { sym_init.push(0); sym_decl.push(0); }
+    sym_init[s] = nodes[n].a;
+    return var_global(s);
+}
+
 // A reference to g from emitted code: an on-use definition is queued.
 fn note_use(g: u32) {
     if glob_state[g] != 0 { return; }
@@ -137,12 +146,25 @@ fn fn_emitted_def(s: i64) -> bool {
     if sy.def < 0 { return false; }
     if sy.sc == SC_STATIC { return true; }
     if sy.flags & SF_INLINE == 0 { return true; }
-    if sy.flags & SF_GNU_EXTERN_INLINE != 0 { return false; }
+    if sy.flags & SF_GNU_EXTERN_INLINE != 0 { return sym_has_attr(s, AM_ALWAYS_INLINE); }
     let gnu = opt_c89 || (sy.attr != 0 && sym_attrs[sy.attr].flags & AM_GNU_INLINE != 0);
     if gnu { return true; }
     // C99: an inline definition unless some file-scope declaration is not
     // inline or is extern
-    return sy.flags & SF_FORCE_DEF != 0;
+    if sy.flags & SF_FORCE_DEF != 0 { return true; }
+    return sym_has_attr(s, AM_ALWAYS_INLINE);
+}
+
+// An inline definition that clang would inline everywhere (always_inline,
+// even at -O0) and never emit: goosecc emits it as a local function.
+fn fn_local_inline(s: i64) -> bool {
+    let sy = syms[s];
+    if sy.kind != SK_FUNC || sy.def < 0 || sy.sc == SC_STATIC || sy.flags & SF_INLINE == 0 { return false; }
+    if !sym_has_attr(s, AM_ALWAYS_INLINE) { return false; }
+    if sy.flags & SF_GNU_EXTERN_INLINE != 0 { return true; }
+    let gnu = opt_c89 || (sy.attr != 0 && sym_attrs[sy.attr].flags & AM_GNU_INLINE != 0);
+    if gnu { return false; }
+    return sy.flags & SF_FORCE_DEF == 0;
 }
 
 // Is it emitted even when nothing refers to it?
@@ -163,7 +185,7 @@ fn sym_has_attr(s: i64, m: u32) -> bool {
 // Linkage flags of a defined or referenced global.
 fn link_flags(s: i64, defined: bool) -> u32 {
     var f: u32 = 0;
-    let internal = is_internal_sym(s) || !has_linkage(s);
+    let internal = is_internal_sym(s) || !has_linkage(s) || fn_local_inline(s);
     if internal { f = f | GF_INTERNAL | GF_LOCALREF; }
     if syms[s].flags & SF_WEAK != 0 { f = f | GF_WEAK; }
     let vis = sym_visibility(s);
@@ -269,6 +291,11 @@ fn emit_var(g: u32) {
     var size = type_size(q);
     if size < 0 { size = 0; }
     let init = sym_init[s] as u32;
+    if init != 0 {
+        // a flexible array member with an initializer extends the object (GNU)
+        let ext = init_extent(q, init);
+        if ext > size { size = ext; }
+    }
     var f = link_flags(s, true) | GF_DEFINED;
     if syms[s].flags & SF_THREAD != 0 { f = f | GF_TLS; }
     let common = init == 0 && opt_common && syms[s].flags & SF_TENTATIVE != 0 && !is_internal_sym(s) && syms[s].flags & SF_THREAD == 0 &&
@@ -305,6 +332,35 @@ fn emit_var(g: u32) {
     }
     m_globals[g].flags = m_globals[g].flags | f;
     emit_var_data(g, s, q, init, size);
+}
+
+// The bytes an initializer covers, with a flexible array member's elements.
+fn init_extent(q: u32, init: u32) -> i64 {
+    if kind_of(q) != TY_STRUCT || nkind(init) != N_INITLIST { return 0; }
+    let r = rec_of(q);
+    if records[r].flags & RF_FLEX == 0 { return 0; }
+    let nd = nodes[init];
+    var ci: i64 = 0;
+    let first = records[r].first as i64;
+    let cnt = records[r].count as i64;
+    var last: i64 = -1;
+    var last_child: u32 = 0;
+    for i in first..first + cnt {
+        let f = fields[i];
+        if f.width >= 0 && f.name == 0 { continue; }
+        if ci >= nd.c as i64 { break; }
+        last = i;
+        last_child = nlist[nd.v + ci];
+        ci++;
+    }
+    if last != first + cnt - 1 { return 0; }
+    let f = fields[last];
+    if kind_of(f.ty) != TY_ARRAY || types[f.ty >> 4].n >= 0 { return 0; }
+    let es = type_size(tbase(f.ty));
+    let c = nodes[last_child];
+    if c.kind == N_STRING { return f.offset + (strs[c.a].len as i64) * es; }
+    if c.kind == N_INITLIST { return f.offset + (c.c as i64) * es; }
+    return 0;
 }
 
 fn emit_var_data(g: u32, s: i64, q: u32, init: u32, size: i64) {
@@ -390,6 +446,11 @@ recursive fn sinit(g: u32, at: i64, off: i64, q: u32, n: u32) {
     let nd = nodes[n];
     let k = nd.kind as i64;
     if k == N_ZEROINIT { return; }
+    if (k == N_ICAST || k == N_CAST) && nd.op == CK_LVAL2RVAL && nkind(nd.a) == N_COMPLIT {
+        // a compound literal read in a static initializer: its initializer
+        sinit(g, at, off, q, nodes[nd.a].a);
+        return;
+    }
     if k == N_INITLIST {
         let tk = kind_of(q);
         if tk == TY_STRUCT {
@@ -469,7 +530,7 @@ recursive fn sinit(g: u32, at: i64, off: i64, q: u32, n: u32) {
         }
         return;
     }
-    if k == N_COMPLIT && vkind(q) == VK_AGG {
+    if k == N_COMPLIT {
         sinit(g, at, off, q, nodes[n].a);
         return;
     }
@@ -931,6 +992,9 @@ recursive fn eval_addr(n: u32) -> bool, i64, i64, i64, i64 {
         if op == B_PTRDIFF {
             let ok, t, a, l1, l2 = eval_addr(nd.a);
             let ok2, tb, b, m1, m2 = eval_addr(nd.b);
+            if ok && ok2 && t < 0 && tb < 0 && l1 >= 0 && m1 >= 0 && l2 < 0 && m2 < 0 {
+                return true, -1, a - b, l1, m1;
+            }
             if ok && ok2 && t == tb && l1 < 0 && m1 < 0 {
                 let ok3, es, ev = elem_size(tbase(nty(nd.a)));
                 return true, -1, (a - b) / es, -1, -1;
@@ -967,7 +1031,7 @@ recursive fn eval_lvaddr(n: u32) -> bool, i64, i64, i64, i64 {
         return false, -1, 0, -1, -1;
     }
     if k == N_STRING { return true, string_global(nd.a) as i64, 0, -1, -1; }
-    if k == N_COMPLIT { return true, var_global(nd.b as i64) as i64, 0, -1, -1; }
+    if k == N_COMPLIT { return true, complit_global(n) as i64, 0, -1, -1; }
     if k == N_MEMBER {
         let f = fields[nd.b];
         if f.width >= 0 { return false, -1, 0, -1, -1; }

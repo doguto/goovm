@@ -289,7 +289,9 @@ recursive fn gen_return(n: u32) {
 recursive fn va_arg_addr(n: u32) -> u32 {
     let nd = nodes[n];
     let q = unqual(nd.ty);
-    let ap = ex_val(nd.a);       // pointer to the va_list (struct __va_list_tag)
+    // the va_list: an array (a local va_list) or a pointer (a va_list parameter)
+    var ap: u32 = 0;
+    if is_array(nty(nd.a)) { ap = ex_lv(nd.a).addr; } else { ap = ex_val(nd.a); }
     abi_free_int = 0;
     abi_free_sse = 8;
     let lo, hi = classify(q, 0);

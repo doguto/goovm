@@ -69,7 +69,8 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             let s = nd.a as i64;
             if !fn_emitted_def(s) { continue; }
             if syms[s].def as u32 != it { continue; }
-            let always = !is_internal_sym(s) || sym_has_attr(s, AM_USED) || sym_has_attr(s, AM_CTOR) || sym_has_attr(s, AM_DTOR);
+            let always = (!is_internal_sym(s) && !fn_local_inline(s)) || sym_has_attr(s, AM_USED) || sym_has_attr(s, AM_CTOR) ||
+                sym_has_attr(s, AM_DTOR);
             let g = sym_glob[s];
             if always && glob_state[g] == 0 {
                 glob_state[g] = 1;

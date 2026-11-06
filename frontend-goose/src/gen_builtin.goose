@@ -668,10 +668,7 @@ recursive fn overflow_builtin(name: const u8[:], n: u32) -> u32 {
     let a2 = barg(n, 2);
     var opk: i64 = 0;   // 0 add, 1 sub, 2 mul
     var base = name;
-    if starts_with(base, "s") || starts_with(base, "u") {
-        // sadd_overflow, uaddl_overflow, ...
-        base = base[1..];
-    }
+    if starts_with(base, "s") || starts_with(base, "u") { base = base[1..]; }
     if starts_with(base, "add") { opk = 0; } else if starts_with(base, "sub") { opk = 1; } else { opk = 2; }
     let qa = nty(a0);
     let qb = nty(a1);
@@ -681,14 +678,14 @@ recursive fn overflow_builtin(name: const u8[:], n: u32) -> u32 {
     let xb = ex_val(a1);
     var pres: u32 = NONE;
     if is_p { ex_ignore(a2); } else { pres = ex_val(a2); }
-    let sa = is_signed(qa);
-    let sb = is_signed(qb);
-    let sr = is_signed(qr);
+    let sa = kind_of(qa) != TY_BOOL && is_signed(qa);
+    let sb = kind_of(qb) != TY_BOOL && is_signed(qb);
+    let sr = kind_of(qr) != TY_BOOL && is_signed(qr);
     let wa = tbits(vtype(xa)) as i64;
     let wb = tbits(vtype(xb)) as i64;
     let wr = tbits(vty(qr)) as i64;
     let rt = vty(qr);
-    if vtype(xa) == rt && vtype(xb) == rt && sa == sb && sb == sr {
+    if vtype(xa) == rt && vtype(xb) == rt && sa == sb && sb == sr && tcls(rt) == C_INT {
         let k = if opk == 0 { if sr { OVF_SADD } else { OVF_UADD } } else if opk == 1 { if sr { OVF_SSUB } else { OVF_USUB } }
             else { if sr { OVF_SMUL } else { OVF_UMUL } };
         let st = ty_pair(rt, GIR_T_I1, tsize(rt));
@@ -698,48 +695,64 @@ recursive fn overflow_builtin(name: const u8[:], n: u32) -> u32 {
         if !is_p { store_c(qr, v, pres, false); }
         return int_cast(o, GIR_T_I1, vty(nd.ty), false);
     }
-    // mixed types: compute exactly in a wide signed type, then check the range
+    // otherwise: the exact result in a wider signed type, then a range check
     var w: i64 = wa;
     if wb > w { w = wb; }
-    if wr > w { w = wr; }
-    let any_signed = sa || sb || sr;
-    var ew = w;
-    if any_signed && (!sa || !sb || !sr) { ew = w + 1; }
+    var ew = w + 1;
     if opk == 2 { ew = wa + wb + 1; }
-    var et: u32 = GIR_T_I128;
-    if ew <= 64 { et = GIR_T_I64; }
-    let ea = int_cast(xa, vtype(xa), et, sa);
-    let eb = int_cast(xb, vtype(xb), et, sb);
-    var ovf: u32 = c_false();
+    var ovf = c_false();
     var r: u32 = 0;
-    if ew > 128 {
-        // 128-bit operands: use the overflow op of i128 directly (signed)
-        let k = if opk == 0 { OVF_SADD } else if opk == 1 { OVF_SSUB } else { OVF_SMUL };
-        let k2 = if sa || sb { k } else { if opk == 0 { OVF_UADD } else if opk == 1 { OVF_USUB } else { OVF_UMUL } };
-        let st = ty_pair(et, GIR_T_I1, 16);
-        let rr = emit(GIR_OVF, st, k2, 0, et, ea, eb, 0);
-        r = emit(GIR_EXTRACTVALUE, et, 0, 0, 0, rr, 0, 0);
-        ovf = emit(GIR_EXTRACTVALUE, GIR_T_I1, 0, 0, 0, rr, 16, 0);
+    var et: u32 = GIR_T_I64;
+    let sgn = sa || sb;
+    if ew <= 64 || (wa <= 64 && wb <= 64) {
+        // exact: no overflow in the wide type
+        if ew > 64 { et = GIR_T_I128; }
+        let ea = int_cast(xa, vtype(xa), et, sa);
+        let eb = int_cast(xb, vtype(xb), et, sb);
+        r = ins_bin(if opk == 0 { GIR_ADD } else if opk == 1 { GIR_SUB } else { GIR_MUL }, et, ea, eb);
     } else {
-        let gop = if opk == 0 { GIR_ADD } else if opk == 1 { GIR_SUB } else { GIR_MUL };
-        if et == GIR_T_I128 && opk == 2 {
-            let st = ty_pair(et, GIR_T_I1, 16);
-            let rr = emit(GIR_OVF, st, OVF_SMUL, 0, et, ea, eb, 0);
-            r = emit(GIR_EXTRACTVALUE, et, 0, 0, 0, rr, 0, 0);
-            ovf = emit(GIR_EXTRACTVALUE, GIR_T_I1, 0, 0, 0, rr, 16, 0);
+        // 128-bit operands: wrap in i128 and detect the overflow of the operation itself
+        et = GIR_T_I128;
+        let ea = int_cast(xa, vtype(xa), et, sa);
+        let eb = int_cast(xb, vtype(xb), et, sb);
+        let z = c_zero(et);
+        if opk == 2 {
+            if sgn {
+                let flag = alloca(4, 4);
+                ins_store(GIR_T_I32, c_i32(0), flag, false);
+                r = libcall3("__muloti4", et, ea, eb, flag);
+                let f = ins_load(GIR_T_I32, flag, false);
+                ovf = ins_icmp(GIR_NE, GIR_T_I32, f, c_i32(0));
+            } else {
+                r = ins_bin(GIR_MUL, et, ea, eb);
+                // a != 0 && r / a != b
+                let nz = ins_icmp(GIR_NE, et, ea, z);
+                let q = libcall2("__udivti3", et, r, ea);
+                let ne = ins_icmp(GIR_NE, et, q, eb);
+                let sel = ins_select(nz, ne, c_false());
+                ovf = sel;
+            }
         } else {
-            r = ins_bin(gop, et, ea, eb);
+            r = ins_bin(if opk == 0 { GIR_ADD } else { GIR_SUB }, et, ea, eb);
+            if sgn {
+                let x1 = ins_bin(GIR_XOR, et, ea, r);
+                let x2 = if opk == 0 { ins_bin(GIR_XOR, et, eb, r) } else { ins_bin(GIR_XOR, et, ea, eb) };
+                let x3 = ins_bin(GIR_AND, et, x1, x2);
+                ovf = ins_icmp(GIR_SLT, et, x3, z);
+            } else {
+                ovf = if opk == 0 { ins_icmp(GIR_ULT, et, r, ea) } else { ins_icmp(GIR_ULT, et, ea, eb) };
+            }
         }
     }
     // does r fit the result type?
     let tr = int_cast(r, et, rt, false);
     let back = int_cast(tr, rt, et, sr);
-    let ne = ins_icmp(GIR_NE, et, back, r);
-    var o2 = ins_bin(GIR_OR, GIR_T_I1, ovf, ne);
-    if !sr {
-        // an unsigned result: negative values do not fit
+    var o2 = ins_bin(GIR_OR, GIR_T_I1, ovf, ins_icmp(GIR_NE, et, back, r));
+    let exact = ew <= 64 || (wa <= 64 && wb <= 64);
+    if !sr && (exact || sgn) {
+        // an unsigned result: a negative value does not fit
         let neg = ins_icmp(GIR_SLT, et, r, c_zero(et));
-        if any_signed { o2 = ins_bin(GIR_OR, GIR_T_I1, o2, neg); }
+        o2 = ins_bin(GIR_OR, GIR_T_I1, o2, neg);
     }
     if !is_p { store_c(qr, tr, pres, false); }
     return int_cast(o2, GIR_T_I1, vty(nd.ty), false);

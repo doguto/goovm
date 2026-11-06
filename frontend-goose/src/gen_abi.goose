@@ -337,7 +337,9 @@ fn abi_of_classes(q: u32, lo: i64, hi: i64, is_ret: bool) -> Abi, i64, i64 {
                 if !is_agg_abi(q) { return direct(q), 0, 0; }
                 return coerce1(GIR_T_F80, 0, size, false), 0, 0;
             }
-            return coerce2(GIR_T_F80, GIR_T_F80, size, false), 0, 0;
+            var a = coerce2(GIR_T_F80, GIR_T_F80, size, false);
+            a.off1 = 16;
+            return a, 0, 0;
         }
         return byval(q), 0, 0;
     }

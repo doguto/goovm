@@ -276,7 +276,7 @@ fn decode_string(t: Tok, width: i64) -> i64 {
             }
             continue;
         }
-        strbytes.push(c as! u8);
+        if width > 1 { str_put(width, c); } else { strbytes.push(c as! u8); }
         count++;
         i++;
     }

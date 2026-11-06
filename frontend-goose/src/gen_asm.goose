@@ -87,37 +87,33 @@ recursive fn gen_asm(n: u32) {
     let tmpl = strlit_bytes(nd.a);
     let nops = nd.c as i64;
     if is_empty_template(tmpl) {
-        // outputs tied to inputs take the input value
-        var nout = 0;
+        // the output lvalues are evaluated once; an output tied to an input
+        // takes the input's value, other outputs keep theirs
+        let mark = asm_in.len;
         for i in nops {
             let o = nodes[nlist[nd.v + i]];
-            if o.op == 1 { nout++; }
+            if o.op == 1 { asm_in.push(ex_lv(o.b).addr); asm_in.push(nlist[nd.v + i]); }
         }
-        var oi = 0;
+        let nout = (asm_in.len - mark) / 2;
         for i in nops {
-            let on = nlist[nd.v + i];
-            let o = nodes[on];
-            if o.op == 2 {
-                let c = strlit_bytes(o.a);
-                if c.len > 0 && c[0] >= '0' && c[0] <= '9' {
-                    let k = (c[0] - '0') as i64;
-                    // find output k
-                    var j = 0;
-                    for i2 in nops {
-                        let o2 = nodes[nlist[nd.v + i2]];
-                        if o2.op != 1 { continue; }
-                        if j == k {
-                            let v = ex_val(o.b);
-                            let l = ex_lv(o2.b);
-                            lv_store(l, conv(v, nty(o.b), unqual(nty(o2.b))));
-                        }
-                        j++;
+            let o = nodes[nlist[nd.v + i]];
+            if o.op != 2 { continue; }
+            let c = strlit_bytes(o.a);
+            if c.len > 0 && c[0] >= '0' && c[0] <= '9' {
+                let k = (c[0] - '0') as i64;
+                let v = ex_val(o.b);
+                if k < nout {
+                    let on = nodes[asm_in[mark + 2 * k + 1]];
+                    let oq = unqual(nty(on.b));
+                    if vkind(oq) == VK_SCALAR && nodes[on.b].flags & NF_BITFIELD == 0 {
+                        store_c(oq, conv(v, nty(o.b), oq), asm_in[mark + 2 * k], false);
                     }
-                } else if has_side_effects(o.b) && !has_char(c, 'm') {
-                    ex_ignore(o.b);
                 }
+            } else if has_side_effects(o.b) && !has_char(c, 'm') {
+                ex_ignore(o.b);
             }
         }
+        asm_in.resize(mark);
         return;
     }
     gen_asm_code(n, tmpl);

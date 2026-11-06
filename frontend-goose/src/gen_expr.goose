@@ -408,15 +408,47 @@ recursive fn ex_val(n: u32) -> u32 {
         return emit(GIR_EXTRACTELT, mty(nd.ty), 0, 0, vtype(v), v, i, 0);
     }
     if k == N_INITLIST {
+        if is_vector(nd.ty) { return vec_init_val(n); }
         // a scalar in braces: { x }
         if nd.c > 0 { return ex_val(nlist[nd.v]); }
         return c_zero(vty(nd.ty));
     }
     if k == N_ZEROINIT { return c_zero(vty(nd.ty)); }
-    if is_lvalue(n) { return lv_load(ex_lv(n)); }
+    if is_lvalue(n) || k == N_MEMBER || k == N_INDEX { return lv_load(ex_lv(n)); }
     if k == N_ERROR { return c_zero(GIR_T_I32); }
     bug("ex_val", n);
     return c_zero(GIR_T_I32);
+}
+
+// A vector from an initializer list (elements or smaller vectors).
+recursive fn vec_init_val(n: u32) -> u32 {
+    let nd = nodes[n];
+    let vt = vty(nd.ty);
+    let et = tbase(nd.ty);
+    let lanes = m_types[vt].n;
+    var v = c_zero(vt);
+    var lane: u32 = 0;
+    for i in nd.c {
+        let child = nlist[nd.v + i];
+        let ct = nty(child);
+        let x = ex_val(child);
+        if is_vector(ct) {
+            let cn = m_types[vtype(x)].n;
+            for j in 0..cn {
+                if lane >= lanes { break; }
+                let e = emit(GIR_EXTRACTELT, mty(tbase(ct)), 0, 0, vtype(x), x, c_i32(j as i64), 0);
+                v = emit(GIR_INSERTELT, vt, 0, 0, 0, v, e, c_i32(lane as i64));
+                lane++;
+            }
+        } else {
+            if lane >= lanes { break; }
+            let e = conv(x, ct, et);
+            let em = if kind_of(et) == TY_BOOL { int_cast(e, GIR_T_I1, GIR_T_I8, false) } else { e };
+            v = emit(GIR_INSERTELT, vt, 0, 0, 0, v, em, c_i32(lane as i64));
+            lane++;
+        }
+    }
+    return v;
 }
 
 fn bug(what: const u8[:], n: u32) {
@@ -1021,7 +1053,10 @@ recursive fn ex_assign(n: u32) -> u32 {
         assign_agg(l.addr, lq, nd.b);
         return NONE;
     }
-    if vk == VK_COMPLEX { assign_cplx(n); return NONE; }
+    if vk == VK_COMPLEX {
+        let r, i = assign_cplx(n);
+        return NONE;
+    }
     if nd.op == 0 {
         if quals(lq) & Q_ATOMIC != 0 {
             let v = ex_val(nd.b);
@@ -1066,14 +1101,15 @@ recursive fn assign_agg(dst: u32, q: u32, b: u32) {
     ex_agg(b, dst);
 }
 
-recursive fn assign_cplx(n: u32) {
+// Complex assignment; returns the stored value.
+recursive fn assign_cplx(n: u32) -> u32, u32 {
     let nd = nodes[n];
     let lq = unqual(nty(nd.a));
     if nd.op == 0 {
         let re, im = ex_cplx(nd.b);
         let l = ex_lv(nd.a);
         store_cplx(lq, re, im, l.addr, l.vol);
-        return;
+        return re, im;
     }
     let ct = nd.c;
     let xr, xi = cplx_or_real(nd.b);
@@ -1082,7 +1118,10 @@ recursive fn assign_cplx(n: u32) {
     let cr = conv(ar, cplx_elem(lq), cplx_elem(ct));
     let ci = conv(ai, cplx_elem(lq), cplx_elem(ct));
     let rr, ri = cplx_arith(nd.op as i64, ct, cr, ci, true, xr, xi, is_complex(nty(nd.b)));
-    store_cplx(lq, conv(rr, cplx_elem(ct), cplx_elem(lq)), conv(ri, cplx_elem(ct), cplx_elem(lq)), l.addr, l.vol);
+    let sr = conv(rr, cplx_elem(ct), cplx_elem(lq));
+    let si = conv(ri, cplx_elem(ct), cplx_elem(lq));
+    store_cplx(lq, sr, si, l.addr, l.vol);
+    return sr, si;
 }
 
 // real op= complex: computed in the complex type, the real part stored.
@@ -1166,11 +1205,7 @@ recursive fn ex_cplx(n: u32) -> u32, u32 {
             return nr, im;
         }
     }
-    if k == N_ASSIGN {
-        assign_cplx(n);
-        let l = ex_lv(nd.a);
-        return load_cplx(unqual(nty(nd.a)), l.addr, l.vol);
-    }
+    if k == N_ASSIGN { return assign_cplx(n); }
     if k == N_COND {
         let tb = new_block();
         let fb = new_block();
@@ -1225,7 +1260,7 @@ recursive fn ex_cplx(n: u32) -> u32, u32 {
         else { mem_copy(tmp, va_arg_addr(n), type_size(q), false); }
         return load_cplx(q, tmp, false);
     }
-    if is_lvalue(n) {
+    if is_lvalue(n) || k == N_MEMBER || k == N_INDEX {
         let l = ex_lv(n);
         return load_cplx(q, l.addr, l.vol);
     }
@@ -1407,7 +1442,7 @@ recursive fn ex_agg(n: u32, dst: u32) {
         return;
     }
     if k == N_BUILTIN { ex_builtin(n, dst); return; }
-    if is_lvalue(n) {
+    if is_lvalue(n) || k == N_MEMBER || k == N_INDEX {
         let l = ex_lv(n);
         if dst != NONE { mem_copy(dst, l.addr, type_size(q), l.vol); }
         return;
@@ -1421,7 +1456,7 @@ recursive fn ex_complit(n: u32) -> u32 {
     let nd = nodes[n];
     let s = nd.b as i64;
     if syms[s].flags & SF_FILESCOPE != 0 || syms[s].sc == SC_STATIC || f_sym < 0 {
-        return gref(var_global(s));
+        return gref(complit_global(n));
     }
     var p = sym_addr[s];
     let q = syms[s].ty;

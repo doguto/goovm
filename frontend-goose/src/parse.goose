@@ -1207,8 +1207,11 @@ recursive fn parse_params(variadic: bool&, noproto: bool&, kr: bool&) -> i64, i6
             let d = parse_declarator(apply_type_attrs(base, pa, ds.loc), 2, pa);
             parse_attributes(pa);
             var ty = apply_type_attrs(d.ty, pa, d.loc);
-            // adjustments (C11 6.7.6.3p7-8)
+            // adjustments (C11 6.7.6.3p7-8); a VLA parameter's size is still
+            // evaluated on entry (kept in the symbol's v for B2)
+            var orig: u32 = 0;
             if is_array(ty) {
+                if kind_of(ty) == TY_VLA { orig = ty; }
                 ty = with_quals(mk_ptr(tbase(ty)), array_quals);
             } else if is_func(ty) {
                 ty = mk_ptr(ty);
@@ -1219,6 +1222,7 @@ recursive fn parse_params(variadic: bool&, noproto: bool&, kr: bool&) -> i64, i6
             }
             let s = new_sym(SK_VAR, d.name, ty, d.loc);
             syms[s].flags = SF_PARAM;
+            syms[s].v = orig as i64;
             syms[s].sc = if ds.sc == SC_REGISTER { SC_REGISTER } else { SC_NONE };
             if d.name != 0 { bind_sym(s, false); }
             nscratch.push(s as! u32);

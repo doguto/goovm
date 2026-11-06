@@ -132,9 +132,12 @@ recursive fn contains_label_noswitch(n: u32) -> bool {
     return false;
 }
 
+var label_depth = dictionary<u32, u32> {};   // label -> cleanup depth where it is defined
+
 fn gen_label(l: i64) {
     let b = label_block(l);
     start_block(b);
+    label_depth.insert(l as! u32, cleanups.len as! u32);
 }
 
 recursive fn gen_stmt(n: u32) {
@@ -191,6 +194,9 @@ recursive fn gen_stmt(n: u32) {
         return;
     }
     if k == N_GOTO {
+        // a jump back to before a VLA (or a cleanup variable) leaves its scope
+        let d = label_depth.get(nd.a);
+        if d && (d as i64) < cleanups.len { run_cleanups(d as i64); }
         br(label_block(nd.a as i64));
         return;
     }
@@ -757,6 +763,7 @@ fn gen_function(fd: u32) {
     f_igoto_vals.clear();
     f_arg_types.clear();
     case_blk.clear();
+    label_depth.clear();
     cleanups.clear();
     cleanup_marks.clear();
     dbg_function_begin(s, nd.loc);
@@ -846,7 +853,8 @@ fn gen_function(fd: u32) {
     // variably modified parameter types (int a[n][m]: m is evaluated here)
     for i in np {
         let p = nlist[nd.v + i] as i64;
-        if is_vm_any(syms[p].ty) { eval_vm_type(syms[p].ty); }
+        if syms[p].v != 0 && kind_of(syms[p].v as! u32) == TY_VLA { eval_vm_type(syms[p].v as! u32); }
+        else if is_vm_any(syms[p].ty) { eval_vm_type(syms[p].ty); }
     }
     push_cleanup_scope();
     gen_stmt(nd.b);
@@ -863,7 +871,7 @@ fn gen_function(fd: u32) {
     finish_igoto();
     var flags = f_flags;
     if fty.flags & TF_VARIADIC != 0 { flags = flags | FN_VARARG; }
-    if is_internal_sym(s) { flags = flags | FN_INTERNAL; }
+    if is_internal_sym(s) || fn_local_inline(s) { flags = flags | FN_INTERNAL; }
     var al: u32 = 4;
     let a = syms[s].attr;
     if a != 0 && sym_attrs[a].align > 16 {
