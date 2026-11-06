@@ -1,0 +1,7 @@
+# machine
+Linux 6.18.44-fc-v242 x86_64
+4
+model name	: Intel(R) Xeon(R) Processor @ 2.30GHz
+ 03:19:25 up  1:46,  0 user,  load average: 0.00, 0.20, 0.31
+Ubuntu clang version 20.1.2 (0ubuntu1~24.04.3)
+goose 335fddc (runtime d22ae129d92b)

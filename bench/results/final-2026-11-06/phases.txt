@@ -1,0 +1,20 @@
+gen-20000.bc cpp goovm-time: parse_us=1683561 export_us=296942 backend_us=263010 write_us=35969 total_us=2279482 llvm_insts=3238227 gir_insts=3205263
+gen-20000.bc goose goovm-time: parse_us=1645415 export_us=291889 backend_us=107367 write_us=46416 total_us=2091088 llvm_insts=3238227 gir_insts=3205263
+gen-20000.bc llvm goovm-time: parse_us=1476931 export_us=0 backend_us=4664021 write_us=10464 total_us=6151416 llvm_insts=3238227 gir_insts=0
+gen-20000.bc tpde Compile_us=354349 Parse_IR_us=1662243 TPDE_Analysis_us=46244 TPDE_CodeGen_us=174117 TPDE_EmitObj_us=8704 TPDE_GlobalGen_us=355 TPDE_Prepass_us=110330
+   text	   data	    bss	    dec	    hex	filename
+48867770	    784	   3856	48872410	2e9bbda	$SCRATCH/work/final/gen-20000.cpp.o
+48867770	    784	   3856	48872410	2e9bbda	$SCRATCH/work/final/gen-20000.goose.o
+11247212	    784	   3856	11251852	 abb08c	$SCRATCH/work/final/gen-20000.llc.o
+13220181	    784	   3856	13224821	 c9cb75	$SCRATCH/work/final/gen-20000.tpde.o
+cpp and goose objects identical
+spass.bc cpp goovm-time: parse_us=52003 export_us=10957 backend_us=9165 write_us=4782 total_us=76906 llvm_insts=114953 gir_insts=114371
+spass.bc goose goovm-time: parse_us=53763 export_us=12129 backend_us=4809 write_us=1503 total_us=72204 llvm_insts=114953 gir_insts=114371
+spass.bc llvm goovm-time: parse_us=55821 export_us=0 backend_us=255952 write_us=1299 total_us=313072 llvm_insts=114953 gir_insts=0
+spass.bc tpde Compile_us=18446 Parse_IR_us=55177 TPDE_Analysis_us=2737 TPDE_CodeGen_us=8665 TPDE_EmitObj_us=688 TPDE_GlobalGen_us=173 TPDE_Prepass_us=3326
+   text	   data	    bss	    dec	    hex	filename
+1527863	    152	 358340	1886355	 1cc893	$SCRATCH/work/final/spass.cpp.o
+1527863	    152	 358340	1886355	 1cc893	$SCRATCH/work/final/spass.goose.o
+ 687856	    152	 358340	1046348	  ff74c	$SCRATCH/work/final/spass.llc.o
+ 766347	    152	 358340	1124839	 1129e7	$SCRATCH/work/final/spass.tpde.o
+cpp and goose objects identical

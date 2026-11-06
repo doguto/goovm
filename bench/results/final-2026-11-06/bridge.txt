@@ -1,0 +1,6 @@
+goose_init: 100.4 us
+scalar call      goose 0.48 ns/call   c++ 0.33 ns/call
+sum i64[:]       goose 0.411 ns/elem   c++ 0.361 ns/elem   (equal: yes)
+scale i64[:]     goose 0.559 ns/elem   c++ 0.417 ns/elem
+histogram Item[] goose 1.058 ns/elem   c++ 0.965 ns/elem   (equal: yes)
+make_bytes       goose 0.501 ns/byte   (len 16777216, content ok: yes)

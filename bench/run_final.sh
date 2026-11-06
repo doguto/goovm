@@ -15,6 +15,8 @@ out="${1:?usage: run_final.sh OUT_DIR}"
 mkdir -p "$out"
 : "${GOOSE:?}" "${GOOSE_STDLIB:?}" "${GOOVM:?}" "${TPDE:?}" "${INPUTS:?}" "${CTMARK_O0_CC:?}"
 export GOOSE GOOSE_STDLIB
+STEPS="${STEPS:-backend attribution phases e2e ircore bridge codequal}"
+want() { case " $STEPS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 {
     echo "# machine"
@@ -23,16 +25,21 @@ export GOOSE GOOSE_STDLIB
     "$GOOSE" --version
 } > "$out/machine.txt" 2>&1
 
+if want backend; then
 echo "== back-ends on bitcode inputs" >&2
 bash "$here/backend/run.sh" -n 5 --goovm "$GOOVM" --tpde "$TPDE" --inproc --goose \
     "$INPUTS"/gen-1000.bc "$INPUTS"/gen-5000.bc "$INPUTS"/gen-20000.bc "$INPUTS"/spass.bc "$INPUTS"/typeset.bc \
     > "$out/backend.md"
+fi
 
+if want attribution; then
 echo "== attribution: C++ vs Goose back-end variants" >&2
 : "${GOOVM_BUILD:=$(cd "$(dirname "$GOOVM")/../.." && pwd)}"
 bash "$here/attribution/run.sh" "$GOOVM_BUILD" "$out/attr-work" 7 \
     "$INPUTS"/gen-5000.bc "$INPUTS"/gen-20000.bc "$INPUTS"/spass.bc "$INPUTS"/typeset.bc > "$out/attribution.md"
+fi
 
+if want phases; then
 echo "== in-process phase breakdown" >&2
 for f in "$INPUTS"/gen-20000.bc "$INPUTS"/spass.bc; do
     for b in cpp goose llvm; do
@@ -49,7 +56,7 @@ for f in "$INPUTS"/gen-20000.bc "$INPUTS"/spass.bc; do
 import json, sys
 d = json.load(open(sys.argv[1])); d = d["traceEvents"] if isinstance(d, dict) else d
 t = {e["name"]: e["dur"] for e in d if e.get("name", "").startswith("Total ")}
-print(sys.argv[2], "tpde", " ".join(f"{k[6:].replace(\" \", \"_\")}_us={v}" for k, v in sorted(t.items())))
+print(sys.argv[2], "tpde", " ".join(k[6:].replace(chr(32), "_") + "_us=" + str(v) for k, v in sorted(t.items())))
 ' "$out/tpde-trace.json" "$(basename "$f")"
     for b in cpp goose; do "$GOOVM" --backend=$b "$f" -o "$out/$(basename "$f" .bc).$b.o"; done
     "$TPDE" "$f" -o "$out/$(basename "$f" .bc).tpde.o"
@@ -58,18 +65,27 @@ print(sys.argv[2], "tpde", " ".join(f"{k[6:].replace(\" \", \"_\")}_us={v}" for 
     cmp "$out/$(basename "$f" .bc).cpp.o" "$out/$(basename "$f" .bc).goose.o" && echo "cpp and goose objects identical"
 done > "$out/phases.txt" 2>&1
 rm -f "$out"/*.o "$out/tpde-trace.json"
+fi
 
+if want e2e; then
 echo "== CTMark end to end" >&2
 python3 "$here/e2e/ctmark_backends.py" "$CTMARK_O0_CC" --tpde "$TPDE" --goovm "$GOOVM" --goose --runs 2 \
     --out "$out/e2e.json" > "$out/e2e.md"
+fi
 
+if want ircore; then
 echo "== IR core" >&2
 python3 "$here/../poc/ircore/run.py" "$GOOSE" "$out/ircore-work" --n 2000000 --runs 5 > "$out/ircore.md"
+fi
 
+if want bridge; then
 echo "== bridge" >&2
 bash "$here/../poc/bridge/run.sh" "$out/bridge-work" > "$out/bridge.txt"
+fi
 
+if want codequal; then
 echo "== code quality" >&2
 GOOVM="$GOOVM" TPDE="$TPDE" bash "$here/codequal/run.sh" "$out/codequal-work" 5 2 > "$out/codequal.md"
+fi
 
 echo "done: $out" >&2
