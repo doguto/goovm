@@ -517,6 +517,25 @@ type had been appended into, which the abort pointed at directly);
   (clang -O0: 2.1 KB). Large functions now share slots between values that
   die in their block (DESIGN.md §5): 2.9 KB.
 
+### Correctness
+
+`tests/suite.py --fallback -j3` with the final build (commit c698c97), three
+variants each (`O0`, `g` = `-O0 -g`, `mem2reg`); "excluded" tests fail with
+plain clang-20 -O0 too (gcc's builtins tests that need -O2 folding):
+
+| corpus | tests | clang -O0 passes | goovm passes (O0 / g / mem2reg) | fallbacks |
+|---|---:|---:|---:|---:|
+| gcc-c-torture execute | 1427 | 1427 | 1427 / 1427 / 1427 | 0 |
+| gcc-c-torture ieee | 57 | 57 | 57 / 57 / 57 | 0 |
+| gcc-c-torture builtins | 54 | 48 | 48 / 48 / 48 | 0 |
+| SingleSource UnitTests | 129 | 129 | 129 / 129 / 129 | 0 |
+| SingleSource Regression/C | 37 | 37 | 37 / 37 / 37 | 0 |
+| SingleSource Benchmarks (C) | 100 | 100 | 100 / 100 / 100 | 0 |
+| CTMark C programs | 6 | 6 | 6 / 6 / 6 | 0 |
+
+(torture: the 1,514 files minus the 87 the test-suite's CMakeLists lists as
+unsupported or failing; ieee: 58 minus 1; builtins: 108 files = 54 tests.)
+
 ### Speed
 
 `goovm-llc --time` back-end phase, best of 7, on a shared (not quiet) 4-core
