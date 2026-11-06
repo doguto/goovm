@@ -393,7 +393,9 @@ it generates code:
 - **Line-table rows**, by LLVM's `DwarfDebug::beginInstruction` rules: a
   row with `is_stmt` when the line changes, `prologue_end` at the first
   instruction with a line after the prologue, `epilogue_begin` at the
-  epilogue (with the location of the last return), a line-0 row at the top
+  epilogue (with the location of the last return, and no `is_stmt` when a
+  jump from the return reaches it, as LLVM's epilogue continues the
+  return's statement), a line-0 row at the top
   of a block that has no location after one that had, and `is_stmt` forced
   on the first line of a block that a predecessor leaves on another line
   (computed per function from the terminators before the body is

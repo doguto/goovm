@@ -112,6 +112,7 @@ var df_block = false;          // an instruction of an earlier block was seen (P
 var df_pend = false;           // prologue_end placed
 var df_force = false;          // force is_stmt on this block's first line
 var df_ret: u32 = 0;           // location of the function's last instruction if it is a RET
+var df_ret_last = false;       // the return is the function's last instruction
 var df_va = false;             // a prologue_end row at the va register save code (rows[df_row0 + 1])
 var pro_va: u32 = 0;           // offset of that code in the prologue (cg.goose)
 var blk_force: u8[>..] = [];   // per local block: force is_stmt on its first line
@@ -479,8 +480,9 @@ fn dbg_func_start(sp: u32) {
         }
     }
     // the epilogue (shared, at the end) has the location of the last return,
-    // wherever it is (landing pads and cleanups may follow it)
+    // wherever it is (landing pads, cleanups or a loop may follow it)
     var k: i64 = f_nins;
+    df_ret_last = true;
     while k > 0 {
         k--;
         let L = M.insts[f_first_inst + k];
@@ -488,6 +490,7 @@ fn dbg_func_start(sp: u32) {
             df_ret = L.dbg;
             break;
         }
+        df_ret_last = false;
     }
 }
 fn succ_edge(s: u32, ll: u32) {
@@ -740,6 +743,12 @@ fn dbg_epilogue() {
     if df_sp == 0 || df_ret == 0 { return; }
     let L = M.dlocs[df_ret];
     var fl: u32 = ROW_EPI;
+    if !df_ret_last {
+        // reached by a jump from the return: in LLVM the epilogue follows
+        // the return's code, whose location it has, so it starts no statement
+        if L.line != 0 { row(df_ret, fl, L.line); }
+        return;
+    }
     if df_ret != df_prev && L.line == 0 && df_line == 0 { return; }   // (no line-0 repeat, even for the flag)
     if df_ret != df_prev {
         let old: u32 = if df_prev != 0 { M.dlocs[df_prev].line } else { df_line };
