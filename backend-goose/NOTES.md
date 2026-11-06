@@ -12,6 +12,10 @@ now split into `cg.goose`, `gir.goose`, `x86.goose`, `loc.goose`,
 [`DESIGN.md`](DESIGN.md). It records the new Goose pain points (with the
 compiler's messages) and the speed against v0.
 
+Section 9 is milestone **A2**: the v2 back-end (register allocation and
+instruction selection of LLVM -O0 class; two new files, `ra.goose` and
+`lowera.goose`), with its bugs, pain points and measurements.
+
 v0 page contents:
 
 - the structure of the port;
@@ -571,3 +575,86 @@ Fast paths recovered most of the first version's gap (it executed 1.54x v0's
 instructions): the frame-slot path in the encoder (`op_mem_t`: 99 → 63
 instructions per memory operand), the register-only call path, and the
 predefined-type load/store paths.
+
+## 9. Milestone A2: register allocation
+
+v2 keeps values in registers (DESIGN.md §4-§6): a forward pre-pass per
+function, block-local allocation with write-through homes for values used
+in other blocks, folding of compares, immediates, memory operands and
+address modes, deferred loads and GEP addresses, jump tables, and vectors of
+8 and 16 bytes in xmm registers. About 7,100 lines of Goose in nine files
+(A1: 4,299 in seven): `ra.goose` (the allocator) and `lowera.goose` (the
+allocator-aware lowerings) are new. A1's lowerings stay for the rare classes
+behind a flush of the caller-saved registers, so the allocator was brought
+up one opcode class at a time (integer operations, compares, loads and
+stores, calls, FP, vectors) with the whole suite passing in between. The
+messages below are verbatim from `goose check` (compiler commit 335fddc).
+
+### Bugs found by the tests (all fixed)
+
+- **A prologue store into a slot the body had reused.** Arguments used in
+  other blocks are stored to their home by the prologue, which is generated
+  after the body. The body had already freed such a home at the value's
+  last use, which resets its recorded offset to 0, so the prologue stored
+  the argument at `[rbp+0]`, over the saved rbp (SIGBUS in
+  `tests/c/38_aggregates`). The prologue now uses the offsets recorded when
+  the homes were assigned.
+- **A register file that outlived its function**: values of the previous
+  function were still "in" registers at the next one's entry
+  (`ra_func_start` resets it).
+- **8-byte alignment for 16-byte slots** (`movaps` faulted); slots are now
+  aligned by size class.
+- **FP bits in a general register.** A1's `copysign` lowering left its
+  result in rax, and the allocator recorded an f64 in a general register;
+  three `ieee` tests failed. `ra_tierb_end` moves a legacy result of the
+  wrong class, `copysign` got an xmm lowering, and `ra_gpr`/`ra_xmm` assert
+  the class.
+- **`trunc` to i32 marked clean.** A truncation is a register copy, so the
+  upper half is the source's; `2003-05-26-Shorts` (mem2reg) printed wrong
+  values once a 64-bit use trusted it. Narrowed values are dirty (`ST_EXT`)
+  unless a 32-bit instruction wrote them (`tests/c/45_ra_widths.c`).
+- **`lea` with a scaled index and no base.** SIB base 5 with mod 00 means
+  "no base, disp32", not rbp, so `lea r, [x*4]` for a shift came out wrong.
+  Only `lea r, [x + x]` (shift by 1) is used.
+- **A deferred load through registers into a consumer with fixed
+  registers.** A consumer that first moves something into a fixed register
+  (a shift count into rcx, a dividend into rax) could overwrite the load's
+  address register. Only consumers that read all their operands first take
+  such a load (`pend_reg_ok`).
+
+### New pain points
+
+1. **A branch cannot yield several values.**
+   `let ok, v = if c { two(5) } else { false, 0 };` gives
+   `error: several values exist only in `return a, b;` and in a call's results, so a block or branch cannot end in `a, b`: return from each branch instead (§7.1)`.
+   The message is good. The workaround (`var`s assigned in each branch, or
+   a helper that returns) costs lines in the lowerings, which pick between
+   (flag, memory operand) or (register, immediate) pairs all the time.
+2. **The declared type does not reach the literals in a branch.**
+   `let k: u32 = (if dbl { 0 } else { 2 }) + 1;` gives
+   `error: expected a value of type u32, got i64 (narrowing and sign changes require an explicit `as`)`.
+   `var k: u32 = 1; if !dbl { k = 3; }` works.
+3. **`pad` again**, as a field of the per-value record
+   (`struct V { reg: u8, pad: u16 }`):
+   `error: expected '}' in struct declaration, found ':'`. Renamed `spare`.
+4. **`ctz` is u64 -> i64.** `std`'s `ctz(x: u64) -> i64` is the only bit
+   scan, and register masks are u32, so every use is `ctz(m) as! u32`
+   (`ctz32` in `ra.goose`). A cast on the argument draws
+   `warning: redundant `as u64`: a u32 converts to u64 implicitly here`;
+   the narrowing of the result needs `as!`.
+5. **Records are cheaper field by field.** The pre-pass first read the
+   16-byte `VInfo` record whole (`let x = vi[u]; ...; vi[u] = x`): 75.0M
+   instructions on spass, against 68.7M with `vi[u].field` reads and writes
+   (callgrind). A `.=` reference binding gave no gain. Each `vi[u]` keeps
+   its bounds check either way.
+6. **Profiles of the generated C are flat.** clang inlines the static
+   functions of the one generated C file into a few large ones:
+   `gen_function` alone is 36.6M of the back-end's 72M instructions on
+   spass, and line-level annotation spreads over many inlined copies.
+   `goose -O0` does not change that (clang still inlines). A separate build
+   with `CMAKE_C_FLAGS=-fno-inline` gave a per-function profile (which
+   costs about 20% more instructions).
+
+### Results
+
+@@RESULTS@@

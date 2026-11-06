@@ -330,8 +330,20 @@ fn pp_hint(v: u32, r: u32) {
     let u = gir_idx(v) - f_first_inst;
     if u >= f_nins { return; }
     let c = rc_of(M.insts[f_first_inst + u].ty);
-    if c == RC_GPR { vi[u].hint = r as! u8; }
+    if c == RC_GPR { pp_gpr_hint(u, r); }
     else if in_xmm(c) && r == RAX { vi[u].hint = 16; }
+}
+// General register r for u, and for the operand of u if u is an integer /
+// pointer conversion of it (`(void *)(long)x` as an argument).
+fn pp_gpr_hint(u: u32, r: u32) {
+    vi[u].hint = r as! u8;
+    let I = M.insts[f_first_inst + u];
+    let op: u32 = I.op;
+    if op == GIR_INTTOPTR || op == GIR_PTRTOINT || op == GIR_BITCAST || op == GIR_TRUNC || op == GIR_ZEXT {
+        if gir_kind(I.a) != GIR_V_INST { return; }
+        let w = gir_idx(I.a) - f_first_inst;
+        if w < u && rc_of(M.insts[f_first_inst + w].ty) == RC_GPR { vi[w].hint = r as! u8; }
+    }
 }
 fn pp_call_hints(I: Inst) {
     var gp: u32 = 0;
@@ -344,7 +356,7 @@ fn pp_call_hints(I: Inst) {
             if gp == 6 { return; }
             if gir_kind(v) == GIR_V_INST {
                 let u = gir_idx(v) - f_first_inst;
-                if u < f_nins { vi[u].hint = ARG_GPR[gp] as! u8; }
+                if u < f_nins { pp_gpr_hint(u, ARG_GPR[gp]); }
             }
             gp++;
         } else if in_xmm(c) {
@@ -793,6 +805,13 @@ fn ra_def(j: u32) -> u32 {
     }
     return ra_alloc(GP_ALLOC, ra_pref(j));
 }
+// Whether ra_def(j) would give j its hint register: a three-operand form
+// (lea, imul, movsx, a load) then writes the result there instead of into a
+// dying operand's register, which saves the copy at the call or return.
+fn hint_free(j: u32) -> bool {
+    let h: u32 = vi[j].hint;
+    return h < 16 && vi[j].st & (ST_CS | ST_GLOB) == 0 && r_free & ~r_lock & bit(h) != 0;
+}
 // The register of operand v if the result may take it over: v is a local
 // value whose last use is this instruction and it is in a register.
 fn ra_reuse(v: u32) -> u32 {
@@ -802,6 +821,13 @@ fn ra_reuse(v: u32) -> u32 {
     if r >= 32 { return 32; }
     if vi[id].st & ST_GLOB != 0 || vi[id].last != cur_pos { return 32; }
     return r;
+}
+// ra_reuse, or the scratch register r that ra_gpr built a non-value
+// operand in (a constant, a global or alloca address): r is the operand's
+// register and the result may take it over.
+fn ra_reuse2(v: u32, r: u32) -> u32 {
+    if r < 32 && r_temp & bit(r) != 0 { return r; }
+    return ra_reuse(v);
 }
 // The result of j is in register r (a general or an xmm register, 0..31);
 // ext: it has garbage above its width. Global values are written to their

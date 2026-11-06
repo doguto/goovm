@@ -108,7 +108,12 @@ argument, a 16-byte `VInfo` record):
   it contains inline assembly or `__builtin_setjmp`);
 - `ST_NODEF` if a memory write lies between a load and its use, or the use
   is a legacy lowering (no deferred load);
-- `hint`: the register a return value or a plain call argument is wanted in;
+- `hint`: the register a return value or a plain call argument is wanted in
+  (also given to the operand of an integer/pointer conversion that is
+  such an argument, e.g. `(void *)(long)i`). Lowerings with a
+  three-operand form (`lea`, `imul r, r/m, imm`, `movsx`, loads, `setcc`)
+  write the result straight into a free hint register instead of reusing a
+  dying operand's register;
 - `kind`: how the instruction is lowered (allocator-aware `K_A`, call, legacy
   `K_B`, or legacy clobbering every register `K_ALL`).
 
@@ -188,28 +193,32 @@ registers is deferred the same way into the next instruction when that
 instruction reads its operands before touching fixed registers; the address
 registers stay locked across (`ra_carry`).
 
-A single-use GEP whose user is the next load or store is folded into its
-address (`PADDR`: `[base + idx*scale + disp]`, the alloca offset or the
-global symbol folded in), so `a[i] = x` is `mov [rax+rcx*4], edx`.
+A single-use GEP whose user is the next load, store or GEP is folded into
+its address (`PADDR`: `[base + idx*scale + disp]`, the alloca offset or the
+global symbol folded in), so `a[i] = x` is `mov [rax+rcx*4], edx`, and a
+chain of GEPs (`p->a.b[i]`, one GEP per member access at -O0) becomes one
+address: the next GEP adds its offset and index to the folded one, or
+starts from it with an `lea` when both have an index.
 
 ## 6. Instruction selection
 
 | GIR | code |
 |---|---|
-| add, sub, and, or, xor, mul | `op r, imm` / `op r, [mem]` / `op r, r`; `lea` for add/sub of a live operand, `imul r, r, imm` |
+| add, sub, and, or, xor, mul | `op r, imm` / `op r, [mem]` / `op r, r`; `lea` for add/sub of a live operand, `imul r, r/[mem], imm`; a constant first operand is swapped (`4 * x`), `0 - x` is `neg`, `c - x` builds c in the result register |
 | shifts | `shl/shr/sar r, imm` (`lea r, [x+x]` for `<< 1`); variable counts in cl |
 | udiv/urem by 2^k | `shr` / `and` |
 | sdiv, udiv, srem, urem | dividend in eax/rax, `cdq/cqo` or `xor edx, edx`, `idiv/div r` or `[mem]` at 32 or 64 bits |
-| icmp | `cmp`/`test` at the value's width (8, 16, 32, 64: no extension), immediates and memory operands; fused with the next `condbr` (`jcc`) or `select` (`cmov`), else `setcc` + `movzx` |
+| icmp | `cmp`/`test` at the value's width (8, 16, 32, 64: no extension), immediates and memory operands; fused with the next `condbr` (`jcc`) or `select` (`cmov`), else `setcc` + `movzx` (into a dying operand's register) |
 | fcmp | `ucomiss/sd` (one or two flag tests per predicate), fused with the next `condbr` or `select` |
 | select | `cmov` (INT), a short branch around `movaps` (FP, vectors) |
-| zext, sext, trunc, ptr casts | nothing (the register is reused), `mov r32, r32`, `movzx`, `movsx`, `movsxd`, or the load itself (`movsbl (%rcx,%rax), %edx`) |
+| zext, sext, trunc, ptr casts | nothing (the register is reused), `mov r32, r32`, `movzx`, `movsx`, `movsxd`, or the load itself (`movsbl (%rcx,%rax), %edx`); of a constant: `mov r, imm` |
 | int/FP conversions | `cvtsi2sd xmm, r32/r64/[mem]`, `cvttsd2si`, unsigned 64-bit with the 2^63 split |
 | fadd..fdiv, fsqrt | `addsd xmm, xmm/[mem]/[rip+const]`; fneg/fabs/copysign with xorps/andps/orps masks in `.rodata.cst16` |
 | load, store | typed moves on the folded address; constants stored as immediates (FP constants as their bit pattern); seq_cst stores are `xchg` |
 | GEP | an address mode (folded into the next load/store), else one `lea` |
 | memcpy, memset <= 64 bytes | `movups` 16-byte chunks and a scratch register; `rep movsb/stosb` above |
 | vectors (RC_VX) | `movups/movq`, `addps/addpd`, `paddb/w/d/q`, `psub*`, `pand/por/pxor`, `pmullw`; insertelement/extractelement with a constant lane by `movss`/`shufps`/`unpcklps`/`unpcklpd`/`pinsrw`/`pextrw`/`pshufd`; bitcasts as register moves |
+| switch | dense (at least 4 cases filling at least 40% of their range): `movsx` + `sub lo` + `cmp; ja default` + `lea table(%rip)` + `movslq (table,idx,4)` + `add` + `jmp *r`, the table of rel32 offsets placed right after the jump in `.text` (no relocations), edges into blocks with PHIs through stubs after the table; else a chain of `cmp; je` |
 | branches | `jmp`/`jcc rel8` to blocks already placed (backward), `rel32` forward; no jump to the next block |
 | everything else | the A1 lowerings (§7 of the A1 design: INT2 add/adc..., x87, lane-by-lane vectors, aggregates, atomics, TLS, sjlj, inline asm) |
 

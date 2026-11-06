@@ -240,6 +240,89 @@ fn lower_condbr(I: Inst, cur: u32, next: u32) {
     }
 }
 
+// Jump tables: entries are rel32 offsets from the table start, which sits in
+// the code right after the indirect jump. An entry whose target block is not
+// placed yet is patched with the fixups (jt_fix).
+struct JtFix { pos: u32, blk: u32, base: u32 }
+var jt_fix: JtFix[>..] = [];
+var jt_case: u32[>..] = [];     // per table entry: case index + 1 (0: default)
+var jt_stub_blk: u32[>..] = []; // PHI edges: target block and its stub's position
+var jt_stub_pos: u32[>..] = [];
+
+// The value of case k of SWITCH I, sign-extended from `bits`.
+fn case_val(I: Inst, k: u32, bits: u32) -> i64 {
+    var x: i64 = M.consts[gir_idx(M.opnds[I.b + 1 + 2 * k])].lo as! i64;
+    if bits < 64 { x = (x << (64 - bits)) >> (64 - bits); }
+    return x;
+}
+// A dense switch (at least 4 cases, at least 40% of the range) through a
+// table: t = sext(x) - lo; if t > hi - lo goto default; goto table[t].
+fn switch_table(I: Inst, cur: u32, r: u32, bits: u32) -> bool {
+    let nc: u32 = I.c;
+    if nc < 4 { return false; }
+    var lo: i64 = case_val(I, 0, bits);
+    var hi: i64 = lo;
+    for k in 1..nc {
+        let x = case_val(I, k, bits);
+        if x < lo { lo = x; }
+        if x > hi { hi = x; }
+    }
+    let span: u64 = (hi as! u64) - (lo as! u64);   // entries - 1 (wraps for huge ranges: then too large)
+    if span >= 0x40000000 || (span + 1) * 2 > (nc as u64) * 5 || !fits32(lo) { return false; }
+    let n: u32 = span as! u32 + 1;
+    let t = ra_temp();
+    let u = ra_temp();
+    sign_ext_into(t, r, bits);
+    if lo != 0 { grp1_ri(1, G1_SUB, t, lo as! i32); }
+    grp1_ri(1, G1_CMP, t, span as! i32);
+    let d = M.opnds[I.b];
+    let dphi = has_phi(d);
+    var dpos: u32 = 0;
+    if dphi { dpos = jcc_fwd(CC_A); } else { jcc_block(CC_A, d); }
+    let lp = lea_here(u);
+    load32s(t, m_sib(u, t, 2, 0));
+    alu_rr64(ALU_ADD, t, u);
+    jmp_r(t);
+    let base = here();
+    patch_here(lp);
+    // the table
+    if jt_case.len < n { jt_case.resize(n, 0); }
+    for e in 0..n { jt_case[e] = 0; }
+    for k in 0..nc { jt_case[(case_val(I, k, bits) - lo) as! u32] = k + 1; }
+    for e in 0..n { b4(0); }
+    // stubs for the edges into blocks with PHIs
+    jt_stub_blk.clear();
+    jt_stub_pos.clear();
+    for e in 0..n + 1 {
+        // (entry n: the default's own branch)
+        var tb = d;
+        if e < n && jt_case[e] != 0 { tb = M.opnds[I.b + 2 * jt_case[e]]; }
+        if !has_phi(tb) { continue; }
+        var seen = false;
+        for q in jt_stub_blk { if q == tb { seen = true; } }
+        if seen { continue; }
+        jt_stub_blk.push(tb);
+        jt_stub_pos.push(here());
+        phi_moves(cur, tb);
+        jmp_block(tb);
+    }
+    if dphi { patch4(dpos, stub_pos(d) - (dpos + 4)); }
+    for e in 0..n {
+        var tb = d;
+        if jt_case[e] != 0 { tb = M.opnds[I.b + 2 * jt_case[e]]; }
+        let p = base + 4 * e;
+        if has_phi(tb) { patch4(p, stub_pos(tb) - base); }
+        else if tb <= cur_blk { patch4(p, block_off[tb] - base); }
+        else { jt_fix.push(JtFix { pos: p, blk: tb, base: base }); }
+    }
+    return true;
+}
+fn stub_pos(b: u32) -> u32 {
+    for q, k in jt_stub_blk { if q == b { return jt_stub_pos[k]; } }
+    assert(false);
+    return 0;
+}
+
 fn lower_switch(I: Inst, cur: u32, next: u32) {
     let t: u32 = I.aux;
     let wide = cls_of(t) == C_INT2;
@@ -257,6 +340,7 @@ fn lower_switch(I: Inst, cur: u32, next: u32) {
         use_gpr2(I.a, r, rhi);
     } else {
         r = ra_gpr(I.a, !ex);
+        if ex && switch_table(I, cur, r, bits) { return; }
     }
     var tc: u32 = 32;
     for k in 0..I.c {
@@ -589,6 +673,7 @@ fn gen_function(fi: u32) {
     // then homes and spill slots as they are needed.
     code.clear();
     fixups.clear();
+    jt_fix.clear();
     let rela_start = rela_code.len;
     let baddr_start = baddr.len;
     lay_off = 8 * ncs as i64;
@@ -621,6 +706,7 @@ fn gen_function(fi: u32) {
     for x in fixups {
         patch4(x.pos, block_off[x.blk] - (x.pos + 4));
     }
+    for x in jt_fix { patch4(x.pos, block_off[x.blk] - x.base); }
     let body = here();
     emit_prologue(insts, f.flags);
     let pro = here();

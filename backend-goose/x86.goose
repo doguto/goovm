@@ -298,6 +298,15 @@ checkfree fn imul_rri64(d: u32, s: u32, imm: i32) {
     op_rr(1, 0x69, d, s, false);
     b4(imm as! u32);
 }
+checkfree fn imul_rmi(w: u32, d: u32, x: Mem, imm: i32) {
+    if fits8(imm) {
+        op_mem_t(0, w, 0x6B, d, x, false, 1);
+        b1(imm as! u32);
+    } else {
+        op_mem_t(0, w, 0x69, d, x, false, 4);
+        b4(imm as! u32);
+    }
+}
 checkfree fn imul_rri(w: u32, d: u32, s: u32, imm: i32) {
     if fits8(imm) {
         op_rr(w, 0x6B, d, s, false);
@@ -454,6 +463,16 @@ checkfree fn rep_stosb() { b1(0xF3); b1(0xAA); }
 checkfree fn ud2() { b1(0x0F); b1(0x0B); }
 checkfree fn call_r(r: u32) { op_rr(0, 0xFF, 2, r, false); }
 checkfree fn jmp_r(r: u32) { op_rr(0, 0xFF, 4, r, false); }
+// lea r64, [rip + disp32] to a place in this function's code (a jump table);
+// returns the disp32 position for patch_here.
+checkfree fn lea_here(r: u32) -> u32 {
+    rex(1, r, 0, false);
+    b1(0x8D);
+    b1(0x05 | ((r & 7) << 3));
+    let p = here();
+    b4(0);
+    return p;
+}
 checkfree fn mfence() { b1(0x0F); b1(0xAE); b1(0xF0); }
 
 // --- SSE (registers xmm0..15 use the GPR numbering)

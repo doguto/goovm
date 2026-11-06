@@ -44,6 +44,15 @@ fn v_ext(v: u32) -> bool {
 // loaded and dies here, it is loaded into the register the result is wanted
 // in (its hint), so no copy follows.
 fn ra_gpr_h(v: u32, clean: bool, j: u32) -> u32 {
+    if !is_val(v) && hint_free(j) {
+        // a constant or address: built in the hint register (a scratch the
+        // result takes over, see ra_reuse2)
+        let r = ra_alloc(GP_ALLOC, bit(vi[j].hint));
+        r_val[r] = RV_TEMP;
+        r_temp |= bit(r);
+        ra_mat_gpr(v, r);
+        return r;
+    }
     let h: u32 = vi[j].hint;
     if h < 16 && vi[j].st & (ST_CS | ST_GLOB) == 0 && is_val(v) && r_free & ~r_lock & bit(h) != 0 {
         let id = vid(v);
@@ -63,7 +72,7 @@ fn ra_gpr_h(v: u32, clean: bool, j: u32) -> u32 {
 // The result register for j, taking over the register of operand a if a dies
 // here (else a copy of ra): the two-address form "rd = ra; rd op= ...".
 fn def_from(j: u32, a: u32, ra: u32) -> u32 {
-    let r = ra_reuse(a);
+    let r = ra_reuse2(a, ra);
     if r == ra { return r; }
     let rd = ra_def(j);
     mov_rr64(rd, ra);
@@ -85,12 +94,19 @@ fn lower_binop_a(I: Inst, j: u32) {
         lower_shift_a(I, j, bits);
         return;
     }
-    let ok, imm = alu_imm(I.b, bits);
+    var a = I.a;
+    var b = I.b;
+    let comm = op == GIR_ADD || op == GIR_MUL || op == GIR_AND || op == GIR_OR || op == GIR_XOR;
+    if comm && is_const(a) && !is_const(b) {   // (clang -O0 keeps `4 * x` as written)
+        a = I.b;
+        b = I.a;
+    }
+    let ok, imm = alu_imm(b, bits);
     if ok && op != GIR_MUL {
-        let ra = ra_gpr_h(I.a, !exact, j);
+        let ra = ra_gpr_h(a, !exact, j);
         var rd: u32 = 32;
         if op == GIR_ADD || op == GIR_SUB {
-            rd = ra_reuse(I.a);
+            rd = if hint_free(j) { 32 } else { ra_reuse(a) };
             let k: i64 = if op == GIR_ADD { imm } else { 0 - (imm as i64) };
             if rd != ra && fits32(k) {
                 rd = ra_def(j);
@@ -98,33 +114,64 @@ fn lower_binop_a(I: Inst, j: u32) {
                 lower_int_done(j, rd, bits, true);
                 return;
             }
-            if rd != ra { rd = def_from(j, I.a, ra); }
+            if rd != ra { rd = def_from(j, a, ra); }
         } else {
-            rd = def_from(j, I.a, ra);
+            rd = def_from(j, a, ra);
         }
         let ext: u32 = match op { GIR_ADD => G1_ADD, GIR_SUB => G1_SUB, GIR_AND => G1_AND, GIR_OR => G1_OR, _ => G1_XOR };
         grp1_ri(w, ext, rd, imm);
-        lower_int_done(j, rd, bits, op == GIR_ADD || op == GIR_SUB || op != GIR_AND && v_ext(I.a));
+        lower_int_done(j, rd, bits, op == GIR_ADD || op == GIR_SUB || op != GIR_AND && v_ext(a));
         return;
     }
     if ok && op == GIR_MUL {
-        let ra = ra_gpr_h(I.a, !exact, j);
-        var rd = ra_reuse(I.a);
+        if exact && bits >= 32 {   // imul $imm, mem, rd
+            let om, ma = ra_mem_opnd(a, bits / 8);
+            if om {
+                let rd = ra_def(j);
+                imul_rmi(w, rd, ma, imm);
+                lower_int_done(j, rd, bits, false);
+                return;
+            }
+        }
+        let ra = ra_gpr_h(a, !exact, j);
+        var rd = if hint_free(j) { 32 } else { ra_reuse(a) };
         if rd != ra { rd = ra_def(j); }
         imul_rri(w, rd, ra, imm);
         lower_int_done(j, rd, bits, true);
         return;
     }
     // register (or memory) second operand
-    var a = I.a;
-    var b = I.b;
-    let comm = op == GIR_ADD || op == GIR_MUL || op == GIR_AND || op == GIR_OR || op == GIR_XOR;
     if comm && ra_reuse(a) == 32 && ra_reuse(b) != 32 {
-        a = I.b;
-        b = I.a;
+        let t = a;
+        a = b;
+        b = t;
+    }
+    let n = int_bytes(bits);
+    if op == GIR_SUB && is_const(a) && is_val(b) {
+        // c - x: neg, or c built in the result register
+        if M.consts[gir_idx(a)].lo == 0 {
+            let rx = ra_gpr_h(b, false, j);
+            let rd = def_from(j, b, rx);
+            neg_r(w, rd);
+            lower_int_done(j, rd, bits, true);
+            return;
+        }
+        var okc = false;
+        var mc = Mem { M_REG, 0, 0, 0, 0 };
+        if exact && n >= 4 {
+            let o, m2 = ra_mem_opnd(b, n);
+            okc = o;
+            mc = m2;
+        }
+        var rx: u32 = 32;
+        if !okc { rx = ra_gpr(b, !exact); }
+        let rd = ra_def(j);
+        ra_mat_gpr(a, rd);
+        if okc { alu_rm(w, ALU_SUB, rd, mc); } else { alu_rr(w, ALU_SUB, rd, rx); }
+        lower_int_done(j, rd, bits, true);
+        return;
     }
     let ra = ra_gpr_h(a, !exact, j);
-    let n = int_bytes(bits);
     var okm = false;
     var mb = Mem { M_REG, 0, 0, 0, 0 };
     if exact && n >= 4 {
@@ -193,7 +240,7 @@ fn lower_shift_a(I: Inst, j: u32, bits: u32) {
     // count in cl
     ra_gpr_into(I.b, RCX, false);
     let ra = ra_gpr_h(I.a, need_clean, j);
-    var rd = ra_reuse(I.a);
+    var rd = ra_reuse2(I.a, ra);
     if rd != ra { rd = ra_def(j); }
     if op == GIR_ASHR && bits != 32 && bits != 64 { sign_ext_into(rd, ra, bits); }
     else if rd != ra { mov_rr64(rd, ra); }
@@ -420,9 +467,15 @@ fn fuse_flags(j: u32) -> bool {
     if N.op == GIR_SELECT { return N.a == r && N.b != r && N.c != r && vi[j + 1].kind == K_A; }
     return false;
 }
-// Materializes a condition code as the 0/1 result of j.
-fn set_cc_result(j: u32, cc: u32) {
-    let rd = ra_def(j);
+// Materializes a condition code as the 0/1 result of j (in the hint
+// register, else in the register of an operand that dies here).
+fn set_cc_result(j: u32, cc: u32, a: u32, b: u32) {
+    var rd: u32 = 32;
+    if !hint_free(j) {
+        rd = ra_reuse(a);
+        if rd == 32 { rd = ra_reuse(b); }
+    }
+    if rd == 32 { rd = ra_def(j); }
     setcc(cc, rd);
     movzx8(rd, rd);
     ra_set(j, rd, false);
@@ -436,7 +489,7 @@ fn lower_icmp_a(I: Inst, j: u32) {
         flags_comb = 0;
         return;
     }
-    set_cc_result(j, cc);
+    set_cc_result(j, cc, I.a, I.b);
 }
 
 // How an FCMP predicate is computed from ucomis(x, y) flags: compare (a, b)
@@ -693,6 +746,20 @@ fn lower_cast_a(I: Inst, j: u32) {
 
 // Integer casts (zext, sext, trunc, ptrtoint, inttoptr, bitcast) from sb to db bits.
 fn lower_icast_a(I: Inst, j: u32, op: u32, sb: u32, db: u32) {
+    if is_const(I.a) && cls_of(M.consts[gir_idx(I.a)].ty) == C_INT {
+        // (clang -O0 keeps `f((char)32)` as a sext of a constant)
+        var x: u64 = M.consts[gir_idx(I.a)].lo;
+        if sb < 64 {
+            let m: u64 = ((1 as u64) << sb) - 1;
+            x &= m;
+            if op == GIR_SEXT && (x >> (sb - 1)) & 1 != 0 { x |= ~m; }
+        }
+        if db < 64 { x &= ((1 as u64) << db) - 1; }
+        let rd = ra_def(j);
+        mov_ri(rd, x);
+        ra_set(j, rd, false);
+        return;
+    }
     if op == GIR_SEXT {
         var okm = false;
         var m = Mem { M_REG, 0, 0, 0, 0 };
@@ -709,7 +776,7 @@ fn lower_icast_a(I: Inst, j: u32, op: u32, sb: u32, db: u32) {
             return;
         }
         let rs = ra_gpr_h(I.a, !exact_width(sb), j);
-        var rd = ra_reuse(I.a);
+        var rd = if hint_free(j) { 32 } else { ra_reuse(I.a) };
         if rd != rs { rd = ra_def(j); }
         if sb == 8 { movsx8(w, rd, rs); }
         else if sb == 16 { movsx16(w, rd, rs); }
@@ -736,7 +803,7 @@ fn lower_icast_a(I: Inst, j: u32, op: u32, sb: u32, db: u32) {
         var rd = ra_reuse(I.a);
         if widen && ext {
             // zero-extend the garbage away
-            if rd != rs { rd = ra_def(j); }
+            if rd != rs || hint_free(j) { rd = ra_def(j); }
             if sb == 8 { movzx8(rd, rs); }
             else if sb == 16 { movzx16(rd, rs); }
             else { mov_rr32(rd, rs); }
@@ -835,13 +902,16 @@ fn lower_load_a(I: Inst, j: u32) {
     }
     // the pointer's register may hold the result
     var rd: u32 = 32;
-    if m.kind == M_REG && m.reg != RBP {
+    if hint_free(j) {
+        // (the hint register)
+    } else if m.kind == M_REG && m.reg != RBP {
         let r: u32 = m.reg;
         if ra_reuse(I.a) == r || dead_reg(r) { rd = r; }
     } else if m.kind == M_SIB {
         let r: u32 = m.reg;
         let x: u32 = m.rtype & 15;
-        if r != RBP && dead_reg(r) { rd = r; } else if dead_reg(x) { rd = x; }
+        if x == vi[j].hint && dead_reg(x) { rd = x; }
+        else if r != RBP && dead_reg(r) { rd = r; } else if dead_reg(x) { rd = x; }
     }
     if rd == 32 { rd = ra_def(j); }
     load_int(rd, m, bits_of(t));
@@ -927,7 +997,22 @@ fn gep_mem(I: Inst) -> Mem {
     var base: u32 = 32;
     var disp: i64 = 0;
     let ka = gir_kind(a);
-    if ka <= GIR_V_ARG && (vi[vid(a)].home == H_ALLOCA || vi[vid(a)].home == H_BYVAL) {
+    if ka == GIR_V_INST && vi[vid(a)].reg == PADDR {
+        // the folded address of the GEP just before (a chain `p->a.b`)
+        vi[vid(a)].reg = NOREG;
+        let p = paddr_m;
+        let d: i64 = p.disp;
+        if nv == 0 && fits32(d + off) {
+            return Mem { p.kind, p.reg, p.rtype, (d + off) as! i32, p.sym };
+        }
+        if p.kind == M_REG {
+            base = p.reg;
+            disp = d;
+        } else {
+            base = ra_temp();
+            lea64(base, p);
+        }
+    } else if ka <= GIR_V_ARG && (vi[vid(a)].home == H_ALLOCA || vi[vid(a)].home == H_BYVAL) {
         base = RBP;
         disp = vi[vid(a)].off;
     } else if ka == GIR_V_GLOBAL && is_local_ref(gir_idx(a)) && nv == 0 && fits32(off) {
@@ -938,7 +1023,7 @@ fn gep_mem(I: Inst) -> Mem {
     if nv == 0 {
         if fits32(disp + off) { return m_reg(base, (disp + off) as! i32); }
         let t = ra_temp();
-        if base == RBP { lea64(t, m_rbp(disp as! i32)); } else { mov_rr64(t, base); }
+        if base == RBP || disp != 0 { lea64(t, m_reg(base, disp as! i32)); } else { mov_rr64(t, base); }
         let t2 = ra_temp();
         mov_ri(t2, off as! u64);
         alu_rr64(ALU_ADD, t, t2);
@@ -948,7 +1033,7 @@ fn gep_mem(I: Inst) -> Mem {
     var b = base;
     if nv > 1 || !fits32(disp + off) {
         let t = ra_temp();
-        if b == RBP { lea64(t, m_rbp(disp as! i32)); } else { mov_rr64(t, b); }
+        if b == RBP || disp != 0 { lea64(t, m_reg(b, disp as! i32)); } else { mov_rr64(t, b); }
         disp = 0;
         b = t;
         if !fits32(off) {
@@ -1008,7 +1093,8 @@ fn lower_gep_a(I: Inst, j: u32) {
     if vi[j].nuse == 1 && vi[j].st & ST_GLOB == 0 && vi[j].last == j + 1 {
         let N = M.insts[f_first_inst + j + 1];
         let r = inst_ref(j);
-        if (N.op == GIR_LOAD && N.a == r || N.op == GIR_STORE && N.b == r && N.a != r) && vi[j + 1].kind == K_A {
+        if (N.op == GIR_LOAD && N.a == r || N.op == GIR_STORE && N.b == r && N.a != r || N.op == GIR_GEP && N.a == r)
+           && vi[j + 1].kind == K_A {
             vi[j].reg = PADDR;
             paddr_m = m;
             ra_carry = true;
@@ -1025,9 +1111,9 @@ fn lower_gep_a(I: Inst, j: u32) {
         }
     }
     var rd: u32 = 32;
-    if m.kind != M_RIP {
+    if m.kind != M_RIP && !hint_free(j) {
         let rb: u32 = m.reg;
-        if ra_reuse(I.a) == rb { rd = rb; }
+        if ra_reuse(I.a) == rb || rb != RBP && dead_reg(rb) { rd = rb; }
     }
     if rd == 32 { rd = ra_def(j); }
     lea64(rd, m);
