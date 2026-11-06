@@ -218,7 +218,7 @@ fn layout_globals() {
                 let al: u64 = if G.align != 0 { G.align } else { 1 };
                 if al > osecs[s].align { osecs[s].align = al; }
                 if typ == SHT_NOBITS || buf == BUF_NONE {
-                    bss = (bss + al - 1) / al * al;
+                    bss = (bss + al - 1) & ~(al - 1);
                     g_value[g] = bss;
                     bss += G.size;
                 } else if buf == BUF_RODATA {
@@ -277,6 +277,7 @@ var rel_first: u32[>..] = [];
 
 fn sym_type(G0: Global) -> u32 {
     let G = if G0.kind == G_ALIAS { M.globals[G0.func] } else { G0 };
+    if G.flags & GF_TLS != 0 { return 6; }                     // TLS (also when undefined)
     if G.flags & (GF_DEFINED | GF_COMMON) == 0 { return 0; }   // NOTYPE
     if G.kind == G_FUNC { return 2; }                          // FUNC
     if G.flags & GF_TLS != 0 { return 6; }                     // TLS

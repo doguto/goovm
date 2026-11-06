@@ -148,9 +148,10 @@ fn gen_inst(gi: u32, cur: u32) {
         GIR_DEBUGTRAP => b1(0xCC),
         GIR_ADD, GIR_SUB, GIR_MUL, GIR_SDIV, GIR_UDIV, GIR_SREM, GIR_UREM,
         GIR_AND, GIR_OR, GIR_XOR, GIR_SHL, GIR_LSHR, GIR_ASHR => {
-            let c = cls_of(I.ty);
+            let d = M.types[I.ty];
+            let c: u32 = d.cls;
             if c == C_INT {
-                let bits = bits_of(I.ty);
+                let bits: u32 = d.bits;
                 use_fixed(I.a, RAX);
                 let op: u32 = I.op;
                 let ok, imm = alu_imm(I.b, bits);
@@ -278,13 +279,12 @@ fn gen_inst(gi: u32, cur: u32) {
 
 // --------------------------------------------------------------- functions
 
-checkfree fn align_down(off: i64, al: i64) -> i64 { off / al * al }
 
 fn gen_function(fi: u32) {
     let f = M.funcs[fi];
     let falign: u32 = (1 as u32) << (f.flags >> FN_ALIGN_SHIFT);
     if falign > osecs[cur_code_sec].align { osecs[cur_code_sec].align = falign; }
-    while code.len % falign != 0 { b1(0xCC); }
+    while code.len & (falign - 1) != 0 { b1(0xCC); }
     let start = here();
     f_first_inst = f.first_inst;
     f_first_block = f.first_block;
@@ -314,7 +314,7 @@ fn gen_function(fi: u32) {
     for a in 0..f.n_args {
         let t = M.opnds[f.args + 2 * a];
         let al = slot_align(t);
-        off = (off + slot_size(t) + al - 1) / al * al;
+        off = (off + slot_size(t) + al - 1) & ~(al - 1);  // al is a power of two (no division)
         a_off[a] = (-off) as! i32;
         a_home[a] = A_SLOT;
     }
@@ -330,7 +330,7 @@ fn gen_function(fi: u32) {
             let al: i64 = if I.b != 0 { I.b } else { 1 };
             let size: i64 = if I.a != 0 { I.a } else { 1 };
             if al <= 16 {
-                off = (off + size + al - 1) / al * al;
+                off = (off + size + al - 1) & ~(al - 1);
                 v_off[j] = (-off) as! i32;
                 v_home[j] = H_ALLOCA;
             } else {
@@ -343,12 +343,16 @@ fn gen_function(fi: u32) {
                 overaligned = true;
             }
         } else if I.ty != GIR_T_VOID {
-            let al = slot_align(I.ty);
-            off = (off + slot_size(I.ty) + al - 1) / al * al;
+            // INT and FP values (the common case) take 8 bytes; offsets stay 8-aligned.
+            var sz: i64 = 8;
+            if I.ty > GIR_T_F64 || I.ty == GIR_T_VOID { sz = slot_size(I.ty); }
+            off += sz;
+            if sz >= 16 { off = (off + 15) & ~15; }  // slot start 16-aligned
             v_off[j] = (-off) as! i32;
             v_home[j] = H_SLOT;
             if I.op == GIR_PHI {
-                off = (off + slot_size(I.ty) + al - 1) / al * al;
+                off += sz;
+                if sz >= 16 { off = (off + 15) & ~15; }
                 t_off[j] = (-off) as! i32;
             }
         } else {

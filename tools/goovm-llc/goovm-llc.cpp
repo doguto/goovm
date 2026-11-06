@@ -194,7 +194,13 @@ int main(int argc, char **argv) {
                 std::fprintf(stderr, "goovm-llc: %s\n", e.msg.c_str());
                 return 2;
             }
-            std::string first = e.msg.substr(0, e.msg.find('\n'));
+            // One line: the instruction is printed on a line of its own.
+            std::string first;
+            for (char ch : e.msg) {
+                if (ch == '\n') ch = ' ';
+                if (ch == ' ' && !first.empty() && first.back() == ' ') continue;
+                first += ch;
+            }
             std::fprintf(stderr, "goovm-llc: fallback: %s (%s compiled by LLVM's code generator)\n", first.c_str(),
                          in.c_str());
             use_llvm = true;

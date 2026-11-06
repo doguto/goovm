@@ -269,7 +269,7 @@ fn global_addr(r: u32, g: u32) {
 // ================================================ value-location interface
 
 // Home memory of local instruction j (H_SLOT or the alloca area).
-fn res_mem(j: u32) -> Mem { m_rbp(v_off[j]) }
+inline fn res_mem(j: u32) -> Mem { m_rbp(v_off[j]) }
 
 // The bytes of value v (any class but INT constants and addresses): its
 // slot, or a constant's pool entry.
@@ -296,7 +296,7 @@ fn use_gpr(v: u32, r: u32) -> u32 {
         else { load64(r, m_rbp(a_off[i])); }
     } else if k == GIR_V_CONST {
         let c = M.consts[i];
-        if cls_of(c.ty) == C_INT { mov_ri(r, c.lo); }
+        if c.ty <= GIR_T_PTR || cls_of(c.ty) == C_INT { mov_ri(r, c.lo); }
         else { load_n(r, const_mem(i), size_of(c.ty)); }  // the bits of a small FP/vector constant
     } else {
         global_addr(r, i);
@@ -305,7 +305,7 @@ fn use_gpr(v: u32, r: u32) -> u32 {
 }
 // v into exactly register r (fixed-register operands: shift counts, call
 // arguments, division).
-fn use_fixed(v: u32, r: u32) { use_gpr(v, r); }
+inline fn use_fixed(v: u32, r: u32) { use_gpr(v, r); }
 // An INT2 value into (lo, hi).
 fn use_gpr2(v: u32, lo: u32, hi: u32) {
     if gir_kind(v) == GIR_V_CONST {
@@ -333,7 +333,7 @@ fn use_xmm(v: u32, x: u32) -> u32 {
 // Register for the result of local instruction j (A1: the suggestion).
 fn def_gpr(j: u32, r: u32) -> u32 { r }
 // The result of j is in r (zero-extended): A1 stores it to its slot.
-fn put_gpr(j: u32, r: u32) { store64(m_rbp(v_off[j]), r); }
+inline fn put_gpr(j: u32, r: u32) { store64(m_rbp(v_off[j]), r); }
 fn put_gpr2(j: u32, lo: u32, hi: u32) {
     store64(m_rbp(v_off[j]), lo);
     store64(m_rbp(v_off[j] + 8), hi);

@@ -910,11 +910,12 @@ fn lower_tlsaddr(I: Inst, j: u32) {
 
 // Loads a value of type t at m into the result of j (any class).
 fn load_to_result(j: u32, t: u32, m: Mem) {
-    let c = cls_of(t);
+    let d = M.types[t];
+    let c: u32 = d.cls;
     if c == C_INT {
-        load_n(RAX, m, store_of(t));
-        let b = bits_of(t);
-        if b < 64 && b != store_of(t) * 8 { zext_reg(RAX, b); }
+        load_n(RAX, m, d.store);
+        let b: u32 = d.bits;
+        if b < 64 && b != d.store * 8 { zext_reg(RAX, b); }
         put_gpr(j, RAX);
     } else if c == C_INT2 {
         load64(RAX, m);
@@ -1235,12 +1236,13 @@ fn lower_load(I: Inst, j: u32) {
 }
 fn lower_store(I: Inst) {
     let t: u32 = I.aux;
-    let c = cls_of(t);
+    let d = M.types[t];
+    let c: u32 = d.cls;
     let seq = (I.flags & IF_ORD_MASK) >> IF_ORD_SHIFT == ORD_SEQ_CST;
     if c == C_INT {
         use_fixed(I.a, RAX);
         let m = addr_of(I.b, RCX);
-        let n = store_of(t);
+        let n = d.store;
         if seq && (n == 1 || n == 2 || n == 4 || n == 8) { atomic_rm(false, n, 0x86, 0x87, RAX, m); }
         else { store_n(m, RAX, n); }
         return;
