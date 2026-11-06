@@ -39,6 +39,7 @@ fn dstring(s: const u8[:]) -> u32 {
 
 fn dbg_init(main_file: const u8[:]) {
     if !opt_debug { return; }
+    mx_prepare();
     var d: u8[>..] = [];
     if !env("PWD", d) { d.append("."); }
     comp_dir.append(d);
@@ -74,11 +75,12 @@ fn dbg_function_begin(s: i64, loc: u32) {
     dbg_scope_nodes.clear();
     cur_dbg = 0;
     if !opt_debug { return; }
-    let f = file_of(loc as i64);
+    let xl = expansion_loc(loc) as i64;
+    let f = file_of(xl);
     var line: i64 = 0;
     var file: u32 = 0;
     if f >= 0 {
-        let l, c = line_col(f, loc as i64);
+        let l, c = line_col(f, xl);
         line = l;
         file = dfile(f);
     }
@@ -116,7 +118,7 @@ fn dbg_cur_scope() -> u32 {
     while i <= k {
         if dbg_scopes[i] == 0 {
             let n = dbg_scope_nodes[i];
-            let loc = nodes[n].loc as i64;
+            let loc = expansion_loc(nodes[n].loc) as i64;
             let f = file_of(loc);
             var line: i64 = 0;
             var col: i64 = 0;
@@ -136,18 +138,147 @@ fn dbg_cur_scope() -> u32 {
     return dbg_scopes[k];
 }
 
-inline fn set_loc(loc: u32) { if opt_debug && f_sym >= 0 { set_loc_dbg(loc); } }
+var last_loc: u32 = 0;      // the location of the statement being lowered (for late diagnostics)
 
-fn set_loc_dbg(loc: u32) {
+inline fn set_loc(loc: u32) {
+    last_loc = loc;
+    if opt_debug && f_sym >= 0 { set_loc_dbg(loc); }
+}
+
+// Expressions are attributed as clang's CodeGen attributes them: every
+// expression it visits (EmitLValue, the scalar, complex and aggregate
+// emitters) sets the location to the expression's getExprLoc() and restores
+// the previous one afterwards (ApplyDebugLocation), so an operation lands on
+// its operator, a call on the callee's first token, a load on what is
+// loaded, and a statement's own instructions (branches, returns, stores of
+// initializers) on the statement.
+
+// clang's getBeginLoc(): the first token of expression n.
+fn begin_loc(n: u32) -> u32 {
+    var m = n;
+    loop {
+        let nd = nodes[m];
+        let k = nd.kind as i64;
+        if nd.a != 0 && (k == N_ICAST || k == N_MEMBER || k == N_INDEX || k == N_CALL || k == N_SWIZZLE || k == N_COND ||
+                         k == N_BINARY || k == N_ASSIGN || (k == N_UNARY && (nd.op == U_POSTINC || nd.op == U_POSTDEC))) {
+            m = nd.a;
+            continue;
+        }
+        return nd.loc;
+    }
+}
+
+// clang's getExprLoc(): operators at the operator, member accesses at the
+// member, subscripts at their base, implicit casts, calls and ?: at their
+// first token.
+fn expr_loc(n: u32) -> u32 {
+    var m = n;
+    loop {
+        let nd = nodes[m];
+        let k = nd.kind as i64;
+        if k == N_ICAST || k == N_CALL || k == N_COND { return begin_loc(m); }
+        if k == N_INDEX && nd.a != 0 { m = nd.a; continue; }
+        return nd.loc;
+    }
+}
+
+// Where the emitters attribute expression n's own instructions: its
+// getExprLoc(), except that a load (an lvalue-to-rvalue conversion) is made
+// while visiting what is loaded (ScalarExprEmitter visits the operand).
+fn visit_loc(n: u32) -> u32 {
+    let nd = nodes[n];
+    if nd.kind == N_ICAST && nd.op == CK_LVAL2RVAL && nd.a != 0 { return expr_loc(nd.a); }
+    return expr_loc(n);
+}
+
+// Lowering the condition of a loop: clang evaluates it as a value
+// (EvaluateExprAsBool), so its final conversion and branch are at the loop.
+var dbg_loopcond: bool = false;
+
+// Enters a location; returns the one to restore with pop_loc.
+fn push_loc(loc: u32) -> u32 {
+    let saved = cur_dbg;
+    set_loc_dbg(loc);
+    return saved;
+}
+
+fn pop_loc(saved: u32) {
+    if cur_dbg == saved { return; }
+    cur_dbg = saved;
+    if saved != 0 {
+        let d = m_dlocs[saved];
+        last_line = d.line;
+        last_col = d.col;
+        last_scope = d.scope;
+        last_raw = dloc_raw[saved];
+    } else {
+        last_line = 0;
+        last_col = 0;
+        last_scope = 0;
+        last_raw = 0;
+    }
+}
+
+inline fn dbg_on() -> bool { opt_debug && f_sym >= 0 }
+
+// The outermost function-like macro invocations, sorted and disjoint.
+var mx_start: u32[>..] = [];
+var mx_end: u32[>..] = [];
+
+fn mx_prepare() {
+    sort(mx_ranges);
+    for r in mx_ranges {
+        let s = (r >> 32) as! u32;
+        let e = (r & 0xFFFFFFFF) as! u32;
+        // an invocation in the arguments of another one is inside it
+        if mx_end.len > 0 && s <= mx_end[mx_end.len - 1] { continue; }
+        mx_start.push(s);
+        mx_end.push(e);
+    }
+}
+
+// clang's expansion location: code from a macro, its arguments included,
+// is at the outermost invocation's name. (Tokens of macro bodies already
+// carry the invocation's location: its name for an object-like macro, its
+// ')' for a function-like one.)
+var mx_hint: i64 = 0;                      // the range found last
+
+fn expansion_loc(loc: u32) -> u32 {
+    // locations come mostly in order: try the last range and the gap after it
+    let h = mx_hint;
+    if h < mx_start.len && mx_start[h] <= loc {
+        if loc <= mx_end[h] { return mx_start[h]; }
+        if h + 1 >= mx_start.len || loc < mx_start[h + 1] { return loc; }
+    }
+    var lo: i64 = 0;
+    var hi = mx_start.len;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if mx_start[mid] <= loc { lo = mid + 1; } else { hi = mid; }
+    }
+    if lo > 0 { mx_hint = lo - 1; }
+    if lo > 0 && loc <= mx_end[lo - 1] { return mx_start[lo - 1]; }
+    return loc;
+}
+
+var last_raw: u32 = 0;                     // the source offset of the current location
+var dloc_raw: u32[>..] = [];               // per m_dlocs entry: its source offset
+
+fn set_loc_dbg(loc0: u32) {
     if !opt_debug || f_sym < 0 { return; }
+    let sc = dbg_cur_scope();
+    if loc0 == last_raw && sc == last_scope && cur_dbg != 0 { return; }
+    let loc = expansion_loc(loc0);
     let f = file_of(loc as i64);
     if f < 0 { return; }
     let line, col = line_col(f, loc as i64);
-    let sc = dbg_cur_scope();
     let l = line as! u32;
     let c = col as! u32;
+    last_raw = loc0;
     if l == last_line && c == last_col && sc == last_scope && cur_dbg != 0 { return; }
     m_dlocs.push(DLoc { line: l, col: c, scope: sc, inlined_at: 0 });
+    while dloc_raw.len < m_dlocs.len { dloc_raw.push(0); }
+    dloc_raw[m_dlocs.len - 1] = loc0;
     cur_dbg = (m_dlocs.len - 1) as! u32;
     last_line = l;
     last_col = c;

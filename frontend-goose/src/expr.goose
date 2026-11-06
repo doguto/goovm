@@ -533,8 +533,9 @@ recursive fn parse_postfix(e0: u32) -> u32 {
                 return error_node(loc);
             }
             let name = tval();
+            let nloc = tloc();
             adv();
-            e = mk_member(e, name, k == TK_ARROW, loc);
+            e = mk_member(e, name, k == TK_ARROW, nloc);
         } else if k == TK_PLUSPLUS || k == TK_MINUSMINUS {
             adv();
             e = mk_incdec(e, if k == TK_PLUSPLUS { U_POSTINC } else { U_POSTDEC }, loc);

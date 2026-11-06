@@ -65,6 +65,9 @@ fn usage() {
     exit(2);
 }
 
+// -o - writes to standard output
+fn out_is_stdout() -> bool { out_len == 1 && names[out_off] == '-' }
+
 fn main() {
     let a = args();
     var i = 1;
@@ -111,9 +114,9 @@ fn main() {
         else if s == "--emit-gir" { opt_mode = 5; }
         else if s == "-g" || starts_with(s, "-g") && s != "-g0" && !starts_with(s, "-gno") { gen::opt_debug = true; }
         else if s == "-g0" { gen::opt_debug = false; }
-        else if s == "-fPIC" || s == "-fpic" { gen::opt_pic = true; gen::opt_pie = false; }
-        else if s == "-fPIE" || s == "-fpie" { gen::opt_pic = false; gen::opt_pie = true; }
-        else if s == "-fno-pic" || s == "-fno-PIC" || s == "-fno-pie" || s == "-fno-PIE" { gen::opt_pic = false; }
+        else if s == "-fPIC" || s == "-fpic" { gen::opt_pic = true; gen::opt_pie = false; opt_pic_mode = if s == "-fPIC" { 2 } else { 3 }; }
+        else if s == "-fPIE" || s == "-fpie" { gen::opt_pic = false; gen::opt_pie = true; opt_pic_mode = if s == "-fPIE" { 0 } else { 1 }; }
+        else if s == "-fno-pic" || s == "-fno-PIC" || s == "-fno-pie" || s == "-fno-PIE" { gen::opt_pic = false; opt_pic_mode = 4; }
         else if s == "-fno-builtin" { gen::opt_no_builtin = true; }
         else if starts_with(s, "-fno-builtin-") { gen::no_builtin_opts.push(name_add(s[13..])); gen::no_builtin_opts.push((s.len - 13) as! u32); }
         else if s == "-fcommon" { gen::opt_common = true; }
@@ -174,7 +177,7 @@ fn main() {
             pr_token(t);
         }
         out.push('\n');
-        if out_len > 0 {
+        if out_len > 0 && !out_is_stdout() {
             if !write_file(names[out_off..out_off + out_len], out) { fatal("cannot write output"); }
         } else {
             pr_flush();
@@ -206,7 +209,7 @@ fn main() {
             if opt_mode == 5 {
                 var o: u8[>..] = [];
                 gen::dump_gir(o);
-                if out_len > 0 {
+                if out_len > 0 && !out_is_stdout() {
                     if !write_file(names[out_off..out_off + out_len], o) { fatal("cannot write the GIR dump"); }
                 } else {
                     write_stdout(o);
@@ -226,7 +229,8 @@ fn main() {
                     path.append(opt_input[b..e]);
                     path.append(".o");
                 }
-                if !write_file(path, obj) { fatal("cannot write the object file"); }
+                if out_is_stdout() { write_stdout(obj); }
+                else if !write_file(path, obj) { fatal("cannot write the object file"); }
                 let t5 = clock_ns();
                 if opt_time {
                     write_stderr(str("goosecc: preprocess ", (t1 - t0) / 1000, " us, parse+sema ", (t2 - t1) / 1000, " us, lowering ",

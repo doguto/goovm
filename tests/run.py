@@ -10,6 +10,8 @@ Optional extra variants:
   --opt-passes P also run opt-20 -passes=P on the mem2reg input (e.g. "sroa,instcombine,simplifycfg")
   --backend B    goovm-llc back-end to test (goose, llvm)
   --tpde PATH    also compile the O0 bitcode with tpde-llc and compare
+  --goosecc PATH instead of the goovm-llc variants, compile with goosecc -c
+                 (variants goosecc and goosecc-g, i.e. with -g); no LLVM involved
 
 usage: tests/run.py [--goovm PATH] [-j N] [--work DIR] [--keep] [filter ...]
 Exit status 0 iff every comparison passed.
@@ -59,6 +61,25 @@ def test_one(src, args):
         ref = os.path.join(wd, "ref")
         step([cc, "-O0", "-w", src, "-o", ref, "-lm"], "reference build")
         expect = execute(ref)
+
+        if args.goosecc:
+            for variant, flags in (("goosecc", []), ("goosecc-g", ["-g"])):
+                obj = os.path.join(wd, variant + ".o")
+                exe = os.path.join(wd, variant + ".exe")
+                try:
+                    r = run([args.goosecc, "-c", "-w"] + flags + [src, "-o", obj])
+                    if r.returncode != 0:
+                        raise Fail(f"goosecc exit {r.returncode}: {r.stderr.decode(errors='replace').strip()[:2000]}")
+                    step([cc, obj, "-o", exe, "-lm"], "link")
+                    got = execute(exe)
+                    if got != expect:
+                        raise Fail(f"output mismatch: expected exit {expect[1]}, got {got[1]}\n"
+                                   f"--- expected\n{expect[0].decode(errors='replace')[:1500]}\n"
+                                   f"--- got\n{got[0].decode(errors='replace')[:1500]}")
+                    results.append((variant, True, ""))
+                except Fail as e:
+                    results.append((variant, False, str(e)))
+            return name, results
 
         bcs = []
         bc = os.path.join(wd, "O0.bc")
@@ -115,12 +136,15 @@ def main():
     ap.add_argument("--opt", default="opt-20")
     ap.add_argument("--opt-passes", dest="opt_passes", default="")
     ap.add_argument("--tpde", default="")
+    ap.add_argument("--goosecc", default="")
     ap.add_argument("-j", type=int, default=2)
     ap.add_argument("--work", default="")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("filter", nargs="*")
     args = ap.parse_args()
-    if not os.path.exists(args.goovm):
+    if args.goosecc:
+        args.goosecc = os.path.abspath(args.goosecc)
+    elif not os.path.exists(args.goovm):
         sys.exit(f"goovm-llc not found at {args.goovm} (use --goovm or GOOVM_LLC)")
     tmp = None
     if not args.work:

@@ -128,6 +128,7 @@ fn lower_tu(main_file: const u8[:]) -> bool {
     emit_aliases();
     emit_structors();
     finish_undefined();
+    if f128_loc != NONE { err_at(f128_loc, "goosecc: __float128 is not supported (GIR has no fp128 type)"); }
     return n_errors == 0;
 }
 

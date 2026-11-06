@@ -155,11 +155,17 @@ recursive fn gen_stmt(n: u32) {
             if !any { return; }
         }
     }
-    set_loc(nd.loc);
+    // a stop point at the statement's first token (not for compound
+    // statements, labels and case labels, as in clang)
+    if k == N_EXPR { set_loc(begin_loc(nd.a)); }
+    else if k == N_DECL { set_loc(if nd.c != 0 { nd.c } else { nd.loc }); }
+    else if k != N_COMPOUND && k != N_CASE && k != N_DEFAULT && k != N_LABEL && k != N_NULL { set_loc(nd.loc); }
     if k == N_COMPOUND {
         push_cleanup_scope();
         scope_enter(n);
         for i in nd.c { gen_stmt(nlist[nd.v + i]); }
+        // what follows the block (its cleanups, the branch out) is at the '}'
+        if nd.b != 0 { set_loc(nd.b); }
         scope_leave();
         pop_cleanup_scope(true);
         return;
@@ -254,13 +260,26 @@ recursive fn gen_if(n: u32) {
     let tb = new_block();
     let end = new_block();
     let eb = if nd.c != 0 { new_block() } else { end };
+    // the condition branches at the condition
+    let saved = if dbg_on() { push_loc(expr_loc(nd.a)) } else { 0 };
+    let lc = dbg_loopcond;
+    dbg_loopcond = false;
     ex_cond(nd.a, tb, eb);
+    dbg_loopcond = lc;
+    if dbg_on() { pop_loc(saved); }
     start_block(tb);
     gen_stmt(nd.b);
     if nd.c != 0 {
         if has_insert() { br(end); }
         start_block(eb);
         gen_stmt(nd.c);
+        // the branch out of the else arm has no location (clang)
+        if has_insert() {
+            let s2 = cur_dbg;
+            pop_loc(0);
+            br(end);
+            pop_loc(s2);
+        }
     }
     if has_insert() { br(end); }
     start_block(end);
@@ -285,11 +304,15 @@ recursive fn gen_while(n: u32) {
     let body = new_block();
     let end = new_block();
     start_block(cond);
+    let lc = dbg_loopcond;
+    dbg_loopcond = true;
     ex_cond(nd.a, body, end);
+    dbg_loopcond = lc;
     start_block(body);
     push_loop(end, cond);
     gen_stmt(nd.b);
     pop_loop();
+    set_loc(nd.loc);
     if has_insert() { br(cond); }
     start_block(end);
 }
@@ -304,7 +327,10 @@ recursive fn gen_do(n: u32) {
     gen_stmt(nd.a);
     pop_loop();
     start_block(cond);
+    let lc = dbg_loopcond;
+    dbg_loopcond = true;
     ex_cond(nd.b, body, end);
+    dbg_loopcond = lc;
     start_block(end);
 }
 
@@ -317,13 +343,21 @@ recursive fn gen_for(n: u32) {
     let inc = new_block();
     let end = new_block();
     start_block(cond);
+    set_loc(nd.loc);
+    let lc = dbg_loopcond;
+    dbg_loopcond = true;
     if nd.b != 0 { ex_cond(nd.b, body, end); } else { br(body); }
+    dbg_loopcond = lc;
     start_block(body);
     push_loop(end, if nd.c != 0 { inc } else { cond });
     gen_stmt(nd.v as! u32);
     pop_loop();
     start_block(inc);
-    if nd.c != 0 { ex_ignore(nd.c); }
+    if nd.c != 0 {
+        set_loc(begin_loc(nd.c));
+        ex_ignore(nd.c);
+    }
+    set_loc(nd.loc);
     if has_insert() { br(cond); }
     start_block(end);
     pop_cleanup_scope(true);
@@ -483,7 +517,10 @@ recursive fn gen_local_decl(n: u32) {
         sym_addr[s] = p;
     }
     if nd.b != 0 {
+        // the initialization is at the variable
+        let saved = if dbg_on() { push_loc(nd.loc) } else { 0 };
         init_object(p, q, nd.b);
+        if dbg_on() { pop_loc(saved); }
         if quals(q) & Q_CONST != 0 && is_pointer(q) {
             while local_init.len <= s { local_init.push(0); }
             local_init[s] = nd.b;
@@ -786,7 +823,7 @@ fn gen_function(fd: u32) {
     cleanups.clear();
     cleanup_marks.clear();
     dbg_function_begin(s, nd.loc);
-    set_loc(nd.loc);
+    last_loc = nd.loc;
     // GIR arguments: (type, ABI word) pairs
     let types_mark = m_types.len;
     let ret_t = ret_gir_type(f_ret);
@@ -875,6 +912,8 @@ fn gen_function(fd: u32) {
         if syms[p].v != 0 && kind_of(syms[p].v as! u32) == TY_VLA { eval_vm_type(syms[p].v as! u32); }
         else if is_vm_any(syms[p].ty) { eval_vm_type(syms[p].ty); }
     }
+    // the prologue has no location; the body starts at its '{'
+    set_loc(nodes[nd.b].loc);
     push_cleanup_scope();
     gen_stmt(nd.b);
     pop_cleanup_scope(true);
@@ -906,7 +945,7 @@ fn gen_function(fd: u32) {
 
 fn fn_end_loc(body: u32) -> u32 {
     let b = nodes[body];
-    return b.loc;
+    return if b.b != 0 { b.b } else { b.loc };
 }
 
 fn finish_igoto() {

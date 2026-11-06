@@ -291,6 +291,7 @@ fn emit_var(g: u32) {
     var size = type_size(q);
     if size < 0 { size = 0; }
     let init = sym_init[s] as u32;
+    if sym_decl[s] != 0 { last_loc = nodes[sym_decl[s]].loc; }
     if init != 0 {
         // a flexible array member with an initializer extends the object (GNU)
         let ext = init_extent(q, init);

@@ -1496,7 +1496,7 @@ recursive fn parse_declaration(ctx: i64) {
         if syms[s].kind == SK_TYPEDEF {
             nscratch.push(node(N_TYPEDEF, 0, syms[s].ty, s, 0, 0, d.loc));
         } else {
-            nscratch.push(node(N_DECL, 0, syms[s].ty, s, init as i64, 0, d.loc));
+            nscratch.push(node(N_DECL, 0, syms[s].ty, s, init as i64, start_loc as i64, d.loc));
         }
         if !accept(TK_COMMA) { break; }
     }
@@ -1685,11 +1685,12 @@ recursive fn parse_compound_stmt(stmt_expr: bool) -> u32 {
         let s = parse_stmt();
         nscratch.push(s);
     }
+    let rloc = tloc();
     expect(TK_R_BRACE, "'}'");
     pop_scope();
     let count = nscratch.len - mark;
     let start = commit_list(mark);
-    return node_v(N_COMPOUND, 0, 0, 0, 0, count, loc, start);
+    return node_v(N_COMPOUND, 0, 0, 0, rloc as i64, count, loc, start);
 }
 
 recursive fn cond_expr(loc: u32) -> u32 {

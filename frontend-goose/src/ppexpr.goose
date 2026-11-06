@@ -781,6 +781,7 @@ var cmd_macros: CmdMacro[>..] = [];
 var cmd_includes: u32[>..] = [];       // -include files: (off, len) pairs in names
 var opt_std: u8[>..] = [];
 var opt_os: bool = false;
+var opt_pic_mode: i64 = 0;     // 0 -fPIE (clang's default), 1 -fpie, 2 -fPIC, 3 -fpic, 4 -fno-pic
 var opt_pthread: bool = false;
 var opt_unsigned_char: bool = false;
 
@@ -843,6 +844,13 @@ fn build_builtin_text() {
         i = j + 1;
         var keep = true;
         if line == "#define __NO_INLINE__ 1" && opt_optimize > 0 { keep = false; }
+        if opt_pic_mode != 0 && (starts_with(line, "#define __PIC__ ") || starts_with(line, "#define __pic__ ") ||
+                                 starts_with(line, "#define __PIE__ ") || starts_with(line, "#define __pie__ ")) {
+            keep = false;
+            let pie = line[12] == 'E' || line[12] == 'e';
+            let lvl = if opt_pic_mode == 1 || opt_pic_mode == 3 { " 1\n" } else { " 2\n" };
+            if opt_pic_mode <= 1 || (opt_pic_mode <= 3 && !pie) { builtin_text.append(line[..15]); builtin_text.append(lvl); }
+        }
         if strict && (line == "#define linux 1" || line == "#define unix 1") { keep = false; }
         if starts_with(line, "#define __STDC_VERSION__ ") {
             keep = false;

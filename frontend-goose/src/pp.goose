@@ -378,6 +378,7 @@ recursive fn enter_macro(name: Tok, m: i64) -> i64 {
             return 0;
         }
         xl = rparen_xloc;
+        if name.flags & F_MACRO == 0 && xl > name.xloc { mx_ranges.push(((name.xloc as u64) << 32) | (xl as u64)); }
     }
     let elided = va_elided;
     let nameflags = name.flags & (F_BOL | F_LSPACE);

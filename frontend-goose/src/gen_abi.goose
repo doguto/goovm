@@ -17,7 +17,9 @@ var vec_cache = dictionary<u32, u32> {};    // C type index -> GIR vector type
 
 // GIR types of the scalar C type kinds (TY_*; 255 = look closer).
 let KIND_GIR: u8[32] = [0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 10, 10,     // -, void, bool, chars, shorts, ints, longs, i128
-                         11, 3, 7, 8, 9, 0, 0, 6, 0, 0, 0, 0, 0, 255, 255, 255]; // f16 bf16 float double ldouble f128 complex ptr ...
+                         11, 3, 7, 8, 9, 255, 0, 6, 0, 0, 0, 0, 0, 255, 255, 255]; // f16 bf16 float double ldouble f128 complex ptr ...
+
+var f128_loc: u32 = 0xFFFFFFFF;  // where a __float128 value was first lowered
 
 // The GIR type of a value of scalar C type q (VOID for aggregates and void).
 recursive fn vty(q: u32) -> u32 {
@@ -37,6 +39,11 @@ recursive fn vty(q: u32) -> u32 {
     if k == TY_INT128 || k == TY_UINT128 { return GIR_T_I128; }
     if k == TY_FLOAT16 { return GIR_T_F16; }
     if k == TY_BF16 { return GIR_T_I16; }
+    if k == TY_FLOAT128 {
+        // GIR has no fp128: reported once lower_tu is done
+        if f128_loc == NONE { f128_loc = last_loc; }
+        return GIR_T_F64;
+    }
     if k == TY_ENUM { return vty(enum_underlying(q)); }
     if k == TY_VECTOR || k == TY_EXTVECTOR {
         let ti = (q >> 4) as! u32;

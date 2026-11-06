@@ -556,11 +556,11 @@ recursive fn ex_builtin2(full: const u8[:], name: const u8[:], n: u32, dst: u32)
         return if starts_with(name, "creal") { re } else { im };
     }
     if name == "object_size" || name == "dynamic_object_size" {
+        // the argument is not evaluated: what clang's constant evaluator
+        // knows (a declared object), else unknown, as at -O0
         let ok, ty = fold_int(barg(n, 1));
-        let p = barg(n, 0);
-        let ok2, sz = object_size(p);
-        if ok2 { return c_i64(sz); }
-        if has_side_effects(p) { ex_ignore(p); }
+        let sz = static_object_size(barg(n, 0));
+        if sz >= 0 { return c_i64(sz); }
         return c_i64(if ty >= 2 { 0 } else { -1 });
     }
     if starts_with(full, "__builtin___") && ends_with(name, "_chk") {
@@ -601,35 +601,42 @@ fn signbit_of(x: u32) -> u32 {
     return ins_icmp(GIR_SLT, GIR_T_I16, hi, c_int(0, GIR_T_I16));
 }
 
-// __builtin_object_size of a pointer into a known object (as LLVM's -O0
-// lowerObjectSizeCall finds it).
-recursive fn object_size(p: u32) -> bool, i64 {
-    let ok, t, a, l1, l2 = eval_addr_noemit(p);
-    if !ok || t < 0 { return false, 0; }
-    let s = glob_sym[t];
-    var size: i64 = -1;
-    if s >= 0 { size = type_size(syms[s].ty); }
-    else { size = m_globals[t].size as i64; }
-    if size < 0 || a > size || a < 0 { return false, 0; }
-    return true, size - a;
-}
-
-fn eval_addr_noemit(p: u32) -> bool, i64, i64, i64, i64 {
-    // only for decayed arrays of objects with static storage
+// The bytes left in a declared object after the address p (a decayed array
+// or &object, plus a constant), or -1.
+fn static_object_size(p: u32) -> i64 {
     var m = p;
+    var off: i64 = 0;
     loop {
         let nd = nodes[m];
         if (nd.kind == N_ICAST || nd.kind == N_CAST) && (nd.op == CK_NOOP || nd.op == CK_BITCAST) { m = nd.a; continue; }
+        if nd.kind == N_BINARY && nd.op == B_PTRADD {
+            let ok, v = fold_int(nd.b);
+            let es = type_size(tbase(unqual(nd.ty)));
+            if !ok || es < 0 { return -1; }
+            off += v * (if es == 0 { 1 } else { es });
+            m = nd.a;
+            continue;
+        }
+        if nd.kind == N_UNARY && nd.op == U_ADDR && nodes[nd.a].kind == N_INDEX {
+            // &a[i] = a + i
+            let x = nodes[nd.a];
+            let ok, v = fold_int(x.b);
+            let es = type_size(unqual(x.ty));
+            if !ok || es < 0 { return -1; }
+            off += v * es;
+            m = x.a;
+            continue;
+        }
         break;
     }
     let nd = nodes[m];
-    if (nd.kind == N_ICAST || nd.kind == N_CAST) && nd.op == CK_ARRAY2PTR && nodes[nd.a].kind == N_DECLREF {
-        let s = nodes[nd.a].a as i64;
-        if sym_addr.len > s && sym_addr[s] != NONE {
-            return false, -1, 0, -1, -1;
-        }
-    }
-    return false, -1, 0, -1, -1;
+    let is_addr = ((nd.kind == N_ICAST || nd.kind == N_CAST) && nd.op == CK_ARRAY2PTR) || (nd.kind == N_UNARY && nd.op == U_ADDR);
+    if !is_addr || nodes[nd.a].kind != N_DECLREF { return -1; }
+    let s = nodes[nd.a].a as i64;
+    if syms[s].kind != SK_VAR { return -1; }
+    let size = type_size(syms[s].ty);
+    if size < 0 || off < 0 || off > size { return -1; }
+    return size - off;
 }
 
 recursive fn chk_builtin(name: const u8[:], n: u32) -> u32 {

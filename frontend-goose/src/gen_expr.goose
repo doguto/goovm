@@ -129,9 +129,16 @@ recursive fn ptr_add(p: u32, pt: u32, i: u32, iq: u32, neg: bool) -> u32 {
 // ------------------------------------------------------------ lvalues
 
 recursive fn ex_lv(n: u32) -> LV {
+    if !dbg_on() { return ex_lv1(n); }
+    let saved = push_loc(visit_loc(n));
+    let l = ex_lv1(n);
+    pop_loc(saved);
+    return l;
+}
+
+recursive fn ex_lv1(n: u32) -> LV {
     let nd = nodes[n];
     let k = nd.kind as i64;
-    set_loc(nd.loc);
     if k == N_DECLREF {
         let s = nd.a as i64;
         if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN { return lv_plain(gref(func_global(s)), nd.ty); }
@@ -358,9 +365,16 @@ recursive fn ex_ignore(n: u32) {
 }
 
 recursive fn ex_val(n: u32) -> u32 {
+    if !dbg_on() { return ex_val1(n); }
+    let saved = push_loc(visit_loc(n));
+    let v = ex_val1(n);
+    pop_loc(saved);
+    return v;
+}
+
+recursive fn ex_val1(n: u32) -> u32 {
     let nd = nodes[n];
     let k = nd.kind as i64;
-    set_loc(nd.loc);
     if k == N_INT {
         let t = vty(nd.ty);
         if tcls(t) == C_INT2 { return c_wide(nd.v as! u64, if nd.v < 0 { 0xFFFFFFFFFFFFFFFF } else { 0 as u64 }, t); }
@@ -871,6 +885,32 @@ recursive fn cplx_or_real(n: u32) -> u32, u32 {
 
 // The value of a scalar condition as i1.
 recursive fn ex_bool(n: u32) -> u32 {
+    if !dbg_on() { return ex_bool1(n); }
+    if dbg_loopcond {
+        // the top of a loop condition: a comparison is at its operator, the
+        // conversion of any other scalar at the loop
+        dbg_loopcond = false;
+        let nd = nodes[n];
+        let own = (nd.kind == N_BINARY && (is_cmp_op(nd.op as i64) || nd.op == B_LAND || nd.op == B_LOR)) ||
+                  (nd.kind == N_UNARY && nd.op == U_NOT);
+        var v: u32 = 0;
+        if own {
+            let s0 = push_loc(expr_loc(n));
+            v = ex_bool1(n);
+            pop_loc(s0);
+        } else {
+            v = ex_bool1(n);
+        }
+        dbg_loopcond = true;
+        return v;
+    }
+    let saved = push_loc(expr_loc(n));
+    let v = ex_bool1(n);
+    pop_loc(saved);
+    return v;
+}
+
+recursive fn ex_bool1(n: u32) -> u32 {
     let nd = nodes[n];
     let k = nd.kind as i64;
     if k == N_BINARY && (nd.op == B_LAND || nd.op == B_LOR) {
@@ -931,18 +971,18 @@ recursive fn ex_cond(n: u32, t: u32, f: u32) {
         br(if cv { t } else { f });
         return;
     }
-    if k == N_BINARY && nd.op == B_LAND {
+    if k == N_BINARY && (nd.op == B_LAND || nd.op == B_LOR) {
+        // in a loop condition (a value for clang) the branches are at the
+        // operator; in an if, at the whole condition (already current)
+        let lc = dbg_loopcond;
+        let saved = if dbg_on() && lc { push_loc(nd.loc) } else { 0 };
+        dbg_loopcond = false;
         let mid = new_block();
-        ex_cond(nd.a, mid, f);
+        if nd.op == B_LAND { ex_cond(nd.a, mid, f); } else { ex_cond(nd.a, t, mid); }
         start_block(mid);
         ex_cond(nd.b, t, f);
-        return;
-    }
-    if k == N_BINARY && nd.op == B_LOR {
-        let mid = new_block();
-        ex_cond(nd.a, t, mid);
-        start_block(mid);
-        ex_cond(nd.b, t, f);
+        dbg_loopcond = lc;
+        if dbg_on() && lc { pop_loc(saved); }
         return;
     }
     if k == N_UNARY && nd.op == U_NOT {
@@ -1146,10 +1186,17 @@ recursive fn assign_cplx_to_real(n: u32) -> u32 {
 // ------------------------------------------------------------ complex values
 
 recursive fn ex_cplx(n: u32) -> u32, u32 {
+    if !dbg_on() { return ex_cplx1(n); }
+    let saved = push_loc(visit_loc(n));
+    let re, im = ex_cplx1(n);
+    pop_loc(saved);
+    return re, im;
+}
+
+recursive fn ex_cplx1(n: u32) -> u32, u32 {
     let nd = nodes[n];
     let k = nd.kind as i64;
     let q = nd.ty;
-    set_loc(nd.loc);
     if k == N_ICAST || k == N_CAST {
         let ck = nd.op as i64;
         if ck == CK_LVAL2RVAL {
@@ -1382,10 +1429,16 @@ fn cplx_arith(op: i64, q: u32, ar: u32, ai: u32, ac: bool, yr: u32, yi: u32, bc:
 // ------------------------------------------------------------ aggregates
 
 recursive fn ex_agg(n: u32, dst: u32) {
+    if !dbg_on() { ex_agg1(n, dst); return; }
+    let saved = push_loc(visit_loc(n));
+    ex_agg1(n, dst);
+    pop_loc(saved);
+}
+
+recursive fn ex_agg1(n: u32, dst: u32) {
     let nd = nodes[n];
     let k = nd.kind as i64;
     let q = nd.ty;
-    set_loc(nd.loc);
     if k == N_ICAST || k == N_CAST {
         let ck = nd.op as i64;
         if ck == CK_LVAL2RVAL {

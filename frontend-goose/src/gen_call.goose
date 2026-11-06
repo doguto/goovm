@@ -163,7 +163,6 @@ recursive fn ex_call(n: u32, dst: u32) -> u32 {
     cabis.resize(amark);
     // the result type, then the run of operands
     let rt = if ra.kind == AK_SRET { GIR_T_VOID } else { ret_gir_type(ra) };
-    set_loc(nd.loc);
     let s = m_opnds.len as! u32;
     let cnt = (call_vals.len - mark) / 2;
     for i in cnt {

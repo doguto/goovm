@@ -101,6 +101,10 @@ struct Tok {
                   // end of the outermost macro expansion (= spell for file tokens)
 }
 
+// Function-like macro invocations whose name is a file token, as (name
+// offset << 32 | ')' offset): the expansion ranges of -g's locations.
+var mx_ranges: u64[>..] = [];
+
 // The translation unit's tokens (-fsyntax-only).
 var tu_toks: Tok[>..] = [];
 

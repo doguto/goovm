@@ -39,8 +39,8 @@ let N_SWIZZLE = 26;     // ext_vector_type element access: a = vector (op = 1: p
                         // c = count, v = element indices (4 bits each, the first lowest)
 
 // statements
-let N_COMPOUND = 40;    // v = first in nlist, c = count
-let N_DECL = 41;        // a = symbol, b = initializer (0 none)
+let N_COMPOUND = 40;    // v = first in nlist, c = count, b = location of the '}' (0: made up)
+let N_DECL = 41;        // a = symbol, b = initializer (0 none), c = location of the declaration's first token
 let N_IF = 42;          // a = cond, b = then, c = else (0 none)
 let N_WHILE = 43;       // a = cond, b = body
 let N_DO = 44;          // a = body, b = cond
