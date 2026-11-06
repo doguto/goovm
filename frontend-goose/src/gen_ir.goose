@@ -23,6 +23,7 @@ var m_types: TypeDef[>..] = [];
 var m_funcs: Func[>..] = [];
 var m_blocks: Block[>..] = [];
 var m_insts: Inst[>..] = [];
+extern fn prefault_insts(a: Inst[>..]&, bytes: i64) = "goosecc_prefault";
 var m_opnds: u32[>..] = [];
 var m_consts: Const[>..] = [];
 var m_globals: Global[>..] = [];
@@ -423,6 +424,7 @@ fn fn_finish(g: u32, flags: u32, nargs: u32, args: u32, ret_ty: u32, dbg: u32) -
     let first = m_insts.len as! u32;
     let na = f_allocas.len as! u32;
     for id, k in f_border { f_blocks[id].pos = k as! u32; }
+    prefault_insts(m_insts, (f_allocas.len + f_insts.len) * 24);
     for I in f_allocas { m_insts.push(I); }
     for I in f_insts {
         var J = I;

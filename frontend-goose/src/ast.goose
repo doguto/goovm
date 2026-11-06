@@ -157,14 +157,26 @@ var nodes: Node[>..] = [];
 var nlist: u32[>..] = [];
 var nscratch: u32[>..<] = [];     // lists under construction (mark / resize)
 
+extern fn prefault_nodes(a: Node[>..]&, bytes: i64) = "goosecc_prefault";
+extern fn prefault_syms(a: Sym[>..]&, bytes: i64) = "goosecc_prefault";
+var node_frontier: i64 = 0;
+var sym_frontier: i64 = 0;
 fn node(kind: i64, op: i64, ty: u32, a: i64, b: i64, c: i64, loc: u32) -> u32 {
     let n = nodes.len;
+    if n >= node_frontier {
+        prefault_nodes(nodes, 65536);
+        node_frontier = n + 2048;
+    }
     nodes.push(Node { kind: kind as! u8, op: op as! u8, flags: 0, ty: ty, a: a as! u32, b: b as! u32, c: c as! u32, loc: loc, v: 0 });
     return n as! u32;
 }
 
 fn node_v(kind: i64, op: i64, ty: u32, a: i64, b: i64, c: i64, loc: u32, v: i64) -> u32 {
     let n = nodes.len;
+    if n >= node_frontier {
+        prefault_nodes(nodes, 65536);
+        node_frontier = n + 2048;
+    }
     nodes.push(Node { kind: kind as! u8, op: op as! u8, flags: 0, ty: ty, a: a as! u32, b: b as! u32, c: c as! u32, loc: loc, v: v });
     return n as! u32;
 }
@@ -265,6 +277,10 @@ fn ensure_ids() {
 
 fn new_sym(kind: i64, name: u32, ty: u32, loc: u32) -> i64 {
     let s = syms.len;
+    if syms.len >= sym_frontier {
+        prefault_syms(syms, 65536);
+        sym_frontier = syms.len + 1424;
+    }
     syms.push(Sym { kind: kind as! u8, sc: 0, flags: 0, name: name, ty: ty, prev: -1, canon: s as! i32,
         scope: scope_depth as! u32, def: -1, v: 0, loc: loc, attr: 0 });
     return s;

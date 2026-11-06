@@ -61,6 +61,10 @@ fn add_dir(d: const u8[:], sys: bool) {
 // Adds a token to tu_toks, a keyword with its keyword kind (TK_KW + code).
 fn tu_add(t0: Tok) {
     var t = t0;
+    if tu_toks.len >= tok_frontier {
+        prefault_toks(tu_toks, 65536);
+        tok_frontier = tu_toks.len + 4096;
+    }
     if t.kind == TK_IDENT {
         let kwc = idents[t.val].kw;
         if kwc != 0 { t.kind = (TK_KW + (kwc as i64)) as! u8; }

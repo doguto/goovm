@@ -18,6 +18,25 @@ double goosecc_round_f32(double d) { return (double)(float)d; }
 #include <unistd.h>
 #include <sys/stat.h>
 
+/* Commits the pages of the `bytes` after the top of a growable array's data
+ * stack in one call (MADV_POPULATE_WRITE, Linux 5.14) instead of a page
+ * fault per page as it grows: half the cost per page, and a large array
+ * (the tokens, the AST, the source text) takes a few hundred. Nothing is
+ * written: the pages hold zeros, as they would when first touched. At most
+ * 512 KB, less than the guard gap after the region (the runtime's 1 MB),
+ * so the range never reaches another region; a range in the gap fails
+ * there and does nothing. Older kernels refuse the advice (EINVAL). */
+#include <sys/mman.h>
+#ifndef MADV_POPULATE_WRITE
+#define MADV_POPULATE_WRITE 23
+#endif
+void goosecc_prefault(gs_rref a, int64_t bytes) {
+    if (bytes > (512 << 10)) bytes = 512 << 10;
+    uintptr_t top = (uintptr_t)a.stk->top;
+    uintptr_t s = (top + 4095) & ~(uintptr_t)4095, e = (top + (uintptr_t)bytes) & ~(uintptr_t)4095;
+    if (e > s) madvise((void *)s, e - s, MADV_POPULATE_WRITE);
+}
+
 static int goosecc_cpath(sl_u8 path, char *p, size_t cap) {
     if (path.len <= 0 || (size_t)path.len >= cap || memchr(path.data, 0, (size_t)path.len)) return 0;
     memcpy(p, path.data, (size_t)path.len);
@@ -45,6 +64,7 @@ int64_t goosecc_read_file(sl_u8 path, gs_rref out) {
     int64_t len0 = out.hdr->len;
     uint8_t *top0 = out.stk->top;
     int reg = S_ISREG(st.st_mode), ok = 1, direct = 1;
+    if (reg && st.st_size > 8192) goosecc_prefault(out, st.st_size + 1);
     size_t size = reg ? (size_t)st.st_size : 0, total = 0;
     for (;;) {
         /* one byte more than a regular file has left, to see its end */

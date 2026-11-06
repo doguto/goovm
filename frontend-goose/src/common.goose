@@ -109,6 +109,12 @@ var mx_ranges: u64[>..] = [];
 // their TK_KW kinds. #pragma pack and ms_struct take effect from token
 // index pack_changes[2k] / ms_changes[2k] on (value at 2k + 1).
 var tu_toks: Tok[>..] = [];
+
+// The pages after the top of a growing array are committed ahead in 64 KB
+// steps (goosecc_rt.h): the token, node, symbol and GIR instruction arrays
+// call it when they pass their frontier.
+extern fn prefault_toks(a: Tok[>..]&, bytes: i64) = "goosecc_prefault";
+var tok_frontier: i64 = 0;
 var pack_changes: u32[>..] = [];
 var ms_changes: u32[>..] = [];
 
