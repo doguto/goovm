@@ -83,6 +83,64 @@ struct Fix {
 
 enum : unsigned { RA = 1, RB = 2, RC = 4 };  // which of a/b/c hold value refs
 
+// Open-addressing map from pointers to u32 values, cleared in O(1) by a
+// generation count (the per-function value map is cleared once per function
+// and hit for every operand; llvm::DenseMap's clear() shrinks and rehashes).
+struct PtrMap {
+    struct E {
+        const void *k;
+        uint32_t v;
+        uint32_t gen;
+    };
+    std::vector<E> tab;
+    size_t mask = 0;
+    uint32_t gen = 1;
+    uint32_t count = 0;
+    PtrMap() {
+        tab.assign(1024, E{nullptr, 0, 0});
+        mask = tab.size() - 1;
+    }
+    static size_t hash(const void *p) { return (size_t)((((uintptr_t)p >> 4) * 0x9E3779B97F4A7C15ull) >> 32); }
+    void clear() {
+        if (++gen == 0) {
+            for (E &e : tab) e.gen = 0;
+            gen = 1;
+        }
+        count = 0;
+    }
+    uint32_t *find(const void *k) {
+        for (size_t i = hash(k) & mask;; i = (i + 1) & mask) {
+            E &e = tab[i];
+            if (e.gen != gen) return nullptr;
+            if (e.k == k) return &e.v;
+        }
+    }
+    bool count_of(const void *k) { return find(k) != nullptr; }
+    uint32_t &operator[](const void *k) {
+        if (2 * (size_t)(count + 1) > tab.size()) grow();
+        for (size_t i = hash(k) & mask;; i = (i + 1) & mask) {
+            E &e = tab[i];
+            if (e.gen != gen) {
+                e = E{k, 0, gen};
+                count++;
+                return e.v;
+            }
+            if (e.k == k) return e.v;
+        }
+    }
+    void grow() {
+        std::vector<E> old;
+        old.swap(tab);
+        tab.assign(old.size() * 2, E{nullptr, 0, 0});
+        mask = tab.size() - 1;
+        uint32_t g = gen;
+        gen = 1;
+        count = 0;
+        for (const E &e : old)
+            if (e.gen == g) (*this)[e.k] = e.v;
+    }
+};
+
 // Inline copies and fills up to this many bytes; larger or variable sizes
 // call libc.
 constexpr uint64_t MAX_INLINE_MEM = 256;
@@ -96,7 +154,7 @@ struct Exporter {
 
     DenseMap<const GlobalValue *, uint32_t> gmap;  // global -> GIR global index
     StringMap<uint32_t> libfns;                     // libcall name -> global
-    DenseMap<Type *, uint16_t> tmap;                // type -> type id
+    PtrMap tmap;                                    // type -> type id
     DenseMap<const Constant *, uint32_t> cmap;      // FP / wide / aggregate constants
     DenseMap<const Constant *, uint32_t> cglob;     // relocatable aggregate constant -> private global
     StringMap<uint32_t> secmap;                     // section name -> sections index
@@ -110,8 +168,8 @@ struct Exporter {
     // Per function.
     const Function *F = nullptr;
     const Instruction *curI = nullptr;
-    DenseMap<const Value *, uint32_t> vmap;     // instruction -> ref
-    DenseMap<const Value *, uint32_t> phimat;   // value used by a PHI, materialized in the entry block
+    PtrMap vmap;                                // instruction -> ref
+    PtrMap phimat;                              // value used by a PHI, materialized in the entry block
     std::vector<uint32_t> bmap;                 // BB number -> local block
     std::vector<Fix> fixes;
     bool in_phi_prepass = false;
@@ -174,7 +232,28 @@ struct Exporter {
         while (T.types.size() < GIR_T_FIRST_USER) def(GIR_TK_VOID, GIR_C_NONE, 0, 0, 1, 0);
     }
     // Type id of a value type; fails on anything GIR cannot hold.
-    uint16_t ty(Type *t) {
+    __attribute__((always_inline)) uint16_t ty(Type *t) {
+        switch (t->getTypeID()) {
+        case Type::IntegerTyID:
+            switch (cast<IntegerType>(t)->getBitWidth()) {
+            case 1: return GIR_T_I1;
+            case 8: return GIR_T_I8;
+            case 16: return GIR_T_I16;
+            case 32: return GIR_T_I32;
+            case 64: return GIR_T_I64;
+            default: break;
+            }
+            break;
+        case Type::PointerTyID:
+            if (t->getPointerAddressSpace() == 0) return GIR_T_PTR;
+            break;
+        case Type::FloatTyID: return GIR_T_F32;
+        case Type::DoubleTyID: return GIR_T_F64;
+        default: break;
+        }
+        return ty_slow(t);
+    }
+    uint16_t ty_slow(Type *t) {
         if (auto *it = dyn_cast<IntegerType>(t)) {
             unsigned b = it->getBitWidth();
             switch (b) {
@@ -201,8 +280,7 @@ struct Exporter {
         } else if (t->isVoidTy()) {
             fail("void value");
         }
-        auto it = tmap.find(t);
-        if (it != tmap.end()) return it->second;
+        if (uint32_t *p = tmap.find(t)) return (uint16_t)*p;
         uint16_t id;
         if (auto *itp = dyn_cast<IntegerType>(t)) {
             unsigned b = itp->getBitWidth();
@@ -500,8 +578,8 @@ struct Exporter {
     }
 
     // ---------------------------------------------------------- instructions
-    uint32_t emit(uint8_t op, uint16_t t, uint8_t sub, uint16_t flags, uint16_t aux, uint32_t a, uint32_t b,
-                  uint32_t c, unsigned refs) {
+    __attribute__((always_inline)) uint32_t emit(uint8_t op, uint16_t t, uint8_t sub, uint16_t flags, uint16_t aux,
+                                                 uint32_t a, uint32_t b, uint32_t c, unsigned refs) {
         uint32_t idx = (uint32_t)T.insts.size();
         if (idx >= PH_BASE) fail("module too large for GIR (instruction count)");
         T.insts.push_back(GirInst{op, sub, flags, t, aux, a, b, c, cur_dbg});
@@ -511,7 +589,7 @@ struct Exporter {
         return GIR_MK(GIR_V_INST, idx);
     }
     // A placeholder is used exactly once: remember where it was stored.
-    void note(uint32_t r, uint32_t where, uint32_t field) {
+    __attribute__((always_inline)) void note(uint32_t r, uint32_t where, uint32_t field) {
         if (!is_placeholder(r)) return;
         Fix &fx = fixes[GIR_IDX(r) - PH_BASE];
         fx.where = where;
@@ -563,19 +641,22 @@ struct Exporter {
 
     // Value -> ref. May append instructions (materialized constants) to the
     // current block.
-    uint32_t ref(const Value *v) {
+    __attribute__((always_inline)) uint32_t ref(const Value *v) {
+        if (isa<Instruction>(v))
+            if (uint32_t *p = vmap.find(v)) return *p;
+        return ref_slow(v);
+    }
+    uint32_t ref_slow(const Value *v) {
         if (const auto *I = dyn_cast<Instruction>(v)) {
-            auto it = vmap.find(I);
-            if (it != vmap.end()) return it->second;
+            if (uint32_t *p = vmap.find(I)) return *p;
             uint32_t k = (uint32_t)fixes.size();
             if (PH_BASE + k >= (1u << 30)) fail("too many forward references");
             fixes.push_back(Fix{I, GIR_NONE, 0});
             return GIR_MK(GIR_V_INST, PH_BASE + k);
         }
         if (const auto *A = dyn_cast<Argument>(v)) return GIR_MK(GIR_V_ARG, A->getArgNo());
-        if (!in_phi_prepass) {
-            auto it = phimat.find(v);
-            if (it != phimat.end()) return it->second;
+        if (!in_phi_prepass && phimat.count) {
+            if (uint32_t *p = phimat.find(v)) return *p;
         }
         if (const auto *CI = dyn_cast<ConstantInt>(v)) {
             uint16_t t = ty(CI->getType());
@@ -865,31 +946,66 @@ struct Exporter {
             if (!returnable((uint16_t)d.elems, ngp, nfp, nvec, nx87)) return false;
         return true;
     }
+    std::vector<uint8_t> ret_ok;  // per type id: checked as a return type
     uint16_t check_ret(Type *rt) {
         uint16_t t = ret_ty(rt);
+        if (t < ret_ok.size() && ret_ok[t]) return t;
+        if (ret_ok.size() <= t) ret_ok.resize(t + 1, 0);
+        ret_ok[t] = 1;
         unsigned g = 0, f = 0, v = 0, x = 0;
         if (!returnable(t, g, f, v, x) || g > 3 || f > 2 || f + v > 4 || x > 2)
             fail("return type " + tystr(rt) + " that does not fit the return registers");
         if (T.types[t].kind == GIR_TK_VECTOR && bits(T.types[t].elems) == 1) fail("i1 vector return");
         return t;
     }
-    uint32_t abi_word(AttributeSet as, Type *t, const std::string &what) {
+    // Facts about a (uniqued) attribute list of a call site or a function.
+    enum : uint32_t { AL_DONE = 1, AL_SPECIAL = 2, AL_SEXT = 4, AL_RT = 8, AL_NR = 16 };
+    PtrMap alinfo;
+    uint32_t alist_bits(const AttributeList &L) {
+        const void *k = L.getRawPointer();
+        if (!k) return AL_DONE;
+        if (uint32_t *p = alinfo.find(k)) return *p;
+        uint32_t x = AL_DONE;
+        for (auto kind : {Attribute::ByVal, Attribute::StructRet, Attribute::InAlloca, Attribute::Preallocated,
+                          Attribute::ByRef})
+            if (L.hasAttrSomewhere(kind)) x |= AL_SPECIAL;
+        if (L.hasAttrSomewhere(Attribute::SExt)) x |= AL_SEXT;
+        if (L.hasFnAttr(Attribute::ReturnsTwice)) x |= AL_RT;
+        if (L.hasFnAttr(Attribute::NoReturn)) x |= AL_NR;
+        alinfo[k] = x;
+        return x;
+    }
+    // The ABI word of a parameter without special attributes.
+    uint32_t abi_plain(uint16_t gt, const char *what) {
+        uint8_t c = cls(gt);
+        if (c == GIR_C_MEM) fail(std::string("aggregate passed by value as ") + what);
+        if (c == GIR_C_VEC && bits(T.types[gt].elems) == 1) fail(std::string("i1 vector ") + what);
+        return 0;
+    }
+    uint32_t abi_word(AttributeSet as, Type *t, const char *what) {
+        if (!as.hasAttributes()) {
+            uint16_t gt = ty(t);
+            uint8_t c = cls(gt);
+            if (c == GIR_C_MEM) fail(std::string("aggregate passed by value as ") + what);
+            if (c == GIR_C_VEC && bits(T.types[gt].elems) == 1) fail(std::string("i1 vector ") + what);
+            return 0;
+        }
         if (as.hasAttribute(Attribute::InAlloca) || as.hasAttribute(Attribute::Preallocated))
-            fail("inalloca/preallocated " + what);
+            fail(std::string("inalloca/preallocated ") + what);
         if (as.hasAttribute(Attribute::ByVal)) {
             Type *bt = as.getByValType();
             uint64_t size = DL.getTypeAllocSize(bt);
             uint64_t al = as.getStackAlignment() ? as.getStackAlignment()->value()
                           : as.getAlignment()   ? as.getAlignment()->value()
                                                 : DL.getABITypeAlign(bt).value();
-            if (size >= (1u << 24)) fail("byval " + what + " of 16 MiB or more");
+            if (size >= (1u << 24)) fail(std::string("byval ") + what + " of 16 MiB or more");
             return GIR_ABI_BYVAL | (uint32_t)size | ((uint32_t)Log2_64(al) << 24);
         }
-        if (as.hasAttribute(Attribute::ByRef)) fail("byref " + what);
+        if (as.hasAttribute(Attribute::ByRef)) fail(std::string("byref ") + what);
         uint16_t gt = ty(t);
         uint8_t c = cls(gt);
-        if (c == GIR_C_MEM) fail("aggregate passed by value as " + what);
-        if (c == GIR_C_VEC && bits(T.types[gt].elems) == 1) fail("i1 vector " + what);
+        if (c == GIR_C_MEM) fail(std::string("aggregate passed by value as ") + what);
+        if (c == GIR_C_VEC && bits(T.types[gt].elems) == 1) fail(std::string("i1 vector ") + what);
         if (as.hasAttribute(Attribute::StructRet)) return GIR_ABI_SRET;
         return 0;
     }
@@ -897,21 +1013,23 @@ struct Exporter {
     // ---------------------------------------------------------------- calls
     // Argument for a call: `signext` narrower than 32 bits gets an explicit
     // SEXT to i32 (the SysV caller-extends rule as clang implements it).
-    void call_arg(const CallBase &CB, unsigned i, uint32_t &r, uint32_t &w) {
+    void call_arg(const CallBase &CB, unsigned i, uint32_t al, uint32_t &r, uint32_t &w) {
         const Value *v = CB.getArgOperand(i);
-        w = abi_word(CB.getParamAttributes(i), v->getType(), "argument");
         uint16_t t = ty(v->getType());
+        w = al & AL_SPECIAL ? abi_word(CB.getParamAttributes(i), v->getType(), "argument") : abi_plain(t, "argument");
         r = ref(v);
-        if (CB.paramHasAttr(i, Attribute::SExt) && is_int(t) && bits(t) < 32)
+        if ((al & AL_SEXT) && is_int(t) && bits(t) < 32 && CB.paramHasAttr(i, Attribute::SExt))
             r = emit(GIR_SEXT, GIR_T_I32, 0, 0, t, r, 0, 0, RA);
     }
 
     void emit_call(const CallBase &CB, uint32_t callee, uint16_t rt, bool vararg) {
-        if (CB.hasFnAttr(Attribute::ReturnsTwice)) fn_flags |= GIR_FN_RETURNS_TWICE;  // setjmp, vfork, ...
+        uint32_t al = alist_bits(CB.getAttributes());
+        if (const Function *Fn = CB.getCalledFunction()) al |= alist_bits(Fn->getAttributes());
+        if (al & AL_RT) fn_flags |= GIR_FN_RETURNS_TWICE;  // setjmp, vfork, ...
         SmallVector<uint32_t, 32> args;
         for (unsigned i = 0, n = CB.arg_size(); i < n; i++) {
             uint32_t r, w;
-            call_arg(CB, i, r, w);
+            call_arg(CB, i, al, r, w);
             args.push_back(r);
             args.push_back(w);
         }
@@ -920,7 +1038,7 @@ struct Exporter {
             push_ref(args[i]);
             T.opnds.push_back(args[i + 1]);
         }
-        uint16_t fl = (vararg ? GIR_IF_VARARG : 0) | (CB.doesNotReturn() ? GIR_IF_NORETURN : 0);
+        uint16_t fl = (vararg ? GIR_IF_VARARG : 0) | (al & AL_NR ? GIR_IF_NORETURN : 0);
         uint32_t r = emit(GIR_CALL, rt, 0, fl, 0, callee, s, (uint32_t)(args.size() / 2), RA);
         if (rt != GIR_T_VOID) vmap[&CB] = r;
     }
@@ -1679,7 +1797,8 @@ struct Exporter {
     // ------------------------------------------------------------ one inst
     void inst(const Instruction &I) {
         curI = &I;
-        cur_dbg = dloc(I.getDebugLoc().get());
+        const MDNode *dl = I.getDebugLoc().getAsMDNode();
+        cur_dbg = dl ? dloc(static_cast<const DILocation *>(dl)) : 0;
         switch (I.getOpcode()) {
         case Instruction::Ret: {
             const auto &R = cast<ReturnInst>(I);
@@ -2049,7 +2168,9 @@ struct Exporter {
         SmallVector<uint32_t, 16> args;
         for (const Argument &A : Fn.args()) {
             where = "parameter " + std::to_string(A.getArgNo());
-            uint32_t w = abi_word(Fn.getAttributes().getParamAttrs(A.getArgNo()), A.getType(), "parameter");
+            uint32_t w = alist_bits(Fn.getAttributes()) & AL_SPECIAL
+                             ? abi_word(Fn.getAttributes().getParamAttrs(A.getArgNo()), A.getType(), "parameter")
+                             : abi_plain(ty(A.getType()), "parameter");
             if (A.hasStructRetAttr()) sret_arg = A.getArgNo();
             args.push_back(ty(A.getType()));
             args.push_back(w);
@@ -2070,7 +2191,6 @@ struct Exporter {
         vmap.clear();
         phimat.clear();
         fixes.clear();
-        T.n_llvm_insts += Fn.getInstructionCount();
 
         bool entry = true;
         for (const BasicBlock &BB : Fn) {
@@ -2083,26 +2203,29 @@ struct Exporter {
                         curI = &P;
                         cur_dbg = 0;
                         for (const Value *v : P.incoming_values())
-                            if (needs_mat(v) && !phimat.count(v)) phimat[v] = ref(v);
+                            if (needs_mat(v) && !phimat.count_of(v)) phimat[v] = ref(v);
                     }
                 in_phi_prepass = false;
                 entry = false;
             }
-            for (const Instruction &I : BB) inst(I);
+            for (const Instruction &I : BB) {
+                inst(I);
+                T.n_llvm_insts++;
+            }
             b.n_inst = (uint32_t)T.insts.size() - b.first_inst;
             T.blocks.push_back(b);
         }
         curI = nullptr;
         for (const Fix &fx : fixes) {
-            auto it = vmap.find(fx.v);
-            if (it == vmap.end() || is_placeholder(it->second)) {
+            uint32_t *p = vmap.find(fx.v);
+            if (!p || is_placeholder(*p)) {
                 curI = cast<Instruction>(fx.v);
                 fail("use of an instruction without a GIR value");
             }
-            if (fx.field == 3) T.opnds[fx.where] = it->second;
-            else if (fx.field == 0) T.insts[fx.where].a = it->second;
-            else if (fx.field == 1) T.insts[fx.where].b = it->second;
-            else T.insts[fx.where].c = it->second;
+            if (fx.field == 3) T.opnds[fx.where] = *p;
+            else if (fx.field == 0) T.insts[fx.where].a = *p;
+            else if (fx.field == 1) T.insts[fx.where].b = *p;
+            else T.insts[fx.where].c = *p;
         }
         gf.n_blocks = (uint32_t)T.blocks.size() - gf.first_block;
         gf.n_inst = (uint32_t)T.insts.size() - gf.first_inst;
@@ -2360,7 +2483,15 @@ struct Exporter {
 
 }  // namespace
 
-void gir_export(const Module &m, GirTables &out) {
+void gir_export(const Module &m, GirTables &out, size_t size_hint) {
+    // Bitcode takes 6 to 11 bytes per instruction (more with debug info);
+    // over-reserving only costs address space.
+    if (size_hint) {
+        out.insts.reserve(size_hint / 4 + 1024);
+        out.opnds.reserve(size_hint / 3 + 1024);
+        out.consts.reserve(size_hint / 4 + 1024);
+        out.blocks.reserve(size_hint / 16 + 256);
+    }
     Exporter e(m, out);
     e.run();
 }

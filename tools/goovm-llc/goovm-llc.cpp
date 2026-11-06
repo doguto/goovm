@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
     bool use_llvm = backend == "llvm";
     if (!use_llvm) {
         try {
-            gir_export(*m, tables);
+            gir_export(*m, tables, (*buf)->getBufferSize());
         } catch (const GirUnsupported &e) {
             if (!fallback || backend == "llvm-only") {
                 std::fprintf(stderr, "goovm-llc: %s\n", e.msg.c_str());
@@ -232,8 +232,9 @@ int main(int argc, char **argv) {
     auto t4 = clk::now();
 
     if (time) {
-        uint64_t llvm_insts = 0;
-        for (const auto &F : *m) llvm_insts += F.isDeclaration() ? 0 : F.getInstructionCount();
+        uint64_t llvm_insts = tables.n_llvm_insts;
+        if (use_llvm)
+            for (const auto &F : *m) llvm_insts += F.isDeclaration() ? 0 : F.getInstructionCount();
         std::fprintf(stderr,
                      "goovm-llc --backend=%s%s %s\n"
                      "  parse    %10.0f us\n"
