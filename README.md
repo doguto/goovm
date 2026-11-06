@@ -22,8 +22,11 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 バックエンドは Goose 版だけを育てます。A1 で、clang-20 が `-O0`（`-g` 付き、`mem2reg` 後を含む）で出す C の LLVM IR をすべて扱う `-O0` バックエンドになりました。A2 で、出力コードの質が LLVM の `-O0`（FastISel + RegAllocFast）と同じ水準になりました。
 
 - レジスタ割り付けを入れました。ブロック内の値はレジスタに置き、ブロックをまたぐ値はスタック上の置き場所に書き通します。比較と分岐の融合、即値・メモリオペランド・アドレス形式の畳み込み、xmm レジスタ上の浮動小数点と 8/16 バイトのベクトルも扱います。設計は [`backend-goose/DESIGN.md`](backend-goose/DESIGN.md) です。
-- `bench/codequal` の実行時間は llc -O0 の 0.99 倍、`.text` は 1.09 倍です（A1 は 1.71 倍と 3.8 倍）。CTMark の C プログラムの実行時間は clang -O0 の 0.80〜1.10 倍（幾何平均 1.00）、Vector/build2 は 1.28 倍（A1 は 11 倍）です。
-- バックエンドの時間は A1 の 1.03〜1.32 倍です。エクスポータを2倍速くしたので、goovm 全体（書き出しとバックエンド）は TPDE の Compile より速いままです。
+- `bench/codequal` の実行時間は llc -O0 の 0.98 倍、`.text` は 1.05 倍です（A1 は 1.72 倍と 4.2 倍）。CTMark の C プログラムの実行時間は clang -O0 の 0.95〜1.01 倍（幾何平均 0.99、A1 は 2.78）、Vector/build2 は 1.15 倍（A1 は 10.9 倍）です。
+- バックエンドの時間は A1 の 1.04〜1.32 倍です。エクスポータを2倍速くしたので、goovm 全体（書き出しとバックエンド）は A1 より速く、gen-20000 と spass では TPDE の Compile より速いままです（typeset では 1.17 倍）。
+- 計測結果は [`bench/results/a2-2026-11-06/`](bench/results/a2-2026-11-06/) と [`backend-goose/NOTES.md`](backend-goose/NOTES.md) の9節にあります。
+
+A1 から変わらない点:
 
 - GIR は版2になりました（型表、i128・f80・集約・ベクトル、デバッグ位置、ABI 属性、TLS、別名、セクションなど）。仕様は [`gir/README.md`](gir/README.md) です。
 - 書き出せない IR に出会うと、終了コード2と理由を出して止まります。`--fallback` を付けると、その入力だけ LLVM の `-O0` コード生成に任せ、標準エラーにそう書きます。

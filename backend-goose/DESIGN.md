@@ -292,8 +292,8 @@ symbol plus the block's offset; label differences are resolved in place.
 ## 10. Code quality and speed
 
 See `NOTES.md` §9 for the measurements. In short: on `bench/codequal` the
-generated code runs at 0.99x llc -O0's time with 1.09x its `.text`; the
-CTMark C programs run at 0.80x to 1.15x clang -O0's time (geometric mean
-1.00); Vector/build2 at 1.28x clang -O0 (A1: 11x). The back-end phase is
-1.16x A1's time on gen-20000 and 1.30x on spass: the pre-pass and the
-allocator's bookkeeping cost more than the 3-4x fewer bytes save.
+generated code runs at 0.98x llc -O0's time with 1.05x its `.text` (spass
+1.02x, typeset 1.07x); the CTMark C programs run at 0.95x to 1.01x (geometric mean 0.99x) clang -O0's
+time; Vector/build2 at 1.15x clang -O0 (A1: 11x). The back-end phase is
+1.04x to 1.32x A1's time: the pre-pass and the allocator's bookkeeping cost
+more than the 3x fewer bytes save.
