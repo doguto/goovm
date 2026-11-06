@@ -45,7 +45,7 @@
 #include <vector>
 
 #ifdef GOOVM_CC_WITH_GOOSE
-#include "goovm_backend.h"   // int goovm_compile_module(llvm::Module&, std::vector<uint8_t>&, std::string&)
+#include "goovm_backend.h"
 #endif
 
 using clk = std::chrono::steady_clock;
@@ -97,6 +97,9 @@ int main(int argc, char **argv) {
     if (backend == "goose") backend = "llvm";   // not built in: behave like clang -c
 #endif
     auto t0 = clk::now();
+#ifdef GOOVM_CC_WITH_GOOSE
+    if (backend == "goose") goovm_backend_init(argc, argv);
+#endif
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
 
@@ -128,7 +131,7 @@ int main(int argc, char **argv) {
     CI.createDiagnostics(*llvm::vfs::getRealFileSystem());
     if (!CI.hasDiagnostics()) return 1;
 
-    long long fe = 0, be = 0, wr = 0;
+    long long fe = 0, be = 0, wr = 0, ex = 0, cg = 0;
     int rc = 0;
     if (backend == "clang") {
         clang::EmitObjAction act;
@@ -149,7 +152,7 @@ int main(int argc, char **argv) {
         if (backend == "goose") {
             std::vector<uint8_t> obj;
             std::string err;
-            int r = goovm_compile_module(*M, obj, err);
+            int r = goovm_compile_module(*M, obj, err, &ex, &cg);
             auto c = clk::now();
             be = us(b, c);
             if (r == 0) {
@@ -174,8 +177,8 @@ int main(int argc, char **argv) {
     }
     if (timing) {
         long long tot = us(t0, clk::now());
-        std::fprintf(stderr, "goovm-cc-time: backend=%s frontend_us=%lld backend_us=%lld write_us=%lld total_us=%lld\n",
-                     backend.c_str(), fe, be, wr, tot);
+        std::fprintf(stderr, "goovm-cc-time: backend=%s frontend_us=%lld backend_us=%lld export_us=%lld codegen_us=%lld "
+                     "write_us=%lld total_us=%lld\n", backend.c_str(), fe, be, ex, cg, wr, tot);
     }
     return rc;
 }

@@ -35,3 +35,15 @@ if (GOOVM_WITH_GOOSE)
     add_subdirectory(backend-goose)
 endif ()
 add_subdirectory(tools/goovm-llc)
+
+# goovm-cc (clang's front end in-process + a goovm back-end) needs the Clang
+# CMake package (Ubuntu: libclang-20-dev); skipped when it is missing.
+option(GOOVM_WITH_CLANG "Build goovm-cc" ON)
+if (GOOVM_WITH_CLANG)
+    find_package(Clang CONFIG HINTS "${LLVM_DIR}/../clang")
+    if (Clang_FOUND)
+        add_subdirectory(tools/goovm-cc)
+    else ()
+        message(STATUS "goovm: Clang CMake package not found; goovm-cc is not built")
+    endif ()
+endif ()
