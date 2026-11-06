@@ -43,10 +43,10 @@ import .gen_tu;
 import cg from "../../backend-goose";
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
-var opt_input: u8[>..] = [];
+var in_off: u32 = 0;        // the input file's name (names)
+var in_len: i64 = 0;
+fn opt_input() -> const u8[:] { names[in_off..in_off + in_len] }
 var out_off: u32 = 0;
-var std_off: u32 = 0;
-var std_len: i64 = 0;
 var out_len: i64 = 0;
 var opt_mode: i64 = 0;      // 0 = -fsyntax-only, 1 = -E, 2 = --layout-check, 3 = --dump-ast, 4 = -c, 5 = --emit-gir
 var opt_time: bool = false;
@@ -290,12 +290,12 @@ fn options() {
         }
         if has_val {
             if which == 0 { angled.push(name_add(val)); angled.push(val.len as! u32); }
-            else if which == 1 { cmd_macros.push(CmdMacro { def: true, off: name_add(val), len: val.len as! u32 }); }
-            else if which == 2 { cmd_macros.push(CmdMacro { def: false, off: name_add(val), len: val.len as! u32 }); }
+            else if which == 1 { cmd_macros.push(CmdMacro { def: true, inc: false, off: name_add(val), len: val.len as! u32 }); }
+            else if which == 2 { cmd_macros.push(CmdMacro { def: false, inc: false, off: name_add(val), len: val.len as! u32 }); }
             else if which == 3 { isystem_dirs.push(name_add(val)); isystem_dirs.push(val.len as! u32); }
             else if which == 4 { quote.push(name_add(val)); quote.push(val.len as! u32); }
             else if which == 5 { sys_dirs_after.push(name_add(val)); sys_dirs_after.push(val.len as! u32); }
-            else if which == 6 { cmd_includes.push(name_add(val)); cmd_includes.push(val.len as! u32); }
+            else if which == 6 { cmd_macros.push(CmdMacro { def: false, inc: true, off: name_add(val), len: val.len as! u32 }); }
             else if which == 7 { out_off = name_add(val); out_len = val.len; }
             else if which == 12 { std_off = name_add(val); std_len = val.len; }
         }
@@ -330,7 +330,7 @@ fn options() {
             opt_optimize = 1;
             if s == "-Os" || s == "-Oz" { opt_os = true; }
         }
-        else if s == "-" || (s.len > 0 && s[0] != '-') { opt_input.clear(); opt_input.append(s); }
+        else if s == "-" || (s.len > 0 && s[0] != '-') { in_off = name_add(s); in_len = s.len; }
         else if !(starts_with(s, "-W") || s == "-w" || starts_with(s, "-f") || starts_with(s, "-m") || starts_with(s, "-g") ||
                   starts_with(s, "-pedantic") || s == "-pipe" || s == "-ansi" || s == "-v" || s == "-Qunused-arguments" ||
                   starts_with(s, "-M") || s == "-S" || s == "-emit-llvm" || starts_with(s, "--")) {
@@ -338,9 +338,8 @@ fn options() {
         }
         // everything else (-w, -W..., -f..., -m...) is accepted and ignored
     }
-    if opt_input.len == 0 { usage(); }
+    if in_len == 0 { usage(); }
 
-    opt_std.append(names[std_off..std_off + std_len]);
     pp_init_tables();
     // Search list: -iquote, -I, -isystem, then the system directories.
     var k = 0;
@@ -367,7 +366,7 @@ fn main() {
     let t0 = clock_ns();
     if opt_mode == 1 {
         mode_E = true;
-        if !pp_start(opt_input) { exit(1); }
+        if !pp_start(opt_input()) { exit(1); }
         pp_fill();
         out.push('\n');
         if out_len > 0 && !out_is_stdout() {
@@ -377,7 +376,7 @@ fn main() {
         }
     } else {
         tu_annot = true;
-        if !pp_start(opt_input) { exit(1); }
+        if !pp_start(opt_input()) { exit(1); }
         // keywords are known before preprocessing, so that pp_fill gives
         // keyword tokens their kinds as it adds them
         let v = std_version();
@@ -393,7 +392,7 @@ fn main() {
         parse_tu();
         if (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
             let t2 = clock_ns();
-            let ok = gen::lower_tu(opt_input);
+            let ok = gen::lower_tu(opt_input());
             let t3 = clock_ns();
             if !ok { exit(1); }
             if opt_mode == 5 {
@@ -413,10 +412,10 @@ fn main() {
                 } else {
                     // file.c -> file.o in the current directory
                     var b = 0;
-                    for c, i in opt_input { if c == '/' { b = i + 1; } }
-                    var e = opt_input.len;
-                    if e - b > 2 && opt_input[e - 2] == '.' { e -= 2; }
-                    path.append(opt_input[b..e]);
+                    for c, i in opt_input() { if c == '/' { b = i + 1; } }
+                    var e = opt_input().len;
+                    if e - b > 2 && opt_input()[e - 2] == '.' { e -= 2; }
+                    path.append(opt_input()[b..e]);
                     path.append(".o");
                 }
                 if out_is_stdout() { write_stdout(obj); }
@@ -436,11 +435,11 @@ fn main() {
         }
         if opt_mode == 2 && n_errors == 0 {
             var abs: u8[>..] = [];
-            if opt_input[0] != '/' {
+            if opt_input()[0] != '/' {
                 if !env("PWD", abs) { fatal("cannot determine the current directory (PWD)"); }
                 abs.push('/');
             }
-            abs.append(opt_input);
+            abs.append(opt_input());
             if out_len == 0 { fatal("--layout-check needs -o file"); }
             if !write_layout_check(abs, names[out_off..out_off + out_len]) { fatal("cannot write the layout check file"); }
         }

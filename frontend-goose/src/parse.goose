@@ -1645,9 +1645,9 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
 var loop_depth: i64 = 0;
 var break_depth: i64 = 0;
 var switch_cases: u32[>..<] = [];
-var switch_types: u32[>..<] = [];
-var switch_marks: u32[>..<] = [];
-var switch_defaults: u8[>..<] = [];
+// The switch statements being parsed: the promoted condition type, where its cases start in switch_cases, a default seen.
+struct SwitchCtx { ty: u32, mark: u32, dflt: bool }
+var switches: SwitchCtx[>..<] = [];
 
 fn label_ref(name: u32, loc: u32) -> i64 {
     ensure_ids();
@@ -1825,15 +1825,11 @@ recursive fn parse_stmt() -> u32 {
             c = promote(c);
         }
         let mark = switch_cases.len;
-        switch_marks.push(mark as! u32);
-        switch_types.push(nty(c));
-        switch_defaults.push(0);
+        switches.push(SwitchCtx { ty: nty(c), mark: mark as! u32, dflt: false });
         break_depth++;
         let b = parse_stmt();
         break_depth--;
-        switch_types.pop();
-        switch_marks.pop();
-        switch_defaults.pop();
+        switches.pop();
         let count = switch_cases.len - mark;
         let start = nlist.len;
         for j in mark..switch_cases.len { nlist.push(switch_cases[j]); }
@@ -1856,13 +1852,13 @@ recursive fn parse_stmt() -> u32 {
         expect(TK_COLON, "':' after 'case'");
         let ok, v0 = fold_int(rv(e));
         if !ok { err_at(nodes[e].loc, "expression is not an integer constant expression"); }
-        if switch_marks.len == 0 {
+        if switches.len == 0 {
             err_at(loc, "'case' statement not in switch statement");
             return parse_stmt();
         }
-        let st = switch_types[switch_types.len - 1];
+        let st = switches[switches.len - 1].ty;
         let v = trunc_to(v0, st);
-        let mark = switch_marks[switch_marks.len - 1] as i64;
+        let mark = switches[switches.len - 1].mark as i64;
         // (128-bit values are only folded to 64 bits here: B2 refolds them
         // from the expression kept in the case's b)
         let wide = type_size(st) > 8;
@@ -1890,13 +1886,13 @@ recursive fn parse_stmt() -> u32 {
     if w == KW_DEFAULT {
         adv();
         expect(TK_COLON, "':' after 'default'");
-        if switch_marks.len == 0 {
+        if switches.len == 0 {
             err_at(loc, "'default' statement not in switch statement");
             return parse_stmt();
         }
-        let di = switch_defaults.len - 1;
-        if switch_defaults[di] != 0 { err_at(loc, "multiple default labels in one switch"); }
-        switch_defaults[di] = 1;
+        let di = switches.len - 1;
+        if switches[di].dflt { err_at(loc, "multiple default labels in one switch"); }
+        switches[di].dflt = true;
         let dn = node(N_DEFAULT, 0, 0, 0, 0, 0, loc);
         switch_cases.push(dn);
         let s = if at(TK_R_BRACE) { node(N_NULL, 0, 0, 0, 0, 0, loc) } else { parse_stmt() };

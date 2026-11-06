@@ -776,10 +776,11 @@ fn set_ppkw(name: const u8[:], k: i64) {
     idents[id].ppkw = k as! u8;
 }
 
-struct CmdMacro { def: bool, off: u32, len: u32 }
+struct CmdMacro { def: bool, inc: bool, off: u32, len: u32 }   // -D, -U or -include (inc)
 var cmd_macros: CmdMacro[>..] = [];
-var cmd_includes: u32[>..] = [];       // -include files: (off, len) pairs in names
-var opt_std: u8[>..] = [];
+var std_off: u32 = 0;      // -std= (names)
+var std_len: i64 = 0;
+fn opt_std() -> const u8[:] { names[std_off..std_off + std_len] }
 var opt_os: bool = false;
 var opt_pic_mode: i64 = 0;     // 0 -fPIE (clang's default), 1 -fpie, 2 -fPIC, 3 -fpic, 4 -fno-pic
 var opt_pthread: bool = false;
@@ -821,18 +822,18 @@ fn pp_init_tables() {
 
 // The <built-in> buffer: predefined macros adjusted for the options, then
 // the command line -D/-U, then -include.
-var builtin_text: u8[>..] = [];
 
 fn std_version() -> const u8[:] {
-    let s = opt_std;
+    let s = opt_std();
     if s == "c89" || s == "c90" || s == "gnu89" || s == "gnu90" || s == "iso9899:1990" { return ""; }
     if s == "c99" || s == "gnu99" || s == "iso9899:1999" || s == "c9x" || s == "gnu9x" { return "199901L"; }
     if s == "c11" || s == "gnu11" || s == "iso9899:2011" || s == "c1x" || s == "gnu1x" { return "201112L"; }
     return "201710L";
 }
 
+// Appends it to src.
 fn build_builtin_text() {
-    let s = opt_std;
+    let s = opt_std();
     let strict = s.len > 0 && s[0] != 'g';
     let c89 = std_version().len == 0;
     let text = PREDEF_BASE;
@@ -849,56 +850,55 @@ fn build_builtin_text() {
             keep = false;
             let pie = line[12] == 'E' || line[12] == 'e';
             let lvl = if opt_pic_mode == 1 || opt_pic_mode == 3 { " 1\n" } else { " 2\n" };
-            if opt_pic_mode <= 1 || (opt_pic_mode <= 3 && !pie) { builtin_text.append(line[..15]); builtin_text.append(lvl); }
+            if opt_pic_mode <= 1 || (opt_pic_mode <= 3 && !pie) { src.append(line[..15]); src.append(lvl); }
         }
         if strict && (line == "#define linux 1" || line == "#define unix 1") { keep = false; }
         if starts_with(line, "#define __STDC_VERSION__ ") {
             keep = false;
-            if !c89 { builtin_text.append("#define __STDC_VERSION__ "); builtin_text.append(std_version()); builtin_text.push('\n'); }
+            if !c89 { src.append("#define __STDC_VERSION__ "); src.append(std_version()); src.push('\n'); }
         }
         if c89 && line == "#define __GNUC_STDC_INLINE__ 1" {
             keep = false;
-            builtin_text.append("#define __GNUC_GNU_INLINE__ 1\n");
+            src.append("#define __GNUC_GNU_INLINE__ 1\n");
         }
-        if keep { builtin_text.append(line); builtin_text.push('\n'); }
+        if keep { src.append(line); src.push('\n'); }
     }
-    if opt_optimize > 0 { builtin_text.append("#define __OPTIMIZE__ 1\n"); }
-    if opt_os { builtin_text.append("#define __OPTIMIZE_SIZE__ 1\n"); }
-    if strict { builtin_text.append("#define __STRICT_ANSI__ 1\n"); }
-    if opt_pthread { builtin_text.append("#define _REENTRANT 1\n"); }
-    if opt_unsigned_char { builtin_text.append("#define __CHAR_UNSIGNED__ 1\n"); }
+    if opt_optimize > 0 { src.append("#define __OPTIMIZE__ 1\n"); }
+    if opt_os { src.append("#define __OPTIMIZE_SIZE__ 1\n"); }
+    if strict { src.append("#define __STRICT_ANSI__ 1\n"); }
+    if opt_pthread { src.append("#define _REENTRANT 1\n"); }
+    if opt_unsigned_char { src.append("#define __CHAR_UNSIGNED__ 1\n"); }
     for m in cmd_macros {
+        if m.inc { continue; }
         let d = names[m.off..m.off + m.len];
         if m.def {
-            builtin_text.append("#define ");
+            src.append("#define ");
             let eq = find(d, "=");
             if eq >= 0 {
-                builtin_text.append(d[..eq]);
-                builtin_text.push(' ');
-                builtin_text.append(d[eq + 1..]);
+                src.append(d[..eq]);
+                src.push(' ');
+                src.append(d[eq + 1..]);
             } else {
-                builtin_text.append(d);
-                builtin_text.append(" 1");
+                src.append(d);
+                src.append(" 1");
             }
         } else {
-            builtin_text.append("#undef ");
-            builtin_text.append(d);
+            src.append("#undef ");
+            src.append(d);
         }
-        builtin_text.push('\n');
+        src.push('\n');
     }
-    var k = 0;
-    while k + 1 < cmd_includes.len {
-        let o = cmd_includes[k] as i64;
-        builtin_text.append("#include \"");
-        builtin_text.append(names[o..o + cmd_includes[k + 1]]);
-        builtin_text.append("\"\n");
-        k += 2;
+    for m in cmd_macros {
+        if !m.inc { continue; }
+        src.append("#include \"");
+        src.append(names[m.off..m.off + m.len]);
+        src.append("\"\n");
     }
 }
 
 // Sets the language options from -std.
 fn pp_set_lang() {
-    let s = opt_std;
+    let s = opt_std();
     opt_gnu = s.len == 0 || s[0] == 'g';
     let v = std_version();
     opt_c99 = v.len > 0;
@@ -910,7 +910,6 @@ fn pp_set_lang() {
 // Starts preprocessing `path`.
 fn pp_start(path: const u8[:]) -> bool {
     pp_set_lang();
-    build_builtin_text();
     pbuf.clear();
     pbuf.append(path);
     let f = lookup_file();
@@ -922,7 +921,7 @@ fn pp_start(path: const u8[:]) -> bool {
     base_file_name_len = path.len as! u32;
     // The builtin buffer is file `files.len` (not in the path cache).
     let bstart = src.len;
-    src.append(builtin_text);
+    build_builtin_text();
     let bend = src.len;
     src.push(0);
     src.push(0);

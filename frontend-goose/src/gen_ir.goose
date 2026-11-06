@@ -283,9 +283,11 @@ var f_insts: Inst[>..<] = [];
 var f_allocas: Inst[>..<] = [];
 var f_ofix: u32[>..<] = [];     // positions in m_opnds holding local value refs
 var f_bfix: u32[>..<] = [];     // positions in m_opnds holding block ids
-var f_bstart: i32[>..<] = [];   // per block id: first local instruction, -1 = not started
+// Per block id: the first local instruction (-1 = not started), and its
+// position in the layout (fn_finish).
+struct FBlock { start: i32, pos: u32 }
+var f_blocks: FBlock[>..<] = [];
 var f_border: u32[>..<] = [];   // block ids in layout order
-var f_bpos: u32[>..<] = [];     // per block id: layout position (finish_function)
 var f_brelocs: u32[>..<] = [];  // m_drelocs entries whose blocks are ids of this function
 var cur_blk: i64 = -1;          // the block being filled, -1 after a terminator
 var cur_dbg: u32 = 0;
@@ -308,8 +310,8 @@ let OPM: u8[83] = [
 fn is_local(v: u32) -> bool { v >> 30 == 0 }
 
 fn new_block() -> u32 {
-    let id = f_bstart.len;
-    f_bstart.push(-1);
+    let id = f_blocks.len;
+    f_blocks.push(FBlock { start: -1, pos: 0 });
     return id as! u32;
 }
 
@@ -317,7 +319,7 @@ fn emit(op: i64, t: u32, sub: i64, flags: u32, aux: u32, a: u32, b: u32, c: u32)
     if cur_blk < 0 {
         // code after a terminator: a new block without predecessors
         let id = new_block();
-        f_bstart[id] = f_insts.len as! i32;
+        f_blocks[id].start = f_insts.len as! i32;
         f_border.push(id);
         cur_blk = id as i64;
     }
@@ -339,7 +341,7 @@ fn has_insert() -> bool { cur_blk >= 0 }
 // Starts block id; the current block (if not terminated) falls through.
 fn start_block(id: u32) {
     if cur_blk >= 0 { br(id); }
-    f_bstart[id] = f_insts.len as! i32;
+    f_blocks[id].start = f_insts.len as! i32;
     f_border.push(id);
     cur_blk = id as i64;
 }
@@ -382,7 +384,7 @@ fn fn_begin() {
     f_allocas.clear();
     f_ofix.clear();
     f_bfix.clear();
-    f_bstart.clear();
+    f_blocks.clear();
     f_border.clear();
     f_brelocs.clear();
     cur_blk = -1;
@@ -399,8 +401,8 @@ fn remap(v: u32, first: u32, na: u32) -> u32 {
 fn fn_finish(g: u32, flags: u32, nargs: u32, args: u32, ret_ty: u32, dbg: u32) -> u32 {
     if cur_blk >= 0 { emit_term(GIR_UNREACHABLE, 0, 0, 0); }
     // a block that was made but never started (a target nothing reached)
-    for k in 0..f_bstart.len {
-        if f_bstart[k] < 0 {
+    for k in 0..f_blocks.len {
+        if f_blocks[k].start < 0 {
             cur_blk = -1;
             start_block(k as! u32);
             emit_term(GIR_UNREACHABLE, 0, 0, 0);
@@ -408,9 +410,7 @@ fn fn_finish(g: u32, flags: u32, nargs: u32, args: u32, ret_ty: u32, dbg: u32) -
     }
     let first = m_insts.len as! u32;
     let na = f_allocas.len as! u32;
-    f_bpos.clear();
-    f_bpos.resize(f_bstart.len, 0);
-    for id, k in f_border { f_bpos[id] = k as! u32; }
+    for id, k in f_border { f_blocks[id].pos = k as! u32; }
     for I in f_allocas { m_insts.push(I); }
     for I in f_insts {
         var J = I;
@@ -419,17 +419,17 @@ fn fn_finish(g: u32, flags: u32, nargs: u32, args: u32, ret_ty: u32, dbg: u32) -
             if m & 1 != 0 { J.a = remap(I.a, first, na); }
             if m & 2 != 0 { J.b = remap(I.b, first, na); }
             if m & 4 != 0 { J.c = remap(I.c, first, na); }
-            if m & 8 != 0 { J.a = f_bpos[I.a]; }
-            if m & 16 != 0 { J.b = f_bpos[I.b]; }
-            if m & 32 != 0 { J.c = f_bpos[I.c]; }
+            if m & 8 != 0 { J.a = f_blocks[I.a].pos; }
+            if m & 16 != 0 { J.b = f_blocks[I.b].pos; }
+            if m & 32 != 0 { J.c = f_blocks[I.c].pos; }
         }
         m_insts.push(J);
     }
     let first_block = m_blocks.len as! u32;
     let nb = f_border.len;
     for k in 0..nb {
-        let s = f_bstart[f_border[k]] as! u32;
-        let e: u32 = if k + 1 < nb { f_bstart[f_border[k + 1]] as! u32 } else { f_insts.len as! u32 };
+        let s = f_blocks[f_border[k]].start as! u32;
+        let e: u32 = if k + 1 < nb { f_blocks[f_border[k + 1]].start as! u32 } else { f_insts.len as! u32 };
         if k == 0 {
             m_blocks.push(Block { first_inst: first, n_inst: na + e - s });
         } else {
@@ -437,10 +437,10 @@ fn fn_finish(g: u32, flags: u32, nargs: u32, args: u32, ret_ty: u32, dbg: u32) -
         }
     }
     for p in f_ofix { m_opnds[p] = remap(m_opnds[p], first, na); }
-    for p in f_bfix { m_opnds[p] = f_bpos[m_opnds[p]]; }
+    for p in f_bfix { m_opnds[p] = f_blocks[m_opnds[p]].pos; }
     for r in f_brelocs {
-        m_drelocs[r].blk = f_bpos[m_drelocs[r].blk];
-        if m_drelocs[r].kind == DR_BLOCKDIFF32 { m_drelocs[r].blk2 = f_bpos[m_drelocs[r].blk2]; }
+        m_drelocs[r].blk = f_blocks[m_drelocs[r].blk].pos;
+        if m_drelocs[r].kind == DR_BLOCKDIFF32 { m_drelocs[r].blk2 = f_blocks[m_drelocs[r].blk2].pos; }
     }
     let fi = m_funcs.len as! u32;
     m_funcs.push(Func { global: g, flags: flags, first_block: first_block, n_blocks: nb as! u32, first_inst: first,
