@@ -293,11 +293,12 @@ fn gen_inst(gi: u32, cur: u32) {
 // before the defining one) is detected and the function is laid out again
 // with one slot per value, as are functions that call a returns_twice
 // function (the second return from setjmp sees the slots as they were).
-// The pass costs about as much again as the forward layout it replaces, so
-// functions of at most SHARE_MIN_INSTS instructions (value slots of at most
-// ~2 KB) keep one slot per value.
+// The pass costs about 150 x86 instructions per GIR instruction (the forward
+// one-slot layout a fraction of that), so functions of at most
+// SHARE_MIN_INSTS instructions (value slots of at most ~4 KB) keep one slot
+// per value.
 
-let SHARE_MIN_INSTS = 256;
+let SHARE_MIN_INSTS = 512;
 
 var v_mark: u32[>..] = [];      // per value: lay_epoch + MK_*
 var lay_epoch: u32 = 0;         // advances by 4 per function

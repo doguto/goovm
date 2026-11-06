@@ -1,4 +1,4 @@
-/* Frame-slot sharing in large functions (more than 256 GIR instructions).
+/* Frame-slot sharing in large functions (more than 512 GIR instructions).
  *   big():     a recursive function of ~2,000 instructions in one block; with
  *              one 8-byte slot per value its frame would be ~16 KB and 3,000
  *              levels of recursion would overflow an 8 MB stack.
@@ -25,7 +25,7 @@ static unsigned later(unsigned a, unsigned n) {
     unsigned v[8] = {a, 2, 3, 4, 5, 6, 7, 8};
     unsigned acc = a;
     unsigned x;
-    S64(0)
+    S64(0) S64(64)
     goto L2;
 L1:
     acc += x * 3u;
@@ -45,7 +45,7 @@ static __attribute__((noinline)) void bounce(unsigned x) {
 static unsigned jumper(unsigned a) {
     unsigned v[8] = {a, 9, 8, 7, 6, 5, 4, 3};
     unsigned acc = a;
-    S64(0)
+    S64(0) S64(64)
     unsigned keep = acc ^ 0x5a5a5a5au;
     int r = setjmp(jb);
     if (r == 0) {

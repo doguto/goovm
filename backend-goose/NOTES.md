@@ -483,7 +483,7 @@ was found while writing and testing it; the messages are verbatim from
    (`gs_add_i64(..., file, line)`), each record is copied by value, and the
    stores into `u32` arrays may alias the module globals (`GS_GL->...`), so
    clang reloads them after each store. The same loop in C would be a third
-   of that. I limited the pass to functions where it matters (more than 256
+   of that. I limited the pass to functions where it matters (more than 512
    instructions) instead of fighting the code shape.
 
 What went well: the seven files typechecked after fixing the four errors

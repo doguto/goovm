@@ -147,7 +147,7 @@ rbp-8..-40      rbx, r12..r15        only if the function calls __builtin_setjmp
 rsp             16-byte aligned; dynamic allocas and outgoing call areas below
 ```
 
-**Slot sharing.** Functions of more than 256 instructions are laid out by
+**Slot sharing.** Functions of more than 512 instructions are laid out by
 one backward pass (`layout_shared` in `cg.goose`) that also finds each
 value's last use: scanning backward, the first use seen is the last one, so
 the value takes a slot there and gives it back at its definition. A value
@@ -158,9 +158,11 @@ different blocks are never live at the same time, so this needs no liveness
 across blocks. A use above its definition in layout order is detected and
 the function is laid out again with one slot per value, as are functions
 that call `setjmp` or another `returns_twice` function (`GIR_FN_RETURNS_TWICE`,
-`GIR_FN_SJLJ`) and functions of at most 256 instructions (whose value slots
-are at most ~2 KB; the backward pass costs about as much as the rest of the
-layout). One slot per value made consumer-typeset's recursive `Manifest`
+`GIR_FN_SJLJ`) and functions of at most 512 instructions (whose value slots
+are at most ~4 KB): the backward pass executes about 150 x86 instructions per
+GIR instruction, which made the whole back-end 7% slower on spass and 12% on
+gen-20000 with a limit of 256 (gen-20000's functions have 100 to 500
+instructions), and 1% to 3% with 512. One slot per value made consumer-typeset's recursive `Manifest`
 (16 000 instructions) take a 97 KB frame and overflow the 8 MB stack; with
 sharing it is 2.9 KB (clang -O0: 2.1 KB). `v_span[j]` records the last use;
 `live_check` in the value-location interface aborts if a lowering reads a
