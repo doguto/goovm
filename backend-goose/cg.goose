@@ -402,7 +402,12 @@ fn gen_inst(gi: u32, cur: u32) {
     cur_pos = j;
     let k: u32 = vi[j].kind;
     if k == K_A || k == K_CALL {
-        match I.op {
+        match I.op {   // (the most frequent first: the match is a chain of compares)
+            GIR_LOAD => lower_load_a(I, j),
+            GIR_STORE => lower_store_a(I),
+            GIR_CALL => lower_call(I, j),
+            GIR_GEP => lower_gep_a(I, j),
+            GIR_ICMP => lower_icmp_a(I, j),
             GIR_RET => lower_ret(I, j),
             GIR_BR => {
                 if has_phi(I.a) {
@@ -429,7 +434,6 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_AND, GIR_OR, GIR_XOR, GIR_SHL, GIR_LSHR, GIR_ASHR => {
                 if rc_of(I.ty) == RC_VX { lower_vbin_a(I, j); } else { lower_binop_a(I, j); }
             },
-            GIR_ICMP => lower_icmp_a(I, j),
             GIR_FCMP => lower_fcmp_a(I, j),
             GIR_FADD, GIR_FSUB, GIR_FMUL, GIR_FDIV => {
                 if rc_of(I.ty) == RC_VX { lower_vbin_a(I, j); } else { lower_fbin_a(I, j); }
@@ -441,10 +445,6 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_ZEXT, GIR_SEXT, GIR_TRUNC, GIR_PTRTOINT, GIR_INTTOPTR, GIR_BITCAST,
             GIR_FPEXT, GIR_FPTRUNC, GIR_FPTOSI, GIR_FPTOUI, GIR_SITOFP, GIR_UITOFP => lower_cast_a(I, j),
             GIR_ALLOCA => {},
-            GIR_LOAD => lower_load_a(I, j),
-            GIR_STORE => lower_store_a(I),
-            GIR_GEP => lower_gep_a(I, j),
-            GIR_CALL => lower_call(I, j),
             GIR_PHI => lower_phi(I, j, cur),
             GIR_MEMCPY, GIR_MEMSET => lower_memcpy_a(I),
             _ => ud2(),

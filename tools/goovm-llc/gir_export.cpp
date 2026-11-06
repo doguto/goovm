@@ -863,21 +863,54 @@ struct Exporter {
 
     // GEP (instruction or constant expression): constant indices fold into
     // one byte offset, the others become (index, scale) pairs.
+    // Alloc sizes and struct layouts, cached per type (DataLayout looks them
+    // up in a hash map on every call).
+    PtrMap asz_map, lay_map;
+    std::vector<const StructLayout *> lays;
+    uint64_t alloc_size(Type *t) {
+        if (uint32_t *p = asz_map.find(t)) return *p;
+        TypeSize ts = DL.getTypeAllocSize(t);
+        if (ts.isScalable()) fail("scalable GEP");
+        uint64_t v = ts.getFixedValue();
+        if (v <= 0xFFFFFFFFull) asz_map[t] = (uint32_t)v;
+        return v;
+    }
+    const StructLayout *layout(StructType *st) {
+        if (uint32_t *p = lay_map.find(st)) return lays[*p];
+        const StructLayout *L = DL.getStructLayout(st);
+        lay_map[st] = (uint32_t)lays.size();
+        lays.push_back(L);
+        return L;
+    }
+
     uint32_t gep(const GEPOperator *G) {
         if (G->getType()->isVectorTy()) fail("vector GEP");
         uint32_t base = ref(G->getPointerOperand());
         uint64_t off = 0;
         SmallVector<uint32_t, 8> dyn;
-        for (auto GTI = gep_type_begin(G), E = gep_type_end(G); GTI != E; ++GTI) {
-            const Value *idx = GTI.getOperand();
-            if (StructType *ST = GTI.getStructTypeOrNull()) {
+        // (the walk of gep_type_iterator: index 0 steps over the source
+        // element type, later ones into structs, arrays and vectors)
+        Type *cur = G->getSourceElementType();
+        unsigned n = G->getNumIndices();
+        for (unsigned i = 0; i < n; i++) {
+            const Value *idx = G->getOperand(i + 1);
+            uint64_t stride;
+            if (i == 0) {
+                stride = alloc_size(cur);
+            } else if (StructType *ST = dyn_cast<StructType>(cur)) {
                 unsigned fi = (unsigned)cast<ConstantInt>(idx)->getZExtValue();
-                off += DL.getStructLayout(ST)->getElementOffset(fi).getFixedValue();
+                off += layout(ST)->getElementOffset(fi).getFixedValue();
+                cur = ST->getElementType(fi);
                 continue;
+            } else if (auto *VT = dyn_cast<VectorType>(cur)) {
+                cur = VT->getElementType();
+                TypeSize ts = DL.getTypeStoreSize(cur);
+                if (ts.isScalable() || isa<ScalableVectorType>(VT)) fail("scalable GEP");
+                stride = ts.getFixedValue();
+            } else {
+                cur = cur->getArrayElementType();
+                stride = alloc_size(cur);
             }
-            TypeSize ts = GTI.getSequentialElementStride(DL);
-            if (ts.isScalable()) fail("scalable GEP");
-            uint64_t stride = ts.getFixedValue();
             if (const auto *CI = dyn_cast<ConstantInt>(idx)) {
                 if (CI->getBitWidth() > 64) fail("GEP index wider than 64 bits");
                 off += (uint64_t)CI->getSExtValue() * stride;
