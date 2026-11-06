@@ -28,6 +28,7 @@ let M_FUNC = 1;
 let M_VARIADIC = 2;
 let M_BUILTIN = 4;
 let M_GNUVA = 8;      // named variadic parameter: `args...`
+let M_SIMPLE = 16;    // a function-like body without #, ## or __VA_OPT__ (expand_simple)
 
 var macros: Macro[>..] = [];
 var mtoks: Tok[>..] = [];
@@ -290,6 +291,30 @@ recursive fn macro_token(t0: Tok) -> bool, Tok {
     return true, t;
 }
 
+// pp_lex_unexpanded for the tokens of a macro's arguments: a token from a
+// file that is not a directive or the end of the file is pp_lex's
+// (unexpanded: no macro name is marked) as lex_file_token returns it.
+recursive fn arg_token() -> Tok {
+    let ci = ctxs.len - 1;
+    if ctxs[ci].kind == CTX_FILE {
+        let t = lex_file_token();
+        if t.kind != TK_EOF && !(t.kind == TK_HASH && t.flags & F_BOL != 0 && !lx_dir) {
+            if !lx_dir {
+                let ms = ctxs[ci].mi_state;
+                if ms != MI_INVALID && ms != MI_GUARD { ctxs[ci].mi_state = MI_INVALID; }
+            }
+            return t;
+        }
+        pp_noexpand++;
+        let ok, r = file_token(t, ci);
+        var res = r;
+        if !ok { res = pp_lex(); }
+        pp_noexpand--;
+        return res;
+    }
+    return pp_lex_unexpanded();
+}
+
 // Lex without macro expansion (clang LexUnexpandedToken).
 recursive fn pp_lex_unexpanded() -> Tok {
     pp_noexpand++;
@@ -467,7 +492,7 @@ recursive fn read_macro_args(name: Tok, m: i64) -> bool {
         let start = argtoks.len;
         var parens = 0;
         loop {
-            t = pp_lex_unexpanded();
+            t = arg_token();
             if t.kind == TK_EOF || t.kind == TK_EOD {
                 error_at(name.xloc as i64, str("unterminated function-like macro invocation of '", ident_text(name.val as i64), "'"));
                 // Do not lose the EOF/EOD: re-inject it.
@@ -578,6 +603,7 @@ fn last_kind() -> i64 {
 // macro m, appending the result to xbuf. Returns NextTokGetsSpace.
 recursive fn expand_args(m: i64, i0: i64, xl: u32, elided: bool) -> bool {
     let mc = macros[m];
+    if mc.flags & M_SIMPLE != 0 { return expand_simple(m, i0, xl); }
     let b = mc.first as i64;
     let n = mc.count as i64;
     let first_res = xbuf.len;
@@ -744,6 +770,48 @@ recursive fn expand_args(m: i64, i0: i64, xl: u32, elided: bool) -> bool {
             }
         }
         i++;
+    }
+    return next_space;
+}
+
+// expand_args for a body without #, ## and __VA_OPT__ (M_SIMPLE): each
+// parameter is replaced by its pre-expanded argument, the other tokens
+// are copied; the spacing as expand_args gives it.
+recursive fn expand_simple(m: i64, i0: i64, xl: u32) -> bool {
+    let mc = macros[m];
+    let b = mc.first as i64;
+    let n = mc.count as i64;
+    let nargs = argidx.len - i0;
+    for k in nargs { precache.push(-1); precache.push(-1); }
+    var next_space = false;
+    for i in n {
+        let ct = mtoks[b + i];
+        if i != 0 && ct.flags & F_LSPACE != 0 { next_space = true; }
+        if ct.kind != TK_PARAM {
+            var t = ct;
+            t.xloc = xl;
+            t.flags = t.flags | F_MACRO;
+            if next_space {
+                t.flags = t.flags | F_LSPACE;
+                next_space = false;
+            }
+            xbuf.push(t);
+            continue;
+        }
+        let ps, pe = preexpanded(i0, ct.aux as i64);
+        if pe > ps {
+            let fr = xbuf.len;
+            for j in ps..pe {
+                var t = pre[j];
+                if t.kind == TK_HASHHASH { t.kind = TK_HASHHASH_NP; }
+                xbuf.push(t);
+            }
+            var f0 = xbuf[fr];
+            f0.flags = f0.flags & ~(F_LSPACE | F_BOL);
+            if next_space { f0.flags = f0.flags | F_LSPACE; }
+            xbuf[fr] = f0;
+            next_space = false;
+        }
     }
     return next_space;
 }

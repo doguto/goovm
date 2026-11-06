@@ -674,6 +674,14 @@ fn do_define() {
             }
         }
     }
+    if flags & M_FUNC != 0 {
+        var simple = true;
+        for j in first..mtoks.len {
+            let k = mtoks[j].kind;
+            if k == TK_HASH || k == TK_HASHHASH || (k == TK_IDENT && mtoks[j].val == id_va_opt) { simple = false; }
+        }
+        if simple { flags = flags | M_SIMPLE; }
+    }
     let m = macros.len;
     macros.push(Macro { name: n.val, first: first as! u32, count: count as! u32, nparams: params.len as! u16,
         flags: flags, builtin: 0, enabled: true, loc: n.xloc });
