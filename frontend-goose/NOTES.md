@@ -2,7 +2,8 @@
 
 goosecc is about 17,600 lines of Goose without comments and blank lines
 (compiler commit 335fddc, runtime d22ae129d92b): the front end of milestone
-B1 (sections 1-8) and the lowering to GIR of B2 (section 9), plus the
+B1 (sections 1-8), the lowering to GIR of B2 (section 9) and the speed
+work of B3 (section 10), plus the
 Goose back-end imported as a package. It is compiled with `goose
 --standalone` to one 5.1 MB C file and then with `clang-20 -O2`
 (2 s and 18 s). This page records what was
@@ -135,16 +136,18 @@ they key on spans of `src` and must not copy them.
 
 ## 6. Interfacing with C
 
-Four things needed C, through `extern fn` and `--include src/goosecc_rt.h`:
-reinterpreting f64 bits in both directions (floating literals and constant
-folding), rounding a double to float, and `memchr` (line comments, block
-comments and line tables are scanned with it: glibc's is vectorized, a byte
-loop is not). The extern mechanism is simple and worked the first time.
+In B1 four things needed C, through `extern fn` and `--include
+src/goosecc_rt.h`: reinterpreting f64 bits in both directions (floating
+literals and constant folding), rounding a double to float, and `memchr`
+(line comments, block comments and line tables; B3 replaced it with std's
+`find_any`, section 10). The extern mechanism is simple and worked the
+first time.
 
 ## 7. Performance notes
 
-What the profiles led to: the lexer hashes an identifier while scanning it
-and interns it without a second pass; comments are skipped with `memchr`
+(B1; section 10 has what B3 changed.) What the profiles led to: the lexer
+hashes an identifier while scanning it and interns it without a second
+pass; comments are skipped with `memchr`
 (block comments by searching for the `/`, which is rare inside comments,
 rather than the `*` that starts every line of a boxed comment); line tables
 are built lazily, only for files that get a diagnostic or a line marker;
@@ -337,4 +340,117 @@ and interning the struct types of two-part ABI values once. What remains
 is the cost of the data-stack model: about 15% of a run is page faults and
 the kernel, spread over the many growable arrays touched for the first
 time.
+
+## 10. Milestone B3: speed
+
+B3 made `goosecc -c` faster than TinyCC over the CTMark C files
+(README.md, "Speed (B3)"; DESIGN.md, section 9, has each change with its
+numbers). The work was guided by callgrind (instruction counts per
+generated C line: the `goose --standalone` output compiles with `-g`, so
+each line of the profile maps to a line of Goose), `perf record -e
+cpu-clock` (the VM exposes no hardware counters) and micro-benchmarks of
+the machine itself. What the Goose side of it was like:
+
+### What the memory model costs at run time
+
+- **A region per global array.** Every global `T[>..]`, `T[>..<]` and
+  dictionary is a data stack: a reserved region set up at start-up with
+  `mmap`, `mprotect` (the guard gap) and `madvise` (no huge page for its
+  first 2 MB). At B2's end goosecc had 227 regions. The profile of a
+  one-line file is mostly the kernel's maple tree inserting and splitting
+  those mappings, and the exit unmapping them. B3 brought it to 182
+  (`goose check --stacks`: `main program: 6 data stacks + 176 global
+  stacks = 182 regions`) by turning scratch globals into locals,
+  parallel arrays into arrays of structs, and several dictionaries into
+  one keyed by `table << 32 | key`. Grouping arrays in a struct is not
+  allowed:
+
+  ```
+  t3.goose:1: error: resizable field a of struct Tables must be the final field; use root struct for independently stored fields
+  ```
+
+  and a root struct's fields are independent stacks again.
+- **Locals are stacks too.** A function-local `T[>..]` lives on one of
+  the runtime data stacks, whose number is the deepest simultaneous
+  nesting of such locals over the call graph (`goose check --stacks`
+  lists it per function). Moving the option scratch buffers from globals
+  into `main` raised the runtime stacks from 7 to 8 (one more region);
+  moving them into a function of their own (`options()`) brought it to 6.
+- **Page faults.** A region commits its pages as they are first touched.
+  In this VM a first touch costs 1.2 µs per 4 KB page including the
+  unmap at exit (a C micro-benchmark); `MADV_POPULATE_WRITE` over 64 KB
+  at a time costs 0.68 µs, and a transparent huge page 0.18 µs per 4 KB.
+  A typical CTMark compile touches 700-1,500 pages, sqlite3.c 6,000.
+  goosecc now populates the big tables (tokens, AST, symbols, GIR, source
+  text) ahead of their growth through a C helper that reads the data
+  stack's top pointer (`gs_rref`'s `stk->top`), which works but depends on
+  the runtime's layout. Huge pages for the large tables (`MADV_HUGEPAGE`
+  past their first megabyte) cut sqlite3.c's faults from 6,155 to 4,323
+  but did not change its time, and were left out.
+- **Clearing a dictionary walks its capacity.** The per-function map of
+  labels and `case` blocks was cleared for each of sqlite3.c's 1,900
+  functions; `clear` visits every slot, so a map that once grew large
+  costs its whole capacity per function. It is now cleared only when it
+  has entries.
+- **Division by a value known only at run time** goes through a magic
+  number that the generated code computes before the loop, bit by bit
+  (`gs_divu_gen`): an integer literal's overflow check (`v > (2^64 - 1 -
+  d) / base`) ran 60 iterations per literal. The front end now checks
+  with a multiplication (`mul_add_overflows`). The back-end has the same
+  pattern in `gir_codegen`, `layout_globals`, `write_elf` and `const_mem`
+  (reported to A2; B3 does not modify `backend-goose/`).
+- **Struct copies.** `let c = ctxs[ci]` copies the 81-byte context; the
+  hot paths read fields (`ctxs[ci].kind`) instead.
+
+### Getting at the machine
+
+- **SIMD.** std's `find_any` with a `byte_set` is the only vector code
+  Goose offers (16 bytes at a time with SSE2); it replaced the C
+  library's `memchr` for comments and line tables. Scanning an identifier
+  and hashing it 8 bytes at a time needed C (`goosecc_ident_scan` in
+  `goosecc_rt.h`), and its result is two values, which an extern function
+  cannot return:
+
+  ```
+  t2.goose:1: error: extern fn scan2 returns at most one value
+  ```
+
+  so the length and the hash come back packed in a `u64`.
+- **Bounds checks in scanning loops.** `while cc[src[q]] & CC_IDCONT !=
+  0 { q++; }` keeps its check on `src[q]` (q is unbounded): a compare
+  and a branch per byte. The C helpers check once per 16 bytes.
+- **Reading a file into a growable array** without a copy needed C as
+  well (`goosecc_read_file` reads straight to the top of the array's data
+  stack and moves the top and the length, as `goose.h` allows C to do).
+  os's `file_exists` + `read_file` make 7 system calls per header (stat,
+  fopen, fstat, 64 KB freads, fclose); the helper makes 4.
+- **Parsing papercut**: a cast applied to a `match` (or `if`) expression
+  needs parentheses or a `let`:
+
+  ```
+  t1.goose:5: error: expected ';' in variable declaration, found 'as'
+      var j = match c { 'a' => 1, 'b' => 2, _ => 0 } as i64 + name.len;
+  ```
+
+### What I would want from the compiler and the runtime
+
+1. **One reservation for all regions** (or a region reserved on its
+   first push): 182 regions cost 546 system calls and as many VMA
+   operations at start-up and again at exit, a large part of a one-line
+   compile's 1.4 ms.
+2. **No `MADV_NOHUGEPAGE` when THP is not `always`**: under `madvise`
+   (as here) it changes nothing but costs a system call and a VMA split
+   per region.
+3. **Commit pages in larger steps** as a data stack grows
+   (`MADV_POPULATE_WRITE` of 64 KB or more on growth), which halves the
+   cost per page.
+4. **`dictionary.clear` proportional to the entries**, not the capacity.
+5. **Division by a loop-invariant run-time value**: compute the magic
+   number with `clz` (a few instructions) or divide in hardware when the
+   loop is short.
+6. **Several results from an `extern fn`** (a C struct return would do).
+7. **Unaligned `u64` loads from a `u8` slice** (and a fast path in
+   `find_any` for sets given as byte ranges), so that identifier scanning
+   and word-wise hashing could stay in Goose.
+8. **Casts and binary operators after `match` / `if` expressions.**
 

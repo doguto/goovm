@@ -13,9 +13,23 @@ file.c -o file.o` produces objects that link with clang-20's and glibc.
   Goose's rules, the AST contract, and the lowering to GIR (section 7:
   values, the SysV calling convention, globals, static data and
   relocations, builtins, inline assembly, debug locations).
-- [NOTES.md](NOTES.md): what writing it in Goose was like (errors, workarounds).
+- [NOTES.md](NOTES.md): what writing it in Goose was like (errors, workarounds),
+  and in section 10 what B3's speed work met in the language and runtime.
 
-Status (milestone B2):
+Status (milestone B3):
+
+- `goosecc -c` is faster than TinyCC over the 284 C files of CTMark:
+  1.74 s against tcc's 1.88 s (0.92 times its time; faster on 252 of the
+  284 files), and 9.4 times faster than `clang-20 -O0 -c`; B2 took
+  1.40 times tcc's time. On sqlite3.c alone tcc is still ahead (45.8 ms
+  against 35.1 ms). DESIGN.md, section 9, has each optimization with its
+  numbers; "Speed (B3)" below the measurements.
+- The outputs did not change: `-E`, the diagnostics, the AST dump, the
+  layout check and the objects (with and without `-g`) are byte-identical
+  to B2's over the 2,357 corpus files, and the oracles below pass as
+  before.
+
+Status at milestone B2:
 
 - Every test of the llvm-test-suite corpora that passes when built with
   `clang-20 -O0` passes when its C files are compiled by goosecc, with and
@@ -40,10 +54,15 @@ GOOSE=/path/to/goose GOOSE_STDLIB=/path/to/goose/stdlib frontend-goose/build.sh 
 ```
 
 `build.sh [outdir]` translates `src/main.goose` (which imports
-`../backend-goose` as a package) to one C file with `goose --standalone`
-and compiles it with `clang-20 -O2 -static` (`CFLAGS`, `LDFLAGS` override;
-`LDFLAGS=` gives a dynamic executable). Without `GOOSE` and `GOOSE_STDLIB`
-it uses the paths of the machine it was developed on.
+`../backend-goose` as a package) to one C file with `goose --standalone
+--stack-reserve 256M` and compiles it with `clang-20 -O2 -static`, linked
+against musl when its static library is installed (`apt install
+musl-dev`; `LIBC=glibc` links glibc instead, 0.6 ms slower per run in a
+VM). `CFLAGS`, `LDFLAGS` and `GOOSE_FLAGS` override; `LDFLAGS=` gives a
+dynamic glibc executable. Without `GOOSE` and `GOOSE_STDLIB` it uses the
+paths of the machine it was developed on. `tools/gen_tables.py`
+regenerates `src/tables_gen.goose` (B3's static name tables) after a
+change to the generated predefined or builtin tables.
 
 ## Use
 
@@ -155,6 +174,52 @@ The tables of clang-20 facts are generated, and the generators are kept:
 `tools/gen_builtins.py` (builtin function types).
 
 ## Results
+
+### Speed (B3)
+
+`tests/bench_goosecc.py -n 5` at the commit that adds these results:
+every C file of the six CTMark programs with the suite's flags, each
+compile run alone and single-threaded, best of 5 wall-clock times, the
+object written to a scratch file. goosecc is `build.sh`'s static musl
+build; tcc is Ubuntu's 0.9.27. The machine (4 cores) was shared with
+another agent's test runs: the load average was 5.7 at the start and 6.6
+at the end, so absolute times carry noise; the ratios are what matters.
+
+| program | files | clang-20 -O0 -c | goosecc -c | tcc -c | goosecc / tcc | speed-up over clang | goosecc peak RSS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| sqlite3 | 2 | 697 ms | 53 ms | 42 ms | 1.27 | 13.2x | 25 MB |
+| SPASS | 51 | 3627 ms | 357 ms | 406 ms | 0.88 | 10.2x | 17 MB |
+| ClamAV | 98 | 4410 ms | 510 ms | 547 ms | 0.93 | 8.6x | 17 MB |
+| lencod | 55 | 3125 ms | 350 ms | 362 ms | 0.97 | 8.9x | 17 MB |
+| mafft | 27 | 1669 ms | 183 ms | 214 ms | 0.86 | 9.1x | 17 MB |
+| consumer-typeset | 51 | 2768 ms | 286 ms | 314 ms | 0.91 | 9.7x | 17 MB |
+| **total** | 284 | 16.30 s | 1.74 s | 1.88 s | **0.92** | 9.4x | 25 MB |
+
+Before and after (B2 from the B2 section below, measured at another
+time; the second pair from one interleaved run of both binaries and tcc,
+best of 3 per file, load 3 to 7, DESIGN.md section 9):
+
+| | goosecc B2 | goosecc B3 | tcc | B2 / tcc | B3 / tcc |
+|---|---:|---:|---:|---:|---:|
+| CTMark, `bench_goosecc.py` | 2867 ms | 1738 ms | 2042 / 1884 ms | 1.40 | 0.92 |
+| CTMark, one interleaved run | 2614 ms | 1710 ms | 1920 ms | 1.36 | 0.89 |
+| sqlite3.c, interleaved | 55.9 ms | 44.0 ms | 35.8 ms | 1.56 | 1.23 |
+| a one-line file | 2.7 ms | 1.3-1.4 ms | 1.5 ms | | |
+
+Per file, goosecc takes a median 0.91 times tcc's time (0.69 to 1.62)
+and is faster on 252 of the 284 files; the median speed-up over clang is
+9.0x (4.8x to 15.9x). tcc stays ahead on 32 files, by more than 20% on
+five (lencod's `symbol.c` and `sei.c`, sqlite3.c, ClamAV's `spin.c` and
+`filetypes.c`). On sqlite3.c, with much code and few headers, goosecc's
+cost of storing every token and an AST before generating code shows
+(DESIGN.md, 9.5); on CTMark's many header-heavy files its start-up and
+preprocessor now cost less than tcc's.
+
+Where the time goes (`--time`, sum over the 284 files): preprocessing
+880 ms, parsing and type checking 264 ms, lowering 122 ms, the back-end
+94 ms, writing 18 ms; the rest of the 1.74 s is process start-up and exit.
+sqlite3.c (45.8 ms): preprocessing 14.9 ms, parsing 12.0 ms, lowering
+9.4 ms, the back-end 7.1 ms, writing 0.4 ms.
 
 ### Compiler (B2)
 
