@@ -24,9 +24,9 @@ A3 で、Goose 版バックエンドの出力がデバッガと例外処理で�
 - **巻き戻し情報**：すべての関数に `.eh_frame` の FDE を出します。CFI は命令境界ごとに正確です（プロローグの push、エピローグの pop、可変長 alloca、レッドゾーン、スタック渡しの引数を持つ invoke の `DW_CFA_GNU_args_size`）。`tests/gdb_oracle.py --unwind` で、全関数を1命令ずつ実行してバックトレースを確かめます。
 - **C++**：invoke / landingpad / resume、パーソナリティ、`.gcc_except_table` の LSDA、comdat（ELF のセクショングループ）、初期化の優先順位、`thread_local` の動的初期化、モジュールレベルのアセンブリ。SingleSource の C++ コーパス（107本）と CTMark の C++ 4本（7zip、Bullet、kimwitu++、tramp3d-v4）が、LLVM へのフォールバックなしに参照出力と一致します。goovm-llc と goovm-cc の両方で確かめています。
 - **DWARF 5**：clang-20 `-g` と同じものを出します。行テーブル（is_stmt、prologue_end、epilogue_begin）、コンパイル単位、サブプログラム、引数と局所変数の位置、レキシカルブロック、インライン展開された関数、すべての型です。エクスポータが LLVM 20 の DwarfDebug を移植して DIE の木を作り、バックエンドはコードのアドレス、フレーム上の位置、範囲を埋めます。
-- 正しさ：全コーパス（C と C++）の全変種（O0、g、mem2reg、goovm-cc の cc と cc-g）で失敗0です。`-g` の全オブジェクトが `llvm-dwarfdump --verify` を通ります。clang `-O0 -g` との gdb のやりとりの比較（`tests/gdb_oracle.py`）は、93本中 N 本で一致します（差は既知の LLVM との違い、§10 参照）。
-- goosecc は変更なしで `-g` の行テーブルを出すようになりました（GIR の追加は後方互換です）。
-- 速さ：`-g` なしのバックエンドの時間は A2 の X〜Y 倍です（`.eh_frame` の分は約 Z%）。`-g` ではバックエンドが約2倍、エクスポータが約4倍になりますが、LLVM の `-O0 -g` のコード生成より、sqlite3 で8倍、tramp3d-v4 で9倍速いままです。
+- 正しさ：全コーパス（C と C++ の1,921本、clang で通る1,915本）の全変種（O0、g、mem2reg、goovm-cc の cc と cc-g）で失敗0、フォールバック0です。`-g` の全オブジェクト（5,266個）が `llvm-dwarfdump --verify` を通ります。clang `-O0 -g` との gdb のやりとりの比較（`tests/gdb_oracle.py`、93本、1,389回の停止）は87本で一致します。残りの差は既知の LLVM との違いです（NOTES.md の10節）。全関数を1命令ずつ実行する巻き戻し検査は91本で不一致0です（2本は再帰が深く時間切れ）。
+- goosecc は `frontend-goose/` を変えずに、`-g` で行テーブルを出すようになりました（GIR の追加は後方互換です）。`tests/run.py --goosecc` は98/98です。
+- 速さ：`-g` なしのバックエンドの時間は A2 の1.04〜1.10倍です（goovm-llc 全体では1.02〜1.07倍、うち `.eh_frame` が2〜4%）。`-g` ではバックエンドが2〜4倍、エクスポータが4〜6倍になりますが、LLVM の `-O0 -g` のコード生成より、sqlite3 と tramp3d-v4 で8.5倍速いままです。
 
 ## マイルストーン A2：レジスタ割り付け
 

@@ -456,3 +456,10 @@ generated code runs at 0.98x llc -O0's time with 1.05x its `.text` (spass
 -O0's time (geometric mean 0.99x; A1 2.78x); Vector/build2 at 1.15x clang
 -O0 (A1: 11x). The back-end phase is 1.04x to 1.32x A1's time: the pre-pass
 and the allocator's bookkeeping cost more than the 3x fewer bytes save.
+
+A3 (`NOTES.md` §10): without `-g` the back-end takes 1.04x to 1.10x A2's
+time (gen-20000, spass, typeset; goovm-llc in total 1.02x to 1.07x), of which
+`.eh_frame` is 2% to 4%. With `-g` the back-end takes about 2x its time on C
+and 4x on template-heavy C++, the exporter 4x to 6x; goovm with `-g` is
+still 8.5x faster than LLVM's -O0 code generator with `-g` on sqlite3 and
+tramp3d-v4.

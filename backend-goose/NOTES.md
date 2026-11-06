@@ -786,3 +786,242 @@ PER_KERNEL=1 GOOVM=$G TPDE=$S/work/a2/tpde-llc bench/codequal/run.sh /tmp/cq 5 2
 bench/backend/time_backend.py --goovm $S/work/a2/goovm-a1 --goovm $G -n 7 \
     $S/work/a2/inputs/{gen-20000,spass,typeset}.bc
 ```
+
+## 10. Milestone A3: unwinding, C++, DWARF
+
+A3 makes the back-end's objects debuggable and unwindable and compiles C++:
+`.eh_frame` with exact CFI for every function, the Itanium EH tables
+(invoke, landingpad, resume, LSDA, personality), comdat groups, module asm,
+and DWARF 5 as clang -g writes it (DESIGN.md §9-§12). The GIR additions are
+backward compatible (gir/README.md, "Additions in milestone A3"): goosecc
+still calls `gir_codegen` unchanged, and its `-g` objects now get a line
+table and a minimal unit without a change on its side. New code: Goose
+`eh.goose` (340 lines) and `dwarf.goose` (about 1,770), the
+exporter's DWARF builder `gir_dwarf.cpp` (about 1,380 lines of C++, a port
+of LLVM 20's DwarfDebug/DwarfUnit/LexicalScopes for one unit), EH and
+comdat export in `gir_export.cpp`, module-asm symbol scanning in
+`gir_asm.cpp`. The messages below are verbatim from `goose`.
+
+### Bugs found by the tests (all fixed)
+
+- **Comdat `.rodata` sections held the whole `.rodata`.** A constant in a
+  comdat got a section of its own, still pointing at the shared `.rodata`
+  buffer, so every such section repeated all of `.rodata`. Comdat rodata
+  sections are now laid out like data sections.
+- **`invalid file index 1 (valid values are [0,1))`** from
+  `llvm-dwarfdump --verify` on 79 objects: in DWARF 5 the line program's
+  file register still starts at 1, so a sequence whose rows were all in
+  file 0 needs an explicit `DW_LNS_set_file 0`.
+- **`file_names[1] is a duplicate of file_names[0]`**: the primary file was
+  entered once by directory and once by full path.
+- **Quadratic group writer**: every comdat scanned every section
+  (tramp3d-v4: 75 ms of 102 ms of back-end time; now 28 ms).
+- **`LLVM ERROR: Inline asm not supported by this streamer because we don't
+  have an asm parser for this target`**: `goovm-llc --backend=llvm`
+  (and `--fallback`) and `goovm-cc` on C++ with `<iostream>`'s module asm;
+  the drivers now initialize the asm parser.
+- **`-fenable-matrix` unsupported in goovm-cc**: the in-process driver did
+  not apply the cc1 job's `-mllvm` options.
+- Found by the gdb oracle (`tests/gdb_oracle.py`), each a place where gdb
+  behaved differently on a goovm build than on a clang build:
+  - rows for GIR instructions that emit no code (a folded compare or GEP,
+    a deferred load, a branch to the next block) shared their address with
+    the next row; gdb then stopped "on" the wrong line (`next` in a nested
+    loop went from line 21 to 19). An instruction without code now leaves
+    no trace in the line table, as it has no machine instruction in LLVM;
+  - a block that is only a branch to the next block gets a 2-byte `jmp`,
+    as LLVM's FastISel emits it "for more accurate line information"
+    (`step` from an `if` body stops on the closing brace's line);
+  - arguments loaded on the next line of a multi-line call were attributed
+    to the call's line (deferred loads); their code now gets their row;
+  - a variadic function's prologue_end goes on its register-save code, as
+    LLVM 20's `findPrologueEndLoc` does past the save area's branch;
+  - the unit's code ranges and the line-table sequences follow LLVM's
+    `addRange` (a run of functions in one section; another section or a
+    function without debug information ends it): a function of only line-0
+    rows (`_GLOBAL__sub_I_*`) inherited the previous function's last line;
+  - no `epilogue_begin` row at line 0;
+  - `llvm.memcpy` above 32 bytes and every `llvm.memset` are libc calls, as
+    in LLVM's -O0 (they were inline up to 256 bytes), so that `step` enters
+    `memcpy` where it does in a clang build;
+- Found by comparing `llvm-dwarfdump --debug-info` of goovm and clang
+  objects (normalized for offsets and addresses):
+  - libstdc++ 13's `always_inline` functions (`std::distance`,
+    `__distance`, ...) are inlined even at -O0, so C++ objects need abstract
+    subprograms and `DW_TAG_inlined_subroutine`s: the builder now ports
+    LexicalScopes' inlined and abstract scopes and the back-end keeps code
+    ranges per (scope, inlined-at) instance; `DW_AT_inline` needs
+    `DW_FORM_implicit_const`, which the abbreviation writer now supports;
+  - `-gline-tables-only`: no subprogram DIE for a function without inlined
+    code (LLVM skips it);
+  - a variable whose `#dbg_declare` address is `undef` is dropped, as
+    FastISel drops it.
+
+### New pain points
+
+1. **`pad` once more**, as a local: `let pad = ...` gives
+   `error: expected identifier in variable declaration, found 'pad'`, and
+   in an expression `error: expression expected, found 'pad'`. (§5 and §9
+   met it as a field.) Renamed `fill`.
+2. **Recursion must be declared.** The scope-instance lookup for inlined
+   code creates the enclosing instances first:
+   `error: recursive call cycle through inst_of, which is not declared `recursive fn` (§7.8)`.
+   `recursive fn inst_of(...)` fixes it; the message is exact. It is the
+   only recursive function of the back-end.
+3. **Narrowing a `u64` section size** for a `u32` field:
+   `error: expected a value of type u32, got u64 (narrowing and sign changes require an explicit `as`)`.
+   The ELF and DWARF writers mix u64 (ELF) and u32 (GIR, DWARF 32) offsets
+   on every line; `eh.goose` and `dwarf.goose` have 115 `as!` and 39 `as`
+   between them.
+4. **Redundant-cast warnings in the other direction.**
+   `warning: redundant `as u64`: a u32 converts to u64 implicitly here` and
+   `warning: redundant `as i64`: a u32 converts to i64 implicitly here`
+   (about twenty while writing `dwarf.goose`), also in
+   `((s as u64) << 32 | ia as u64)`, about the second cast only: the first
+   is required (§5, item 3), and the warnings make it look like noise.
+5. **No arrays of growable arrays.** The DWARF writer would naturally keep
+   a list of ranges per scope or a list of rows per section; an element type
+   may not be resizable, so every per-key list is a linked list in one flat
+   array (`Rng.next`, `sc_head`/`sc_tail`) or a counting sort
+   (`lv_first`/`lv_attr`, the group members of the ELF writer).
+### Results
+
+### Results
+
+Correctness runs shared the 4-core VM with another agent's test runs; the
+timings were taken later on a quiet machine (load average 1).
+
+**Correctness** (`tests/suite.py --variants O0,g,mem2reg,cc,cc-g
+--verify-dwarf -j3`; `cc` and `cc-g` compile each file with `goovm-cc`,
+clang's front end and the Goose back-end in one process; the `g` and `cc-g`
+columns were run again on the final build after the last line-table
+change, which does not touch code generation):
+
+| corpus | tests | clang -O0 passes | O0 | g | mem2reg | cc | cc-g |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| gcc-c-torture execute | 1427 | 1427 | 1427 | 1427 | 1427 | 1427 | 1427 |
+| gcc-c-torture ieee | 57 | 57 | 57 | 57 | 57 | 57 | 57 |
+| gcc-c-torture builtins | 54 | 48 | 48 | 48 | 48 | 48 | 48 |
+| SingleSource UnitTests (C) | 129 | 129 | 129 | 129 | 129 | 129 | 129 |
+| SingleSource Regression/C | 37 | 37 | 37 | 37 | 37 | 37 | 37 |
+| SingleSource Benchmarks (C) | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+| CTMark C programs | 6 | 6 | 6 | 6 | 6 | 6 | 6 |
+| SingleSource UnitTests (C++) | 35 | 35 | 35 | 35 | 35 | 35 | 35 |
+| SingleSource Regression/C++ | 31 | 31 | 31 | 31 | 31 | 31 | 31 |
+| SingleSource Benchmarks (C++) | 41 | 41 | 41 | 41 | 41 | 41 | 41 |
+| CTMark C++ programs | 4 | 4 | 4 | 4 | 4 | 4 | 4 |
+
+1,921 tests (1,915 that pass with plain clang; the 6 excluded builtins
+tests fail with it too) x 5 variants in 3,705 s at -j3: no failure, no
+unsupported input, no fallback. `llvm-dwarfdump --verify` passed on all
+5,266 objects of the `g` and `cc-g` variants.
+
+The C++ corpora are SingleSource's C++ tests (UnitTests, Regression,
+Benchmarks: 107 programs, including the EH directories) and CTMark's four
+C++ programs (7zip, Bullet, kimwitu++, tramp3d-v4); none needs a fallback.
+`tests/run.py`: 106/106 (49 C programs, `cxx/01_eh`, `cxx/02_cxx_features`,
+`mixed/eh_through_c` with its `c-goovm` and `cxx-goovm` variants).
+goosecc, built from the tree with `frontend-goose/build.sh` (no change in
+`frontend-goose/`): `tests/run.py --goosecc` 98/98 (49 programs, `-c` and `-c -g`), and its 49 `-g`
+objects pass `llvm-dwarfdump --verify` (5,932 line-table rows; gdb
+breaks and steps by line in them).
+
+**DWARF against clang** (`llvm-dwarfdump --debug-info`, offsets and
+addresses normalized): identical for `t1.c`, `d1.cpp` (1,946 lines:
+classes, templates, namespaces, imported entities), `c5.cpp`, `e1.cpp`
+(11,193 lines with libstdc++'s inlined `std::distance`), and for programs
+of `always_inline` functions with nested inlining, inlined lexical blocks,
+methods and labels in C and C++ (1,693 lines); `-gline-tables-only` is
+identical too. The only difference left is a VLA's location list.
+
+**gdb oracle** (`tests/gdb_oracle.py`, clang -O0 -g vs goovm, 1,389 stops
+in 93 programs: tests/c and a sample of 44 llvm-test-suite C and C++
+programs): 87 of 93 transcripts match; the others differ as described under
+"What is left". With `--unwind` (the first two activations of every
+function single-stepped, the backtrace checked after each instruction):
+91 of the 93 programs, 1.7 million instructions, without a mismatch; for
+queens and the C++ ackermann (deep recursion) the gdb session did not end
+within its 50 minutes.
+
+**Unwind tables**: `llvm-dwarfdump --eh-frame` parses every FDE of the
+oracle's objects without a warning, with one FDE per function (aliases
+share theirs); C++ exceptions cross goovm-compiled C frames (plain calls,
+`qsort` callbacks, function pointers, dynamic allocas, stack arguments)
+with the stack pointer unchanged after each catch (`mixed/eh_through_c`).
+
+**Compile speed** (`bench/backend/time_backend.py -n 11`, best of 11, ms;
+A2 is the build of commit 35150d8):
+
+| input | GIR insts | A2 back-end | A3 back-end | A3 / A2 | A2 export | A3 export | total A3 / A2 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| gen-20000.bc | 3,205,263 | 203.9 | 217.7 | 1.07 | 208.2 | 213.2 | 1.05 |
+| spass.bc | 114,371 | 10.9 | 12.0 | 1.10 | 8.5 | 8.7 | 1.07 |
+| typeset.bc | 119,262 | 9.5 | 9.9 | 1.04 | 8.8 | 8.8 | 1.02 |
+
+`.eh_frame` costs 2% (gen-20000) to 4% (spass) of the back-end's time (a build without the FDEs of
+functions without landing pads). `-g` multiplies the back-end's time by 2 (C) to
+4 (tramp3d-v4, many small inlined template functions) and the exporter's by
+4 to 6 (most of that is LLVM materializing the debug metadata the exporter
+reads, not the DIE builder), but goovm stays far ahead of LLVM's own -O0
+code generator with `-g`:
+
+| input | goovm back-end | goovm export | goovm total | LLVM -O0 back-end | LLVM / goovm |
+|---|---:|---:|---:|---:|---:|
+| sqlite3.c | 9.5 | 7.7 | 17.2 | 233 | 13.5 |
+| sqlite3.c -g | 19.0 | 31.3 | 50.3 | 428 | 8.5 |
+| tramp3d-v4 (EH) | 34.0 | 29.6 | 63.6 | 1,692 | 26.6 |
+| tramp3d-v4 (EH) -g | 129.7 | 167.5 | 297.2 | 2,557 | 8.6 |
+| gen-20000 -g | 414.5 | 852.8 | 1,267.3 | | |
+
+(`goovm-llc --backend=llvm --time`, best of 3, for LLVM; tramp3d-v4 without
+exceptions: 26.5 + 25.0 ms.)
+
+### What is left
+
+- **Location lists.** LLVM describes a VLA (a `#dbg_declare` of a dynamic
+  alloca, which FastISel turns into a `DBG_VALUE`) with a location list
+  that starts at the allocation; goovm gives it its frame slot for the
+  whole function, so gdb shows `a = <address>` instead of `<optimized out>`
+  before the `int a[n]` line runs.
+- **Statement starts where goovm folds a load that LLVM does not.** A2's
+  deferred loads fold a single-use load into any later instruction of the
+  block (LLVM's FastISel only into the instruction right after it). When a
+  statement's first load is folded into an instruction on the next line
+  (`x = a |\n (1 << b)`), the statement's first row is that line's, and
+  `next` stops on the second line first (exptree). Deferred loads
+  materialized into registers do get their own rows (above); folded
+  memory operands take their user's, as in LLVM.
+- **`va_end` lines.** `llvm.va_end` is no code, but LLVM's -O0 sometimes
+  leaves the `lea` of its operand behind (and so a row for the line) and
+  sometimes not (the oracle saw both);
+  goovm has no row. Emitting the `lea` always matched clang in two of the
+  four cases of the oracle's programs and broke the other two, so it was
+  left out.
+- **Jumps into the middle of a row.** In bigfib's `check()`, the early
+  `return string();` jumps to the return block, which in clang's code
+  starts in the middle of the closing brace's row (so `next` goes straight
+  back to the caller) and in goovm's at the start of a forced `is_stmt` row
+  (so `next` stops on the brace first).
+- **Different frames**: gdb transcripts still differ where the program
+  prints stack addresses or reads uninitialized memory that a library call
+  wrote (the oracle normalizes what it can), and label differences
+  (`&&l1 - &&l0`) are goovm's code sizes.
+- **One compile unit per module**: a module linked from several units
+  (`llvm-link`) gets DIEs for the first only (clang -c never makes one).
+- Range lists use `DW_RLE_startx_length` throughout; LLVM uses
+  `base_addressx` + `offset_pair` for several ranges in one section. Both
+  are valid and gdb reads both.
+
+### Rebuild and reproduce (A3)
+
+```bash
+S=/tmp/claude-0/-home-user-goovm/593b2907-8413-508c-8bdb-c68ef6e66f6e/scratchpad   # this session's scratch
+GOOSE=$S/work/goose-build/goose GOOSE_STDLIB=$S/src/goose/stdlib backend-goose/build.sh build
+G=build/tools/goovm-llc/goovm-llc; C=build/tools/goovm-cc/goovm-cc
+tests/run.py --goovm $G -j3                                   # C, C++ and mixed programs
+tests/suite.py --goovm $G --cc $C --variants O0,g,mem2reg,cc,cc-g --verify-dwarf -j3 --report suite.md
+tests/gdb_oracle.py --goovm $G -j3                            # clang -O0 -g vs goovm under gdb
+tests/gdb_oracle.py --goovm $G --unwind -j2                   # single-step unwinding check
+frontend-goose/build.sh /tmp/gcc && tests/run.py --goosecc /tmp/gcc/goosecc
+bench/backend/time_backend.py --goovm <A2 build> --goovm $G -n 11 $S/work/inputs-final/{gen-20000,spass,typeset}.bc
+```
