@@ -16,6 +16,11 @@ Section 9 is milestone **A2**: the v2 back-end (register allocation and
 instruction selection of LLVM -O0 class; two new files, `ra.goose` and
 `lowera.goose`), with its bugs, pain points and measurements.
 
+Section 10 is milestone **A3**: unwind information, C++ exception handling
+and comdats, DWARF 5 debug information (two new files, `eh.goose` and
+`dwarf.goose`), with the bugs the tests and the gdb oracle found, the pain
+points and the measurements.
+
 v0 page contents:
 
 - the structure of the port;

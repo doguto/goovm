@@ -124,7 +124,11 @@ operand conventions are listed in `gir.h`; by group:
 - **Memory**: `ALLOCA` (static, entry block, any alignment), `DYNALLOCA`
   (variable size), `STACKSAVE`, `STACKRESTORE`, `LOAD`, `STORE`, `GEP`
   (constant offset plus (index, scale) pairs), `MEMCPY`/`MEMSET` (constant
-  size up to 256 bytes; anything else is a libc call).
+  size up to 256 bytes). The exporter makes them where LLVM's -O0 inlines
+  the intrinsic (`llvm.memcpy` up to 32 bytes, the `.inline` forms,
+  volatile ones); other copies and every `llvm.memset` are libc calls, as
+  in a clang -O0 build (milestone A3; A1/A2 inlined everything up to 256
+  bytes).
 - **Aggregates and vectors**: `EXTRACTVALUE`/`INSERTVALUE` (with the byte
   offset the exporter computed from the index path), `EXTRACTELT`,
   `INSERTELT`, `SHUFFLE` (mask in `opnds`). Arithmetic, compares, selects and
@@ -288,8 +292,9 @@ makes a unit with one subprogram per function.
 
 ## What the exporter drops or folds
 
-- Debug records, `llvm.lifetime.*`, `llvm.assume`, `llvm.donothing`,
-  `llvm.sideeffect`, `llvm.var.annotation`, `llvm.invariant.*`,
+- Debug records (which feed the DIE tables), `llvm.lifetime.*`,
+  `llvm.assume`, `llvm.donothing`, `llvm.sideeffect`,
+  `llvm.var.annotation`, `llvm.invariant.*`,
   `llvm.experimental.noalias.scope.decl`, `llvm.pseudoprobe`,
   `llvm.prefetch`, `llvm.va_end`, `llvm.clear_cache`.
 - `llvm.expect*`, `llvm.ptr.annotation`, `llvm.annotation`, `freeze`, the

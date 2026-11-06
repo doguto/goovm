@@ -343,14 +343,15 @@ FDE   advance 1, def_cfa_offset 16, offset rbp at cfa-16   (push rbp)
 So the rules are exact at every instruction boundary, including between
 the pushes and the pops: `tests/gdb_oracle.py --unwind` single-steps every
 function and checks the backtrace after each instruction. There is one CIE
-per personality routine (and one without); the FDE's address range and LSDA
-pointer are `pcrel sdata4` relocations, the personality pointer `indirect
-pcrel sdata4` to the `DW.ref` variable the exporter made.
+per personality routine (and one without); an FDE's start address and LSDA
+pointer are `pcrel sdata4` (`R_X86_64_PC32` against the section symbols),
+the CIE's personality pointer `indirect pcrel sdata4` to the `DW.ref`
+variable the exporter made.
 
 `DW_CFA_GNU_args_size` is emitted at an invoke that passes arguments on the
-stack (`sub rsp` before it, `add rsp` after): an exception that lands in
-the landing pad leaves rsp as it was at the call, and the unwinder uses the
-size to pop the area, as LLVM's X86 back-end tells it to.
+stack (`sub rsp` before it, `add rsp` after, which the landing pad does
+not run): the unwinder adds the size to the stack pointer it installs for
+the landing pad, as for LLVM's X86 back-end.
 
 ## 11. C++ exceptions
 
@@ -397,7 +398,17 @@ it generates code:
   on the first line of a block that a predecessor leaves on another line
   (computed per function from the terminators before the body is
   generated). A row is (code offset, location, flags); offsets are rebased
-  when the function is placed.
+  when the function is placed. Three rules keep the rows where LLVM's would
+  be although goovm's code differs from FastISel's: a GIR instruction that
+  emits no code (a folded compare or GEP, a deferred load, a branch to the
+  next block) leaves no trace (`dbg_inst_end` undoes its row); a deferred
+  load that an instruction materializes into a register gets a row of its
+  own when its line differs (`dbg_ld`, from `ra_mat_gpr`/`ra_mat_xmm`), and
+  the first such load also takes the code emitted since its IR position
+  (in LLVM it precedes that code); a variadic function's prologue_end is
+  on its register-save code (LLVM 20's `findPrologueEndLoc` stops at the
+  save area's branch). For the same reason `cg.goose` emits the `jmp` of a
+  block that is only a branch to the next block, as FastISel does.
 - **Runs** of instructions with one location, from which the code ranges of
   lexical blocks and inlined subroutines follow by LLVM's LexicalScopes
   algorithm: a run opens its scope instance and the enclosing ones, a run in
@@ -418,11 +429,16 @@ abbreviation (hashed, codes in first-use order like LLVM's), drops the
 DIEs of empty scopes, and computes every DIE's offset; the second places
 the bodies, patches `ref4` values and emits the relocations. Strings go to
 `.debug_str` with `strx1..4` indices in first-use order; addresses to
-`.debug_addr` (`addrx`); multi-range scopes and a unit with code in several
-sections to `.debug_rnglists` (`startx_length`), which also adds
-`DW_AT_rnglists_base`. The line program has one sequence per code section,
-the DWARF 5 directory and file tables (MD5-less, `line_strp`), and LLVM's
-special-opcode parameters (line base -5, range 14, opcode base 13). A
+`.debug_addr` (`addrx`); the ranges of multi-range scopes and of a unit
+with several code ranges to `.debug_rnglists` (`startx_length`), which also
+adds `DW_AT_rnglists_base`. The unit's code ranges are LLVM's
+(`DwarfCompileUnit::addRange`): runs of functions with debug information
+that follow each other in the module in one section; each run is a
+line-table sequence (a function of only line-0 rows then does not inherit
+its predecessor's last line in gdb). The line program has the sequences
+grouped by section, the DWARF 5 directory and file tables (MD5-less,
+`line_strp`), and LLVM's special-opcode parameters (line base -5, range 14,
+opcode base 13). A
 module with locations but no DIE table (goosecc's `-g`) gets a unit with one
 subprogram per function, so its line table is usable by a debugger.
 
