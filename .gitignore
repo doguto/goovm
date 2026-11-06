@@ -1,0 +1,4 @@
+/build/
+/build-*/
+/backend-goose/build/
+__pycache__/

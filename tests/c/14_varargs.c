@@ -1,6 +1,7 @@
 // printf varargs with mixed argument types, many arguments, stack-passed.
 #include <stdio.h>
 #include <stdint.h>
+#include <stddef.h>
 
 int main(void) {
     char c = 'q';

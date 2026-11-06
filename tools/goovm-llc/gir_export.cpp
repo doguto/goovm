@@ -82,6 +82,7 @@ struct Exporter {
     std::vector<uint32_t> bmap;                 // BB number -> local block
     std::vector<Fix> fixes;
     bool in_phi_prepass = false;
+    std::string where;  // extra context for errors outside instructions
 
     Exporter(const Module &m, GirTables &t) : M(m), DL(m.getDataLayout()), T(t) {}
 
@@ -90,6 +91,7 @@ struct Exporter {
         std::string s;
         raw_string_ostream os(s);
         os << "goovm-llc: unsupported: " << why;
+        if (!where.empty()) os << " (" << where << ")";
         if (F) os << " in function '" << F->getName() << "'";
         if (curI) {
             os << " at instruction:\n  ";
@@ -710,15 +712,18 @@ struct Exporter {
         gf.first_block = (uint32_t)T.blocks.size();
         gf.first_inst = (uint32_t)T.insts.size();
         gf.n_args = (uint32_t)Fn.arg_size();
+        where = "return type";
         gf.ret_ty = ret_ty(FT->getReturnType());
         sret_arg = GIR_NONE;
         gf.arg_tys = (uint32_t)T.opnds.size();
         for (const Argument &A : Fn.args()) {
+            where = "parameter " + std::to_string(A.getArgNo());
             if (A.hasByValAttr()) fail("byval parameter");
             if (A.hasInAllocaAttr() || A.hasPreallocatedAttr()) fail("inalloca/preallocated parameter");
             if (A.hasStructRetAttr()) sret_arg = A.getArgNo();
             T.opnds.push_back(ty(A.getType()));
         }
+        where.clear();
         if (sret_arg != GIR_NONE) {
             if (gf.ret_ty != GIR_T_VOID) fail("sret function with a return value");
             gf.ret_ty = GIR_T_PTR;

@@ -531,6 +531,7 @@ void gen_inst(uint32_t gi, uint32_t cur) {
         for (uint32_t k = 0; k < I.c; k++) {
             uint32_t idx = M->opnds[I.b + 2 + 2 * k];
             uint32_t sc = M->opnds[I.b + 3 + 2 * k];
+            if (sc == 0) continue;  // the exporter never emits these
             load_val(RCX, idx);
             sext_reg(RCX, type_of(idx));
             if ((sc & (sc - 1)) == 0) {
