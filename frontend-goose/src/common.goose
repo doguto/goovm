@@ -167,18 +167,24 @@ fn ident_grow() {
     }
 }
 
-// Interns the spelling src[off..off+len] with hash h.
+// Interns the spelling src[off..off+len] with hash h. The table exists
+// (pp_init_tables interns the empty spelling first); it grows only when a
+// new identifier is added.
 fn ident_lookup(off: i64, len: i64, h: u32) -> u32 {
-    if (idents.len + 1) * 2 > idtab.len { ident_grow(); }
     var p = (h as i64) & idmask;
     loop {
-        let e = idtab[p];
+        let e = idtab[p] as i64;
         if e == 0 { break; }
-        let d = idents[e - 1];
-        if d.hash == h && d.len == len {
-            if src[d.off..d.off + d.len] == src[off..off + len] { return e - 1; }
+        if idents[e - 1].hash == h && idents[e - 1].len == len {
+            let o = idents[e - 1].off as i64;
+            if src[o..o + len] == src[off..off + len] { return (e - 1) as! u32; }
         }
         p = (p + 1) & idmask;
+    }
+    if (idents.len + 1) * 2 > idtab.len {
+        ident_grow();
+        p = (h as i64) & idmask;
+        while idtab[p] != 0 { p = (p + 1) & idmask; }
     }
     let id = idents.len;
     idents.push(Ident { off: off as! u32, len: len as! u32, hash: h, macro: -1, kw: 0, ppkw: 0, flags: 0 });
