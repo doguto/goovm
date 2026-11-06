@@ -210,6 +210,24 @@ fn ident_text(id: i64) -> const u8[:] {
     return src[d.off..d.off + d.len];
 }
 
+// The entry of `name` (h = its hash_bytes) in one of the hash tables of
+// tables_gen.goose, which index `text` (of length tlen when they were
+// generated): its index, or -1. An entry's name is its line up to `sep`
+// or the end of the line.
+fn tbl_find(text: const u8[:], offs: const u32[:], ht: const u16[:], tlen: i64, name: const u8[:], h: u32, sep: u8) -> i64 {
+    if text.len != tlen { fatal("tables_gen.goose does not match its tables: run tools/gen_tables.py"); }
+    let mask = ht.len - 1;
+    var p = (h as i64) & mask;
+    loop {
+        let e = ht[p] as i64;
+        if e == 0 { return -1; }
+        let o = offs[e - 1] as i64;
+        let q = o + name.len;
+        if q <= text.len && text[o..q] == name && (q == text.len || text[q] == sep || text[q] == '\n') { return e - 1; }
+        p = (p + 1) & mask;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Files. A file's text is loaded once into src; `start..end` is its range
 // (a NUL follows at `end`).
