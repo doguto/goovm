@@ -514,9 +514,8 @@ fn lex_skip_line() {
             if src[p] == c { p++; }
             continue;
         }
-        // the rest of a run of identifier characters and spaces at once
-        p++;
-        while cc[src[p]] & (CC_IDCONT | CC_HSPACE) != 0 { p++; }
+        // up to the next character the loop must look at, 16 bytes at a time
+        p = skip_text(src, p + 1);
     }
     lx_pos = p;
 }
