@@ -40,7 +40,7 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 | `backend-cpp/` | v0 の C++ 版バックエンド。`8f55b18` で凍結し、ビルドしない |
 | `frontend-goose/` | Goose で一から書いた C フロントエンド `goosecc`（プリプロセッサ・構文解析・型検査。clang-20 と出力を突き合わせて検証） |
 | `tools/goovm-cc/` | clang のフロントエンドを同じプロセス内で動かし、LLVM IR をそのままバックエンドへ渡す `clang -c` 代替 |
-| `tests/` | `suite.py`（各コーパスでの正しさの検証）と、C テストプログラム48本（`run.py`） |
+| `tests/` | `suite.py`（各コーパスでの正しさの検証）と、C テストプログラム49本（`run.py`） |
 | `bench/` | CTMark、LLVM 自身のビルド、バックエンド、要因の切り分け、出力コードの質、全体への効果の計測 |
 | `poc/` | Goose コンパイラの伸び方、C++ との接続、変更可能な IR グラフの試作 |
 

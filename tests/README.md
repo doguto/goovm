@@ -2,7 +2,7 @@
 
 | script | what |
 |---|---|
-| `run.py` | the small differential tests in `c/` (48 programs) |
+| `run.py` | the small differential tests in `c/` (49 programs) |
 | `suite.py` | the llvm-test-suite C corpora through goovm-llc, against their reference outputs |
 | `realworld_mixed.py` | (v0) links SPASS and consumer-typeset from a mix of goovm and clang objects |
 

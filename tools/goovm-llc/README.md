@@ -92,7 +92,7 @@ The C++ reference back-end of GIR v0 (`backend-cpp/`) is frozen at commit
 ## Tests
 
 ```
-tests/run.py --goovm build/tools/goovm-llc/goovm-llc -j3        # 48 small programs, O0 + mem2reg
+tests/run.py --goovm build/tools/goovm-llc/goovm-llc -j3        # 49 small programs, O0 + mem2reg
 tests/suite.py --goovm build/tools/goovm-llc/goovm-llc -j3      # the llvm-test-suite corpora
 ```
 
