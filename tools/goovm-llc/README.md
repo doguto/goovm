@@ -98,9 +98,11 @@ Goose back-end and warns if its object is not byte-identical to the C++ one.
 
 ## Wiring in the Goose back-end
 
-The Goose port is `backend-goose/cg.goose`. The current file is an interface
-skeleton: it defines the record structs and the exported function, and
-returns an empty object. It exports:
+The Goose port is `backend-goose/cg.goose`, a 1:1 port of the C++ back-end
+that writes byte-identical objects (`backend-goose/check_identical.py`
+checks this; `backend-goose/NOTES.md` describes the port, its differences
+from the C++ and the measurements). `backend-goose/build.sh` generates the C
+and builds a goovm-llc with it, as below. It exports:
 
 ```goose
 export fn gir_codegen(funcs: const Func[:], blocks: const Block[:], insts: const Inst[:],
@@ -148,5 +150,5 @@ What the driver does (`goovm-llc.cpp`, `goose_codegen`):
   compile time.
 - An empty result is reported as an error (exit 1).
 
-This was checked with the `goose` compiler on the skeleton: the generated
-header matched these names, and the build and the call worked.
+This was checked with the `goose` compiler (commit 335fddc): the generated
+header matches these names, and the build and the call work.

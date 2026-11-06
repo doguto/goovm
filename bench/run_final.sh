@@ -28,6 +28,11 @@ bash "$here/backend/run.sh" -n 5 --goovm "$GOOVM" --tpde "$TPDE" --inproc --goos
     "$INPUTS"/gen-1000.bc "$INPUTS"/gen-5000.bc "$INPUTS"/gen-20000.bc "$INPUTS"/spass.bc "$INPUTS"/typeset.bc \
     > "$out/backend.md"
 
+echo "== attribution: C++ vs Goose back-end variants" >&2
+: "${GOOVM_BUILD:=$(cd "$(dirname "$GOOVM")/../.." && pwd)}"
+bash "$here/attribution/run.sh" "$GOOVM_BUILD" "$out/attr-work" 7 \
+    "$INPUTS"/gen-5000.bc "$INPUTS"/gen-20000.bc "$INPUTS"/spass.bc "$INPUTS"/typeset.bc > "$out/attribution.md"
+
 echo "== in-process phase breakdown" >&2
 for f in "$INPUTS"/gen-20000.bc "$INPUTS"/spass.bc; do
     for b in cpp goose llvm; do
