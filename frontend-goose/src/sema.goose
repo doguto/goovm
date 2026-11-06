@@ -263,10 +263,19 @@ fn promote(n: u32) -> u32 {
     return icast(n, CK_INTEGRAL, to);
 }
 
+// The width of the bit-field n refers to, or -1: a load of a bit-field
+// member, or (clang's getSourceBitField) an assignment to one, a prefix
+// increment of one, or a comma whose right operand is one.
 fn bitfield_width(n: u32) -> i64 {
-    // n is an rvalue load of a bit-field member (or the member itself)
     var m = n;
-    if nodes[m].kind == N_ICAST && nodes[m].op == CK_LVAL2RVAL { m = nodes[m].a; }
+    loop {
+        let nd = nodes[m];
+        if nd.kind == N_ICAST && (nd.op == CK_LVAL2RVAL || nd.op == CK_NOOP) { m = nd.a; continue; }
+        if nd.kind == N_ASSIGN { m = nd.a; continue; }
+        if nd.kind == N_BINARY && nd.op == B_COMMA { m = nd.b; continue; }
+        if nd.kind == N_UNARY && (nd.op == U_PREINC || nd.op == U_PREDEC) { m = nd.a; continue; }
+        break;
+    }
     if nodes[m].kind == N_MEMBER && nodes[m].flags & NF_BITFIELD != 0 { return fields[nodes[m].b].width as i64; }
     return -1;
 }
@@ -289,6 +298,36 @@ fn promoted_type(n: u32) -> u32 {
     }
     if int_rank(t) < 4 { return t_int; }
     return t;
+}
+
+// The type after the default argument promotions (C11 6.5.2.2p6).
+fn arg_promoted_type(t0: u32) -> u32 {
+    let t = unqual(t0);
+    let k = kind_of(t);
+    if k == TY_FLOAT { return t_double; }
+    if !is_integer_kind(k) { return t; }
+    if k == TY_ENUM {
+        let u = enum_underlying(t);
+        if int_rank(u) < 4 { return t_int; }
+        return u;
+    }
+    if int_rank(t) < 4 { return t_int; }
+    return t;
+}
+
+// Pointer types that differ only in qualifiers at any level.
+fn cvr_similar(a0: u32, b0: u32) -> bool {
+    var a = a0;
+    var b = b0;
+    loop {
+        a = unqual(tcanon(a));
+        b = unqual(tcanon(b));
+        if a == b { return true; }
+        if kind_of(a) != TY_POINTER || kind_of(b) != TY_POINTER { return false; }
+        a = tbase(a);
+        b = tbase(b);
+    }
+    return false;
 }
 
 fn cast_kind(from: u32, to: u32) -> i64 {
@@ -317,8 +356,8 @@ fn cast_kind(from: u32, to: u32) -> i64 {
     if kt == TY_POINTER {
         if fi { return CK_INT2PTR; }
         if kf == TY_POINTER {
-            // a qualification conversion is a no-op (clang NoOp)
-            if unqual(tcanon(tbase(from))) == unqual(tcanon(tbase(to))) { return CK_NOOP; }
+            // a qualification conversion is a no-op (clang NoOp, hasCvrSimilarType)
+            if cvr_similar(from, to) { return CK_NOOP; }
             return CK_BITCAST;
         }
     }
@@ -354,29 +393,26 @@ fn convert(n: u32, to0: u32) -> u32 {
     return icast(n, ck, to);
 }
 
-// Is n a null pointer constant (an integer constant 0, or such cast to void *)?
+// Is n a null pointer constant: an integer constant expression with value
+// 0, or such an expression cast to void * (C11 6.3.2.3p3)? As in clang,
+// implicit conversions are looked through, and only an explicit cast to
+// unqualified void * of an integer operand counts (`(void *)(void *)0` is
+// not one).
 fn is_null_const(n: u32) -> bool {
     var m = n;
     loop {
         let nd = nodes[m];
-        if nd.flags & NF_NULLCONST != 0 { return true; }
-        if nd.kind == N_INT { return nd.v == 0 && is_integer(nd.ty); }
-        if (nd.kind == N_CAST || nd.kind == N_ICAST) && (nd.op == CK_NOOP || nd.op == CK_INTEGRAL || nd.op == CK_BITCAST || nd.op == CK_NULL2PTR || nd.op == CK_INT2PTR) {
-            if kind_of(nd.ty) == TY_POINTER {
-                let pt = tbase(nd.ty);
-                if !(kind_of(pt) == TY_VOID && quals(pt) == 0) { return false; }
-            } else if !is_integer(nd.ty) {
-                return false;
-            }
-            m = nd.a;
-            continue;
+        if nd.kind == N_ICAST { m = nd.a; continue; }
+        if nd.kind == N_CAST && kind_of(nd.ty) == TY_POINTER {
+            let pt = tbase(nd.ty);
+            if kind_of(pt) == TY_VOID && quals(pt) == 0 && is_integer(nodes[nd.a].ty) { m = nd.a; continue; }
+            return false;
         }
+        if !is_integer(nd.ty) { return false; }
+        if nd.kind == N_INT { return nd.v == 0; }
         if nd.kind == N_UNARY && nd.op == U_EXTENSION { m = nd.a; continue; }
-        if is_integer(nd.ty) && (nd.kind == N_BINARY || nd.kind == N_UNARY || nd.kind == N_COND || nd.kind == N_SIZEOF) {
-            let ok, v = fold_int(m);
-            return ok && v == 0;
-        }
-        return false;
+        let ok, v = fold_int(m);
+        return ok && v == 0;
     }
 }
 

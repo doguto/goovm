@@ -49,6 +49,13 @@ recursive fn ct_before(out: u8[>..]&, q: u32) {
         out.push(')');
         return;
     }
+    if k == TY_VECTOR || k == TY_EXTVECTOR {
+        // clang prints the qualifiers of a vector type after it
+        ct_base(out, q);
+        if qs & Q_CONST != 0 { out.append(" const"); }
+        if qs & Q_VOLATILE != 0 { out.append(" volatile"); }
+        return;
+    }
     if qs & Q_CONST != 0 { out.append("const "); }
     if qs & Q_VOLATILE != 0 { out.append("volatile "); }
     if qs & Q_RESTRICT != 0 { out.append("restrict "); }
@@ -264,6 +271,7 @@ recursive fn dump_node(n: u32, depth: i64) {
     }
     if k == N_DECL {
         let s = nd.a as i64;
+        if syms[s].kind != SK_VAR { return; }    // block-scope function declarations
         format(dout, depth, "\tVarDecl\t");
         dump_type(syms[s].ty);
         format(dout, "\t", sym_name(s), "\n");

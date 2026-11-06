@@ -1281,6 +1281,8 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
             }
             if ds.is_inline { syms[prev].flags = syms[prev].flags | SF_INLINE; }
             if ds.noreturn { syms[prev].flags = syms[prev].flags | SF_NORETURN; }
+            // a later declaration has (or, without one, inherits) a prototype
+            syms[prev].flags = syms[prev].flags & ~SF_KRDEF;
             record_attrs(prev, a, 0);
             if syms[prev].scope as i64 != scope_depth && scope_depth > 0 {
                 // a block-scope redeclaration of a visible function: same entity
@@ -1507,11 +1509,35 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
         }
     }
     let s = declare(dd, ds, a, CTX_FILESCOPE);
-    if syms[s].flags & SF_DEFINED != 0 && syms[s].kind == SK_FUNC {
-        // GNU extern inline followed by a real definition is allowed
-        if !(syms[s].flags & SF_INLINE != 0) {
-            err_at(d.loc, str("redefinition of '", ident_text(d.name as i64), "'"));
+    if d.kr && syms[s].kind == SK_FUNC {
+        // clang: references to a function whose latest declaration is a
+        // definition without a prototype have the type without prototype;
+        // calls still convert the arguments to the parameter types, which
+        // for a K&R definition are the promoted declared types (or the
+        // prototype's, GNU)
+        syms[s].flags = syms[s].flags | SF_KRDEF;
+        let ft = types[syms[s].ty >> 4];
+        if ft.flags & TF_NOPROTO != 0 {
+            fn_scratch.clear();
+            for i in d.nparams { fn_scratch.push(arg_promoted_type(syms[nlist[d.params + i]].ty)); }
+            syms[s].ty = qt(mk_type(TY_FUNC, (ft.flags as i64) & ~TF_NOPROTO, ft.base, 0, 0, 0) as i64, 0);
         }
+    }
+    if syms[s].flags & SF_DEFINED != 0 && syms[s].kind == SK_FUNC {
+        // only a GNU extern inline definition may be followed by another
+        // definition (clang's canRedefineFunction)
+        if syms[s].flags & SF_GNU_EXTERN_INLINE == 0 {
+            if syms[s].flags & SF_INLINE != 0 && !opt_c89 {
+                err_at(d.loc, str("redefinition of a 'extern inline' function '", ident_text(d.name as i64), "' is not supported in C99 mode"));
+            } else {
+                err_at(d.loc, str("redefinition of '", ident_text(d.name as i64), "'"));
+            }
+        }
+    }
+    syms[s].flags = syms[s].flags & ~SF_GNU_EXTERN_INLINE;
+    if ds.is_inline && ds.sc == SC_EXTERN {
+        let gnu = opt_c89 || a.misc & AM_GNU_INLINE != 0 || (syms[s].attr != 0 && sym_attrs[syms[s].attr].flags & AM_GNU_INLINE != 0);
+        if gnu { syms[s].flags = syms[s].flags | SF_GNU_EXTERN_INLINE; }
     }
     syms[s].flags = syms[s].flags | SF_DEFINED;
     let rt = unqual(types[syms[s].ty >> 4].base);
@@ -1701,7 +1727,7 @@ recursive fn parse_stmt() -> u32 {
             init = node_v(N_COMPOUND, 0, 0, 0, 0, count, loc, start);
         } else {
             let e = parse_expr();
-            init = node(N_EXPR, 0, 0, e as i64, 0, 0, loc);
+            init = node(N_EXPR, 0, 0, discard_value(e) as i64, 0, 0, loc);
             expect(TK_SEMI, "';' in 'for' statement specifier");
         }
         var c: u32 = 0;
@@ -1712,7 +1738,7 @@ recursive fn parse_stmt() -> u32 {
         }
         expect(TK_SEMI, "';' in 'for' statement specifier");
         var inc: u32 = 0;
-        if !at(TK_R_PAREN) { inc = parse_expr(); }
+        if !at(TK_R_PAREN) { inc = discard_value(parse_expr()); }
         expect(TK_R_PAREN, "')'");
         loop_depth++;
         break_depth++;
@@ -1875,11 +1901,6 @@ recursive fn parse_stmt() -> u32 {
     return node(N_EXPR, 0, 0, discard_value(e) as i64, 0, 0, loc);
 }
 
-// A discarded expression: a volatile scalar lvalue is still read (clang).
-fn discard_value(e: u32) -> u32 {
-    if is_lvalue(e) && quals(nty(e)) & Q_VOLATILE != 0 && is_scalar(nty(e)) { return rv(e); }
-    return e;
-}
 
 recursive fn parse_asm_stmt() -> u32 {
     let loc = tloc();

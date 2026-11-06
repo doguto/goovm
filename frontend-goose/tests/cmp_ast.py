@@ -39,6 +39,9 @@ def norm_type(t):
     t = re.sub(r"[A-Za-z_][A-Za-z0-9_]*::(?=\((?:unnamed|anonymous))", "", t)
     t = re.sub(r"\((?:unnamed|anonymous)(?: struct| union| enum)? at [^)]*\)", r"(anonymous)", t)
     t = t.replace("__restrict", "restrict")
+    t = re.sub(r"\bbool\b", "_Bool", t)
+    # clang prints a decayed parameter type T *[] as T *(*)
+    t = re.sub(r" ?\(\*\)$", "*", t) if t.endswith("*(*)") else t
     t = t.replace(" __attribute__((noreturn))", "")
     t = strip_param_quals(t)
     if re.search(r"\[[^\]0-9]", t):
@@ -82,6 +85,15 @@ def from_clang(n):
         return r
     if k == "PredefinedExpr":
         return N("StringLiteral", clang_type(n))
+    if k == "TypeTraitExpr":
+        # __builtin_types_compatible_p: goosecc folds it
+        return N("IntegerLiteral", clang_type(n))
+    if k == "BinaryOperator" and n.get("opcode") == "+" and len(inner) == 2:
+        # goosecc puts the pointer operand of integer + pointer first
+        t0, t1 = clang_type(inner[0]), clang_type(inner[1])
+        if not ("*" in t0 or "[" in t0) and ("*" in t1 or "[" in t1):
+            inner = [inner[1], inner[0]]
+            n = dict(n, inner=inner)
     if k == "ChooseExpr":
         return N("ChooseExpr", "-")
     if k == "DeclRefExpr" and (n.get("referencedDecl") or {}).get("kind") == "EnumConstantDecl":
@@ -89,6 +101,10 @@ def from_clang(n):
     if k == "CharacterLiteral":
         return N("IntegerLiteral", clang_type(n))
     extra = ""
+    if k == "ImplicitCastExpr" and n.get("castKind") == "BitCast" and inner and clang_type(n) == clang_type(inner[0]):
+        # e.g. dropping noreturn from a function pointer type: goosecc's
+        # function types do not carry noreturn
+        return from_clang(inner[0])
     if k == "ImplicitCastExpr" or k == "CStyleCastExpr":
         extra = CAST.get(n.get("castKind", ""), n.get("castKind", ""))
     elif k in ("BinaryOperator", "UnaryOperator"):
@@ -123,6 +139,8 @@ def from_clang(n):
         if callee.get("kind") == "ImplicitCastExpr" and callee.get("castKind") == "BuiltinFnToFnPtr":
             r.kind = "BuiltinCall"
             r.extra = ((callee.get("inner") or [{}])[0].get("referencedDecl") or {}).get("name", "")
+            # clang names the sized variant of a __sync builtin
+            r.extra = re.sub(r"^(__sync_\w+?)_(?:1|2|4|8|16)$", r"\1", r.extra)
             inner = inner[1:]
             if r.extra in ("__builtin_classify_type", "__builtin_constant_p"):
                 return N("IntegerLiteral", r.type)
@@ -141,7 +159,8 @@ def from_clang(n):
             r.kids.append(x if x else N("<null>", "-"))
         return r
     if k == "CaseStmt":
-        r.kids = [x for x in (from_clang(c) for c in inner[1:]) if x]
+        # the value(s) are not compared (a GNU range has two)
+        r.kids = [x for x in (from_clang(c) for c in inner[-1:]) if x]
         return r
     if k == "LabelStmt":
         r.extra = ""
@@ -159,9 +178,13 @@ def clang_funcs(path, flags):
         return None
     d = json.loads(r.stdout)
     out = {}
-    for n in d.get("inner", []):
+    todo = [d]
+    while todo:
+        n = todo.pop()
         if n.get("kind") == "TypedefDecl":
             TYPEDEFS.add(n.get("name", ""))
+        elif n.get("kind", "").endswith(("Stmt", "Decl")):
+            todo.extend(c for c in n.get("inner", []) if c)
     for n in d.get("inner", []):
         if n.get("kind") == "FunctionDecl" and n.get("inner"):
             body = [c for c in n["inner"] if c.get("kind") == "CompoundStmt"]
@@ -242,7 +265,22 @@ def compare(a, b, path, diffs):
     if a.kind == "ChooseExpr":
         return True
     same_type = a.type == b.type or has_typedef(a.type)
-    if a.kind != b.kind or not same_type or (a.extra != b.extra and a.kind not in ("LabelStmt", "VarDecl", "CaseStmt")):
+    if a.kind in ("ShuffleVectorExpr", "ConvertVectorExpr") and b.kind in ("BuiltinCall", "Builtin"):
+        # goosecc represents these as builtin calls: only the type is compared
+        if same_type:
+            return True
+    if a.kind == "GenericSelectionExpr" and same_type:
+        return True     # goosecc keeps only the selected expression
+    if a.kind == "InitListExpr" and b.kind == "StringLiteral" and len(a.kids) == 1 and a.kids[0].kind == "StringLiteral":
+        # clang wraps the string initializing a flexible array member
+        return compare(a.kids[0], b, path, diffs)
+    if a.kind == "CompoundLiteralExpr" and b.kind == "ImplicitCastExpr" and b.extra == "ToUnion" and a.kids \
+            and a.kids[0].kind == "InitListExpr" and len(a.kids[0].kids) == 1 and b.kids:
+        # a transparent-union argument: clang builds a compound literal
+        return compare(a.kids[0].kids[0], b.kids[0], path, diffs)
+    same_extra = a.extra == b.extra or a.kind in ("LabelStmt", "VarDecl", "CaseStmt") or \
+        (a.kind == "CompoundAssignOperator" and has_typedef(a.extra))
+    if a.kind != b.kind or not same_type or not same_extra:
         diffs.append("%s: clang %s '%s' %s | goosecc %s '%s' %s" % ("/".join(path[-6:]), a.kind, a.type, a.extra, b.kind, b.type, b.extra))
         return False
     ak = flatten_decls(a.kids)

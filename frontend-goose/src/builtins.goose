@@ -107,8 +107,11 @@ recursive fn builtin_type(b: i64) -> u32 {
     if failed {
         bentries[b].custom = true;
         bentries[b].ty = 0;
+        // a type naming FILE is retried once a FILE typedef may be visible
+        if find(text, "FILE") >= 0 { bentries[b].typed = false; }
         return 0;
     }
+    bentries[b].custom = false;
     var t = ty;
     if types[ty >> 4].flags & TF_NOPROTO != 0 { bentries[b].custom = true; }
     bentries[b].ty = t;
@@ -192,6 +195,16 @@ fn builtin_call(s: i64, mark: i64, loc: u32) -> u32 {
             else if nargs > ft.n && ft.flags & TF_VARIADIC == 0 { err_at(loc, str("too many arguments to function call, expected ", ft.n, ", have ", nargs)); }
         }
         let va_start = name == "__builtin_va_start" || name == "__builtin_c23_va_start";
+        // the floating-point classification builtins take their operand
+        // unpromoted; the unordered comparisons convert both operands to
+        // their common type (clang)
+        let classify = name == "__builtin_fpclassify" || name == "__builtin_isfinite" || name == "__builtin_isinf" ||
+            name == "__builtin_isinf_sign" || name == "__builtin_isnan" || name == "__builtin_isnormal" ||
+            name == "__builtin_issubnormal" || name == "__builtin_iszero" || name == "__builtin_issignaling" ||
+            name == "__builtin_isfpclass" || name == "__builtin_signbit" || name == "__builtin_signbitf" ||
+            name == "__builtin_signbitl";
+        let unordered = name == "__builtin_isgreater" || name == "__builtin_isgreaterequal" || name == "__builtin_isless" ||
+            name == "__builtin_islessequal" || name == "__builtin_islessgreater" || name == "__builtin_isunordered";
         for i in nargs {
             let a = arg(mark, i);
             if nodes[a].kind == N_ERROR { continue; }
@@ -202,6 +215,11 @@ fn builtin_call(s: i64, mark: i64, loc: u32) -> u32 {
                 let pt = unqual(tparams[ft.extra + i]);
                 // va_list parameters take the decayed array
                 c = assign_convert(c, pt, nodes[a].loc, 2);
+            } else if classify {
+                // unchanged
+            } else if unordered && nargs == 2 && is_arith(nty(c)) && is_arith(nty(rv(arg(mark, 1 - i)))) {
+                let other = if i == 0 { rv(arg(mark, 1)) } else { nscratch[mark] };
+                c = convert(c, if i == 0 { arith_common(c, other) } else { arith_common(other, c) });
             } else {
                 c = default_promote_b(c);
             }
@@ -250,7 +268,7 @@ fn builtin_call(s: i64, mark: i64, loc: u32) -> u32 {
         let pointee = if is_pointer(a0t) { unqual(tbase(a0t)) } else { t_int };
         if ends_with(name, "bool_compare_and_swap") || ends_with(name, "compare_exchange") ||
            ends_with(name, "compare_exchange_n") || ends_with(name, "compare_exchange_strong") ||
-           ends_with(name, "compare_exchange_weak") || ends_with(name, "test_and_set") ||
+           ends_with(name, "compare_exchange_weak") || name == "__atomic_test_and_set" ||
            ends_with(name, "lock_free") {
             rt = t_bool;
         } else if name == "__sync_synchronize" || name == "__sync_lock_release" || ends_with(name, "_fence") ||

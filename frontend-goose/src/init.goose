@@ -2,8 +2,9 @@
 // syntactic tree first; a walk over it then resolves designators and brace
 // elision into a flat list of (subobject path, value) entries, and the
 // entries are built into the semantic N_INITLIST tree: one child per
-// member or element (N_ZEROINIT where nothing was given), so that lowering
-// needs no knowledge of designators.
+// member (except unnamed bit-fields, as in clang) or element (N_ZEROINIT
+// where nothing was given), so that lowering needs no knowledge of
+// designators.
 
 import std;
 import .common;
@@ -93,6 +94,7 @@ var ipath: i64[>..<] = [];
 struct Frame { ty: u32, idx: i64, count: i64 }
 var ifr: Frame[>..<] = [];
 var root_max: i64 = 0;       // for an incomplete root array: max index + 1
+var init_flex_ok = false;    // the object may initialize a flexible array member
 var flex_max: i64 = 0;
 
 // Number of subobjects of t (-1 = unbounded).
@@ -108,8 +110,8 @@ fn sub_count(t: u32) -> i64 {
 fn sub_type(t: u32, i: i64) -> u32 {
     let k = kind_of(t);
     if k == TY_STRUCT || k == TY_UNION {
-        let f = fields[records[rec_of(t)].first + i];
-        return with_quals(f.ty, quals(t));
+        // the declared member type: the object's qualifiers are not added (clang)
+        return fields[records[rec_of(t)].first + i].ty;
     }
     return with_quals(tbase(t), quals(t));
 }
@@ -204,7 +206,7 @@ recursive fn assign_value(val: u32, base_depth: i64, tail: u32) {
                     if nodes[first].kind == N_SYNINIT || nodes[first].kind == N_DESIG {
                         record_entry(base_depth, node(N_ZEROINIT, 0, unqual(st), 0, 0, 0, nodes[val].loc));
                     } else {
-                        record_entry(base_depth, assign_convert(rv(first), unqual(st), nodes[first].loc, 1));
+                        record_entry(base_depth, assign_convert(rv(first), st, nodes[first].loc, 1));
                     }
                 }
             }
@@ -227,6 +229,10 @@ recursive fn assign_value(val: u32, base_depth: i64, tail: u32) {
                 record_entry(base_depth, r);
                 return;
             }
+            if is_vector(st) && is_vector(nty(r)) && type_size(st) == type_size(nty(r)) {
+                record_entry(base_depth, assign_convert(r, st, nodes[val].loc, 1));
+                return;
+            }
             // brace elision: initialize the first subobject of st
             nodes[val].v = nodes[val].v;
             let c = sub_count(st);
@@ -241,7 +247,7 @@ recursive fn assign_value(val: u32, base_depth: i64, tail: u32) {
             }
             continue;
         }
-        record_entry(base_depth, assign_convert(rv(val), unqual(st), nodes[val].loc, 1));
+        record_entry(base_depth, assign_convert(rv(val), st, nodes[val].loc, 1));
         return;
     }
 }
@@ -258,7 +264,7 @@ recursive fn find_member_designator(t: u32, name: u32) -> i64 {
         let f = fields[r.first + i];
         if f.flags & FF_ANON != 0 && has_member(rec_of(f.ty), name, 0) {
             ifr[ifr.len - 1].idx = i;
-            ifr.push(Frame { ty: with_quals(f.ty, quals(t)), idx: 0, count: sub_count(f.ty) });
+            ifr.push(Frame { ty: f.ty, idx: 0, count: sub_count(f.ty) });
             return find_member_designator(f.ty, name);
         }
     }
@@ -281,6 +287,15 @@ recursive fn init_braced(t: u32, syn: u32) {
         for j in 0..ifr.len { ipath.push(ifr[j].idx); }
         ients[ients.len - 1].pstart = ps as! u32;
         if ifr.len == 0 { let sl = strs[nodes[s].a].len as i64; if sl > root_max { root_max = sl; } }
+        return;
+    }
+    if c == 0 {
+        // explicit empty braces: an (empty) list rather than an implicit
+        // zero value, as in clang (an entry for the whole object with no
+        // value)
+        let ps = ipath.len;
+        for j in 0..ifr.len { ipath.push(ifr[j].idx); }
+        ients.push(IEnt { pstart: ps as! u32, plen: ifr.len as! u32, val: 0 });
         return;
     }
     let base_depth = ifr.len;
@@ -443,7 +458,12 @@ recursive fn build(t: u32, lo: i64, hi: i64, depth: i64, loc: u32) -> u32 {
     for e in lo..hi {
         if ients[ient_order[e]].plen as i64 == depth { whole = e; after = false; } else if whole >= 0 { after = true; }
     }
-    if whole >= 0 && !after { return ients[ient_order[whole]].val; }
+    if whole >= 0 && !after {
+        let v = ients[ient_order[whole]].val;
+        if v != 0 { return v; }
+        // explicit empty braces: build from no entries
+        return build(t, hi, hi, depth, loc);
+    }
     let k = kind_of(t);
     if k == TY_STRUCT || k == TY_UNION {
         let r = records[rec_of(t)];
@@ -476,10 +496,19 @@ recursive fn build(t: u32, lo: i64, hi: i64, depth: i64, loc: u32) -> u32 {
         while e < hi && ent_key(e, depth) < 0 { e++; }
         for i in r.count {
             let f = fields[r.first + i];
+            // unnamed bit-fields have no entry (clang)
+            if f.name == 0 && f.flags & FF_ANON == 0 { continue; }
             var s = e;
             while e < hi && ent_key(e, depth) == i { e++; }
             if e > s {
-                nscratch.push(build(f.ty, s, e, depth + 1, loc));
+                let child = build(f.ty, s, e, depth + 1, loc);
+                if kind_of(f.ty) == TY_ARRAY && types[f.ty >> 4].n < 0 && (depth > 0 || !init_flex_ok) &&
+                   !(nodes[child].kind == N_INITLIST && nodes[child].c == 0) {
+                    // clang: only a top-level object with static storage may
+                    // initialize a flexible array member
+                    err_at(loc, "initialization of flexible array member is not allowed");
+                }
+                nscratch.push(child);
             } else {
                 nscratch.push(zero_node(f.ty, loc));
             }
@@ -550,10 +579,12 @@ recursive fn init_value(s: i64, t: u32, syn: u32, loc: u32) -> u32 {
             let r = rv(syn);
             if compatible_unq(t, nty(r)) { return r; }
             if is_error(r) { return r; }
+            // vectors of the same size convert (BitCast)
+            if is_vector(t) && is_vector(nty(r)) && type_size(t) == type_size(nty(r)) { return assign_convert(r, t, nodes[syn].loc, 1); }
             err_at(nodes[syn].loc, str("initializing ", tname(t), " with an expression of incompatible type ", tname(nty(r))));
             return error_node(loc);
         }
-        return assign_convert(rv(syn), unqual(t), nodes[syn].loc, 1);
+        return assign_convert(rv(syn), t, nodes[syn].loc, 1);
     }
     let em = ients.len;
     let pm = ipath.len;
@@ -561,6 +592,8 @@ recursive fn init_value(s: i64, t: u32, syn: u32, loc: u32) -> u32 {
     let om = ient_order.len;
     root_max = 0;
     flex_max = 0;
+    init_flex_ok = s > 0 && syms[s].kind == SK_VAR && syms[s].flags & SF_COMPLIT == 0 &&
+        (syms[s].flags & SF_FILESCOPE != 0 || syms[s].sc == SC_STATIC || syms[s].sc == SC_EXTERN);
     if is_init_aggregate(t) {
         init_braced(t, syn);
     } else {
@@ -570,7 +603,7 @@ recursive fn init_value(s: i64, t: u32, syn: u32, loc: u32) -> u32 {
         if c > 0 {
             let first = nlist[nodes[syn].v];
             if c > 1 { warn(loc, "excess elements in scalar initializer"); }
-            let v = if nodes[first].kind == N_SYNINIT { zero_node(t, loc) } else { assign_convert(rv(first), unqual(t), nodes[first].loc, 1) };
+            let v = if nodes[first].kind == N_SYNINIT { zero_node(t, loc) } else { assign_convert(rv(first), t, nodes[first].loc, 1) };
             ients.push(IEnt { pstart: ipath.len as! u32, plen: 0, val: v });
         }
         ifr.resize(fm);

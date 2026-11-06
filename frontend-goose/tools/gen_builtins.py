@@ -11,6 +11,11 @@ The output is one line per builtin: `name|type|attrs` where attrs is a set
 of letters from the ast dump (n = noreturn, c = const, p = pure, l = library
 builtin, i.e. a plain C library name that is only predeclared when called).
 
+Builtins whose type involves FILE (__builtin_fprintf, ...) are typed by clang
+only once a FILE typedef is visible; they are probed a second time with one
+declared and recorded with that type: goosecc resolves FILE when it builds
+the type at the call (and treats the builtin as unprototyped without it).
+
 usage: tools/gen_builtins.py [--clang clang-20]
 """
 import argparse, os, re, subprocess, sys, tempfile
@@ -20,21 +25,14 @@ OUT = os.path.join(HERE, "..", "src", "builtins_gen.goose")
 PREDEF = os.path.join(HERE, "..", "src", "predef_gen.goose")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--clang", default="clang-20")
-    a = ap.parse_args()
-    text = open(PREDEF).read()
-    m = re.search(r'let HAS_BUILTIN = """\n(.*?)\n""";', text, re.S)
-    names = [l.split()[0] for l in m.group(1).splitlines() if l.strip()]
-    names = [n for n in names if not n.startswith("__is_") and not n.startswith("_Block")]
-    src = []
+def probe(clang, names, prelude):
+    src = [prelude]
     for i, n in enumerate(names):
         src.append("void goosecc_probe_%d(void) { %s(); }\n" % (i, n))
     with tempfile.NamedTemporaryFile("w", suffix=".c", delete=False) as f:
         f.write("".join(src))
         path = f.name
-    r = subprocess.run([a.clang, "-fsyntax-only", "-w", "-ferror-limit=0", "-Xclang", "-ast-dump", "-fno-color-diagnostics", path],
+    r = subprocess.run([clang, "-fsyntax-only", "-w", "-ferror-limit=0", "-Xclang", "-ast-dump", "-fno-color-diagnostics", path],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     os.unlink(path)
     out = r.stdout.decode(errors="replace")
@@ -48,6 +46,22 @@ def main():
         mm = re.search(r"DeclRefExpr 0x[0-9a-f]+ <[^>]*> '([^']*)' (?:lvalue )?Function 0x[0-9a-f]+ '(\w+)' '([^']*)'", line)
         if mm:
             types.setdefault(mm.group(2), (mm.group(3), ""))
+    return types
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--clang", default="clang-20")
+    a = ap.parse_args()
+    text = open(PREDEF).read()
+    m = re.search(r'let HAS_BUILTIN = """\n(.*?)\n""";', text, re.S)
+    names = [l.split()[0] for l in m.group(1).splitlines() if l.strip()]
+    names = [n for n in names if not n.startswith("__is_") and not n.startswith("_Block")]
+    types = probe(a.clang, names, "")
+    with_file = probe(a.clang, names, "typedef struct _IO_FILE FILE;\n")
+    for n, (t, f) in with_file.items():
+        if "FILE" in t and types.get(n, ("", ""))[0] != t:
+            types[n] = (t, f)
     # Attributes: probe noreturn / const via clang's own knowledge is not in the
     # dump; take the well-known noreturn set.
     noreturn = {"abort", "exit", "_Exit", "_exit", "__builtin_trap", "__builtin_unreachable", "__builtin_abort",

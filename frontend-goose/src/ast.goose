@@ -214,11 +214,13 @@ let SF_ADDR = 2048;     // address taken
 let SF_COMPLIT = 4096;  // the object of a compound literal
 let SF_KR = 8192;       // a K&R parameter given its type by the declaration list
 let SF_LOCALLINK = 16384; // block-scope extern
+let SF_KRDEF = 32768;   // the latest declaration is a definition without a prototype
+let SF_GNU_EXTERN_INLINE = 65536; // defined as a GNU extern inline function (may be redefined)
 
 struct Sym {
     kind: u8,
     sc: u8,
-    flags: u16,
+    flags: u32,
     name: u32,
     ty: u32,
     prev: i32,

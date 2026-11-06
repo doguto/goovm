@@ -572,6 +572,15 @@ recursive fn composite(a: u32, b: u32) -> u32 {
         if ta.flags & TF_NOPROTO != 0 && tb.flags & TF_NOPROTO == 0 { return b; }
         return a;
     }
+    // an enum and its compatible integer type: the integer type (clang's
+    // mergeTypes)
+    if ka == TY_ENUM && kind_of(b) != TY_ENUM && is_integer_kind(kind_of(b)) { return qt(tyi(b), quals(a)); }
+    if kind_of(b) == TY_ENUM && ka != TY_ENUM && is_integer_kind(ka) { return a; }
+    if ka == TY_POINTER && kind_of(b) == TY_POINTER {
+        let c = composite(ta.base, tb.base);
+        if c == ta.base { return a; }
+        return qt(tyi(mk_ptr(c)), quals(a));
+    }
     return a;
 }
 

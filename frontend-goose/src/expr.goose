@@ -350,7 +350,19 @@ recursive fn parse_expr() -> u32 {
 
 fn mk_comma(l: u32, r: u32, loc: u32) -> u32 {
     let b = rv(r);
-    return node(N_BINARY, B_COMMA, nty(b), l as i64, b as i64, 0, loc);
+    return node(N_BINARY, B_COMMA, nty(b), discard_value(l) as i64, b as i64, 0, loc);
+}
+
+// A discarded-value expression (expression statement, for-init/increment,
+// left operand of a comma). C: an lvalue still undergoes lvalue conversion
+// and functions and arrays decay (clang's IgnoredValueConversions).
+fn discard_value(e: u32) -> u32 {
+    if is_error(e) { return e; }
+    let t = nty(e);
+    if is_func(t) { return rv(e); }
+    if !is_lvalue(e) || is_void(t) { return e; }
+    if is_record(t) && !is_complete(t) { return e; }
+    return rv(e);
 }
 
 fn assign_op(k: i64) -> i64 {
@@ -657,7 +669,15 @@ fn ident_expr(id: u32, loc: u32) -> u32 {
         err_at(loc, str("unexpected type name '", ident_text(id as i64), "': expected expression"));
         return error_node(loc);
     }
-    let n = node(N_DECLREF, 0, sy.ty, s, 0, 0, loc);
+    var ty = sy.ty;
+    if k == SK_FUNC && sy.flags & SF_KRDEF != 0 && types[ty >> 4].flags & TF_NOPROTO == 0 {
+        // a function defined without a prototype is referenced with the
+        // type without prototype (clang, C99 DR 316)
+        fn_scratch.clear();
+        let ft = types[ty >> 4];
+        ty = qt(mk_type(TY_FUNC, TF_NOPROTO, ft.base, 0, 0, 0) as i64, 0);
+    }
+    let n = node(N_DECLREF, 0, ty, s, 0, 0, loc);
     if k == SK_VAR { nodes[n].flags = NF_LVALUE; }
     return n;
 }
@@ -829,7 +849,7 @@ fn mk_assign(op: i64, l: u32, r: u32, loc: u32) -> u32 {
     let to = unqual(lt);
     let b = rv(r);
     if op == 0 {
-        let cb = assign_convert(b, to, loc, 0);
+        let cb = assign_convert(b, lt, loc, 0);
         return node(N_ASSIGN, 0, to, l as i64, cb as i64, 0, loc);
     }
     // compound assignment: the computation type
@@ -841,6 +861,14 @@ fn mk_assign(op: i64, l: u32, r: u32, loc: u32) -> u32 {
         }
         let ib = promote(b);
         return node(N_ASSIGN, if op == B_ADD { B_PTRADD } else { B_PTRSUB }, to, l as i64, ib as i64, to as i64, loc);
+    }
+    if (op == B_SHL || op == B_SHR) && is_vector(to) {
+        var cb = b;
+        if !is_vector(nty(b)) {
+            let vt = qt(mk_type(TY_EXTVECTOR, 0, unqual(nty(b)), types[to >> 4].n, 0, 0) as i64, 0);
+            cb = icast(b, CK_VECSPLAT, vt);
+        }
+        return node(N_ASSIGN, op, to, l as i64, cb as i64, to as i64, loc);
     }
     if op == B_SHL || op == B_SHR {
         if !is_integer(to) || !is_integer(nty(b)) {
@@ -871,8 +899,11 @@ fn rv_load_type(l: u32) -> u32 {
 
 // Conversion as if by assignment (C11 6.5.16.1). what: 0 assign, 1 init,
 // 2 argument, 3 return.
-recursive fn assign_convert(n: u32, to: u32, loc: u32, what: i64) -> u32 {
+// `to0` may be qualified: a null pointer constant is converted to the
+// qualified type (clang), everything else to the unqualified one.
+recursive fn assign_convert(n: u32, to0: u32, loc: u32, what: i64) -> u32 {
     if is_error(n) { return n; }
+    let to = unqual(to0);
     let from = nty(n);
     let kt = kind_of(to);
     let kf = kind_of(from);
@@ -880,7 +911,7 @@ recursive fn assign_convert(n: u32, to: u32, loc: u32, what: i64) -> u32 {
     if is_arith(to) && is_arith(from) { return convert(n, to); }
     if kt == TY_BOOL && kf == TY_POINTER { return icast(n, CK_PTR2BOOL, to); }
     if kt == TY_POINTER {
-        if is_null_const(n) { return icast(n, CK_NULL2PTR, unqual(to)); }
+        if is_null_const(n) { return icast(n, CK_NULL2PTR, to0 & ~(Q_ATOMIC as! u32)); }
         if kf == TY_POINTER {
             let tp = tbase(to);
             let fp = tbase(from);
@@ -903,17 +934,30 @@ recursive fn assign_convert(n: u32, to: u32, loc: u32, what: i64) -> u32 {
     }
     if is_record(to) && compatible_unq(to, from) { return n; }
     if kt == TY_UNION && records[rec_of(to)].flags & RF_TRANSPARENT != 0 {
+        // the first member the argument can be assigned to without a
+        // diagnostic, converted to the member's declared type (clang's
+        // CheckTransparentUnionArgumentConstraints)
         let r = records[rec_of(to)];
         for i in r.first..r.first + r.count {
-            let ft = fields[i].ty;
-            if compatible_unq(ft, from) || (is_pointer(ft) && (kf == TY_POINTER || is_null_const(n))) {
-                let c = assign_convert(n, unqual(ft), loc, what);
-                return icast(c, CK_TOUNION, unqual(to));
+            let ft = fields[i].ty & ~(Q_ATOMIC as! u32);
+            var c: u32 = 0;
+            if is_pointer(ft) && kf == TY_POINTER && is_void(tbase(from)) {
+                c = icast(n, CK_BITCAST, ft);
+            } else if is_pointer(ft) && is_null_const(n) {
+                c = icast(n, CK_NULL2PTR, ft);
+            } else if tu_member_ok(ft, from) {
+                c = assign_convert(n, ft, loc, what);
+                if c == n {
+                    if ft != unqual(ft) { c = icast(n, CK_NOOP, ft); }
+                } else if nodes[c].kind == N_ICAST && nodes[c].a == n {
+                    nodes[c].ty = ft;
+                }
             }
+            if c != 0 { return icast(c, CK_TOUNION, unqual(to)); }
         }
     }
     if (kt == TY_VECTOR || kt == TY_EXTVECTOR) && (kf == TY_VECTOR || kf == TY_EXTVECTOR) && type_size(to) == type_size(from) {
-        return icast(n, CK_VECBITCAST, unqual(to));
+        return icast(n, CK_BITCAST, unqual(to));
     }
     if kt == TY_EXTVECTOR && is_arith(from) {
         return icast(convert(n, tbase(to)), CK_VECSPLAT, unqual(to));
@@ -927,9 +971,22 @@ recursive fn assign_convert(n: u32, to: u32, loc: u32, what: i64) -> u32 {
     return error_node(loc);
 }
 
+// Can a value of type `from` be assigned to type ft without a diagnostic?
+fn tu_member_ok(ft: u32, from: u32) -> bool {
+    if is_arith(ft) && is_arith(from) { return true; }
+    if is_pointer(ft) && is_pointer(from) {
+        let tp = tbase(ft);
+        let fp = tbase(from);
+        if (quals(fp) & ~quals(tp)) != 0 { return false; }
+        return compatible_unq(tp, fp) || is_void(tp) || is_void(fp);
+    }
+    return compatible_unq(ft, from);
+}
+
 fn mk_cond(c0: u32, a0: u32, b0: u32, loc: u32) -> u32 {
     if is_error(c0) || is_error(b0) || (a0 != 0 && is_error(a0)) { return error_node(loc); }
-    let c = rv(c0);
+    // C: the condition gets the usual unary conversions (clang)
+    let c = promote(rv(c0));
     if !is_scalar(nty(c)) && !is_vector(nty(c)) {
         err_at(loc, str("used type ", tname(nty(c)), " where arithmetic or pointer type is required"));
         return error_node(loc);
@@ -946,7 +1003,10 @@ fn mk_cond(c0: u32, a0: u32, b0: u32, loc: u32) -> u32 {
         ca = convert(a, rt);
         cb = convert(b, rt);
     } else if is_void(ta) || is_void(tb) {
+        // the other arm is converted to void (clang ToVoid)
         rt = t_void;
+        if !is_void(ta) { ca = icast(a, CK_TOVOID, t_void); }
+        if !is_void(tb) { cb = icast(b, CK_TOVOID, t_void); }
     } else if is_record(ta) && compatible_unq(ta, tb) {
         rt = unqual(ta);
     } else if is_pointer(ta) && is_pointer(tb) {
@@ -1022,6 +1082,24 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
         let pb = if is_integer(tb) { promote(b) } else { b };
         return node(N_BINARY, op, t_int, pa as i64, pb as i64, 0, loc);
     }
+    if (is_vector(ta) || is_vector(tb)) && (op == B_SHL || op == B_SHR) {
+        // clang's checkVectorShift: a scalar operand is splatted to an
+        // ext_vector_type of its own type (the left one converted to the
+        // element type first); a scalar left operand makes the result an
+        // ext_vector_type
+        if !is_vector(ta) {
+            let et = unqual(tbase(tb));
+            let vt = qt(mk_type(TY_EXTVECTOR, 0, et, types[tb >> 4].n, 0, 0) as i64, 0);
+            let sa = icast(convert(a, et), CK_VECSPLAT, vt);
+            return node(N_BINARY, op, vt, sa as i64, b as i64, 0, loc);
+        }
+        var cb = b;
+        if !is_vector(tb) {
+            let vt = qt(mk_type(TY_EXTVECTOR, 0, unqual(tb), types[ta >> 4].n, 0, 0) as i64, 0);
+            cb = icast(b, CK_VECSPLAT, vt);
+        }
+        return node(N_BINARY, op, unqual(ta), a as i64, cb as i64, 0, loc);
+    }
     if is_vector(ta) || is_vector(tb) {
         // element-wise; a scalar operand is splatted
         let vt = if is_vector(ta) { unqual(ta) } else { unqual(tb) };
@@ -1030,8 +1108,11 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
         var rt = vt;
         if op >= B_LT && op <= B_NE {
             // comparison: a vector of signed integers of the element size
+            // (clang's GetSignedVectorType: char, and long long for a
+            // generic vector, long for an ext_vector_type)
             let es = type_size(tbase(vt));
-            let it = match es { 1 => t_schar, 2 => t_short, 4 => t_int, _ => t_long };
+            let ext = kind_of(vt) == TY_EXTVECTOR;
+            let it = match es { 1 => t_char, 2 => t_short, 4 => t_int, 8 => if ext { t_long } else { t_llong }, _ => t_int128 };
             rt = qt(mk_type(kind_of(vt), 0, it, types[vt >> 4].n, 0, 0) as i64, 0);
         }
         return node(N_BINARY, op, rt, ca as i64, cb as i64, 0, loc);
@@ -1088,25 +1169,21 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
     // comparisons
     if is_arith(ta) && is_arith(tb) {
         let t = arith_common(a, b);
-        return node(N_BINARY, op, t_int, cmp_operand(a, t) as i64, cmp_operand(b, t) as i64, 0, loc);
+        return node(N_BINARY, op, t_int, arith_operand(a, t) as i64, arith_operand(b, t) as i64, 0, loc);
     }
     if is_pointer(ta) && is_pointer(tb) {
         let pa = tbase(ta);
         let pb = tbase(tb);
         var ca = a;
         var cb = b;
-        if compatible_unq(pa, pb) && unqual(ta) != unqual(tb) {
-            // clang converts the right operand to the left one's type
-            cb = icast(b, CK_BITCAST, unqual(ta));
-        } else if !compatible_unq(pa, pb) {
-            if is_void(pa) || is_void(pb) || is_null_const(a) || is_null_const(b) {
-                if is_null_const(b) { cb = convert(b, ta); }
-                else if is_null_const(a) { ca = convert(a, tb); }
-                else if is_void(pa) { cb = convert(b, ta); } else { ca = convert(a, tb); }
-            } else {
-                warn(loc, str("comparison of distinct pointer types (", tname(ta), " and ", tname(tb), ")"));
-                cb = convert(b, ta);
-            }
+        if !compatible_unq(pa, pb) && !is_void(pa) && !is_void(pb) {
+            warn(loc, str("comparison of distinct pointer types (", tname(ta), " and ", tname(tb), ")"));
+        }
+        if tcanon(pa) != tcanon(pb) {
+            // clang: the right operand is converted to the left one's type
+            // (BitCast), unless only the left one is a null constant
+            if is_null_const(a) && !is_null_const(b) { ca = icast(a, CK_BITCAST, unqual(tb)); }
+            else { cb = icast(b, CK_BITCAST, unqual(ta)); }
         }
         return node(N_BINARY, op, t_int, ca as i64, cb as i64, 0, loc);
     }
@@ -1130,14 +1207,6 @@ fn arith_operand(n: u32, t: u32) -> u32 {
     var x = n;
     if is_integer(nty(n)) { x = promote(n); }
     if is_complex(t) && !is_complex(nty(x)) && is_real_float(tbase(t)) { return convert(x, tbase(t)); }
-    return convert(x, t);
-}
-
-// Comparison operands: a real operand compared with a complex one is
-// converted to the complex type.
-fn cmp_operand(n: u32, t: u32) -> u32 {
-    var x = n;
-    if is_integer(nty(n)) { x = promote(n); }
     return convert(x, t);
 }
 
@@ -1432,11 +1501,27 @@ fn mk_cast(ty: u32, e: u32, loc: u32) -> u32 {
         err_at(loc, str("operand of type ", tname(from), " cannot be cast to a pointer type"));
         return error_node(loc);
     }
+    if is_complex(from) && !is_complex(to) && kind_of(to) != TY_BOOL {
+        // complex to another real type: to the element type first (clang)
+        let et = unqual(tbase(from));
+        if unqual(tcanon(et)) != unqual(tcanon(to)) {
+            let inner = icast(a, CK_COMPLEX2REAL, et);
+            return node(N_CAST, cast_kind(et, to), unqual(to), inner as i64, 0, 0, loc);
+        }
+    }
+    if is_complex(to) && !is_complex(from) && is_arith(from) {
+        // real to another complex type: to the element type first (clang)
+        let et = unqual(tbase(to));
+        if unqual(tcanon(from)) != unqual(tcanon(et)) {
+            return node(N_CAST, CK_REAL2COMPLEX, unqual(to), convert(a, et) as i64, 0, 0, loc);
+        }
+    }
     var ck = cast_kind(from, to);
-    if is_null_const(a) && is_pointer(to) { ck = CK_NULL2PTR; }
-    let n = node(N_CAST, ck, unqual(to), a as i64, 0, 0, loc);
-    if is_null_const(a) && is_pointer(to) && is_void(tbase(to)) && quals(tbase(to)) == 0 { nodes[n].flags = NF_NULLCONST; }
-    return n;
+    // clang: only an integer null constant becomes NullToPointer in a cast
+    if is_null_const(a) && is_pointer(to) && is_integer(from) { ck = CK_NULL2PTR; }
+    // a vector cast is a BitCast even to the same type
+    if is_vector(to) && is_vector(from) { ck = CK_BITCAST; }
+    return node(N_CAST, ck, unqual(to), a as i64, 0, 0, loc);
 }
 
 // Default argument promotions (C11 6.5.2.2p6).
@@ -1466,10 +1551,17 @@ fn mk_call(callee0: u32, mark: i64, loc: u32) -> u32 {
         nscratch.resize(mark);
         return error_node(loc);
     }
-    let ft = types[tbase(ct) >> 4];
+    var ft = types[tbase(ct) >> 4];
+    var check_count = true;
+    if cn.kind == N_DECLREF && syms[cn.a].kind == SK_FUNC && syms[cn.a].flags & SF_KRDEF != 0 {
+        // the parameter types of the definition convert the arguments
+        // (clang); a count mismatch is only a warning
+        ft = types[syms[cn.a].ty >> 4];
+        check_count = false;
+    }
     let proto = ft.flags & TF_NOPROTO == 0;
     let np = ft.n;
-    if proto {
+    if proto && check_count {
         if nargs < np {
             err_at(loc, str("too few arguments to function call, expected ", np, ", have ", nargs));
         } else if nargs > np && ft.flags & TF_VARIADIC == 0 {

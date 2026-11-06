@@ -36,7 +36,7 @@ __atomic_xor_fetch|void ()|
 __builtin___CFStringMakeConstantString|const __NSConstantString *(const char *)|
 __builtin___NSStringMakeConstantString|const __NSConstantString *(const char *)|
 __builtin___clear_cache|void (char *, char *)|
-__builtin___fprintf_chk|int ()|
+__builtin___fprintf_chk|int (FILE *restrict, int, const char *restrict, ...)|
 __builtin___get_unsafe_stack_bottom|void *(void)|
 __builtin___get_unsafe_stack_ptr|void *(void)|
 __builtin___get_unsafe_stack_start|void *(void)|
@@ -57,7 +57,7 @@ __builtin___strlcat_chk|unsigned long (char *, const char *, unsigned long, unsi
 __builtin___strlcpy_chk|unsigned long (char *, const char *, unsigned long, unsigned long)|
 __builtin___strncat_chk|char *(char *, const char *, unsigned long, unsigned long)|
 __builtin___strncpy_chk|char *(char *, const char *, unsigned long, unsigned long)|
-__builtin___vfprintf_chk|int ()|
+__builtin___vfprintf_chk|int (FILE *restrict, int, const char *restrict, struct __va_list_tag *)|
 __builtin___vprintf_chk|int (int, const char *restrict, struct __va_list_tag *)|
 __builtin___vsnprintf_chk|int (char *restrict, unsigned long, int, unsigned long, const char *restrict, struct __va_list_tag *)|
 __builtin___vsprintf_chk|int (char *restrict, int, unsigned long, const char *restrict, struct __va_list_tag *)|
@@ -364,7 +364,7 @@ __builtin_fmodf128|__float128 (__float128, __float128)|
 __builtin_fmodf16|__fp16 (__fp16, __fp16)|
 __builtin_fmodl|long double (long double, long double)|
 __builtin_fpclassify|int (int, int, int, int, int, ...)|
-__builtin_fprintf|int ()|
+__builtin_fprintf|int (FILE *restrict, const char *restrict, ...)|
 __builtin_frame_address|void *(unsigned int)|
 __builtin_free|void (void *)|
 __builtin_frexp|double (double, int *)|
@@ -373,7 +373,7 @@ __builtin_frexpf128|__float128 (__float128, int *)|
 __builtin_frexpf16|__fp16 (__fp16, int *)|
 __builtin_frexpl|long double (long double, int *)|
 __builtin_frob_return_addr|void *(void *)|
-__builtin_fscanf|int ()|
+__builtin_fscanf|int (FILE *restrict, const char *restrict, ...)|
 __builtin_function_start|void *(void &)|
 __builtin_huge_val|double (void)|
 __builtin_huge_valf|float (void)|
@@ -861,8 +861,8 @@ __builtin_va_copy|void (struct __va_list_tag *, struct __va_list_tag *)|
 __builtin_va_end|void (struct __va_list_tag *)|
 __builtin_va_start|void (struct __va_list_tag *, ...)|
 __builtin_verbose_trap|void (const char *, const char *) __attribute__((noreturn))|
-__builtin_vfprintf|int ()|
-__builtin_vfscanf|int ()|
+__builtin_vfprintf|int (FILE *restrict, const char *restrict, struct __va_list_tag *)|
+__builtin_vfscanf|int (FILE *restrict, const char *restrict, struct __va_list_tag *)|
 __builtin_vprintf|int (const char *restrict, struct __va_list_tag *)|
 __builtin_vscanf|int (const char *restrict, struct __va_list_tag *)|
 __builtin_vsnprintf|int (char *restrict, unsigned long, const char *restrict, struct __va_list_tag *)|
@@ -1233,15 +1233,15 @@ fminl|long double (long double, long double)|
 fmod|double (double, double)|
 fmodf|float (float, float)|
 fmodl|long double (long double, long double)|
-fopen|int ()|
-fprintf|int ()|
-fread|int ()|
+fopen|FILE *(const char *, const char *)|
+fprintf|int (FILE *restrict, const char *restrict, ...)|
+fread|unsigned long (void *, unsigned long, unsigned long, FILE *)|
 free|void (void *)|
 frexp|double (double, int *)|
 frexpf|float (float, int *)|
 frexpl|long double (long double, int *)|
-fscanf|int ()|
-fwrite|int ()|
+fscanf|int (FILE *restrict, const char *restrict, ...)|
+fwrite|unsigned long (const void *, unsigned long, unsigned long, FILE *)|
 getcontext|int ()|
 hypot|double (double, double)|
 hypotf|float (float, float)|
@@ -1417,8 +1417,8 @@ va_copy|void (struct __va_list_tag *, struct __va_list_tag *)|
 va_end|void (struct __va_list_tag *)|
 va_start|void (struct __va_list_tag *, ...)|
 vfork|int (void)|
-vfprintf|int ()|
-vfscanf|int ()|
+vfprintf|int (FILE *restrict, const char *restrict, struct __va_list_tag *)|
+vfscanf|int (FILE *restrict, const char *restrict, struct __va_list_tag *)|
 vprintf|int (const char *restrict, struct __va_list_tag *)|
 vscanf|int (const char *restrict, struct __va_list_tag *)|
 vsnprintf|int (char *restrict, unsigned long, const char *restrict, struct __va_list_tag *)|
