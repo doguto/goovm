@@ -24,6 +24,7 @@ import .expr;
 import .parse;
 import .init;
 import .builtins;
+import .layout;
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
 var opt_input: u8[>..] = [];
@@ -164,6 +165,16 @@ fn main() {
         prepare_tokens();
         parse_init();
         parse_tu();
+        if opt_mode == 2 && n_errors == 0 {
+            var abs: u8[>..] = [];
+            if opt_input[0] != '/' {
+                if !env("PWD", abs) { fatal("cannot determine the current directory (PWD)"); }
+                abs.push('/');
+            }
+            abs.append(opt_input);
+            if out_len == 0 { fatal("--layout-check needs -o file"); }
+            if !write_layout_check(abs, names[out_off..out_off + out_len]) { fatal("cannot write the layout check file"); }
+        }
         if opt_time {
             let t2 = clock_ns();
             write_stderr(str("goosecc: pp ", (t1 - t0) / 1000, " us, parse+sema ", (t2 - t1) / 1000, " us, ", nodes.len, " nodes, ",

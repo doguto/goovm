@@ -593,6 +593,15 @@ fn layout_record(r: i64) {
         }
         if quals(ft) & Q_CONST != 0 { flags = flags | RF_CONST_MEMBER; }
         if is_record(ft) && records[rec_of(ft)].flags & RF_CONST_MEMBER != 0 { flags = flags | RF_CONST_MEMBER; }
+        if ms && f.width >= 0 && is_union {
+            // ms_struct union bit-fields take their whole unit and no alignment
+            flags = flags | RF_HAS_BITFIELD;
+            let ub = if f.width > 0 { tsize * 8 } else { 8 };
+            if ub > data_bits { data_bits = ub; }
+            fields[i].offset = 0;
+            fields[i].bitpos = 0;
+            continue;
+        }
         if ms && f.width >= 0 && !is_union {
             // ms_struct bit-fields: a unit of the declared type is allocated
             // and shared by following bit-fields of the same size.
@@ -635,9 +644,9 @@ fn layout_record(r: i64) {
             let w = f.width as i64;
             let unit_bits = tsize * 8;
             var fal = talign * 8;
-            if fpacked { fal = 8; }
+            if fpacked && w > 0 { fal = 8; }
             if explicit_bits > fal { fal = explicit_bits; }
-            if fpacked && explicit_bits == 0 { fal = 1; }
+            if fpacked && explicit_bits == 0 && w > 0 { fal = 1; }
             if pack_bits > 0 && w > 0 {
                 if fpacked { fal = pack_bits; } else if fal > pack_bits { fal = pack_bits; }
             }
