@@ -128,6 +128,15 @@ var lent: LEnt[>..] = [];
 var hdef: HDef[>..] = [];
 var hpo: HPo[>..] = [];
 var hcd = dictionary<u64, u32> {};
+var hmd: u32[>..] = [];         // the definitions of this process's macros in a head's encoding (def_words)
+var hmdo: u32[>..] = [];        // per macro: 1 + where its encoding starts in hmd, 0 = not made yet
+
+// Witnesses of the paths where no file was found: the stat of a path,
+// once per process (hcb holds the path). A directory's ctime changes when
+// an entry is added to it, removed or renamed, so an unchanged deepest
+// existing ancestor of a path shows that the path still has no file.
+struct Wit { h: u64, off: u32, len: u32, state: i32, dev: u64, ino: u64, mtime: i64, ctime: i64 }
+var wits: Wit[>..] = [];
 
 var st_lookups: i64 = 0;
 var st_hits: i64 = 0;
@@ -463,6 +472,68 @@ fn hk_fwrite(f: i64) {
     if files[f].rw < rec_cur { files[f].rw = rec_cur; }
 }
 
+// The stat of path p (goosecc_stat's answer: 0 none, 1 file, 2 directory,
+// 3 another kind, -1 unknown), once per process: its index in wits.
+fn wit_stat(p: const u8[:]) -> i64 {
+    let h = csum_bytes(p);
+    for w, i in wits {
+        if w.h == h && w.len as i64 == p.len && hcb[w.off..w.off + w.len] == p { return i; }
+    }
+    let st = stat_path(p);
+    let off = hcb.len as! u32;
+    hcb.append(p);
+    var dev: u64 = 0;
+    var ino: u64 = 0;
+    var mt: i64 = 0;
+    var ct: i64 = 0;
+    if st > 0 {
+        dev = last_stat(0) as! u64;
+        ino = last_stat(1) as! u64;
+        mt = last_stat(3);
+        ct = last_stat(4);
+    }
+    wits.push(Wit { h: h, off: off, len: p.len as! u32, state: st as! i32, dev: dev, ino: ino, mtime: mt, ctime: ct });
+    return wits.len - 1;
+}
+
+// path_add of the key spelled by the n bytes at word i of w.
+fn path_add_w(w: const u32[:], i: i64, n: i64, f: i64) {
+    if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
+    let off = pnames.len;
+    if words_to_bytes(pnames, w, i, n) == 0 { return; }
+    let h = hash_bytes(pnames[off..off + n]);
+    let p = path_slot(pnames[off..off + n], h, false);
+    if pathtab[p] != 0 {
+        pnames.resize(off);
+        return;
+    }
+    pathents.push(PathEnt { off: off as! u32, len: n as! u32, hash: h, file: f as! i32 });
+    pathtab[p] = pathents.len as! u32;
+}
+
+// The witness of path p, where no file was found (a recording's end): the
+// deepest existing ancestor, if it has not changed for 2 s (else -1, and
+// the replay stats p itself); -1 too when p exists but could not be read.
+fn witness(p: const u8[:]) -> i64 {
+    let pi = wit_stat(p);
+    let ps = wits[pi].state;
+    if ps != 0 && ps != 2 { return -1; }
+    var n = p.len;
+    loop {
+        while n > 0 && p[n - 1] != '/' { n--; }
+        var wi: i64 = 0;
+        if n == 0 { wi = wit_stat("."); } else if n == 1 { wi = wit_stat("/"); } else { wi = wit_stat(p[..n - 1]); }
+        let w = wits[wi];
+        if w.state > 0 {
+            let lim = hc_t0 - HC_RACY_NS;
+            if w.mtime > lim || w.ctime > lim { return -1; }
+            return wi;
+        }
+        if w.state < 0 || n <= 1 { return -1; }
+        n--;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Looking an include up.
 
@@ -647,6 +718,30 @@ fn ident_new(off: i64, len: i64, h: u32) -> u32 {
     return ident_add(off, len, h, p);
 }
 
+// Macro m's definition in a head's encoding, after its length in words:
+// flags | builtin << 8 | parameters << 16, the body's length, and per
+// token kind | flags << 8 | aux << 16 and the spelling of an identifier,
+// parameter or literal. Two macros have the same words exactly when they
+// expand alike (whatever the identifiers' ids and the text's offsets).
+fn def_words(o: u32[>..]&, m: i64) {
+    let p0 = o.len;
+    o.push(0);
+    let mc = macros[m];
+    o.push((mc.flags as u32) | ((mc.builtin as u32) << 8) | ((mc.nparams as u32) << 16));
+    o.push(mc.count);
+    for k in mc.count as i64 {
+        let tk = mtoks[(mc.first as i64) + k];
+        o.push((tk.kind as u32) | ((tk.flags as u32) << 8) | ((tk.aux as u32) << 16));
+        let kk = tk.kind as i64;
+        if kk == TK_IDENT || kk == TK_PARAM {
+            wstr(o, ident_text(tk.val as i64));
+        } else if spelled(kk) {
+            wstr(o, src[tk.spell..tk.spell + tk.val]);
+        }
+    }
+    o[p0] = (o.len - p0 - 1) as! u32;
+}
+
 // The spelling of a token whose kind has one in src (literals, others).
 fn spelled(k: i64) -> bool {
     return !is_punct(k) && k != TK_IDENT && k != TK_PARAM && k != TK_EOF && k != TK_EOD && k != TK_HASHHASH_NP;
@@ -655,13 +750,34 @@ fn spelled(k: i64) -> bool {
 var hm_flags: u32 = 0;     // the variant's head: what it observed besides paths and macros
 var hm_maxrel: u32 = 0;
 
+var hr_mo: i64 = 0;        // the manifest being checked: hcm[hr_mo..hr_mo + hr_ml]
+var hr_ml: i64 = 0;
+
 // Checks a variant's head (rp at it) against the current state: its path
-// observations (hpo, with their strings copied to hcs), the macros it
-// observed defined (hdef), the rest.
+// observations (hpo; strings as word positions in the manifest), the
+// macros it observed defined (hdef), the rest.
 fn head_check(w: const u32[:]) -> bool {
     hpo.clear();
     hdef.clear();
     hcs.clear();
+    // the witnesses of the paths with no file, each checked once
+    let nw = r32(w) as i64;
+    var wmask: u64 = 0;
+    for i in nw {
+        let si, sn = rstr(w);
+        let dev = r64(w);
+        let ino = r64(w);
+        let mt = r64(w) as! i64;
+        let ct = r64(w) as! i64;
+        if rerr { return false; }
+        if i < 64 {
+            let wo = hcs.len;
+            words_to_bytes(hcs, w, si, sn);
+            let xi = wit_stat(hcs[wo..wo + sn]);
+            let x = wits[xi];
+            if x.state > 0 && x.dev == dev && x.ino == ino && x.mtime == mt && x.ctime == ct { wmask = wmask | (1 << (i as! u64)); }
+        }
+    }
     let np = r32(w) as i64;
     for i in np {
         let kw = r32(w);
@@ -669,16 +785,6 @@ fn head_check(w: const u32[:]) -> bool {
         let st = kw >> 8;
         let ki, kn = rstr(w);
         let pi, pn = rstr(w);
-        if rerr { return false; }
-        let ko = hcs.len;
-        words_to_bytes(hcs, w, ki, kn);
-        var po = ko;
-        var pl = kn;
-        if pn > 0 {
-            po = hcs.len;
-            words_to_bytes(hcs, w, pi, pn);
-            pl = pn;
-        }
         var dev: u64 = 0;
         var ino: u64 = 0;
         var fsize: u64 = 0;
@@ -696,16 +802,33 @@ fn head_check(w: const u32[:]) -> bool {
         var gi: i64 = 0;
         var gn: i64 = 0;
         if kind == PO_OLD && st & 8 != 0 { gi, gn = rstr(w); }
+        var wix: u32 = 0xFFFFFFFF;
+        if kind == PO_NEG { wix = r32(w); }
         if rerr { return false; }
+        var pw = pi;
+        var pl = pn;
+        if pn == 0 {
+            pw = ki;
+            pl = kn;
+        }
+        let wok = kind == PO_NEG && wix < 64 && (wmask >> (wix as u64)) & 1 != 0;
+        if wok && pn == 0 {
+            // a normalized path whose witness has not changed: no file
+            // there now, and none was loaded from it in this process
+            hpo.push(HPo { kind: kind, f: -1, e: -2, key: ki as! u32, klen: kn as! u32, path: pw as! u32, plen: pl as! u32, nf: 0 });
+            continue;
+        }
+        let ko = hcs.len;
+        words_to_bytes(hcs, w, ki, kn);
         let r = path_known(hcs[ko..ko + kn], hash_bytes(hcs[ko..ko + kn]), 0);
         let e = path_known_e;
         if kind == PO_NEG {
             if r >= 0 { return false; }
-            if r == -2 {
+            if r == -2 && !wok {
                 // what lookup_file would find: a directory known not to
                 // exist, or no file there
                 pbuf.clear();
-                pbuf.append(hcs[po..po + pl]);
+                words_to_bytes(pbuf, w, pw, pl);
                 let dl = pbuf_dir_len();
                 if !(dl > 0 && pathtab.len > 0 && dir_missing(dl)) {
                     let s = stat_path(pbuf);
@@ -715,7 +838,7 @@ fn head_check(w: const u32[:]) -> bool {
         } else if kind == PO_NEW {
             if r != -2 { return false; }
             pbuf.clear();
-            pbuf.append(hcs[po..po + pl]);
+            words_to_bytes(pbuf, w, pw, pl);
             let dl = pbuf_dir_len();
             if dl > 0 && pathtab.len > 0 && dir_missing(dl) { return false; }
             if stat_path(pbuf) != 1 { return false; }
@@ -733,39 +856,31 @@ fn head_check(w: const u32[:]) -> bool {
         } else {
             return false;
         }
+        hcs.resize(ko);
         var fi: i64 = -1;
         if kind == PO_OLD { fi = r; }
-        hpo.push(HPo { kind: kind, f: fi as! i32, e: e as! i32, key: ko as! u32, klen: kn as! u32, path: po as! u32, plen: pl as! u32, nf: nf });
+        hpo.push(HPo { kind: kind, f: fi as! i32, e: e as! i32, key: ki as! u32, klen: kn as! u32, path: pw as! u32, plen: pl as! u32, nf: nf });
     }
-    // the macros observed defined, with their definitions
+    // the macros observed defined, with their definitions: the same words
+    // as the current definition's (def_words, made once per macro)
     let nd = r32(w) as i64;
     for j in nd {
         let si, sn = rstr(w);
         let h = r32(w);
-        let mf = r32(w);
-        let cnt = r32(w);
         if rerr { return false; }
         let id = ident_find_w(w, si, sn, h);
         if id < 0 { return false; }
         let m = idents[id].macro as i64;
         if m < 0 { return false; }
-        let mc = macros[m];
-        if mc.flags as u32 != (mf & 255) || mc.builtin as u32 != ((mf >> 8) & 255) || mc.nparams as u32 != (mf >> 16) || mc.count != cnt {
-            return false;
+        while hmdo.len <= m { hmdo.push(0); }
+        if hmdo[m] == 0 {
+            hmdo[m] = (hmd.len + 1) as! u32;
+            def_words(hmd, m);
         }
-        for t in cnt as i64 {
-            let tw = r32(w);
-            let tk = mtoks[(mc.first as i64) + t];
-            if (tk.kind as u32) | ((tk.flags as u32) << 8) | ((tk.aux as u32) << 16) != tw { return false; }
-            let k = tk.kind as i64;
-            if k == TK_IDENT || k == TK_PARAM {
-                let ti, tn = rstr(w);
-                if rerr || !str_is(w, ti, tn, ident_text(tk.val as i64)) { return false; }
-            } else if spelled(k) {
-                let ti, tn = rstr(w);
-                if rerr || !str_is(w, ti, tn, src[tk.spell..tk.spell + tk.val]) { return false; }
-            }
-        }
+        let co = (hmdo[m] - 1) as i64;
+        let cl = hmd[co] as i64;
+        if cl > w.len - rp || w[rp..rp + cl] != hmd[co + 1..co + 1 + cl] { return false; }
+        rp += cl;
         hdef.push(HDef { id: id as! u32, m: m as! i32 });
     }
     hm_flags = r32(w);
@@ -815,6 +930,8 @@ fn hc_replay1(name: const u8[:], angled: bool, k: i64) -> bool {
     tm_man += clock_ns() - tm0;
     let mo = hman[mi].off as i64;
     let ml = hman[mi].len as i64;
+    hr_mo = mo;
+    hr_ml = ml;
     if ml == 0 {
         st_misses++;
         return false;
@@ -1251,15 +1368,28 @@ fn blob_commit(i0: i64, n0: i64, f0: i64, m0: i64) {
     }
     // the path cache, and the recordings' path observations
     for po in hpo {
-        let key = hcs[po.key..po.key + po.klen];
-        let path = hcs[po.path..po.path + po.plen];
+        if !rec_on {
+            if po.kind == PO_NEG && po.e < 0 { path_add_w(hcm[hr_mo..hr_mo + hr_ml], po.key as i64, po.klen as i64, -1); }
+            if po.kind == PO_NEW { path_add_w(hcm[hr_mo..hr_mo + hr_ml], po.key as i64, po.klen as i64, f0 + (po.nf as i64)); }
+            continue;
+        }
+        hcs.clear();
+        words_to_bytes(hcs, hcm[hr_mo..hr_mo + hr_ml], po.key as i64, po.klen as i64);
+        words_to_bytes(hcs, hcm[hr_mo..hr_mo + hr_ml], po.path as i64, po.plen as i64);
+        let key = hcs[0..po.klen];
+        let path = hcs[po.klen..po.klen + po.plen];
         if po.kind == PO_NEG {
+            var pe = po.e;
+            if pe == -2 && rec_on {
+                let r = path_known(key, hash_bytes(key), 0);
+                pe = path_known_e as! i32;
+            }
             if rec_on {
                 var a: u32 = 0;
                 var b: u32 = 0;
                 var stored = false;
                 for r in recs.len {
-                    if po.e >= 0 && po.e as i64 >= recs[r].paths0 as i64 { continue; }
+                    if pe >= 0 && pe as i64 >= recs[r].paths0 as i64 { continue; }
                     if !stored {
                         a, b = hk_store_path(key, path);
                         stored = true;
@@ -1267,7 +1397,7 @@ fn blob_commit(i0: i64, n0: i64, f0: i64, m0: i64) {
                     ev.push(Ev { rec: r as! u16, kind: EV_PNEG, flag: 0, a: a, b: b, c: 0, d: 0 });
                 }
             }
-            if po.e < 0 { path_add(key, -1); }
+            if pe < 0 { path_add(key, -1); }
         } else if po.kind == PO_NEW {
             let f = f0 + (po.nf as i64);
             if rec_on {
@@ -1826,6 +1956,32 @@ fn rec_save(r: Rec) -> bool {
     hcw.clear();
     hcw.push(0);
     w64(hcw, bid);
+    // the witnesses of the paths with no file (distinct), then the
+    // observations
+    var wl: i64[>..] = [];
+    for po, i in hpo {
+        if po.kind != PO_NEG { continue; }
+        var wi: i64 = -1;
+        if po.plen > 0 { wi = witness(hcb[po.path..po.path + po.plen]); } else { wi = witness(hcb[po.key..po.key + po.klen]); }
+        var x: i64 = -1;
+        if wi >= 0 {
+            for y, j in wl { if y == wi { x = j; } }
+            if x < 0 {
+                x = wl.len;
+                wl.push(wi);
+            }
+        }
+        hpo[i].nf = (x + 1) as! u32;
+    }
+    hcw.push(wl.len as! u32);
+    for wi in wl {
+        let x = wits[wi];
+        wstr(hcw, hcb[x.off..x.off + x.len]);
+        w64(hcw, x.dev);
+        w64(hcw, x.ino);
+        w64(hcw, x.mtime as! u64);
+        w64(hcw, x.ctime as! u64);
+    }
     hcw.push(hpo.len as! u32);
     for po in hpo {
         var st: u32 = 0;
@@ -1846,6 +2002,7 @@ fn rec_save(r: Rec) -> bool {
             // the guard at the observation (the event's d)
             wstr(hcw, ident_text(po.e as i64));
         }
+        if po.kind == PO_NEG { hcw.push(po.nf - 1); }
     }
     hcw.push(hdef.len as! u32);
     for hd in hdef {
@@ -1853,19 +2010,11 @@ fn rec_save(r: Rec) -> bool {
         let d = idents[id];
         wstr(hcw, src[d.off..d.off + d.len]);
         hcw.push(d.hash);
-        let mc = macros[hd.m];
-        hcw.push((mc.flags as u32) | ((mc.builtin as u32) << 8) | ((mc.nparams as u32) << 16));
-        hcw.push(mc.count);
-        for k in mc.count as i64 {
-            let tk = mtoks[(mc.first as i64) + k];
-            hcw.push((tk.kind as u32) | ((tk.flags as u32) << 8) | ((tk.aux as u32) << 16));
-            let kk = tk.kind as i64;
-            if kk == TK_IDENT || kk == TK_PARAM {
-                wstr(hcw, ident_text(tk.val as i64));
-            } else if spelled(kk) {
-                wstr(hcw, src[tk.spell..tk.spell + tk.val]);
-            }
-        }
+        let p0 = hcw.len;
+        def_words(hcw, hd.m as i64);
+        // (without def_words' length word)
+        for k in p0..hcw.len - 1 { hcw[k] = hcw[k + 1]; }
+        hcw.pop();
     }
     var mf: u32 = 0;
     if r.ctr_t { mf = mf | 1; }

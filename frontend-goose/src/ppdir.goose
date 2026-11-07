@@ -832,9 +832,10 @@ recursive fn do_include(t: Tok, k: i64) {
     }
     // B4: the header cache replays the whole include (the search, the file
     // and everything it includes) when what it depends on is unchanged;
-    // otherwise it records it.
+    // otherwise it records it. The includes of system headers are part of
+    // the include of a system header from the program's own files.
     var rec = false;
-    if hc_on && !hc_would_skip(inc_name, angled, k) {
+    if hc_on && ctxs[cur_file_ctx].sys == 0 && !hc_would_skip(inc_name, angled, k) {
         if hc_replay(inc_name, angled, k) { return; }
         rec = hc_rec_start(inc_name, angled, k);
     }
