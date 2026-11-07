@@ -180,6 +180,14 @@ fn ident_grow() {
     }
 }
 
+// The header cache (hcache.goose) records what a header's preprocessing
+// reads and writes: rec_on while any recording is active, rec_cur the
+// serial of the innermost one. The hooks (hk_*) are cheap tests of rec_on
+// at the places that read or write state the cache must know about.
+var rec_on: bool = false;
+var rec_cur: u32 = 0;
+var hk_notexist: u8 = 0;    // intern is creating the identifier it looks up
+
 // The id of the identifier spelled src[off..off+len] (hash h), or -1: the
 // probe of ident_lookup, inlined into the lexer's loop.
 inline fn ident_find(off: i64, len: i64, h: u32) -> i64 {
@@ -205,10 +213,22 @@ fn ident_lookup(off: i64, len: i64, h: u32) -> u32 {
         if e == 0 { break; }
         if idents[e - 1].hash == h && idents[e - 1].len == len {
             let o = idents[e - 1].off as i64;
-            if src[o..o + len] == src[off..off + len] { return (e - 1) as! u32; }
+            if src[o..o + len] == src[off..off + len] {
+                if rec_on { hk_look((e - 1) as! u32, off); }
+                return (e - 1) as! u32;
+            }
         }
         p = (p + 1) & idmask;
     }
+    let id = ident_add(off, len, h, p);
+    if rec_on { hk_look(id, off); }
+    return id;
+}
+
+// Adds the identifier spelled src[off..off+len] (hash h), which is not in
+// the table; p is the empty slot its probe ended at.
+fn ident_add(off: i64, len: i64, h: u32, p0: i64) -> u32 {
+    var p = p0;
     if (idents.len + 1) * 2 > idtab.len {
         ident_grow();
         p = (h as i64) & idmask;
@@ -230,13 +250,20 @@ fn intern(s: const u8[:]) -> u32 {
         if e == 0 { break; }
         let d = idents[e - 1];
         if d.hash == h && d.len == s.len {
-            if src[d.off..d.off + d.len] == s { return e - 1; }
+            if src[d.off..d.off + d.len] == s {
+                if rec_on { hk_exist(e - 1); }
+                return e - 1;
+            }
         }
         p = (p + 1) & idmask;
     }
     let off = src_add(s);
     src.push(0);
-    return ident_lookup(off, s.len, h);
+    // a new identifier grows src: the cache must know it was not there
+    hk_notexist = 1;
+    let id = ident_lookup(off, s.len, h);
+    hk_notexist = 0;
+    return id;
 }
 
 fn ident_text(id: i64) -> const u8[:] {
@@ -288,6 +315,9 @@ struct FileRec {
     lines_count: i32,
     sp_off: u32, sp_len: u32,     // the spelling it was first included by (names), the
                                   // presumed file name of diagnostics; 0 = not included yet
+    // B4: the file's identity when it was read (stat), for the header cache
+    dev: u64, ino: u64, fsize: u64, mtime: i64, ctime: i64,
+    rt: u32, rw: u32,             // header cache: serials of the recordings that read / wrote its state
 }
 var files: FileRec[>..] = [];
 var line_starts: u32[>..] = [];
@@ -390,6 +420,7 @@ var diag_suppress: i64 = 0;
 var diag_suppressed_errors: i64 = 0;
 
 fn error_at(loc: i64, msg: const u8[:]) {
+    if rec_on { hk_bad(HC_BAD_DIAG); }
     if diag_suppress > 0 { diag_suppressed_errors++; return; }
     var err_out: u8[>..] = [];
     loc_prefix(err_out, loc);
@@ -402,6 +433,7 @@ fn error_at(loc: i64, msg: const u8[:]) {
 }
 
 fn warn_at(loc: i64, msg: const u8[:]) {
+    if rec_on { hk_bad(HC_BAD_DIAG); }
     if diag_suppress > 0 { return; }
     n_warnings++;
     if quiet_warnings { return; }

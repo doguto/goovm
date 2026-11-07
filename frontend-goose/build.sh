@@ -25,6 +25,11 @@ LDFLAGS="${LDFLAGS--static}"
 GOOSE_FLAGS="${GOOSE_FLAGS---stack-reserve 256M}"
 mkdir -p "$OUT"
 "$GOOSE" --standalone ${GOOSE_FLAGS} --include "$HERE/src/goosecc_rt.h" -o "$OUT/goosecc.c" "$HERE/src/main.goose"
+# The header cache (B4) keys its entries by this build's identity: a hash
+# of the generated C, so that a rebuilt compiler never reads entries
+# written by another one.
+BUILD_ID="0x$(cat "$OUT/goosecc.c" "$HERE/src/goosecc_rt.h" | sha1sum | cut -c1-16)ull"
+CFLAGS="$CFLAGS -DGOOSECC_BUILD_ID=$BUILD_ID"
 # musl: a static glibc executable spends 0.5-0.7 ms of every run in glibc's
 # start-up, mostly probing the caches with cpuid (init_cacheinfo), which
 # traps to the hypervisor in a virtual machine; musl's start-up does not.

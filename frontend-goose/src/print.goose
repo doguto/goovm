@@ -22,11 +22,14 @@ fn pr_flush() {
     out.clear();
 }
 
+var out_to_file: bool = false;   // -E -o file: the output is written at the end
+
 fn pr_newline() {
     out.push('\n');
     pr_bol = true;
     pr_prev_kind = -1;
-    if out.len > 1048576 { pr_flush(); }
+    // not while the header cache records: it keeps what a header printed
+    if out.len > 1048576 && !out_to_file && !rec_on { pr_flush(); }
 }
 
 fn pr_marker(line: i64, fname: u32, flen: u32, flags: const u8[:]) {

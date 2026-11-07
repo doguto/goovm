@@ -40,6 +40,7 @@ import .gen_builtin;
 import .gen_asm;
 import .gen_debug;
 import .gen_tu;
+import .hcache;
 import cg from "../../backend-goose";
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
@@ -51,6 +52,7 @@ var out_len: i64 = 0;
 var opt_mode: i64 = 0;      // 0 = -fsyntax-only, 1 = -E, 2 = --layout-check, 3 = --dump-ast, 4 = -c, 5 = --emit-gir
 var opt_time: bool = false;
 var nostdinc: bool = false;
+var opt_state_hash: i64 = 0;  // --pp-state-hash (2: =v, per array)
 
 fn add_dir(d: const u8[:], sys: bool) {
     var s = d;
@@ -118,6 +120,7 @@ fn pp_fill() {
                 }
                 pend = 0;
                 cur++;
+                if t.kind == TK_IDENT && !noexp && rec_on { hk_mread(t.val); }
                 if t.kind == TK_IDENT && !noexp && idents[t.val].macro >= 0 {
                     ctxs[ci].cur = cur as! u32;
                     ctxs[ci].pend = 0;
@@ -193,8 +196,9 @@ fn pp_fill() {
                 let h = (r & 0xFFFFFFFF) as! u32;
                 if src[q] != '\\' {
                     var fid = ident_find(p, q - p, h);
-                    if fid < 0 { fid = ident_lookup(p, q - p, h) as i64; }
+                    if fid < 0 { fid = ident_lookup(p, q - p, h) as i64; } else if rec_on { hk_look(fid as! u32, p); }
                     let id = fid as! u32;
+                    if rec_on { hk_mread(id); }
                     t = Tok { kind: TK_IDENT, flags: flags | sys, aux: 0, spell: p as! u32, val: id, xloc: p as! u32 };
                     p = q;
                     flags = 0;
@@ -223,6 +227,7 @@ fn pp_fill() {
             lx_flags = flags;
             if !have {
                 t = lex_file_token();
+                if rec_on && t.kind == TK_IDENT { hk_mread(t.val); }
                 if t.kind != TK_EOF && !(t.kind == TK_HASH && t.flags & F_BOL != 0) &&
                         !(t.kind == TK_IDENT && idents[t.val].macro >= 0) {
                     if mi {
@@ -317,6 +322,11 @@ fn options() {
         else if s == "-fcommon" { gen::opt_common = true; }
         else if s == "-fno-common" { gen::opt_common = false; }
         else if s == "--time" { opt_time = true; }
+        else if s == "-fno-header-cache" { hc_enabled = false; }
+        else if s == "-fheader-cache" { hc_enabled = true; }
+        else if s == "--cache-stats" { hc_stats_opt = true; }
+        else if s == "--pp-state-hash" { opt_state_hash = 1; }
+        else if s == "--pp-state-hash=v" { opt_state_hash = 2; }
         else if s == "-pthread" { opt_pthread = true; }
         else if s == "-nostdinc" { nostdinc = true; }
         else if s == "-funsigned-char" { opt_unsigned_char = true; }
@@ -362,13 +372,22 @@ fn options() {
     while k + 1 < sys_dirs_after.len { add_dir(names[sys_dirs_after[k]..sys_dirs_after[k] + sys_dirs_after[k + 1]], true); k += 2; }
 }
 
+// After preprocessing: the header cache's report, the state checksum.
+fn after_pp() {
+    hc_report();
+    if opt_state_hash > 0 { hc_state_hash(opt_state_hash == 2); }
+}
+
 fn main() {
     options();
+    hc_init();
     let t0 = clock_ns();
     if opt_mode == 1 {
         mode_E = true;
+        out_to_file = out_len > 0 && !out_is_stdout();
         if !pp_start(opt_input()) { exit(1); }
         pp_fill();
+        after_pp();
         out.push('\n');
         if out_len > 0 && !out_is_stdout() {
             if write_output(names[out_off..out_off + out_len], out) == 0 { fatal("cannot write output"); }
@@ -387,6 +406,7 @@ fn main() {
         opt_c89 = v.len == 0;
         keywords_init();
         pp_fill();
+        after_pp();
         let t1 = clock_ns();
         types_init();
         parse_init();

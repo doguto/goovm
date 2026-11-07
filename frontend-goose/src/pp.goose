@@ -231,6 +231,7 @@ recursive fn pp_lex() -> Tok {
             noexp = ctxs[ci].noexp;
         }
         if t.kind == TK_IDENT && !noexp {
+            if rec_on { hk_mread(t.val); }
             let m = idents[t.val].macro;
             if m >= 0 && pp_noexpand == 0 {
                 if t.flags & F_NOEXP == 0 && macros[m].enabled {
@@ -275,6 +276,7 @@ recursive fn file_token(t0: Tok, ci: i64) -> bool, Tok {
 // or false when a macro was entered (lex again).
 recursive fn macro_token(t0: Tok) -> bool, Tok {
     var t = t0;
+    if rec_on { hk_mread(t.val); }
     let m = idents[t.val].macro;
     if m >= 0 && pp_noexpand == 0 {
         if t.flags & F_NOEXP == 0 && macros[m].enabled {
@@ -520,6 +522,7 @@ recursive fn read_macro_args(name: Tok, m: i64) -> bool {
                 if !variadic { break; }
                 if fixed_left > 1 { break; }
             } else if t.kind == TK_IDENT {
+                if rec_on { hk_mread(t.val); }
                 let mm = idents[t.val].macro;
                 if mm >= 0 && !macros[mm].enabled { t.flags = t.flags | F_NOEXP; }
             }
@@ -590,7 +593,10 @@ recursive fn preexpanded(i0: i64, k: i64) -> i64, i64 {
 fn arg_needs_preexp(s: i64, e: i64) -> bool {
     for j in s..e {
         let t = argtoks[j];
-        if t.kind == TK_IDENT && idents[t.val].macro >= 0 { return true; }
+        if t.kind == TK_IDENT {
+            if rec_on { hk_mread(t.val); }
+            if idents[t.val].macro >= 0 { return true; }
+        }
     }
     return false;
 }
