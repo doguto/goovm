@@ -684,7 +684,11 @@ fn emit_epilogue() {
     var nsave: u32 = 0;
     for r in CS_REGS { if r_cs_used & bit(r) != 0 { nsave++; } }
     if nsave == 0 {
-        if frameless() && !f_rsp { b1(0x5D); } else { b1(0xC9); }  // pop rbp / leave
+        // pop rbp, or mov rsp, rbp; pop rbp: not `leave`, which costs about
+        // 5 cycles more per return in chains of small calls (a C++ -O0
+        // program's wrappers) on recent Intel cores (NOTES.md §11)
+        if !frameless() || f_rsp { mov_rr64(RSP, RBP); }
+        b1(0x5D);
         cfi_body.push(CfiEv { pos: here(), kind: CE_DEFCFA, a: 0 });
         b1(0xC3);  // ret
         return;
