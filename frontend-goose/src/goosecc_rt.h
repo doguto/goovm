@@ -322,6 +322,7 @@ gen_F80_g3 goosecc_f80_to_i128(gen_F80_g3 x, int64_t is_signed) {
  * arrays of 32-bit little-endian words; Goose builds and parses them as
  * u32 arrays, and these helpers move them to and from the file system. */
 #include <dirent.h>
+#include <stddef.h>
 #include <time.h>
 #include <stdio.h>
 
@@ -437,6 +438,102 @@ int64_t goosecc_read_words(sl_u8 path, gs_rref out) {
     out.stk->top += size;
     out.hdr->len += size / 4;
     return size / 4;
+}
+
+/* A blob being replayed is mapped, not read: reading it into a fresh array
+ * costs a page fault per 4 KB, a private read-only mapping of the page
+ * cache costs one per 64 KB (fault-around). Goose reads its words through
+ * goosecc_mw, which the C compiler inlines into the loops; the caller
+ * checks the index against goosecc_map's length first. */
+static const uint32_t *goosecc_map_p = 0;
+static size_t goosecc_map_bytes = 0;
+int64_t goosecc_map(sl_u8 path) {
+    char p[4096];
+    if (goosecc_map_p) {
+        munmap((void *)goosecc_map_p, goosecc_map_bytes);
+        goosecc_map_p = 0;
+        goosecc_map_bytes = 0;
+    }
+    if (!goosecc_cpath(path, p, sizeof p)) return -1;
+    int fd = open(p, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size % 4 != 0 || st.st_size < 32 || st.st_size > ((int64_t)1 << 30)) {
+        close(fd);
+        return -1;
+    }
+    void *m = mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
+    close(fd);
+    if (m == MAP_FAILED) return -1;
+    goosecc_map_p = m;
+    goosecc_map_bytes = (size_t)st.st_size;
+    return st.st_size / 4;
+}
+__attribute__((always_inline)) inline uint32_t goosecc_mw(int64_t i) { return goosecc_map_p[i]; }
+uint64_t goosecc_mcsum(int64_t from, int64_t to) {
+    sl_u32 w;
+    w.data = (gs_u32 *)(goosecc_map_p + from);
+    w.len = to - from;
+    return goosecc_csum(w);
+}
+/* Appends the n bytes at word i of the mapping to out (the caller checked
+ * that they are in it). */
+void goosecc_mcopy(gs_rref out, int64_t i, int64_t n) {
+    if (n <= 0) return;
+    if (n > 8192) goosecc_prefault(out, n);
+    memcpy(out.stk->top, (const uint8_t *)(goosecc_map_p + i), (size_t)n);
+    out.stk->top += n;
+    out.hdr->len += n;
+}
+int64_t goosecc_meq(int64_t i, sl_u8 s) {
+    return memcmp((const uint8_t *)(goosecc_map_p + i), s.data, (size_t)s.len) == 0;
+}
+
+/* Appends the n tokens at word i of the mapping (4 words each: kind |
+ * flags << 8 | aux << 16, spelling, value, expansion location) to out,
+ * relocated as hcache.goose's rl and lm do: a source offset below 2^31 is
+ * in the unit's text (s0 plus it, at most srclen), others index anchors;
+ * the value of an identifier token (kind 2, 8 (a parameter) or >= kwmin)
+ * indexes ids. 1, or 0 when a value is out of range (out then has some of
+ * them: the caller takes them back). */
+_Static_assert(sizeof(Tok_g) == 16 && offsetof(Tok_g, spell_g) == 4 && offsetof(Tok_g, val_g) == 8 &&
+               offsetof(Tok_g, xloc_g) == 12, "hcache: the layout of Tok");
+int64_t goosecc_reloc_toks(gs_rref out, int64_t i, int64_t n, sl_u32 ids, sl_u32 anchors, int64_t s0, int64_t srclen, int64_t kwmin) {
+    if (n <= 0) return 1;
+    if (n * 16 > 8192) goosecc_prefault(out, n * 16);
+    const uint32_t *w = goosecc_map_p + i;
+    Tok_g *o = (Tok_g *)out.stk->top;
+    int64_t k;
+    for (k = 0; k < n; k++, w += 4) {
+        uint32_t a = w[0], kind = a & 255, sp = w[1], v = w[2], xl = w[3];
+        if (sp < 0x80000000u) {
+            if (sp > srclen) break;
+            sp = (uint32_t)(s0 + sp);
+        } else {
+            if ((int64_t)(sp & 0x7fffffffu) >= anchors.len) break;
+            sp = anchors.data[sp & 0x7fffffffu];
+        }
+        if (xl < 0x80000000u) {
+            if (xl > srclen) break;
+            xl = (uint32_t)(s0 + xl);
+        } else {
+            if ((int64_t)(xl & 0x7fffffffu) >= anchors.len) break;
+            xl = anchors.data[xl & 0x7fffffffu];
+        }
+        if (kind == 2 || kind == 8 || (int64_t)kind >= kwmin) {
+            if ((int64_t)v >= ids.len) break;
+            v = ids.data[v];
+        }
+        o[k].kind_g = (uint8_t)kind;
+        o[k].flags_g = (uint8_t)(a >> 8);
+        o[k].aux_g = (uint16_t)(a >> 16);
+        o[k].spell_g = sp;
+        o[k].val_g = v;
+        o[k].xloc_g = xl;
+    }
+    out.stk->top += k * 16;
+    out.hdr->len += k;
+    return k == n;
 }
 
 /* Creates the missing directories of the path p (its last component is a

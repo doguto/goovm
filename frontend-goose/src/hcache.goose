@@ -139,6 +139,15 @@ var st_corrupt: i64 = 0;
 var st_wbytes: i64 = 0;
 var st_werr: i64 = 0;
 var st_skipped: i64 = 0;
+var tm_replay: i64 = 0;    // ns in replays: all, reading, checking, appending, committing; in recordings' ends
+var tm_read: i64 = 0;
+var tm_check: i64 = 0;
+var tm_append: i64 = 0;
+var tm_commit: i64 = 0;
+var tm_save: i64 = 0;
+var tm_man: i64 = 0;
+var tm_head: i64 = 0;
+var tm_csum: i64 = 0;
 
 extern fn words_eq(w: const u32[:], i: i64, s: const u8[:]) -> i64 = "goosecc_words_eq";
 extern fn words_hash(w: const u32[:], i: i64, n: i64) -> u32 = "goosecc_words_hash";
@@ -792,9 +801,18 @@ fn head_check(w: const u32[:]) -> bool {
 // observations all hold. True when one did.
 fn hc_replay(name: const u8[:], angled: bool, k: i64) -> bool {
     if !hc_prepare() { return false; }
+    let t0 = clock_ns();
+    let r = hc_replay1(name, angled, k);
+    tm_replay += clock_ns() - t0;
+    return r;
+}
+
+fn hc_replay1(name: const u8[:], angled: bool, k: i64) -> bool {
     hc_key(name, angled, k);
     st_lookups++;
+    let tm0 = clock_ns();
     let mi = man_get();
+    tm_man += clock_ns() - tm0;
     let mo = hman[mi].off as i64;
     let ml = hman[mi].len as i64;
     if ml == 0 {
@@ -810,7 +828,10 @@ fn hc_replay(name: const u8[:], angled: bool, k: i64) -> bool {
         let vstart = rp;
         let bid = r64(hcm[mo..mo + ml]);
         if rerr { break; }
-        if head_check(hcm[mo..mo + ml]) {
+        let th0 = clock_ns();
+        let hok = head_check(hcm[mo..mo + ml]);
+        tm_head += clock_ns() - th0;
+        if hok {
             if blob_replay(bid) {
                 st_hits++;
                 return true;
@@ -823,12 +844,70 @@ fn hc_replay(name: const u8[:], angled: bool, k: i64) -> bool {
     return false;
 }
 
-// What a replay relocates by.
+// A blob being replayed is mapped (goosecc_rt.h): mlen words, read with
+// mw(i) after checking i against mlen.
+extern fn map_file(path: const u8[:]) -> i64 = "goosecc_map";
+extern fn mw(i: i64) -> u32 = "goosecc_mw";
+extern fn mcsum(from: i64, to: i64) -> u64 = "goosecc_mcsum";
+extern fn mcopy(out: u8[>..]&, i: i64, n: i64) = "goosecc_mcopy";
+extern fn meq(i: i64, s: const u8[:]) -> i64 = "goosecc_meq";
+extern fn reloc_toks(out: Tok[>..]&, i: i64, n: i64, ids: const u32[:], anchors: const u32[:], s0: i64, srclen: i64, kwmin: i64) -> i64 = "goosecc_reloc_toks";
+var mlen: i64 = 0;
+
+fn m32() -> u32 {
+    if rp >= mlen {
+        rerr = true;
+        return 0;
+    }
+    let v = mw(rp);
+    rp++;
+    return v;
+}
+fn m64() -> u64 {
+    let lo = m32() as u64;
+    let hi = m32() as u64;
+    return lo | (hi << 32);
+}
+fn mstr() -> i64, i64 {
+    let n = m32() as i64;
+    let i = rp;
+    let nw = (n + 3) / 4;
+    if nw > mlen - rp {
+        rerr = true;
+        rp = mlen;
+        return 0, 0;
+    }
+    rp += nw;
+    return i, n;
+}
+fn mstr_is(i: i64, n: i64, s: const u8[:]) -> bool {
+    return n == s.len && meq(i, s) != 0;
+}
+
+// The identifier spelled by the n bytes at word i of the mapping, or -1.
+fn ident_find_m(i: i64, n: i64, h: u32) -> i64 {
+    var p = (h as i64) & idmask;
+    loop {
+        let e = idtab[p] as i64;
+        if e == 0 { return -1; }
+        if idents[e - 1].hash == h && idents[e - 1].len as i64 == n {
+            let o = idents[e - 1].off as i64;
+            if meq(i, src[o..o + n]) != 0 { return e - 1; }
+        }
+        p = (p + 1) & idmask;
+    }
+}
+
+// What a replay relocates by. hcx holds, for the blob's identifiers, their
+// ids here (hcx[0..hr_ni]) and their entries' positions in the blob
+// (hcx[hr_ni..2 hr_ni]), then the anchors' offsets here.
 var hr_s: i64 = 0;        // src.len before
 var hr_srclen: i64 = 0;   // the unit's bytes of source text
-var hr_ni: i64 = 0;       // identifiers (hcx[0..hr_ni]: their ids here)
-var hr_abase: i64 = 0;    // anchor targets (hcx[hr_abase..])
+var hr_ni: i64 = 0;
+var hr_abase: i64 = 0;
 var hr_na: i64 = 0;
+var hb_out: i64 = 0;      // positions in the blob of what blob_commit applies
+var hb_mut: i64 = 0;
 
 // A source offset of the blob: in the unit's text, or an anchor.
 fn rl(v: u32) -> u32 {
@@ -860,32 +939,46 @@ fn lm(v: u32) -> u32 {
 // nothing changed, when a check fails or the blob is missing or corrupt.
 fn blob_replay(bid: u64) -> bool {
     hc_path(bid, true);
-    hcr.clear();
-    let n = read_words(hcp, hcr);
-    if n <= 0 { return false; }
-    if !file_ok(hcr, HC_MAGIC_B) {
+    let t0 = clock_ns();
+    mlen = map_file(hcp);
+    if mlen <= 0 {
+        mlen = 0;
+        return false;
+    }
+    if mw(0) != HC_MAGIC_B || mw(1) != HC_VERSION || mw(2) as i64 != mlen {
         st_corrupt++;
         unlink_path(hcp);
         return false;
     }
+    let tc0 = clock_ns();
+    let cs = mcsum(5, mlen);
+    tm_csum += clock_ns() - tc0;
+    if (cs & 0xFFFFFFFF) as! u32 != mw(3) || (cs >> 32) as! u32 != mw(4) {
+        st_corrupt++;
+        unlink_path(hcp);
+        return false;
+    }
+    let t1 = clock_ns();
+    tm_read += t1 - t0;
     rp = 5;
     rerr = false;
-    let ki, kn = rstr(hcr);
-    if rerr || !str_is(hcr, ki, kn, hck) { return false; }
-    hr_srclen = r32(hcr) as i64;
+    let ki, kn = mstr();
+    if rerr || !mstr_is(ki, kn, hck) { return false; }
+    hr_srclen = m32() as i64;
     // the identifiers: which exist, and what the variant requires of them
-    hr_ni = r32(hcr) as i64;
+    hr_ni = m32() as i64;
+    if hr_ni > mlen { return false; }
     hcx.clear();
-    let lpos = rp;
-    hb_ident_pos = lpos;
+    hcx.resize(2 * hr_ni, 0);
     for i in hr_ni {
-        let h = r32(hcr);
-        let fl = r32(hcr);
-        let off = r32(hcr);
-        let def = r32(hcr);
-        let si, sn = rstr(hcr);
+        let pos = rp;
+        let h = m32();
+        let fl = m32();
+        let off = m32();
+        let def = m32();
+        let si, sn = mstr();
         if rerr { return false; }
-        let id = ident_find_w(hcr, si, sn, h);
+        let id = ident_find_m(si, sn, h);
         if fl & LF_LOOKED == 0 && id < 0 { return false; }
         if fl & LF_EXISTS != 0 && id < 0 { return false; }
         if fl & LF_NOTEXIST != 0 && id >= 0 { return false; }
@@ -895,20 +988,21 @@ fn blob_replay(bid: u64) -> bool {
             return false;
         }
         if fl & LF_LOOKED != 0 && off < 0x80000000 && off as i64 > hr_srclen { return false; }
-        if id >= 0 { hcx.push(id as! u32); } else { hcx.push(0xFFFFFFFF); }
+        if id >= 0 { hcx[i] = id as! u32; } else { hcx[i] = 0xFFFFFFFF; }
+        hcx[hr_ni + i] = pos as! u32;
     }
     // the anchors: offsets into text that was there before the unit (the
     // bodies of macros it observed, files it found loaded); every
     // candidate must give the same offset here
-    hr_na = r32(hcr) as i64;
+    hr_na = m32() as i64;
     hr_abase = hcx.len;
     for a in hr_na {
-        let nc = r32(hcr) as i64;
+        let nc = m32() as i64;
         var tgt: i64 = -1;
         for c in nc {
-            let k = r32(hcr);
-            let x = r32(hcr) as i64;
-            let y = r32(hcr) as i64;
+            let k = m32();
+            let x = m32() as i64;
+            let y = m32() as i64;
             if rerr { return false; }
             var v: i64 = -1;
             if k == 1 {
@@ -953,57 +1047,74 @@ fn blob_replay(bid: u64) -> bool {
     let f0 = files.len;
     let m0 = macros.len;
     let mt0 = mtoks.len;
-    let t0 = tu_toks.len;
+    let t0b = tu_toks.len;
     let x0 = mx_ranges.len;
     let pc0 = pack_changes.len;
     let ms0 = ms_changes.len;
     hr_s = s0;
-    let ok = blob_append(i0);
+    let t2 = clock_ns();
+    tm_check += t2 - t1;
+    let ok = blob_append();
+    let t3 = clock_ns();
+    tm_append += t3 - t2;
     if !ok {
         src.resize(s0);
         names.resize(n0);
         files.resize(f0);
         macros.resize(m0);
         mtoks.resize(mt0);
-        tu_toks.resize(t0);
+        tu_toks.resize(t0b);
         mx_ranges.resize(x0);
         pack_changes.resize(pc0);
         ms_changes.resize(ms0);
         st_corrupt++;
         return false;
     }
-    blob_commit(lpos, i0, n0, f0, m0, t0);
+    blob_commit(i0, n0, f0, m0);
+    tm_commit += clock_ns() - t3;
     return true;
 }
 
-// Positions in the blob of what blob_commit applies.
-var hb_out: i64 = 0;
-var hb_mut: i64 = 0;
+// The flags and the definition index of local identifier li.
+fn ent_flags(li: u32) -> u32 { mw((hcx[hr_ni + (li as i64)] as i64) + 1) }
+fn ent_def(li: u32) -> u32 { mw((hcx[hr_ni + (li as i64)] as i64) + 3) }
+
+fn get_tok(idk_all: bool) -> Tok {
+    let a = mw(rp);
+    let sp = mw(rp + 1);
+    var v = mw(rp + 2);
+    let xl = mw(rp + 3);
+    rp += 4;
+    let k = a & 255;
+    if k == TK_IDENT || k == TK_PARAM || (idk_all && k >= TK_KW) { v = lm(v); }
+    return Tok { kind: k as! u8, flags: ((a >> 8) & 255) as! u8, aux: (a >> 16) as! u16, spell: rl(sp), val: v, xloc: rl(xl) };
+}
 
 // The appends of a replay that can be undone.
-fn blob_append(i0: i64) -> bool {
-    let srci, srcn = rstr(hcr);
+fn blob_append() -> bool {
+    let srci, srcn = mstr();
     if rerr || srcn != hr_srclen { return false; }
-    if words_to_bytes(src, hcr, srci, srcn) == 0 { return false; }
-    let nmi, nmn = rstr(hcr);
-    if rerr || words_to_bytes(names, hcr, nmi, nmn) == 0 { return false; }
+    mcopy(src, srci, srcn);
+    let nmi, nmn = mstr();
+    if rerr { return false; }
+    mcopy(names, nmi, nmn);
     let nbase = (names.len - nmn) as u32;
     // files
-    let nf = r32(hcr) as i64;
+    let nf = m32() as i64;
     for i in nf {
-        let st = r32(hcr);
-        let en = r32(hcr);
-        let pa = r32(hcr);
-        let pl = r32(hcr);
-        let gd = r32(hcr);
-        let fl = r32(hcr);
-        let sp = r32(hcr);
-        let spl = r32(hcr);
-        let dev = r64(hcr);
-        let ino = r64(hcr);
-        let fsize = r64(hcr);
-        let mt = r64(hcr) as! i64;
-        let ct = r64(hcr) as! i64;
+        let st = m32();
+        let en = m32();
+        let pa = m32();
+        let pl = m32();
+        let gd = m32();
+        let fl = m32();
+        let sp = m32();
+        let spl = m32();
+        let dev = m64();
+        let ino = m64();
+        let fsize = m64();
+        let mt = m64() as! i64;
+        let ct = m64() as! i64;
         if rerr { return false; }
         if st > en || en as i64 > srcn || (pa as i64) + (pl as i64) > nmn || (sp as i64) + (spl as i64) > nmn { return false; }
         var g: i32 = -1;
@@ -1015,210 +1126,125 @@ fn blob_append(i0: i64) -> bool {
             dev: dev, ino: ino, fsize: fsize, mtime: mt, ctime: ct, rt: 0, rw: 0 });
     }
     // macros and their tokens
-    let nm = r32(hcr) as i64;
+    let nm = m32() as i64;
     let mtb = mtoks.len as u32;
     var maxt: i64 = 0;
+    if nm * 5 > mlen - rp { return false; }
     for i in nm {
-        let nmw = r32(hcr);
-        let first = r32(hcr);
-        let count = r32(hcr);
-        let pk = r32(hcr);
-        let loc = r32(hcr);
-        if rerr { return false; }
+        let nmw = mw(rp);
+        let first = mw(rp + 1);
+        let count = mw(rp + 2);
+        let pk = mw(rp + 3);
+        let loc = mw(rp + 4);
+        rp += 5;
         if (first as i64) + (count as i64) > maxt { maxt = (first as i64) + (count as i64); }
         macros.push(Macro { name: lm(nmw), first: mtb + first, count: count, nparams: (pk & 0xFFFF) as! u16,
             flags: ((pk >> 16) & 255) as! u8, builtin: (pk >> 24) as! u8, enabled: true, loc: rl(loc) });
     }
-    let nmt = r32(hcr) as i64;
-    if nmt * 4 > hcr.len - rp || maxt > nmt { return false; }
-    for i in nmt {
-        let a = hcr[rp];
-        let sp = hcr[rp + 1];
-        var v = hcr[rp + 2];
-        let xl = hcr[rp + 3];
-        rp += 4;
-        let k = a & 255;
-        if k == TK_IDENT || k == TK_PARAM { v = lm(v); }
-        mtoks.push(Tok { kind: k as! u8, flags: ((a >> 8) & 255) as! u8, aux: (a >> 16) as! u16, spell: rl(sp), val: v, xloc: rl(xl) });
-    }
+    let nmt = m32() as i64;
+    if nmt * 4 > mlen - rp || maxt > nmt { return false; }
+    if reloc_toks(mtoks, rp, nmt, hcx[0..hr_ni], hcx[hr_abase..hcx.len], hr_s, hr_srclen, 256) == 0 { return false; }
+    rp += nmt * 4;
     // the translation unit's tokens
-    let nt = r32(hcr) as i64;
-    if nt * 4 > hcr.len - rp { return false; }
-    if nt > 0 {
-        if tu_toks.len + nt >= tok_frontier {
-            prefault_toks(tu_toks, nt * 16 + 65536);
-            tok_frontier = tu_toks.len + nt + 4096;
-        }
+    let nt = m32() as i64;
+    if nt * 4 > mlen - rp { return false; }
+    if nt > 0 && tu_toks.len + nt >= tok_frontier {
+        prefault_toks(tu_toks, nt * 16 + 65536);
+        tok_frontier = tu_toks.len + nt + 4096;
     }
-    for i in nt {
-        let a = hcr[rp];
-        let sp = hcr[rp + 1];
-        var v = hcr[rp + 2];
-        let xl = hcr[rp + 3];
-        rp += 4;
-        let k = a & 255;
-        if k == TK_IDENT || k >= TK_KW { v = lm(v); }
-        tu_toks.push(Tok { kind: k as! u8, flags: ((a >> 8) & 255) as! u8, aux: (a >> 16) as! u16, spell: rl(sp), val: v, xloc: rl(xl) });
-    }
+    if reloc_toks(tu_toks, rp, nt, hcx[0..hr_ni], hcx[hr_abase..hcx.len], hr_s, hr_srclen, TK_KW) == 0 { return false; }
+    rp += nt * 4;
     // -E's output (applied later)
     hb_out = rp;
-    let oi, on = rstr(hcr);
-    let bol = r32(hcr);
+    let oi, on = mstr();
+    let bol = m32();
     // -g's macro expansion ranges, #pragma pack and ms_struct
-    let nx = r32(hcr) as i64;
+    let nx = m32() as i64;
     for i in nx {
-        let a = rl(r32(hcr)) as u64;
-        let b = rl(r32(hcr)) as u64;
+        let a = rl(m32()) as u64;
+        let b = rl(m32()) as u64;
         mx_ranges.push((a << 32) | b);
     }
     let tb = tu_toks.len - nt;
-    let npc = r32(hcr) as i64;
+    let npc = m32() as i64;
     for i in npc {
-        let ti = r32(hcr) as i64;
-        let v = r32(hcr);
+        let ti = m32() as i64;
+        let v = m32();
         if ti > nt { rerr = true; }
         pack_changes.push((tb + ti) as! u32);
         pack_changes.push(v);
     }
-    let nms = r32(hcr) as i64;
+    let nms = m32() as i64;
     for i in nms {
-        let ti = r32(hcr) as i64;
-        let v = r32(hcr);
+        let ti = m32() as i64;
+        let v = m32();
         if ti > nt { rerr = true; }
         ms_changes.push((tb + ti) as! u32);
         ms_changes.push(v);
     }
     // the changes to what was there before: validated here, applied later
     hb_mut = rp;
-    let nim = r32(hcr) as i64;
+    let nim = m32() as i64;
     for i in nim {
-        let li = r32(hcr);
-        let kind = r32(hcr);
-        let kk = r32(hcr);
-        let id = lm(li);
-        if kind > 2 || (kind == 1 && kk as i64 >= nm) { return false; }
-        if kind == 2 && !rerr {
-            // its observed definition: the identifier table says which
-            if !ent_has_def(li) { return false; }
-        }
+        let li = m32();
+        let kind = m32();
+        let kk = m32();
+        lm(li);
+        if rerr || kind > 2 || (kind == 1 && kk as i64 >= nm) { return false; }
+        if kind == 2 && ent_flags(li) & LF_DEF == 0 { return false; }
     }
-    let npo = r32(hcr) as i64;
-    for i in npo { lm(r32(hcr)); }
-    let nfm = r32(hcr) as i64;
+    let npo = m32() as i64;
+    for i in npo { lm(m32()); }
+    let nfm = m32() as i64;
     for i in nfm {
-        let x = r32(hcr) as i64;
-        let gd = r32(hcr);
-        let fl = r32(hcr);
-        let sp = r32(hcr);
-        let spl = r32(hcr);
+        let x = m32() as i64;
+        let gd = m32();
+        let fl = m32();
+        let sp = m32();
+        let spl = m32();
         if x >= hpo.len || hpo[x].kind != PO_OLD { return false; }
         if gd != 0xFFFFFFFF { lm(gd); }
         if (sp as i64) + (spl as i64) > nmn { return false; }
     }
-    if hm_flags & 1 != 0 { r64(hcr); }
+    if hm_flags & 1 != 0 { m64(); }
     if hm_flags & 2 != 0 {
-        r32(hcr);
-        let n = r32(hcr) as i64;
+        m32();
+        let n = m32() as i64;
         for i in n {
-            r32(hcr);
-            let l = r32(hcr);
+            m32();
+            let l = m32();
             if l != 0 { lm(l - 1); }
         }
     }
-    let so = r32(hcr);
-    let sl = r32(hcr);
-    let sy = r32(hcr);
+    let so = m32();
+    let sl = m32();
+    let sy = m32();
     if (so as i64) + (sl as i64) > nmn { return false; }
-    if rerr { return false; }
-    // the new identifiers' spellings are where their first lookups were
-    let save2 = rp;
-    rp = hb_ident_pos;
-    for i in hr_ni {
-        let h = r32(hcr);
-        let fl = r32(hcr);
-        let off = r32(hcr);
-        let def = r32(hcr);
-        let si, sn = rstr(hcr);
-        if hcx[i] as i64 >= i0 {
-            if fl & LF_LOOKED == 0 { return false; }
-            let o = rl(off) as i64;
-            if rerr || o + sn > src.len || !str_is(hcr, si, sn, src[o..o + sn]) { return false; }
-        }
-    }
-    rp = save2;
     return !rerr;
-}
-
-var hb_ident_pos: i64 = 0;
-
-// Whether local identifier li has LF_DEF (re-reads the table).
-fn ent_has_def(li: u32) -> bool {
-    let save = rp;
-    rp = hb_ident_pos;
-    var res = false;
-    for i in hr_ni {
-        let h = r32(hcr);
-        let fl = r32(hcr);
-        let off = r32(hcr);
-        let def = r32(hcr);
-        let si, sn = rstr(hcr);
-        if i == li as i64 { res = fl & LF_DEF != 0; break; }
-    }
-    rp = save;
-    return res;
-}
-
-// The local identifier li's observed macro (its LF_DEF definition).
-fn ent_def_macro(li: u32) -> i32 {
-    let save = rp;
-    rp = hb_ident_pos;
-    var res: i32 = -1;
-    for i in hr_ni {
-        let h = r32(hcr);
-        let fl = r32(hcr);
-        let off = r32(hcr);
-        let def = r32(hcr);
-        let si, sn = rstr(hcr);
-        if i == li as i64 {
-            if fl & LF_DEF != 0 && (def as i64) < hdef.len { res = hdef[def].m; }
-            break;
-        }
-    }
-    rp = save;
-    return res;
 }
 
 // The rest of a replay, which cannot fail: the identifiers, the path
 // cache, the changes to identifiers and files, -E's output, the end of
 // the include; and what the recordings around it must know.
-fn blob_commit(lpos: i64, i0: i64, n0: i64, f0: i64, m0: i64, t0: i64) {
+fn blob_commit(i0: i64, n0: i64, f0: i64, m0: i64) {
     // identifiers, created in the order of their first lookups
-    rp = lpos;
     for i in hr_ni {
-        let h = r32(hcr);
-        let fl = r32(hcr);
-        let off = r32(hcr);
-        let def = r32(hcr);
-        let si, sn = rstr(hcr);
+        let pos = hcx[hr_ni + i] as i64;
         let id = hcx[i];
-        if id as i64 >= i0 {
-            let nid = ident_new(rl(off) as i64, sn, h);
-        }
-        if rec_on && fl & LF_LOOKED != 0 {
-            if fl & LF_NOTEXIST != 0 { hk_notexist = 1; }
-            hk_look(id, rl(off) as i64);
-            hk_notexist = 0;
+        if id as i64 >= i0 { ident_new(rl(mw(pos + 2)) as i64, mw(pos + 4) as i64, mw(pos)); }
+        if rec_on {
+            let fl = mw(pos + 1);
+            if fl & LF_LOOKED != 0 {
+                if fl & LF_NOTEXIST != 0 { hk_notexist = 1; }
+                hk_look(id, rl(mw(pos + 2)) as i64);
+                hk_notexist = 0;
+            }
         }
     }
     if rec_on {
         // the observations, before the changes
-        rp = lpos;
         for i in hr_ni {
-            let h = r32(hcr);
-            let fl = r32(hcr);
-            let off = r32(hcr);
-            let def = r32(hcr);
-            let si, sn = rstr(hcr);
+            let fl = mw((hcx[hr_ni + i] as i64) + 1);
             if fl & LF_OBS != 0 { hk_mread(hcx[i]); }
             if fl & LF_EXISTS != 0 { hk_exist(hcx[i] as i64); }
         }
@@ -1255,11 +1281,11 @@ fn blob_commit(lpos: i64, i0: i64, n0: i64, f0: i64, m0: i64, t0: i64) {
     }
     // the changes to identifiers' macros, poisoning, files loaded before
     rp = hb_mut;
-    let nim = r32(hcr) as i64;
+    let nim = m32() as i64;
     for i in nim {
-        let li = r32(hcr);
-        let kind = r32(hcr);
-        let kk = r32(hcr);
+        let li = m32();
+        let kind = m32();
+        let kk = m32();
         let id = hcx[li];
         if rec_on { hk_mwrite(id); }
         if kind == 0 {
@@ -1267,25 +1293,22 @@ fn blob_commit(lpos: i64, i0: i64, n0: i64, f0: i64, m0: i64, t0: i64) {
         } else if kind == 1 {
             idents[id].macro = (m0 + (kk as i64)) as! i32;
         } else {
-            let save = rp;
-            let m = ent_def_macro(li);
-            rp = save;
-            idents[id].macro = m;
+            idents[id].macro = hdef[ent_def(li)].m;
         }
     }
-    let npo = r32(hcr) as i64;
+    let npo = m32() as i64;
     for i in npo {
-        let id = hcx[r32(hcr)];
+        let id = hcx[m32()];
         if rec_on { hk_poison(id); }
         idents[id].flags = idents[id].flags | ID_POISONED;
     }
-    let nfm = r32(hcr) as i64;
+    let nfm = m32() as i64;
     for i in nfm {
-        let x = r32(hcr) as i64;
-        let gd = r32(hcr);
-        let fl = r32(hcr);
-        let sp = r32(hcr);
-        let spl = r32(hcr);
+        let x = m32() as i64;
+        let gd = m32();
+        let fl = m32();
+        let sp = m32();
+        let spl = m32();
         let f = hpo[x].f as i64;
         if rec_on { hk_fwrite(f); }
         if gd == 0xFFFFFFFF { files[f].grd = -1; } else { files[f].grd = hcx[gd] as! i32; }
@@ -1298,24 +1321,24 @@ fn blob_commit(lpos: i64, i0: i64, n0: i64, f0: i64, m0: i64, t0: i64) {
     }
     if hm_flags & 1 != 0 {
         if rec_on { hk_counter(); }
-        counter_value = r64(hcr) as! i64;
+        counter_value = m64() as! i64;
     }
     if hm_flags & 2 != 0 {
         if rec_on { hk_pack(); }
-        pack_cur = r32(hcr);
-        let n = r32(hcr) as i64;
+        pack_cur = m32();
+        let n = m32() as i64;
         pack_stack.clear();
         for i in n {
-            let v = r32(hcr);
-            let l = r32(hcr);
+            let v = m32();
+            let l = m32();
             var lab: u32 = 0;
             if l != 0 { lab = hcx[l - 1] + 1; }
             pack_stack.push(PackEnt { val: v, label: lab });
         }
     }
-    let so = r32(hcr);
-    let sl = r32(hcr);
-    let sy = r32(hcr);
+    let so = m32();
+    let sl = m32();
+    let sy = m32();
     if rec_on {
         let d = (include_depth() + (hm_maxrel as i64)) as! u32;
         for r in recs.len { if d > recs[r].maxd { recs[r].maxd = d; } }
@@ -1326,11 +1349,10 @@ fn blob_commit(lpos: i64, i0: i64, n0: i64, f0: i64, m0: i64, t0: i64) {
     if mode_E {
         pr_file_enter((n0 as u32) + so, sl, sy != 0);
         rp = hb_out;
-        let oi, on = rstr(hcr);
-        let bol = r32(hcr);
-        words_to_bytes(out, hcr, oi, on);
+        let oi, on = mstr();
+        let bol = m32();
+        mcopy(out, oi, on);
         pr_bol = bol != 0;
-        if on > 0 { pr_prev_kind = -1; }
         if out.len > 1048576 && !out_to_file && !rec_on { pr_flush(); }
     }
     // back in the includer, as at the end of the file
@@ -1422,7 +1444,10 @@ fn hc_unit_end() {
         st_small++;
         return;
     }
-    if !rec_save(r) {
+    let t0 = clock_ns();
+    let ok = rec_save(r);
+    tm_save += clock_ns() - t0;
+    if !ok {
         st_bad++;
         return;
     }
@@ -1940,19 +1965,26 @@ fn hc_report() {
     } else {
         format(o, "goosecc: header cache: ", st_lookups, " lookups, ", st_hits, " hits, ", st_misses, " misses; ",
             st_recorded, " recorded (", st_wbytes, " bytes written), ", st_small, " too small, ", st_bad, " not cacheable, ",
-            st_corrupt, " corrupt, ", st_werr, " write errors\n");
+            st_corrupt, " corrupt, ", st_werr, " write errors; replay ", tm_replay / 1000, " us (read ", tm_read / 1000,
+            ", check ", tm_check / 1000, ", append ", tm_append / 1000, ", commit ", tm_commit / 1000, "), saving ", tm_save / 1000, " us\n");
+    }
+    if hc_on && opt_time {
+        var q: u8[>..] = [];
+        format(q, "goosecc: header cache: manifests ", tm_man / 1000, " us, heads ", tm_head / 1000, " us, checksums ", tm_csum / 1000, " us\n");
+        write_stderr(q);
     }
     write_stderr(o);
 }
 
 // --pp-state-hash: a checksum of everything preprocessing leaves for the
-// later phases (and -E's output), to show that a replay leaves the same
-// state. Not the caches (line tables, the path cache, the identifier hash
-// table). With verbose, one per array.
+// later phases, to show that a replay leaves the same state. Not the
+// caches (line tables, the path cache, the identifier hash table), nor
+// -E's output (written to stdout in pieces; compare it whole). With
+// verbose, one per array.
 fn hc_state_hash(verbose: bool) {
     var o: u8[>..] = [];
     var all: u64 = 0;
-    for part in 9 {
+    for part in 8 {
         hcw.clear();
         if part == 0 { wstr(hcw, src); }
         if part == 1 { wstr(hcw, names); }
@@ -2004,12 +2036,11 @@ fn hc_state_hash(verbose: bool) {
             hcw.push(0xFFFFFFFF);
             for x in push_stack { hcw.push(x as! u32); }
         }
-        if part == 8 { wstr(hcw, out); }
         let c = csum_words(hcw);
         all = (all ^ c) * 0x9e3779b97f4a7c15;
         if verbose {
             o.append(match part { 0 => " src ", 1 => " names ", 2 => " idents ", 3 => " macros ", 4 => " mtoks ", 5 => " toks ",
-                6 => " files ", 7 => " misc ", _ => " out " });
+                6 => " files ", _ => " misc " });
             hexd(o, c, 16);
         }
     }
