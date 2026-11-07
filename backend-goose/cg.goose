@@ -430,7 +430,7 @@ fn gen_inst(gi: u32, cur: u32) {
                 lower_call(I, j);
                 call_lp = GIR_NONE;
             },
-            GIR_GEP => { if vi[j].home != H_ALLOCA { lower_gep_a(I, j); } },
+            GIR_GEP => lower_gep_a(I, j),
             GIR_ICMP => lower_icmp_a(I, j),
             GIR_RET => lower_ret(I, j),
             GIR_BR => {
@@ -778,7 +778,6 @@ fn gen_function(fi: u32) {
         if I.op != GIR_ALLOCA { continue; }
         if layout_alloca(I, gi - f_first_inst) { f_overaligned = true; }
     }
-    frame_geps_fixup();
     setup_args();
 
     if dbg_on {

@@ -111,10 +111,7 @@ can be spilled as is.
 
 Homes (`vi[id].home`, offset `vi[id].off`): `H_SLOT` (a frame slot,
 allocated on first need), `H_ALLOCA` (the value is the address `rbp + off`
-of a static alloca, or of a GEP with constant indices of one or of such a
-GEP: the pre-pass marks those with their offset from the base, fixed up
-after the frame layout, `frame_geps_fixup`; every use reads `[rbp+off]` or
-rematerializes `lea r, [rbp+off]`), `H_PTR` (over-aligned alloca: the pointer is stored
+of a static alloca), `H_PTR` (over-aligned alloca: the pointer is stored
 at `rbp + off`), `H_BYVAL` (argument: address of the caller's copy),
 `H_STACK` (argument passed on the stack: its home is the incoming slot).
 

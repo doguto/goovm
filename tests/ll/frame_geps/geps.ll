@@ -1,7 +1,7 @@
-; GEPs with constant indices of allocas, which the back-end turns into frame
-; addresses (ra.goose pp_frame_gep): chains, negative and byte offsets, uses
+; GEPs with constant indices of allocas (a frame-address scheme for them was
+; tried in C1 and removed): chains, negative and byte offsets, uses
 ; in other blocks and in PHIs, an escaping address, pointer compares, an
-; over-aligned base (not a frame address), and an alloca outside the entry
+; over-aligned base, and an alloca outside the entry
 ; block. main.c calls them and prints the results.
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-linux-gnu"
