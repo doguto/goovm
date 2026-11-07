@@ -1,12 +1,15 @@
 // goovm-llc: LLVM bitcode -> GIR -> x86-64 ELF object.
 //
-//   goovm-llc [--backend=goose|llvm|llvm-only] [--fallback] [--time] [--dump-gir]
+//   goovm-llc [--backend=goose|llvm|llvm-only] [-O0|-O1] [--fallback] [--time] [--dump-gir]
 //             in.bc -o out.o
 //
 //   goose      the Goose back-end (default; backend-goose/)
 //   llvm       LLVM's own -O0 code generator, in process (for comparison)
 //   llvm-only  parse and export only: no back-end, no object written
 //
+//   -O1         run the Goose middle-end and the global register allocator
+//               (GIR header opt_level 1; -O2 and -O3 mean the same); -O0 is
+//               the default
 //   --fallback  if the module uses something GIR cannot express, compile it
 //               with LLVM's -O0 code generator instead and say so on stderr
 //               ("goovm-llc: fallback: <reason>")
@@ -47,7 +50,8 @@ double us(clk::time_point a, clk::time_point b) { return std::chrono::duration<d
 
 [[noreturn]] void usage() {
     std::fprintf(stderr,
-                 "usage: goovm-llc [--backend=goose|llvm|llvm-only] [--fallback] [--time] [--dump-gir] in.bc -o out.o\n");
+                 "usage: goovm-llc [--backend=goose|llvm|llvm-only] [-O0|-O1] [--fallback] [--time] [--dump-gir] in.bc -o "
+                 "out.o\n");
     std::exit(1);
 }
 
@@ -153,9 +157,11 @@ bool goose_codegen(const GirModule &m, const uint8_t *&obj, size_t &obj_len) {
 int main(int argc, char **argv) {
     std::string backend = "goose", in, out;
     bool time = false, dump = false, fallback = false;
+    unsigned opt_level = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!std::strncmp(a, "--backend=", 10)) backend = a + 10;
+        else if (a[0] == '-' && a[1] == 'O' && a[2] >= '0' && a[2] <= '3' && !a[3]) opt_level = a[2] == '0' ? 0 : 1;
         else if (!std::strcmp(a, "--time")) time = true;
         else if (!std::strcmp(a, "--dump-gir")) dump = true;
         else if (!std::strcmp(a, "--fallback")) fallback = true;
@@ -201,6 +207,7 @@ int main(int argc, char **argv) {
     if (!use_llvm) {
         try {
             gir_export(*m, tables, (*buf)->getBufferSize());
+            tables.header.opt_level = opt_level;
         } catch (const GirUnsupported &e) {
             if (!fallback || backend == "llvm-only") {
                 std::fprintf(stderr, "goovm-llc: %s\n", e.msg.c_str());

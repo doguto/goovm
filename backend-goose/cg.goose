@@ -24,8 +24,10 @@ import dwarf;
 import abi;
 import lowera;
 import lower;
+import opt;
 
 var M: Module;
+var opt_on = false;          // opt_level >= 1 (the middle-end ran; global register allocation)
 
 // The object file being built; the host reads it until the next call.
 var obj: u8[>..] = [];
@@ -896,6 +898,10 @@ export fn gir_codegen_ex(header: const Header[:], types: const TypeDef[:], funcs
 }
 
 fn codegen() -> const u8[:] {
+    // -O1: the middle-end makes new tables (opt.goose), which the code
+    // generator then compiles
+    opt_on = M.header.len != 0 && M.header[0].r0 >= 1;
+    if opt_on { opt_module(); }
     code.clear();
     mcode.clear();
     rela_code.clear();

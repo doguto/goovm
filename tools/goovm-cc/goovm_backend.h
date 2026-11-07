@@ -17,8 +17,10 @@ void goovm_backend_exit();
 // Exports `m` to GIR and compiles it with the Goose back-end into an ELF
 // object. Returns 0 on success, 2 if the module uses something GIR cannot
 // express (`err` says what), 1 on other errors. The phase times are in
-// microseconds.
+// microseconds. opt_level >= 1 runs the Goose middle-end and the global
+// register allocator (GIR header opt_level).
 int goovm_compile_module(llvm::Module &m, std::vector<uint8_t> &obj, std::string &err,
-                         long long *export_us = nullptr, long long *codegen_us = nullptr);
+                         long long *export_us = nullptr, long long *codegen_us = nullptr,
+                         unsigned opt_level = 0);
 
 #endif

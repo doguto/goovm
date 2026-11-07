@@ -24,7 +24,7 @@ void goovm_backend_init(int argc, char **argv) { goose_init(argc, argv); }
 void goovm_backend_exit() { goose_exit(); }
 
 int goovm_compile_module(llvm::Module &mod, std::vector<uint8_t> &obj, std::string &err,
-                         long long *export_us, long long *codegen_us) {
+                         long long *export_us, long long *codegen_us, unsigned opt_level) {
     using clk = std::chrono::steady_clock;
     auto t0 = clk::now();
     GirTables tables;
@@ -34,6 +34,7 @@ int goovm_compile_module(llvm::Module &mod, std::vector<uint8_t> &obj, std::stri
         err = u.msg;
         return 2;
     }
+    tables.header.opt_level = opt_level;
     auto t1 = clk::now();
     GirModule m = tables.view();
     gs_i64 len = 0;

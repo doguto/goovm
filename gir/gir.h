@@ -336,6 +336,12 @@ typedef struct GirBlock {
 #define GIR_FN_SJLJ     16u    /* contains SJLJ_SETJMP: preserve all callee-saved registers */
 #define GIR_FN_RETURNS_TWICE 32u /* calls a returns_twice function (setjmp, vfork, ...): */
                                /*   a frame slot must not be shared between values */
+/* additive (milestone E1), hints for the optimizer (opt_level >= 1); an -O0
+ * back-end ignores them */
+#define GIR_FN_NOINLINE 64u    /* do not inline calls of this function (the source said
+                                  noinline; clang -O0's implied noinline, which comes with
+                                  optnone, is not exported) */
+#define GIR_FN_ALWAYSINLINE 128u /* always_inline */
 #define GIR_FN_ALIGN_SHIFT 24  /* bits 24..31: log2 of the function alignment (>= 4) */
 
 /* 40 bytes. Functions are also globals (Func.global is their entry in the
@@ -584,7 +590,12 @@ typedef struct GirHeader {
     uint32_t flags;              /* GIR_MF_* */
     uint32_t tls_get_addr;       /* globals index of __tls_get_addr, or GIR_NONE */
     uint32_t n_llvm_insts;       /* statistics */
-    uint32_t reserved[4];
+    uint32_t opt_level;          /* additive (milestone E1; was reserved, so 0 from older
+                                    producers): 0 = -O0 code generation; >= 1 = the
+                                    back-end runs its middle-end on the tables and
+                                    allocates registers globally (backend-goose/DESIGN.md
+                                    §15, §16) */
+    uint32_t reserved[3];
 } GirHeader;
 
 /* The whole module, as the host holds it (host-side only: this struct is

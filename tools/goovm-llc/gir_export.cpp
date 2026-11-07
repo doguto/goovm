@@ -2441,6 +2441,12 @@ struct Exporter : GirDwarfHost {
         GirFunc gf{};
         gf.global = g;
         fn_flags = (Fn.hasLocalLinkage() ? GIR_FN_INTERNAL : 0) | (FT->isVarArg() ? GIR_FN_VARARG : 0);
+        // inlining hints for the optimizer (-O1); clang -O0 puts noinline on
+        // every function together with optnone, so that noinline is not the
+        // source's and is not exported
+        if (Fn.hasFnAttribute(Attribute::NoInline) && !Fn.hasFnAttribute(Attribute::OptimizeNone))
+            fn_flags |= GIR_FN_NOINLINE;
+        if (Fn.hasFnAttribute(Attribute::AlwaysInline)) fn_flags |= GIR_FN_ALWAYSINLINE;
         uint64_t falign = Fn.getAlign() ? Fn.getAlign()->value() : 16;
         if (falign < 16) falign = 16;
         gf.first_block = (uint32_t)T.blocks.size();
