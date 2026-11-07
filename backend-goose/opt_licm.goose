@@ -326,6 +326,247 @@ fn licm_split_gep(i: u32, pt: u32, ep: u32) -> bool {
     return true;
 }
 
+// Loop rotation (LLVM's LoopRotate, for small headers): a loop whose header
+// H holds only PHIs, a few cheap instructions and the exit test `condbr c,
+// B, E` (B in the loop, E outside), entered from one block P and with one
+// latch L that ends in `br H`, gets a copy H' of the test on the entry edge:
+// P goes to H', H' to B or E, and H is entered only from L, so
+// merge_blocks folds it into the latch. The loop becomes a guarded
+// do-while: one taken branch per iteration and none on entry (with the test
+// at the top, a loop that runs once or twice paid a jump to the test on
+// every entry). The values H defines that are used outside H are repaired by
+// demotion: an alloca stored in H and in H' and loaded at those uses, which
+// mem2reg promotes again with the PHIs the new CFG needs. (The caller runs
+// mem2reg; build_cfg first.)
+let ROT_MAX: u32 = 4;           // instructions a header may have besides PHIs and the test
+let ROT_LOOPS: u32 = 32;        // rotations per function
+var rot_map: u32[>..] = [];     // per instruction of H: its value on the entry edge
+var rot_mark: u32[>..] = [];    // loop membership (epoch)
+var rot_epoch: u32 = 0;
+var rot_vals: u32[>..] = [];    // H's values
+fn rotate_loops() -> bool {
+    if o_pinned { return false; }
+    ensure_cfg();
+    resolve_all();
+    if rot_mark.len < cfg_nb { rot_mark.resize(cfg_nb, 0); }
+    // (headers first, as the RPO lists them now; the CFG analyses go stale
+    // as loops are rotated, but each rotation only reads its own loop)
+    // (inner loops first: their headers come later in the RPO)
+    lc_hdr.clear();
+    var k = rpo.len;
+    while k > 0 {
+        k--;
+        let h = rpo[k];
+        if h == 0 || b_fl[h] & (BF_LP | BF_DEAD) != 0 || p_start[h + 1] - p_start[h] < 2 { continue; }
+        lc_hdr.push(h);
+    }
+    var n: u32 = 0;
+    build_uses();
+    for H in lc_hdr {
+        if n >= ROT_LOOPS { break; }
+        if rot_map.len < o_ins.len { rot_map.resize(o_ins.len, NIL); }
+        if rotate_one(H) {
+            n++;
+            // (the CFG and the uses are rebuilt for the next loop)
+            ensure_cfg();
+            if rot_mark.len < cfg_nb { rot_mark.resize(cfg_nb, 0); }
+            build_uses();
+        }
+    }
+    return n != 0;
+}
+fn rotate_one(H: u32) -> bool {
+    if b_fl[H] & (BF_LP | BF_DEAD) != 0 { return false; }
+    // one latch, and the outside edges through one preheader (made here if
+    // there are several: SimplifyCFG sends the edges of empty blocks straight
+    // to the header)
+    var nback: u32 = 0;
+    var nout: u32 = 0;
+    for k in p_start[H]..p_start[H + 1] {
+        let p = p_list[k];
+        if rpo_num[p] == NIL { return false; }
+        if dominates(H, p) { nback++; } else { nout++; }
+    }
+    if nback != 1 || nout == 0 { return false; }
+    if nout > 1 {
+        if !licm_preheader(H) { return false; }
+        ensure_cfg();
+        if rot_mark.len < cfg_nb { rot_mark.resize(cfg_nb, 0); }
+        if rot_map.len < o_ins.len { rot_map.resize(o_ins.len, NIL); }
+        build_uses();
+    }
+    if p_start[H + 1] - p_start[H] != 2 { return false; }
+    let q0 = p_list[p_start[H]];
+    let q1 = p_list[p_start[H] + 1];
+    if rpo_num[q0] == NIL || rpo_num[q1] == NIL || q0 == q1 { return false; }
+    var P: u32 = NIL;
+    var L: u32 = NIL;
+    if dominates(H, q0) && !dominates(H, q1) { L = q0; P = q1; }
+    else if dominates(H, q1) && !dominates(H, q0) { L = q1; P = q0; }
+    else { return false; }
+    let lt = b_last[L];
+    if lt == NIL || o_ins[lt].op != GIR_BR || L == H { return false; }
+    let pt = b_last[P];
+    if pt == NIL || block_invoke(P) != NIL { return false; }
+    let pop: u32 = o_ins[pt].op;
+    if pop != GIR_BR && pop != GIR_CONDBR { return false; }
+    let t = b_last[H];
+    if t == NIL || o_ins[t].op != GIR_CONDBR || o_ins[t].b == o_ins[t].c { return false; }
+    // loop body: backwards from L to H
+    rot_epoch++;
+    rot_mark[H] = rot_epoch;
+    tmp_stack.clear();
+    if rot_mark[L] != rot_epoch {
+        rot_mark[L] = rot_epoch;
+        tmp_stack.push(L);
+    }
+    while tmp_stack.len != 0 {
+        let b = tmp_stack.pop();
+        for k in p_start[b]..p_start[b + 1] {
+            let q = p_list[k];
+            if rpo_num[q] == NIL || rot_mark[q] == rot_epoch { continue; }
+            rot_mark[q] = rot_epoch;
+            tmp_stack.push(q);
+        }
+    }
+    let x = o_ins[t].b;
+    let y = o_ins[t].c;
+    let xin = rot_mark[x] == rot_epoch;
+    let yin = rot_mark[y] == rot_epoch;
+    if xin == yin { return false; }
+    let E = if xin { y } else { x };
+    let B = if xin { x } else { y };
+    if b_fl[E] & BF_LP != 0 || b_fl[B] & BF_LP != 0 || B == H || E == P { return false; }
+    // H: PHIs, a few cheap instructions, the test; the values used outside H
+    // must be promotable again
+    rot_vals.clear();
+    var ni: u32 = 0;
+    var i = b_first[H];
+    while i != t {
+        let I = o_ins[i];
+        if I.op != GIR_PHI {
+            if !spec_op(I) || I.op == GIR_GEP { return false; }
+            ni++;
+            if ni > ROT_MAX { return false; }
+        }
+        rot_vals.push(i);
+        i = o_nxt[i];
+    }
+    for v in rot_vals {
+        if rot_used_out(v, H) && (!int_ty(o_ins[v].ty) || bits_of(o_ins[v].ty) > 64) { return false; }
+    }
+    // H' = the test on the entry edge
+    let H2 = new_block();
+    for v in rot_vals {
+        if o_ins[v].op == GIR_PHI {
+            rot_map[v] = res(phi_in(v, P));
+            continue;
+        }
+        let c = new_inst(o_ins[v]);
+        each_slot(c) { s =>
+            vset(c, s, rot_in(res(vget(c, s)), H));
+        };
+        link_end(H2, c);
+        rot_map[v] = c;
+    }
+    let ct = new_inst(o_ins[t]);
+    o_ins[ct].a = rot_in(res(o_ins[t].a), H);
+    link_end(H2, ct);
+    // demotion of the values used outside H
+    for v in rot_vals {
+        if !rot_used_out(v, H) { continue; }
+        let ty: u32 = o_ins[v].ty;
+        let a = new_inst(Inst { op: GIR_ALLOCA as! u8, sub: 0, flags: 0, ty: GIR_T_PTR, aux: 0, a: store_of(ty),
+                                b: M.types[ty].align, c: 0, dbg: o_ins[t].dbg });
+        link_start(0, a);
+        rot_store(v, ty, a, t);
+        rot_store(rot_map[v], ty, a, ct);
+        for k in u_start[v]..u_start[v + 1] {
+            let u = u_list[k];
+            if o_blk[u] == NIL || o_blk[u] == H2 { continue; }
+            let U = o_ins[u];
+            if o_blk[u] == H && U.op != GIR_PHI { continue; }
+            if U.op == GIR_PHI {
+                for e in 0..U.c {
+                    let p = o_ops[U.b + 2 * e + 1];
+                    if res(o_ops[U.b + 2 * e]) != v || p == H { continue; }
+                    o_ops[U.b + 2 * e] = rot_load(a, ty, b_last[p]);
+                }
+            } else {
+                var ld: u32 = NIL;
+                each_slot(u) { s =>
+                    if res(vget(u, s)) == v {
+                        if ld == NIL { ld = rot_load(a, ty, u); }
+                        vset(u, s, ld);
+                    }
+                };
+            }
+        }
+    }
+    // H' enters B and E like H
+    rot_phis(B, H, H2);
+    rot_phis(E, H, H2);
+    // P goes to H' instead of H
+    if pop == GIR_BR { o_ins[pt].a = H2; }
+    else {
+        if o_ins[pt].b == H { o_ins[pt].b = H2; }
+        if o_ins[pt].c == H { o_ins[pt].c = H2; }
+    }
+    phi_remove_pred(H, P);
+    b_lnext[H2] = b_lnext[P];
+    b_lnext[P] = H2;
+    return true;
+}
+// v (an operand of a copy of H's instruction) on the entry edge.
+fn rot_in(v: u32, H: u32) -> u32 {
+    if is_inst(v) && o_blk[v] == H { return rot_map[v]; }
+    return v;
+}
+// Whether value v of H is used outside H: by an instruction of another block
+// or as a PHI's incoming value on an edge that does not leave H (H's own
+// PHIs included: the edge from the latch, which H no longer dominates).
+fn rot_used_out(v: u32, H: u32) -> bool {
+    for k in u_start[v]..u_start[v + 1] {
+        let u = u_list[k];
+        if o_blk[u] == NIL { continue; }
+        let U = o_ins[u];
+        if U.op != GIR_PHI {
+            if o_blk[u] != H { return true; }
+            continue;
+        }
+        for e in 0..U.c {
+            if res(o_ops[U.b + 2 * e]) == v && o_ops[U.b + 2 * e + 1] != H { return true; }
+        }
+    }
+    return false;
+}
+fn rot_store(v: u32, ty: u32, a: u32, at: u32) {
+    let s = new_inst(Inst { op: GIR_STORE as! u8, sub: 0, flags: 0, ty: GIR_T_VOID, aux: ty as! u16, a: v, b: a, c: 0,
+                            dbg: o_ins[at].dbg });
+    link_before(at, s);
+}
+fn rot_load(a: u32, ty: u32, at: u32) -> u32 {
+    let l = new_inst(Inst { op: GIR_LOAD as! u8, sub: 0, flags: 0, ty: ty as! u16, aux: 0, a: a, b: 0, c: 0,
+                            dbg: o_ins[at].dbg });
+    link_before(at, l);
+    return l;
+}
+// The PHIs of block s get an entry for H2: H's value, mapped to the entry edge.
+fn rot_phis(s: u32, H: u32, H2: u32) {
+    var i = b_first[s];
+    while i != NIL && o_ins[i].op == GIR_PHI {
+        let I = o_ins[i];
+        let w = res(phi_in(i, H));
+        let ns = new_run(2 * (I.c + 1));
+        for q in 0..2 * I.c { o_ops[ns + q] = o_ops[I.b + q]; }
+        o_ops[ns + 2 * I.c] = rot_in(w, H);
+        o_ops[ns + 2 * I.c + 1] = H2;
+        o_ins[i].b = ns;
+        o_ins[i].c = I.c + 1;
+        i = o_nxt[i];
+    }
+}
+
 // Loop rotation in the layout: a loop whose header ends in a conditional
 // branch (one successor in the loop, one out) and whose only latch ends in a
 // branch to the header gets its header placed right after the latch. The

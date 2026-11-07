@@ -766,6 +766,7 @@ fn opt_function(fi: u32) {
         if mem2reg() { simplify_phis(); }
     }
     opt_round();
+    if !opt_off("tre") && tail_recursion() { opt_round(); }
     if !opt_off("inline") && inl_any_call() {
         ensure_cfg();
         build_loops();
@@ -783,6 +784,12 @@ fn opt_function(fi: u32) {
             if mem2reg() { simplify_phis(); }
             opt_round();
         }
+    }
+    if !opt_off("lrot") && rotate_loops() {
+        resolve_all();
+        ensure_cfg();
+        build_uses();
+        if mem2reg() { simplify_phis(); }
     }
     opt_round();
     if !opt_off("licm") && licm() {

@@ -2,7 +2,7 @@
 
 | script | what |
 |---|---|
-| `run.py` | the small differential tests in `c/` (54 programs), `cxx/`, `mixed/` (C and C++ linked together) and `ll/` (hand-written LLVM IR with a C driver) |
+| `run.py` | the small differential tests in `c/` (55 programs), `cxx/`, `mixed/` (C and C++ linked together) and `ll/` (hand-written LLVM IR with a C driver) |
 | `suite.py` | the llvm-test-suite C and C++ corpora through goovm-llc (and goovm-cc), against their reference outputs |
 | `gdb_oracle.py` | the same scripted gdb session on a clang -O0 -g build and a goovm build, compared; `--unwind`: single-step every function checking the backtrace |
 | `realworld_mixed.py` | (v0) links SPASS and consumer-typeset from a mix of goovm and clang objects |

@@ -295,3 +295,218 @@ fn inline_call(c: u32, cfi: u32) {
     }
     if id0 > 0 {}   // (the ids from id0 on are the copy)
 }
+
+// Tail recursion elimination (LLVM's TailCallElim): a call of the function
+// itself right before a return (`return f(...)`, or `return x + f(...)` with
+// the sum only returned: an accumulator) becomes a jump back to the start,
+// where the arguments are PHIs; with an accumulator, a PHI sums the x's and
+// every other return adds it. Functions with allocas (the frame would be
+// reused while a pointer into it may be live), byval or variadic arguments
+// are left alone.
+var tre_call: u32[>..] = [];    // per site: the call
+var tre_add: u32[>..] = [];     // per site: the accumulating add, or NIL
+var tre_phi: u32[>..] = [];     // per argument: its PHI
+let TRE_ARG: u32 = 0x40000000;  // GIR_V_ARG << 30
+fn tre_self_call(c: u32) -> bool {
+    if c == NIL || o_ins[c].op != GIR_CALL { return false; }
+    let C = o_ins[c];
+    return C.flags & (IF_INVOKE | IF_VARARG) == 0 && callee_of(C) == o_fi && C.c == o_f.n_args;
+}
+fn tail_recursion() -> bool {
+    if o_pinned || o_f.flags & (FN_VARARG | FN_VASTART | FN_SJLJ | FN_RETURNS_TWICE) != 0 { return false; }
+    for a in 0..o_f.n_args {
+        if M.opnds[o_f.args + 2 * a + 1] & ABI_BYVAL != 0 { return false; }
+    }
+    resolve_all();
+    tre_call.clear();
+    tre_add.clear();
+    var acc = false;
+    var any_call = false;
+    for b0 in 0..b_first.len {
+        let b: u32 = b0 as! u32;
+        if !live_block(b) { continue; }
+        var i = b_first[b];
+        while i != NIL {
+            let op: u32 = o_ins[i].op;
+            if op == GIR_ALLOCA || op == GIR_DYNALLOCA || op == GIR_STACKSAVE || op == GIR_LANDINGPAD { return false; }
+            if op == GIR_CALL && callee_of(o_ins[i]) == o_fi { any_call = true; }
+            i = o_nxt[i];
+        }
+    }
+    if !any_call { return false; }
+    tre_dup_rets();
+    build_uses();
+    let rt = o_f.ret_ty;
+    for b0 in 0..b_first.len {
+        let b: u32 = b0 as! u32;
+        if !live_block(b) { continue; }
+        let t = b_last[b];
+        if t == NIL || o_ins[t].op != GIR_RET { continue; }
+        let p = o_prv[t];
+        if p == NIL { continue; }
+        let v = if rt == GIR_T_VOID { GIR_NONE } else { res(o_ins[t].a) };
+        if tre_self_call(p) && (rt == GIR_T_VOID || v == p && u_start[p + 1] - u_start[p] == 1) {
+            tre_call.push(p);
+            tre_add.push(NIL);
+            continue;
+        }
+        // ret (add x, c) with c = f(...) right before and only used there
+        if rt == GIR_T_VOID || v != p || o_ins[p].op != GIR_ADD || !int_ty(rt) || bits_of(rt) > 64 { continue; }
+        if o_ins[p].ty != rt || u_start[p + 1] - u_start[p] != 1 { continue; }
+        let c = o_prv[p];
+        if !tre_self_call(c) || u_start[c + 1] - u_start[c] != 1 { continue; }
+        let x = if res(o_ins[p].b) == c { res(o_ins[p].a) } else { res(o_ins[p].b) };
+        if x == c || res(o_ins[p].a) != c && res(o_ins[p].b) != c { continue; }
+        tre_call.push(c);
+        tre_add.push(p);
+        acc = true;
+    }
+    let ns: u32 = tre_call.len as! u32;
+    if ns == 0 { return false; }
+    // (with an accumulator, the other returns must return the type itself)
+    if acc {
+        for b0 in 0..b_first.len {
+            let b: u32 = b0 as! u32;
+            if !live_block(b) { continue; }
+            let t = b_last[b];
+            if t == NIL || o_ins[t].op != GIR_RET || tre_site(b) { continue; }
+            if otype(res(o_ins[t].a)) != rt { return false; }
+        }
+    }
+    // the entry block's instructions move to a new header H; block 0 jumps there
+    let H = new_block();
+    var i = b_first[0];
+    while i != NIL {
+        let nx = o_nxt[i];
+        unlink(i);
+        link_end(H, i);
+        i = nx;
+    }
+    let dbg = o_ins[b_last[H]].dbg;
+    let br0 = new_inst(Inst { op: GIR_BR as! u8, sub: 0, flags: 0, ty: GIR_T_VOID, aux: 0, a: H, b: 0, c: 0, dbg: dbg });
+    link_end(0, br0);
+    sc_tmp.clear();
+    succs_into(H, sc_tmp);
+    for s in sc_tmp { phi_rename_pred(s, 0, H); }
+    b_lnext[H] = b_lnext[0];
+    b_lnext[0] = H;
+    // argument PHIs (entries: the argument from block 0, then one per site)
+    tre_phi.clear();
+    for a in 0..o_f.n_args {
+        let r = new_run(2 * (1 + ns));
+        o_ops[r] = TRE_ARG | a;
+        o_ops[r + 1] = 0;
+        let ph = new_inst(Inst { op: GIR_PHI as! u8, sub: 0, flags: 0, ty: M.opnds[o_f.args + 2 * a] as! u16, aux: 0,
+                                 a: 0, b: r, c: 1 + ns, dbg: dbg });
+        tre_phi.push(ph);
+    }
+    // uses of the arguments read the PHIs (the PHIs are not linked yet)
+    for i0 in 0..o_ins.len {
+        let u: u32 = i0 as! u32;
+        if o_blk[u] == NIL { continue; }
+        each_slot(u) { s =>
+            let v = vget(u, s);
+            if gir_kind(v) == GIR_V_ARG { vset(u, s, tre_phi[gir_idx(v)]); }
+        };
+    }
+    for ph in tre_phi { link_start(H, ph); }
+    var A: u32 = NIL;
+    if acc {
+        let r = new_run(2 * (1 + ns));
+        o_ops[r] = int_const(rt, 0);
+        o_ops[r + 1] = 0;
+        A = new_inst(Inst { op: GIR_PHI as! u8, sub: 0, flags: 0, ty: rt as! u16, aux: 0, a: 0, b: r, c: 1 + ns, dbg: dbg });
+        link_start(H, A);
+    }
+    // the sites jump to H
+    for k in 0..ns {
+        let c = tre_call[k];
+        let b = o_blk[c];
+        let t = b_last[b];
+        for a in 0..o_f.n_args {
+            let I = o_ins[tre_phi[a]];
+            o_ops[I.b + 2 * (1 + k)] = res(o_ops[o_ins[c].b + 2 * a]);
+            o_ops[I.b + 2 * (1 + k) + 1] = b;
+        }
+        if acc {
+            var nv = A;
+            if tre_add[k] != NIL {
+                let p = tre_add[k];
+                let x = if res(o_ins[p].b) == c { res(o_ins[p].a) } else { res(o_ins[p].b) };
+                nv = ins_new(t, GIR_ADD, rt, A, x);
+            }
+            let I = o_ins[A];
+            o_ops[I.b + 2 * (1 + k)] = nv;
+            o_ops[I.b + 2 * (1 + k) + 1] = b;
+        }
+        // (the return, the add of the accumulator to it and the call go)
+        let tdbg = o_ins[t].dbg;
+        unlink(t);
+        if tre_add[k] != NIL { unlink(tre_add[k]); }
+        unlink(c);
+        let br = new_inst(Inst { op: GIR_BR as! u8, sub: 0, flags: 0, ty: GIR_T_VOID, aux: 0, a: H, b: 0, c: 0, dbg: tdbg });
+        link_end(b, br);
+    }
+    // the other returns add the accumulator
+    if acc {
+        for b0 in 0..b_first.len {
+            let b: u32 = b0 as! u32;
+            if !live_block(b) { continue; }
+            let t = b_last[b];
+            if t == NIL || o_ins[t].op != GIR_RET { continue; }
+            let s = ins_new(t, GIR_ADD, rt, A, res(o_ins[t].a));
+            o_ins[t].a = s;
+        }
+    }
+    o_cfg_ok = false;
+    return true;
+}
+// Returns of a PHI (`R: v = phi ...; ret v`, what `c ? x : f(y) + z` leaves):
+// a predecessor that ends in `br R` right after the call (or the add) that
+// computes its incoming value gets a return of its own, which the site scan
+// then finds.
+var tre_tmp: u32[>..] = [];
+fn tre_dup_rets() {
+    let rt = o_f.ret_ty;
+    if rt == GIR_T_VOID { return; }
+    for b0 in 0..b_first.len {
+        let R: u32 = b0 as! u32;
+        if !live_block(R) { continue; }
+        let t = b_last[R];
+        let f = b_first[R];
+        if t == NIL || o_ins[t].op != GIR_RET || f == t || o_ins[f].op != GIR_PHI || o_nxt[f] != t { continue; }
+        if res(o_ins[t].a) != f { continue; }
+        tre_tmp.clear();
+        for k in 0..o_ins[f].c {
+            tre_tmp.push(o_ops[o_ins[f].b + 2 * k + 1]);
+            tre_tmp.push(res(o_ops[o_ins[f].b + 2 * k]));
+        }
+        var k: i64 = 0;
+        while k < tre_tmp.len {
+            let p = tre_tmp[k];
+            let w = tre_tmp[k + 1];
+            k += 2;
+            let pt = b_last[p];
+            if pt == NIL || o_ins[pt].op != GIR_BR || p == R { continue; }
+            let q = o_prv[pt];
+            if q == NIL || q != w { continue; }
+            var site = tre_self_call(q);
+            if !site && o_ins[q].op == GIR_ADD {
+                let c = o_prv[q];
+                site = tre_self_call(c) && (res(o_ins[q].a) == c || res(o_ins[q].b) == c);
+            }
+            if !site { continue; }
+            o_ins[pt].op = GIR_RET as! u8;
+            o_ins[pt].a = w;
+            o_ins[pt].b = 0;
+            o_ins[pt].c = 0;
+            phi_remove_pred(R, p);
+            o_cfg_ok = false;
+        }
+    }
+}
+// Whether block b ends in one of the sites' returns.
+fn tre_site(b: u32) -> bool {
+    for c in tre_call { if o_blk[c] == b { return true; } }
+    return false;
+}
