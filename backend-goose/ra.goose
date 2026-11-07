@@ -564,7 +564,10 @@ fn ra_load_from(r: u32, m: Mem, t: u32) {
 
 // --------------------------------------------------------------- allocation
 
-inline fn ra_live_after(id: u32) -> bool { vi[id].st & ST_GLOB != 0 || vi[id].last > cur_pos }
+fn ra_live_after(id: u32) -> bool {
+    if vi[id].st & ST_PIN != 0 { return rg_live_after(id); }
+    return vi[id].st & ST_GLOB != 0 || vi[id].last > cur_pos;
+}
 inline fn ra_note(id: u32) {
     if vi[id].st & ST_GLOB == 0 && vi[id].last == cur_pos { dying.push(id); }
 }
@@ -596,7 +599,8 @@ fn ra_alloc(xm: u32, pref: u32) -> u32 {
 // Frees a register of class xm by spilling the value whose next use is the
 // farthest (a value that is also in its home costs nothing).
 fn ra_evict(xm: u32) -> u32 {
-    var m = ~r_free & ~r_lock & xm & r_alloc;
+    var m = ~r_free & ~r_lock & xm & r_alloc & ~rg_pin;   // (pinned global values stay)
+    if m == 0 && rg_on { return rg_borrow(xm); }
     if m == 0 { assert(false); }   // every register is locked: a lowering asks for too many
     var best: u32 = 32;
     var best_last: u32 = 0;
@@ -824,6 +828,12 @@ fn ra_gpr_into(v: u32, r: u32, clean: bool) {
 }
 // A register for the INT result of j (locked; recorded by ra_set).
 fn ra_def(j: u32) -> u32 {
+    if rg_on && rg_reg[j] != NOREG {
+        // a pinned value is computed in its register (reserved by rg_def_start)
+        let r: u32 = rg_reg[j];
+        r_lock |= bit(r);
+        return r;
+    }
     let h: u32 = vi[j].hint;
     if h < 16 && vi[j].st & (ST_CS | ST_GLOB) == 0 && r_free & ~r_lock & bit(h) != 0 {
         return ra_alloc(GP_ALLOC, bit(h));
@@ -834,6 +844,7 @@ fn ra_def(j: u32) -> u32 {
 // (lea, imul, movsx, a load) then writes the result there instead of into a
 // dying operand's register, which saves the copy at the call or return.
 fn hint_free(j: u32) -> bool {
+    if rg_on && rg_reg[j] != NOREG { return true; }   // (ra_def gives its register)
     let h: u32 = vi[j].hint;
     return h < 16 && vi[j].st & (ST_CS | ST_GLOB) == 0 && r_free & ~r_lock & bit(h) != 0;
 }
@@ -857,7 +868,23 @@ fn ra_reuse2(v: u32, r: u32) -> u32 {
 // The result of j is in register r (a general or an xmm register, 0..31);
 // ext: it has garbage above its width. Global values are written to their
 // home at once; a result nobody uses is dropped.
-fn ra_set(j: u32, r: u32, ext: bool) {
+fn ra_set(j: u32, r0: u32, ext0: bool) {
+    var r = r0;
+    var ext = ext0;
+    if rg_on && vi[j].st & ST_PIN != 0 {
+        // a pinned value goes to its register, normalized
+        let pr: u32 = rg_reg[j];
+        if r != pr {
+            if pr >= 16 { movaps_rr(pr - 16, r - 16); } else { mov_rr64(pr, r); }
+            if r_temp & bit(r) == 0 && r_val[r] >= RV_TEMP {
+                r_val[r] = RV_NONE;
+                r_free |= bit(r);
+            }
+            r = pr;
+        }
+        if ext && r < 16 { zext_reg(r, bits_of(vtype(j))); }
+        ext = false;
+    }
     let old = r_val[r];
     if old < RV_TEMP && old != j { vi[old].reg = NOREG; }
     r_temp &= ~bit(r);
@@ -868,7 +895,7 @@ fn ra_set(j: u32, r: u32, ext: bool) {
     var st = vi[j].st & ~(ST_MEM | ST_EXT);
     if ext { st |= ST_EXT; }
     vi[j].st = st;
-    if st & ST_GLOB != 0 {
+    if st & (ST_GLOB | ST_PIN) == ST_GLOB {
         ra_store_home(j, r);
     } else if vi[j].nuse == 0 {
         r_val[r] = RV_NONE;
@@ -956,6 +983,11 @@ fn ra_xmm_into(v: u32, x: u32) {
     ra_mat_xmm(v, x);
 }
 fn ra_xdef(j: u32) -> u32 {
+    if rg_on && rg_reg[j] != NOREG {
+        let r: u32 = rg_reg[j];
+        r_lock |= bit(r);
+        return r - 16;
+    }
     let h: u32 = vi[j].hint;
     if h >= 16 && h < 32 && vi[j].st & ST_GLOB == 0 && r_free & ~r_lock & bit(h) != 0 {
         return ra_alloc(XMM_ALL, bit(h)) - 16;
@@ -1059,4 +1091,8 @@ fn ra_end_inst() {
     r_free |= r_temp;
     r_temp = 0;
     r_lock = 0;
+    if rg_on {
+        if rg_nborrow != 0 { rg_restore(); }
+        rg_kills();
+    }
 }

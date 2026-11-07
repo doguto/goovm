@@ -44,6 +44,15 @@ fn v_ext(v: u32) -> bool {
 // loaded and dies here, it is loaded into the register the result is wanted
 // in (its hint), so no copy follows.
 fn ra_gpr_h(v: u32, clean: bool, j: u32) -> u32 {
+    if rg_on && rg_reg[j] != NOREG {
+        // pinned result: a constant or address is built in its register
+        if is_val(v) { return ra_gpr(v, clean); }
+        let r: u32 = rg_reg[j];
+        r_lock |= bit(r);
+        r_temp |= bit(r);
+        ra_mat_gpr(v, r);
+        return r;
+    }
     if !is_val(v) && hint_free(j) {
         // a constant or address: built in the hint register (a scratch the
         // result takes over, see ra_reuse2)
@@ -944,6 +953,7 @@ fn dead_reg(r: u32) -> bool {
 // selects, stores.
 fn pend_reg_ok(j: u32) -> bool {
     if vi[j].kind != K_A { return false; }
+    if rg_on && vi[j].st & ST_PIN != 0 { return false; }   // (rg_def_start may move a local value)
     let N = M.insts[f_first_inst + j];
     let op: u32 = N.op;
     if op == GIR_ADD || op == GIR_SUB || op == GIR_MUL || op == GIR_AND || op == GIR_OR || op == GIR_XOR { return true; }

@@ -708,13 +708,15 @@ fn opt_function(fi: u32) {
         if mem2reg() { simplify_phis(); }
     }
     for round in 2 {
+        build_cfg();
         if !opt_off("fold") {
-            build_cfg();
             simplify();
             simplify_phis();
         }
+        if !opt_off("gvn") { gvn(); }
         resolve_all();
         dce();
+        if !opt_off("cfg") && simplify_cfg() { simplify_phis(); }
     }
     oir_store(fi);
 }

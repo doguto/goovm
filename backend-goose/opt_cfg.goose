@@ -34,24 +34,24 @@ fn block_invoke(b: u32) -> u32 {
     if p != NIL && o_ins[p].op == GIR_CALL && o_ins[p].flags & IF_INVOKE != 0 { return p; }
     return NIL;
 }
-// Appends the successors of b (one per edge) to s_list.
-fn push_succs(b: u32) {
+// Appends the successors of b (one per edge) to out.
+fn succs_into(b: u32, out: u32[>..]&) {
     let t = b_last[b];
     if t == NIL { return; }
     let I = o_ins[t];
     let op: u32 = I.op;
-    if op == GIR_BR { s_list.push(I.a); }
+    if op == GIR_BR { out.push(I.a); }
     else if op == GIR_CONDBR {
-        s_list.push(I.b);
-        s_list.push(I.c);
+        out.push(I.b);
+        out.push(I.c);
     } else if op == GIR_SWITCH {
-        s_list.push(o_ops[I.b]);
-        for k in 0..I.c { s_list.push(o_ops[I.b + 2 + 2 * k]); }
+        out.push(o_ops[I.b]);
+        for k in 0..I.c { out.push(o_ops[I.b + 2 + 2 * k]); }
     } else if op == GIR_INDIRECTBR {
-        for k in 0..I.c { s_list.push(o_ops[I.b + k]); }
+        for k in 0..I.c { out.push(o_ops[I.b + k]); }
     }
     let iv = block_invoke(b);
-    if iv != NIL { s_list.push(o_ops[o_ins[iv].b + 2 * o_ins[iv].c]); }
+    if iv != NIL { out.push(o_ops[o_ins[iv].b + 2 * o_ins[iv].c]); }
 }
 inline fn live_block(b: u32) -> bool { b_fl[b] & BF_DEAD == 0 }
 
@@ -64,7 +64,7 @@ fn build_cfg() {
     s_list.clear();
     for b in 0..nb {
         s_start.push(s_list.len as! u32);
-        if live_block(b) { push_succs(b); }
+        if live_block(b) { succs_into(b, s_list); }
     }
     s_start.push(s_list.len as! u32);
     p_cnt.clear();
