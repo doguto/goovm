@@ -269,7 +269,7 @@ the `<...>` includes); `warm` a compile with the cache that earlier
 compiles filled (one cache for the whole run, so the later files of a
 program also find the variants the earlier ones recorded). tcc is
 Ubuntu's 0.9.27. The load average was 0.9 to 1.4 (another agent's test
-runs).
+runs). The raw data, per file: `../bench/results/b4-2026-11-07/hcache.{md,json}`.
 
 | program | files | goosecc off | cold | warm | tcc -c | clang-20 -O0 -c | warm: speed-up over off | over tcc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
