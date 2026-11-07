@@ -755,7 +755,8 @@ fn file_ok(w: const u32[:], magic: u32) -> bool {
 // its blob's id and its head). Appending is one write, which concurrent
 // appenders cannot interleave; a torn or damaged record ends the reading.
 // This process keeps each manifest it reads in hcm normalized: 5 words,
-// the key, the number of variants, each variant's length and words.
+// the key, the number of variants, each variant's length, checksum (two
+// words, verified when the variant is tried) and words.
 
 // The manifest of the current key (an index into hman), read at its
 // first use in this process.
@@ -786,10 +787,8 @@ fn man_get() -> i64 {
                 if hcr[rp] != HC_MAGIC_R { break; }
                 let vl = hcr[rp + 1] as i64;
                 if vl < 2 || vl > hcr.len - rp - 4 { break; }
-                let c = csum_words(hcr[rp + 4..rp + 4 + vl]);
-                if (c & 0xFFFFFFFF) as! u32 != hcr[rp + 2] || (c >> 32) as! u32 != hcr[rp + 3] { break; }
                 hcm.push(vl as! u32);
-                hcm.append(hcr[rp + 4..rp + 4 + vl]);
+                hcm.append(hcr[rp + 2..rp + 4 + vl]);
                 nv++;
                 rp += 4 + vl;
             }
@@ -1063,15 +1062,22 @@ fn hc_replay1(name: const u8[:], angled: bool, k: i64) -> bool {
     var vpos: i64[>..] = [];
     for vi in nv {
         let vlen = r32(hcm[mo..mo + ml]) as i64;
-        if rerr || vlen > ml - rp { break; }
+        if rerr || vlen + 2 > ml - rp { break; }
         vpos.push(rp);
-        rp += vlen;
+        rp += vlen + 2;
     }
     var vk = vpos.len - 1;
     while vk >= 0 {
         let vstart = vpos[vk];
         vk--;
-        rp = vstart;
+        // the record's checksum, verified now that it is used
+        let vlen = hcm[mo + vstart - 1] as i64;
+        let c = csum_words(hcm[mo + vstart + 2..mo + vstart + 2 + vlen]);
+        if (c & 0xFFFFFFFF) as! u32 != hcm[mo + vstart] || (c >> 32) as! u32 != hcm[mo + vstart + 1] {
+            st_corrupt++;
+            continue;
+        }
+        rp = vstart + 2;
         rerr = false;
         let bid = r64(hcm[mo..mo + ml]);
         if rerr { break; }
@@ -1500,7 +1506,8 @@ fn blob_commit(i0: i64, n0: i64, f0: i64, m0: i64) {
     // the path cache, and the recordings' path observations
     for po in hpo {
         if !rec_on {
-            if po.kind == PO_NEG && po.e < 0 { path_add_w(hcm[hr_mo..hr_mo + hr_ml], po.key as i64, po.klen as i64, -1, 3 - 2 * po.nf); }
+            // (no file at a path: not added; a later lookup asks the file
+            // system again, which costs less than adding them all)
             if po.kind == PO_NEW { path_add_w(hcm[hr_mo..hr_mo + hr_ml], po.key as i64, po.klen as i64, f0 + (po.nf as i64), 0); }
             continue;
         }
@@ -2204,7 +2211,7 @@ fn man_add(r: Rec, bid: u64) {
         nv = r32(hcr) as i64;
         for vi in nv {
             let vl = r32(hcr) as i64;
-            let vs = rp;
+            let vs = rp + 2;
             if vl == hcw.len - 1 && vs + vl <= hcr.len && hcr[vs..vs + vl] == hcw[1..hcw.len] { return; }
             rp = vs + vl;
         }
@@ -2226,7 +2233,7 @@ fn man_add(r: Rec, bid: u64) {
         var skip = nv - HC_MAX_VARIANTS / 2;
         rp = vbase;
         while skip > 0 {
-            rp += 1 + (hcr[rp] as i64);
+            rp += 3 + (hcr[rp] as i64);
             skip--;
         }
         keep0 = rp;
@@ -2237,12 +2244,8 @@ fn man_add(r: Rec, bid: u64) {
         while rp < hcr.len {
             let vl = hcr[rp] as i64;
             hcx.push(HC_MAGIC_R);
-            hcx.push(vl as! u32);
-            let vc = csum_words(hcr[rp + 1..rp + 1 + vl]);
-            hcx.push((vc & 0xFFFFFFFF) as! u32);
-            hcx.push((vc >> 32) as! u32);
-            hcx.append(hcr[rp + 1..rp + 1 + vl]);
-            rp += 1 + vl;
+            hcx.append(hcr[rp..rp + 3 + vl]);
+            rp += 3 + vl;
         }
         hcx.append(hcv);
         res = write_words(hcp, hcx);
@@ -2286,12 +2289,15 @@ fn man_add(r: Rec, bid: u64) {
         rp = keep0;
         while rp < hcr.len {
             let vl = hcr[rp] as i64;
-            hcm.append(hcr[rp..rp + 1 + vl]);
+            hcm.append(hcr[rp..rp + 3 + vl]);
             cnt++;
-            rp += 1 + vl;
+            rp += 3 + vl;
         }
     }
-    hcm.append(hcw);
+    hcm.push(hcw[0]);
+    hcm.push((c & 0xFFFFFFFF) as! u32);
+    hcm.push((c >> 32) as! u32);
+    hcm.append(hcw[1..hcw.len]);
     cnt++;
     hcm[nvpos] = cnt;
     if mi >= 0 {
