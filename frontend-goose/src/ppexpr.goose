@@ -213,7 +213,7 @@ recursive fn pe_unary(ev: bool) -> i64, bool {
                 pe_error("macro name must be an identifier");
                 return 0, false;
             }
-            if rec_on { hk_mread(n.val); }
+            if rec_on { hk_mtest(n.val); }
             let d = idents[n.val].macro >= 0;
             if paren {
                 let c = pp_lex_unexpanded();

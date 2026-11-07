@@ -56,14 +56,16 @@ let EV_PNEG = 6;     // a: path key and spelling (hcb), b: their lengths (key | 
 let EV_PNEW = 7;     // + c: the file loaded from it
 let EV_POLD = 8;     // + c: the file already loaded for it, d: its guard; flag: its state (fstate)
 let EV_FWRITE = 9;   // a: a file loaded before the unit whose state the unit changed
+let EV_MTEST = 10;   // a: identifier, b: its macro (i32) when the unit first tested whether it is one
 
 struct Ev { rec: u16, kind: u8, flag: u8, a: u32, b: u32, c: u32, d: u32 }
 
-// Per identifier: the serial of the innermost recording that has read its
-// macro (m, or written it first), looked it up (l), written its macro (w).
+// Per identifier: the serial of the innermost recording that has tested
+// whether it is a macro (m: or read or written it), read its macro's
+// definition (d: or written it), looked it up (l), written its macro (w).
 // A recording with a serial <= the value has seen it: the recordings that
 // have form an outer part of the stack (B4, DESIGN.md 10.3).
-struct ITouch { m: u32, l: u32, w: u32 }
+struct ITouch { m: u32, d: u32, l: u32, w: u32 }
 
 struct Rec {
     serial: u32,
@@ -90,6 +92,7 @@ let LF_NOTEXIST = 2;   // intern created it: it must not exist
 let LF_OBS = 4;        // its macro was read before the unit changed it: undefined, unless LF_DEF
 let LF_DEF = 8;        // observed as the macro of the variant's definition `def`
 let LF_EXISTS = 16;    // intern found it: it must exist
+let LF_DEFINED = 32;   // only tested, found a macro: it must be one (any definition)
 
 // Path observations (a variant's head).
 let PO_NEG = 1;
@@ -275,7 +278,7 @@ fn hc_key(name: const u8[:], angled: bool, k: i64) {
 // The hooks (callers test rec_on first).
 
 fn itouch_fit(id: i64) {
-    while itouch.len <= id { itouch.push(ITouch { m: 0, l: 0, w: 0 }); }
+    while itouch.len <= id { itouch.push(ITouch { m: 0, d: 0, l: 0, w: 0 }); }
 }
 
 // An identifier lookup (off: the spelling's offset in src).
@@ -291,15 +294,33 @@ fn hk_look(id: u32, off: i64) {
     itouch[id].l = rec_cur;
 }
 
-// A read of an identifier's macro.
+// A read of an identifier's macro, its definition included. (Until the
+// recording writes it, d is below the recording's serial: the macro is
+// still the one it started with.)
 fn hk_mread(id: u32) {
+    itouch_fit(id as i64);
+    let t = itouch[id].d;
+    if t >= rec_cur { return; }
+    let m = idents[id].macro;
+    var r = recs.len - 1;
+    while r >= 0 && recs[r].serial > t {
+        ev.push(Ev { rec: r as! u16, kind: EV_MOBS, flag: 0, a: id, b: m as! u32, c: 0, d: 0 });
+        r--;
+    }
+    itouch[id].d = rec_cur;
+    if itouch[id].m < rec_cur { itouch[id].m = rec_cur; }
+}
+
+// A test of whether an identifier is a macro (#ifdef, defined, a guard),
+// which does not read the definition.
+fn hk_mtest(id: u32) {
     itouch_fit(id as i64);
     let t = itouch[id].m;
     if t >= rec_cur { return; }
     let m = idents[id].macro;
     var r = recs.len - 1;
     while r >= 0 && recs[r].serial > t {
-        ev.push(Ev { rec: r as! u16, kind: EV_MOBS, flag: 0, a: id, b: m as! u32, c: 0, d: 0 });
+        ev.push(Ev { rec: r as! u16, kind: EV_MTEST, flag: 0, a: id, b: m as! u32, c: 0, d: 0 });
         r--;
     }
     itouch[id].m = rec_cur;
@@ -310,6 +331,7 @@ fn hk_mread(id: u32) {
 fn hk_mwrite(id: u32) {
     itouch_fit(id as i64);
     if itouch[id].m < rec_cur { itouch[id].m = rec_cur; }
+    if itouch[id].d < rec_cur { itouch[id].d = rec_cur; }
     let t = itouch[id].w;
     if t >= rec_cur { return; }
     var r = recs.len - 1;
@@ -1103,6 +1125,8 @@ fn blob_replay(bid: u64) -> bool {
             if def as i64 >= hdef.len || hdef[def].id as i64 != id { return false; }
         } else if fl & LF_OBS != 0 && id >= 0 && idents[id].macro >= 0 {
             return false;
+        } else if fl & LF_DEFINED != 0 && (id < 0 || idents[id].macro < 0) {
+            return false;
         }
         if fl & LF_LOOKED != 0 && off < 0x80000000 && off as i64 > hr_srclen { return false; }
         if id >= 0 { hcx[i] = id as! u32; } else { hcx[i] = 0xFFFFFFFF; }
@@ -1363,6 +1387,7 @@ fn blob_commit(i0: i64, n0: i64, f0: i64, m0: i64) {
         for i in hr_ni {
             let fl = mw((hcx[hr_ni + i] as i64) + 1);
             if fl & LF_OBS != 0 { hk_mread(hcx[i]); }
+            if fl & LF_DEFINED != 0 { hk_mtest(hcx[i]); }
             if fl & LF_EXISTS != 0 { hk_exist(hcx[i] as i64); }
         }
     }
@@ -1662,7 +1687,7 @@ fn rec_save(r: Rec) -> bool {
     fr_serial = r.serial;
     fr_src0 = r.src0 as i64;
     fr_bad = false;
-    while lmap.len < idents.len { lmap.push(ITouch { m: 0, l: 0, w: 0 }); }
+    while lmap.len < idents.len { lmap.push(ITouch { m: 0, d: 0, l: 0, w: 0 }); }
     lent.clear();
     hdef.clear();
     hpo.clear();
@@ -1686,11 +1711,18 @@ fn rec_save(r: Rec) -> bool {
         }
     }
     if nexp != idents.len { return false; }
-    // macro observations, intern's findings
+    // macro observations (a test finds a macro: any definition does; a read
+    // of its definition: that one), intern's findings
+    for e in evown {
+        if e.kind == EV_MTEST {
+            let li = lid(e.a);
+            if (e.b as! i32) < 0 { lent[li].flags = lent[li].flags | LF_OBS; } else { lent[li].flags = lent[li].flags | LF_DEFINED; }
+        }
+    }
     for e in evown {
         if e.kind == EV_MOBS {
             let li = lid(e.a);
-            lent[li].flags = lent[li].flags | LF_OBS;
+            lent[li].flags = (lent[li].flags | LF_OBS) & ~LF_DEFINED;
             let m = e.b as! i32;
             if m >= 0 {
                 if m as i64 >= r.macros0 as i64 { return false; }
@@ -2068,8 +2100,10 @@ fn man_add(r: Rec, bid: u64) {
                 let vl = r32(hcr) as i64;
                 let vs = rp;
                 if vl < 2 || vl > hcr.len - vs { break; }
-                let ob = (hcr[vs] as u64) | ((hcr[vs + 1] as u64) << 32);
-                if ob != bid && kept < HC_MAX_VARIANTS {
+                // the same variant again (heads differ even where blobs, which
+                // refer to the macros they observed only by anchors, are equal)
+                let same = vl == hcw.len - 1 && hcr[vs..vs + vl] == hcw[1..hcw.len];
+                if !same && kept < HC_MAX_VARIANTS {
                     hcv.push(vl as! u32);
                     hcv.append(hcr[vs..vs + vl]);
                     kept++;

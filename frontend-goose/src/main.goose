@@ -120,7 +120,7 @@ fn pp_fill() {
                 }
                 pend = 0;
                 cur++;
-                if t.kind == TK_IDENT && !noexp && rec_on { hk_mread(t.val); }
+                if t.kind == TK_IDENT && !noexp && rec_on { hk_mtest(t.val); }
                 if t.kind == TK_IDENT && !noexp && idents[t.val].macro >= 0 {
                     ctxs[ci].cur = cur as! u32;
                     ctxs[ci].pend = 0;
@@ -198,7 +198,7 @@ fn pp_fill() {
                     var fid = ident_find(p, q - p, h);
                     if fid < 0 { fid = ident_lookup(p, q - p, h) as i64; } else if rec_on { hk_look(fid as! u32, p); }
                     let id = fid as! u32;
-                    if rec_on { hk_mread(id); }
+                    if rec_on { hk_mtest(id); }
                     t = Tok { kind: TK_IDENT, flags: flags | sys, aux: 0, spell: p as! u32, val: id, xloc: p as! u32 };
                     p = q;
                     flags = 0;
@@ -227,7 +227,7 @@ fn pp_fill() {
             lx_flags = flags;
             if !have {
                 t = lex_file_token();
-                if rec_on && t.kind == TK_IDENT { hk_mread(t.val); }
+                if rec_on && t.kind == TK_IDENT { hk_mtest(t.val); }
                 if t.kind != TK_EOF && !(t.kind == TK_HASH && t.flags & F_BOL != 0) &&
                         !(t.kind == TK_IDENT && idents[t.val].macro >= 0) {
                     if mi {

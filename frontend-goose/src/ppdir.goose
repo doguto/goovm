@@ -515,7 +515,7 @@ recursive fn do_if(t: Tok, k: i64, ms: u8) {
     } else {
         let n = dir_ident();
         if n.kind == TK_IDENT {
-            if rec_on { hk_mread(n.val); }
+            if rec_on { hk_mtest(n.val); }
             let defined = idents[n.val].macro >= 0;
             val = if k == PK_IFDEF { defined } else { !defined };
             if k == PK_IFNDEF && !defined { grdm = n.val as i64; }
@@ -654,7 +654,7 @@ recursive fn skip_block() {
                     } else {
                         let n = dir_ident();
                         if n.kind == TK_IDENT {
-                            if rec_on { hk_mread(n.val); }
+                            if rec_on { hk_mtest(n.val); }
                             let defined = idents[n.val].macro >= 0;
                             v = if k == PK_ELIFDEF { defined } else { !defined };
                         }
@@ -851,7 +851,7 @@ recursive fn do_include(t: Tok, k: i64) {
     }
     let g = files[f].grd as i64;
     if g >= 0 {
-        if rec_on { hk_mread(g as! u32); }
+        if rec_on { hk_mtest(g as! u32); }
         if idents[g].macro >= 0 {
             if rec { hc_rec_drop(); }
             return;
