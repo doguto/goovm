@@ -1287,36 +1287,23 @@ from B4's in that string.
 
 ### 11.6 What differs from clang
 
-Over the corpus files (README.md, "Debug information (B5)"), the
-differences that remain come from code that goosecc generates
-differently, not from the debug information:
+B5 left 44 corpus files whose DWARF differs from clang's, all from code
+that goosecc generated differently; G1 (section 12.3) made the code
+generation follow clang's folding, NRVO and inlining of nodebug
+`always_inline` functions, and 9 remain (README.md, "Results", G1):
 
-- **clang folds reads of `const` variables with constant initializers**
-  (`EmitDeclRefExprDbgValue`): the variable gets `DW_AT_const_value` or
-  no location, it is emitted at its first use, or not at all; goosecc
-  reads such variables from memory;
-- **clang inlines `always_inline` functions at -O0** (inlined
-  subroutines; the SSE intrinsics of the `Vector/SSE` tests, which
-  goosecc calls, are such functions);
-- **clang folds expressions goosecc does not**: address differences,
-  `strlen` and `memchr` of literals (goosecc keeps the literals and their
-  DIEs), comparisons of complex constants, `__builtin_constant_p` of a
-  variable (clang leaves it unevaluated and emits both arms of the `?:`),
-  an array bound that is an address difference;
-- **clang makes a constant-sized array where goosecc makes a VLA** (a
-  `const int` bound);
-- a static function that only code clang leaves out (11.2) refers to is
-  still emitted by goosecc, and gets its subprogram at the end of the
-  unit; clang emits neither (no corpus file has one);
-- **locations**: a variable that clang returns in place (NRVO) or a VLA
-  has a location list in clang (`DW_OP_breg`), a frame location in
-  goosecc; clang drops the variable of an empty struct returned in place;
-  realigned frames use `DW_OP_breg7` in clang (`tests/dwarf_diff.py`
-  counts these as "identical but for frame-location forms" when nothing
-  else differs);
-- goosecc's own bugs: an array of VLA rows (`char c[10][n]`) gets a
-  1-byte allocation (wrong code, which its DWARF follows), and `noinit`
-  variables do not compile.
+- **`always_inline` functions with debug information** (8 torture tests):
+  clang inlines them at -O0 and describes each expansion with a
+  `DW_TAG_inlined_subroutine` under an abstract subprogram; goosecc emits
+  them out of line and calls them;
+- a VLA's location list (`920721-2.c`) as the back-end writes it;
+- **locations**: a variable that clang returns in place (NRVO) has a
+  location list in clang (`DW_OP_breg`), a frame location with
+  `DW_OP_deref` in goosecc; realigned frames use `DW_OP_breg7` in clang
+  (`tests/dwarf_diff.py` counts these as "identical but for frame-location
+  forms" when nothing else differs);
+- goosecc's own bug: an array of VLA rows (`char c[10][n]`) gets a 1-byte
+  allocation (wrong code, which its DWARF follows).
 
 ## 12. Start-up, the parse cache and clang's folding (G1)
 

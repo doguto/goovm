@@ -270,6 +270,12 @@ def compare(a, b, path, diffs):
     if a.kind == "ChooseExpr":
         return True
     same_type = a.type == b.type or has_typedef(a.type)
+    if a.type == "<vla>" and re.search(r"\[\d+\]$", b.type):
+        # clang prints a bound written as an expression even when it folded
+        # the array to a constant size (a ConstantArrayType keeps its size
+        # expression since clang 18; GNU modes fold, G1): only "an array"
+        # can be told from its JSON
+        same_type = True
     if a.kind in ("ShuffleVectorExpr", "ConvertVectorExpr") and b.kind in ("BuiltinCall", "Builtin"):
         # goosecc represents these as builtin calls: only the type is compared
         if same_type:
