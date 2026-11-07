@@ -377,7 +377,33 @@ def t_policy(a):
     return t.done()
 
 
-TESTS = [t_policy, t_edit_same_size, t_racy, t_macros, t_order, t_include_next, t_counter, t_states, t_symlink, t_relative,
+def t_evict(a):
+    """A size limit (GOOSECC_CACHE_SIZE): the oldest files go, the cache stays near the limit, results do not change."""
+    t = T(a, "evict")
+    files = []
+    for i in range(12):
+        t.write(f"h{i}.h", f"int ev{i};\n" + BIG * 3)
+        files.append(t.write(f"f{i}.c", f'#include "h{i}.h"\n#include <stdio.h>\nint f{i}(void) {{ return 0; }}\n'))
+    age()
+    # the limit: half of what the files take without one
+    for f in files:
+        t.run(["-c", f], True)
+    full = sum(os.path.getsize(os.path.join(dp, f)) for dp, dn, fn in os.walk(t.cache) for f in fn)
+    shutil.rmtree(t.cache)
+    lim = full // 2
+    env = {"GOOSECC_CACHE_SIZE": str(lim)}
+    for rnd in range(2):
+        for f in files:
+            t.same(["-c", f], f"{os.path.basename(f)} round {rnd}", env_extra=env)
+    size = sum(os.path.getsize(os.path.join(dp, f)) for dp, dn, fn in os.walk(t.cache) for f in fn)
+    if size > 2 * lim:
+        t.fails.append(f"cache holds {size} bytes, limit {lim}")
+    if a.v:
+        print(f"   cache {size} bytes, limit {lim}")
+    return t.done()
+
+
+TESTS = [t_policy, t_evict, t_edit_same_size, t_racy, t_macros, t_order, t_include_next, t_counter, t_states, t_symlink, t_relative,
          t_pragmas, t_time, t_deleted, t_concurrent, t_corrupt]
 
 

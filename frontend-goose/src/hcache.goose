@@ -2188,7 +2188,8 @@ fn rec_save(r: Rec) -> bool {
     hcw[0] = (hcw.len - 1) as! u32;
     man_add(r, bid);
     // now and then, keep the cache within its size
-    if bid & 63 == 0 { evict_dir(hcb[hc_dir_off..hc_dir_off + hc_dir_len], hc_limit); }
+    // (on 1 in 64 new blobs; on every one under a small limit)
+    if bid & 63 == 0 || hc_limit < 67108864 { evict_dir(hcb[hc_dir_off..hc_dir_off + hc_dir_len], hc_limit); }
     return true;
 }
 
