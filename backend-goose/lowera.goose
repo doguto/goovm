@@ -951,13 +951,25 @@ fn pend_reg_ok(j: u32) -> bool {
     if op >= GIR_ICMP && op <= GIR_BITCAST || op >= GIR_FADD && op <= GIR_UITOFP { return op != GIR_FNEG; }
     return op == GIR_STORE;
 }
+// Whether load j's only use is as the base pointer of a GEP that is not the
+// next instruction.
+fn late_gep_base(j: u32) -> bool {
+    let u = vi[j].last;
+    if u == j + 1 { return false; }
+    let U = M.insts[f_first_inst + u];
+    return U.op == GIR_GEP && U.a == inst_ref(j);
+}
 fn lower_load_a(I: Inst, j: u32) {
     let t: u32 = I.ty;
     if I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && vi[j].nuse == 1 && rc_of(t) != RC_VX
        && vi[j].st & (ST_GLOB | ST_NODEF) == 0 && vi[j].last > j {
         // deferred to its use; an address in registers only into the next
-        // instruction, which then sees the registers still locked
-        if addr_is_static(I.a) {
+        // instruction, which then sees the registers still locked. Not the
+        // base pointer of a later GEP: the GEP would load it after the loads
+        // in between (`a[i]`: the index), which is slower than the program
+        // order (daxpy's loop, about 20%), and it gains nothing (a GEP's base
+        // is a register)
+        if addr_is_static(I.a) && !late_gep_base(j) {
             ra_pend_add(j, ra_addr(I.a));
             return;
         }
