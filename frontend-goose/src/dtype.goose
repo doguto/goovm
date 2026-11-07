@@ -573,6 +573,31 @@ recursive fn pf_params(out: u8[>..]&, d: u32) {
     else if np == 0 { out.append("void"); }
 }
 
+// References to a function defined K&R-style before them: their type has
+// no prototype (DR 316), the declaration's has one.
+var krrefs = dictionary<u64, u32> {};
+fn dt_note_krref(n: u32) {
+    if !dbg_g { return; }
+    krrefs.insert(n as u64, 1);
+}
+fn is_krref(n: u32) -> bool {
+    let r = krrefs.get(n as u64);
+    if r { return true; }
+    return false;
+}
+
+// Integer + pointer additions, which the AST holds pointer first.
+var swapped = dictionary<u64, u32> {};
+fn dt_note_swapped(n: u32) {
+    if !dbg_g { return; }
+    swapped.insert(n as u64, 1);
+}
+fn is_swapped(n: u32) -> bool {
+    let r = swapped.get(n as u64);
+    if r { return true; }
+    return false;
+}
+
 // Where an enum was defined (it may have been named before: enum foo; ...).
 var enum_defloc = dictionary<u64, u32> {};
 fn dt_note_enum_def(e: i64, loc: u32) {

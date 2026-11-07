@@ -171,10 +171,11 @@ var ev_on = false;
 var ev_noproto = false;              // the next EV_REF is of a function through a type without prototype
 
 // A reference to a function (callee c: through casts to its declaration):
-// clang makes the function's llvm::Function with the reference's type, and
-// a type without prototype is variadic there, so the definition then makes
-// a new one (at the end of the module: CodeGenModule's replacement of
-// functions without prototype).
+// clang makes the function's llvm::Function with the declaration's type,
+// and a type without prototype is variadic there, so the definition then
+// makes a new one (at the end of the module: CodeGenModule's replacement
+// of functions without prototype). A reference after a K&R definition has
+// a type without prototype (DR 316) but its declaration has one.
 fn dbg_fnref(c: u32) {
     var n = c;
     loop {
@@ -188,11 +189,22 @@ fn dbg_fnref(c: u32) {
         break;
     }
     if nkind(n) != N_DECLREF { return; }
-    ev_noproto = (types[nodes[n].ty >> 4].flags as i64) & TF_NOPROTO != 0;
+    ev_noproto = (types[nodes[n].ty >> 4].flags as i64) & TF_NOPROTO != 0 && !is_krref(n);
 }
 
 fn dev(kind: u32, a: u32, b: u32) {
     if ev_on && dbg_dead == 0 { m_devs.push(DEv { kind: kind, a: a, b: b }); }
+}
+
+// Moves the events [m0, m1) after the ones recorded since m1 (the lowering
+// visited two operands in the other order than clang).
+var rot_tmp: DEv[>..] = [];
+fn dbg_rotate_events(m0: i64, m1: i64) {
+    rot_tmp.clear();
+    for k in m0..m1 { rot_tmp.push(m_devs[k]); }
+    let n2 = m_devs.len - m1;
+    for k in 0..n2 { m_devs[m0 + k] = m_devs[m1 + k]; }
+    for k in 0..rot_tmp.len { m_devs[m0 + n2 + k] = rot_tmp[k]; }
 }
 
 // > 0 while the lowering emits code that clang's CodeGen leaves out: the
@@ -201,6 +213,12 @@ fn dev(kind: u32, a: u32, b: u32) {
 // does not fold) and the arm that does not run. The code is the same
 // either way; the debug information records nothing of it.
 var dbg_dead: i32 = 0;
+// Set where clang has no insertion point but goosecc goes on: after an if
+// whose arms both end in a jump, clang deletes the empty end block, and
+// the statements up to the next label are not emitted (EmitStmt); goosecc
+// lowers them into a block without predecessors, which dbg_dead keeps out
+// of the debug information.
+var dbg_noins = false;
 // Does clang fold condition c (and leave out the other arm, which has no
 // label)? Only asked where goosecc's const_bool did not fold it.
 fn clang_folds(c: u32, then_arm: u32, else_arm: u32) -> bool, bool {
@@ -219,6 +237,7 @@ fn dbg_fn_begin() {
     f_vlaexpr = 0;
     f_vd0 = vd_var.len;
     ev_on = true;
+    dbg_noins = false;
     dfn_e0 = m_devs.len as! u32;
 }
 var dfn_e0: u32 = 0;
@@ -226,7 +245,8 @@ var dfn_e0: u32 = 0;
 // A parameter (argno from 1) at addr (an alloca, or the byval argument).
 fn dbg_param(p: i64, addr: u32, argno: u32) {
     if !opt_debug { return; }
-    let mf = addr >> 30 == 0 && addr >= ATAG;
+    // a byval argument has a fixed frame index in LLVM (an MF variable too)
+    let mf = (addr >> 30 == 0 && addr >= ATAG) || addr & 0xC0000000 == KARG;
     dev(EV_VAR, f_dvars.len as! u32, 0);
     f_dvars.push(DVar { sym: p, addr: addr, rec: 0, argno: argno, flags: if mf { DV_MF } else { 0 }, n: 0, dq: 0 });
 }

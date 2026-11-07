@@ -845,8 +845,12 @@ recursive fn ex_binary(n: u32) -> u32 {
         return int_cast(c, GIR_T_I1, vty(nd.ty), false);
     }
     if op == B_PTRADD || op == B_PTRSUB {
+        let m0 = m_devs.len;
         let p = ex_val(nd.a);
+        let m1 = m_devs.len;
         let i = ex_val(nd.b);
+        // -g: integer + pointer: clang visits the integer first
+        if m1 > m0 && m_devs.len > m1 && is_swapped(n) { dbg_rotate_events(m0, m1); }
         return ptr_add(p, tbase(at), i, nty(nd.b), op == B_PTRSUB);
     }
     if op == B_PTRDIFF {

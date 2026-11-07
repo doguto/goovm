@@ -160,6 +160,39 @@ recursive fn gen_stmt(n: u32) {
             if !any { return; }
         }
     }
+    // -g: a statement that clang emits from a folded switch (gen_switch)
+    if sw_live.len > 0 && sw_is_live(n) {
+        if !sw_ft && !contains_label(n) {
+            // after a statement that does not fall through: not emitted
+            gen_stmt1(n);
+            return;
+        }
+        let saved = dbg_dead;
+        dbg_dead = 0;
+        dbg_noins = false;
+        gen_stmt1(n);
+        dbg_dead = saved;
+        sw_ft = has_insert() && !dbg_noins;
+        return;
+    }
+    // -g: code clang does not emit (no insertion point, gen_dwarf.goose):
+    // a label, a case or a statement with a label in it makes one
+    if dbg_noins {
+        if k == N_LABEL || k == N_CASE || k == N_DEFAULT || contains_label(n) {
+            dbg_noins = false;
+        } else if k != N_COMPOUND {
+            dbg_dead++;
+            gen_stmt1(n);
+            dbg_dead--;
+            return;
+        }
+    }
+    gen_stmt1(n);
+}
+
+recursive fn gen_stmt1(n: u32) {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
     // a stop point at the statement's first token (not for compound
     // statements, labels and case labels, as in clang)
     if k == N_EXPR { set_loc(begin_loc(nd.a)); }
@@ -295,12 +328,18 @@ recursive fn gen_if1(n: u32) {
     if fk && !fv { dbg_dead++; }
     gen_stmt(nd.b);
     if fk && !fv { dbg_dead--; }
+    // -g: does the arm fall through as clang sees it (dbg_noins)?
+    let then_ft = has_insert() && !dbg_noins;
+    dbg_noins = false;
+    var else_ft = true;
     if nd.c != 0 {
         if has_insert() { br(end); }
         start_block(eb);
         if fk && fv { dbg_dead++; }
         gen_stmt(nd.c);
         if fk && fv { dbg_dead--; }
+        else_ft = has_insert() && !dbg_noins;
+        dbg_noins = false;
         // the branch out of the else arm has no location (clang)
         if has_insert() {
             let s2 = cur_dbg;
@@ -311,6 +350,12 @@ recursive fn gen_if1(n: u32) {
     }
     if has_insert() { br(end); }
     start_block(end);
+    // clang deletes an end block that nothing branches to: no insertion
+    // point until a label (gen_dwarf.goose, dbg_noins)
+    if dbg_on() {
+        let live = if fk { if fv { then_ft } else { else_ft } } else { then_ft || else_ft };
+        if !live { dbg_noins = true; }
+    }
 }
 
 fn push_loop(brk: u32, cont: u32) {
@@ -403,6 +448,14 @@ recursive fn gen_for(n: u32) {
 recursive fn gen_switch(n: u32) {
     let nd = nodes[n];
     let cq = nty(nd.a);
+    // -g: a switch clang constant-folds emits only the statements that run
+    let smark = sw_live.len;
+    let cf = dbg_on() && sw_fold(n);
+    if !cf { sw_live.resize(smark); }
+    if cf {
+        dbg_dead++;
+        sw_ft = true;
+    }
     let v = ex_val(nd.a);
     let t = vtype(v);
     let end = new_block();
@@ -415,7 +468,7 @@ recursive fn gen_switch(n: u32) {
         let b = new_block();
         fmap.insert(fk(FM_CASE, cn), b);
         // clang's EmitCaseStmt: a case value that is an enumerator
-        if dbg_on() { dbg_enumc(cn); }
+        if dbg_on() && !cf { dbg_enumc(cn); }
         if nkind(cn) == N_DEFAULT { dflt = b; }
         else if nodes[cn].c != 0 {
             let lo = nodes[cn].v;
@@ -482,6 +535,164 @@ recursive fn gen_switch(n: u32) {
     brk_to.pop();
     if has_insert() { br(end); }
     start_block(end);
+    if cf {
+        dbg_dead--;
+        sw_live.resize(smark);
+        // clang's insertion point is where the last statement left it
+        dbg_noins = !sw_ft;
+    }
+}
+
+// -g: clang's EmitSwitchStmt folds a constant condition when
+// FindCaseStatementsForValue can collect the statements that run (from the
+// case to a break at its level, nothing skipped that a kept statement may
+// need); it then emits those alone (sw_live), without the condition and
+// the case labels. A port of FindCaseStatementsForValue and
+// CollectStatementsForCase.
+var sw_live: u32[>..] = [];
+var sw_found = false;
+var sw_ft = true;                    // the last statement emitted falls through
+let CSFC_FAIL = 0;
+let CSFC_FALL = 1;
+let CSFC_OK = 2;
+
+fn sw_fold(n: u32) -> bool {
+    let nd = nodes[n];
+    let ok, v = fold_int(nd.a);
+    if !ok || !pure_const(nd.a) { return false; }
+    // clang's list of cases runs from the last one
+    var cs: u32 = 0;
+    var dflt: u32 = 0;
+    var i = nd.c as i64 - 1;
+    while i >= 0 {
+        let cn = nlist[nd.v + i];
+        if nkind(cn) == N_DEFAULT { dflt = cn; }
+        else {
+            if nodes[cn].c != 0 { return false; }
+            if nodes[cn].v == v {
+                cs = cn;
+                break;
+            }
+        }
+        i--;
+    }
+    if cs == 0 {
+        if dflt == 0 { return !contains_label_noswitch(nd.b); }
+        cs = dflt;
+    }
+    sw_found = false;
+    let r = csfc(nd.b, cs);
+    return r != CSFC_FAIL && sw_found;
+}
+
+// cs: the case looked for, 0 once found (collecting).
+recursive fn csfc(s: u32, cs: u32) -> i64 {
+    if s == 0 { return if cs != 0 { CSFC_OK } else { CSFC_FALL }; }
+    let nd = nodes[s];
+    let k = nd.kind as i64;
+    if k == N_CASE || k == N_DEFAULT {
+        if s == cs {
+            sw_found = true;
+            return csfc(nd.a, 0);
+        }
+        return csfc(nd.a, cs);
+    }
+    if cs == 0 && k == N_BREAK { return CSFC_OK; }
+    if k == N_COMPOUND {
+        var i: i64 = 0;
+        let e = nd.c as i64;
+        let started_live = sw_found;
+        let start_size = sw_live.len;
+        var c = cs;
+        if c != 0 {
+            var had_decl = false;
+            while c != 0 && i < e {
+                let it = nlist[nd.v + i];
+                if might_add_decl(it) { had_decl = true; }
+                let r = csfc(it, c);
+                if r == CSFC_FAIL { return CSFC_FAIL; }
+                if r == CSFC_OK {
+                    if sw_found {
+                        if had_decl { return CSFC_FAIL; }
+                        i++;
+                        while i < e {
+                            if contains_label_noswitch(nlist[nd.v + i]) { return CSFC_FAIL; }
+                            i++;
+                        }
+                        return CSFC_OK;
+                    }
+                } else {
+                    c = 0;
+                    if had_decl { return CSFC_FAIL; }
+                }
+                i++;
+            }
+            if !sw_found { return CSFC_OK; }
+        }
+        var any_decls = false;
+        while i < e {
+            let it = nlist[nd.v + i];
+            if might_add_decl(it) { any_decls = true; }
+            let r = csfc(it, 0);
+            if r == CSFC_FAIL { return CSFC_FAIL; }
+            if r == CSFC_OK {
+                i++;
+                while i < e {
+                    if contains_label_noswitch(nlist[nd.v + i]) { return CSFC_FAIL; }
+                    i++;
+                }
+                return CSFC_OK;
+            }
+            i++;
+        }
+        if any_decls {
+            if started_live && !contains_break(s) {
+                sw_live.resize(start_size);
+                sw_live.push(s);
+            } else {
+                return CSFC_FAIL;
+            }
+        }
+        return CSFC_FALL;
+    }
+    if cs != 0 {
+        if contains_label_noswitch(s) { return CSFC_FAIL; }
+        return CSFC_OK;
+    }
+    if contains_break(s) { return CSFC_FAIL; }
+    sw_live.push(s);
+    return CSFC_FALL;
+}
+
+recursive fn might_add_decl(s: u32) -> bool {
+    if s == 0 { return false; }
+    let k = nkind(s);
+    if k == N_IF || k == N_SWITCH || k == N_WHILE || k == N_DO || k == N_FOR || k == N_COMPOUND { return false; }
+    if k == N_DECL || k == N_TYPEDEF || k == N_TAGDEF || k == N_STATICASSERT { return true; }
+    if k == N_CASE || k == N_DEFAULT { return might_add_decl(nodes[s].a); }
+    if k == N_LABEL { return might_add_decl(nodes[s].b); }
+    return false;
+}
+
+recursive fn contains_break(s: u32) -> bool {
+    if s == 0 { return false; }
+    let nd = nodes[s];
+    let k = nd.kind as i64;
+    if k == N_SWITCH || k == N_WHILE || k == N_DO || k == N_FOR { return false; }
+    if k == N_BREAK { return true; }
+    if k == N_COMPOUND {
+        for i in nd.c { if contains_break(nlist[nd.v + i]) { return true; } }
+        return false;
+    }
+    if k == N_IF { return contains_break(nd.b) || contains_break(nd.c); }
+    if k == N_CASE || k == N_DEFAULT { return contains_break(nd.a); }
+    if k == N_LABEL { return contains_break(nd.b); }
+    return false;
+}
+
+fn sw_is_live(n: u32) -> bool {
+    for i in sw_live.len { if sw_live[i] == n { return true; } }
+    return false;
 }
 
 // A case value: 128-bit ones are refolded from the case expression.

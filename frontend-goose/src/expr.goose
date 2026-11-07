@@ -721,14 +721,19 @@ fn ident_expr(id: u32, loc: u32) -> u32 {
         return error_node(loc);
     }
     var ty = sy.ty;
+    var krref = false;
     if k == SK_FUNC && sy.flags & SF_KRDEF != 0 && types[ty >> 4].flags & TF_NOPROTO == 0 {
         // a function defined without a prototype is referenced with the
         // type without prototype (clang, C99 DR 316)
         fn_scratch.clear();
         let ft = types[ty >> 4];
         ty = qt(mk_type(TY_FUNC, TF_NOPROTO, ft.base, 0, 0, 0) as i64, 0);
+        krref = true;
     }
     let n = node(N_DECLREF, 0, ty, s, 0, 0, loc);
+    // -g: the declaration has a prototype type all the same (clang's
+    // CodeGen uses it: no variadic llvm::Function)
+    if krref { dt_note_krref(n); }
     if k == SK_VAR { nodes[n].flags = NF_LVALUE; }
     return n;
 }
@@ -1200,7 +1205,10 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
         }
         if is_integer(ta) && is_pointer(tb) {
             if !ptr_elem_ok(tb, loc) { return error_node(loc); }
-            return node(N_BINARY, B_PTRADD, unqual(tb), b as i64, promote(a) as i64, 0, loc);
+            let pn = node(N_BINARY, B_PTRADD, unqual(tb), b as i64, promote(a) as i64, 0, loc);
+            // -g: clang evaluates the integer (the left operand) first
+            dt_note_swapped(pn);
+            return pn;
         }
         return bad_operands(a, b, loc);
     }
