@@ -125,7 +125,35 @@ fn simp(i: u32) -> u32 {
         return simp_cast(i);
     }
     if op == GIR_GEP { return simp_gep(i); }
+    if op == GIR_EXTRACTVALUE { return simp_extract(i); }
     return NIL;
+}
+
+// extractvalue (load p), off -> load (p + off), right after the aggregate
+// load (the memory is the same there).
+fn simp_extract(i: u32) -> u32 {
+    let a = res(o_ins[i].a);
+    if !is_inst(a) { return NIL; }
+    let L = o_ins[a];
+    if L.op != GIR_LOAD || L.flags & (IF_VOLATILE | IF_ORD_MASK) != 0 || o_blk[a] == NIL { return NIL; }
+    let t: u32 = o_ins[i].ty;
+    if cls_of(t) == C_MEM || store_of(t) == 0 { return NIL; }
+    var p = res(L.a);
+    let off = o_ins[i].b;
+    if off != 0 {
+        let s = new_run(2);
+        o_ops[s] = off;
+        o_ops[s + 1] = 0;
+        let g = new_inst(Inst { op: GIR_GEP as! u8, sub: 0, flags: 0, ty: GIR_T_PTR, aux: 0, a: p, b: s, c: 0, dbg: L.dbg });
+        link_after(a, g);
+        p = g;
+        let ld = new_inst(Inst { op: GIR_LOAD as! u8, sub: 0, flags: 0, ty: t as! u16, aux: 0, a: p, b: 0, c: 0, dbg: L.dbg });
+        link_after(g, ld);
+        return ld;
+    }
+    let ld = new_inst(Inst { op: GIR_LOAD as! u8, sub: 0, flags: 0, ty: t as! u16, aux: 0, a: p, b: 0, c: 0, dbg: L.dbg });
+    link_after(a, ld);
+    return ld;
 }
 
 fn simp_bin(i: u32) -> u32 {
@@ -475,7 +503,10 @@ fn simp_gep(i: u32) -> u32 {
         let B = o_ins[base];
         let bs = B.b;
         let bn = B.c;
-        if bn + n <= 4 {
+        // (only when one of them has no index terms: the back-end folds a GEP
+        // into each load and store, so terms would be computed again per use,
+        // and an address of many terms needs as many registers at once)
+        if (bn == 0 || n == 0) && bn + n <= 2 {
             let boff: u64 = o_ops[bs] as u64 | (o_ops[bs + 1] as u64 << 32);
             let tot = off + boff;
             let ns = new_run(2 + 2 * (bn + n));

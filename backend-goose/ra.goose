@@ -855,6 +855,11 @@ fn ra_reuse(v: u32) -> u32 {
     let id = vid(v);
     let r: u32 = vi[id].reg;
     if r >= 32 { return 32; }
+    if vi[id].st & ST_PIN != 0 {
+        // a pinned value that dies here lends its register to a local result
+        if rg_live_after(id) || vi[cur_pos].st & ST_PIN != 0 || r_val[r] != id { return 32; }
+        return r;
+    }
     if vi[id].st & ST_GLOB != 0 || vi[id].last != cur_pos { return 32; }
     return r;
 }

@@ -652,8 +652,20 @@ fn opt_module() {
             if g.func != GIR_NONE { fn_pinned[g.func] = 1; }
         }
     }
+    inl_scan();
+    sroa_init();
     opt_order();
     for fi in fn_order { opt_function(fi); }
+    // internal functions whose calls were all inlined are not emitted
+    // (kept with debug information, whose subprograms name them)
+    if !o_dbg && !opt_off("inline") {
+        for fi in 0..M.funcs.len {
+            let F = M.funcs[fi];
+            if F.flags & FN_INTERNAL == 0 || fn_calls[fi] != 0 || fn_addr[fi] != 0 { continue; }
+            if M.gcomdat.len != 0 && M.gcomdat[F.global] != GIR_NONE { continue; }
+            x_funcs[xb_f + fi].flags |= FN_DEAD;
+        }
+    }
     remap_dies();
     if opt_dump_on() { dump_module(); }
     M = Module { header: M.header, types: M.types, funcs: x_funcs[xb_f..], blocks: x_blocks[xb_b..],
@@ -664,13 +676,9 @@ fn opt_module() {
 }
 
 // The order functions are optimized in: callees before callers (a
-// post-order of the call graph from every function; calls inside a cycle
-// in any order).
+// post-order of the call graph from every function, opt_order in
+// opt_inline.goose; calls inside a cycle in any order).
 var fn_order: u32[>..] = [];
-fn opt_order() {
-    fn_order.clear();
-    for fi in 0..M.funcs.len { fn_order.push(fi as! u32); }
-}
 
 // Passes switched off by the environment variable GOOVM_OPT (a list such as
 // "-gvn,-inline": for bisecting; "-all" runs no pass at all).
@@ -689,6 +697,19 @@ fn opt_off(name: const u8[:]) -> bool {
     return find(opt_env, w) >= 0 || find(opt_env, "-all") >= 0;
 }
 
+// One round of the scalar passes.
+fn opt_round() {
+    build_cfg();
+    if !opt_off("fold") {
+        simplify();
+        simplify_phis();
+    }
+    if !opt_off("gvn") { gvn(); }
+    resolve_all();
+    dce();
+    if !opt_off("cfg") && simplify_cfg() { simplify_phis(); }
+}
+
 fn opt_dump_on() -> bool {
     opt_off("");    // (reads the variable)
     return find(opt_env, "dump") >= 0;
@@ -705,18 +726,32 @@ fn opt_function(fi: u32) {
         build_cfg();
         if remove_unreachable() { build_cfg(); }
         build_uses();
+        if !opt_off("sroa") && sroa() {
+            resolve_all();
+            build_uses();
+        }
         if mem2reg() { simplify_phis(); }
     }
-    for round in 2 {
+    opt_round();
+    if !opt_off("inline") {
         build_cfg();
-        if !opt_off("fold") {
-            simplify();
-            simplify_phis();
+        build_loops();
+        if inline_calls() {
+            resolve_all();
+            build_cfg();
+            if remove_unreachable() { build_cfg(); }
+            opt_round();
+            resolve_all();
+            build_uses();
+            if !opt_off("sroa") && sroa() {
+                resolve_all();
+                build_uses();
+            }
+            if mem2reg() { simplify_phis(); }
+            opt_round();
         }
-        if !opt_off("gvn") { gvn(); }
-        resolve_all();
-        dce();
-        if !opt_off("cfg") && simplify_cfg() { simplify_phis(); }
     }
+    opt_round();
+    inl_record();
     oir_store(fi);
 }

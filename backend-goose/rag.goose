@@ -666,6 +666,21 @@ fn rg_finish(insts: const Inst[:], blocks: const Block[:]) {
         let id = rg_val[g];
         if rg_reg[id] != NOREG { vi[id].st |= ST_PIN; }
     }
+    // a local value that feeds a pinned PHI is computed in the PHI's register
+    // when that is free (the edge's copy is then a no-op)
+    for g in 0..rg_val.len {
+        let id = rg_val[g];
+        if rg_reg[id] == NOREG || id >= f_nins { continue; }
+        let I = M.insts[f_first_inst + id];
+        if I.op != GIR_PHI { continue; }
+        for q in 0..I.c {
+            let v = M.opnds[I.b + 2 * q];
+            if gir_kind(v) != GIR_V_INST { continue; }
+            let u = gir_idx(v) - f_first_inst;
+            if u >= f_nins || rg_gid[u] != NIL || vi[u].hint != NOREG || vi[u].st & ST_GLOB != 0 { continue; }
+            if (rc_of(vtype(u)) == RC_GPR) == (rg_reg[id] < 16) { vi[u].hint = rg_reg[id]; }
+        }
+    }
 }
 
 // ================================================ code generation support
@@ -780,7 +795,12 @@ var rg_brid: u32[8] = [0; 8];
 var rg_nborrow: u32 = 0;
 fn rg_borrow(xm: u32) -> u32 {
     let m = ~r_lock & xm & rg_pin & r_alloc;
-    if m == 0 || rg_nborrow == 8 { assert(false); }
+    if m == 0 || rg_nborrow == 8 {
+        write_stderr(str("goovm: no register to borrow: function ", f_index, " instruction ", cur_pos, " op ",
+                         M.insts[f_first_inst + cur_pos].op, " free ", r_free, " lock ", r_lock, " pin ", rg_pin,
+                         " alloc ", r_alloc, " xm ", xm, " n ", rg_nborrow, "\n"));
+        assert(false);
+    }
     let r = ctz32(m);
     let id = r_val[r];
     if id >= RV_TEMP { assert(false); }

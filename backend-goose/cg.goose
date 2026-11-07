@@ -32,6 +32,8 @@ import opt_fold;
 import opt_scfg;
 import opt_gvn;
 import rag;
+import opt_inline;
+import opt_sroa;
 import opt_dump;
 
 var M: Module;
@@ -957,6 +959,7 @@ fn gen_functions() {
         for k in sec_end[s - 1]..sec_end[s] {
             let G = M.globals[g_order[k]];
             if G.kind != G_FUNC || G.func == GIR_NONE { continue; }
+            if M.funcs[G.func].flags & FN_DEAD != 0 { continue; }   // (-O1: inlined everywhere)
             gen_function(G.func);
         }
         osecs[s].size = mcode.len as u64 - osecs[s].start;
