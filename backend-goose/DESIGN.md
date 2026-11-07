@@ -7,6 +7,12 @@ without `-g`, and the same IR after `opt -passes=mem2reg`. It is written in
 Goose and called from `goovm-llc` and `goovm-cc` (C++) and from `goosecc`
 (Goose) through two `export fn`s (`gir_codegen`, `gir_codegen_ex`).
 
+Milestone C1 brought floating-point-heavy C++ to the speed of clang -O0's
+code (Bullet 1.71x -> 0.97x, tramp3d-v4 1.18x -> 1.01x): small aggregates
+returned in registers no longer go through memory in ways that miss
+store-to-load forwarding, `is.fpclass` has fast paths, and the epilogue
+avoids `leave` (§14).
+
 Milestone A3 added what a debugger, an unwinder and a C++ program need:
 `.eh_frame` for every function with CFI exact at every instruction (§10),
 C++ exception tables (§11), comdat groups (§9) and DWARF 5 debug
@@ -232,7 +238,7 @@ starts from it with an `lea` when both have an index.
 | fadd..fdiv, fsqrt | `addsd xmm, xmm/[mem]/[rip+const]`; fneg/fabs/copysign with xorps/andps/orps masks in `.rodata.cst16` |
 | load, store | typed moves on the folded address; constants stored as immediates (FP constants as their bit pattern); seq_cst stores are `xchg` |
 | GEP | an address mode (folded into the next load/store), else one `lea` |
-| memcpy, memset <= 64 bytes | `movups` 16-byte chunks and a scratch register; `rep movsb/stosb` above |
+| memcpy, memset <= 64 bytes | memcpy up to 32 bytes (the exporter's inline limit for non-volatile copies): 8/4/2/1-byte moves through a scratch register, as FastISel copies them (§14); larger copies `movups` 16-byte chunks; memset 8-byte stores of the replicated byte; `rep movsb/stosb` above 64 |
 | vectors (RC_VX) | `movups/movq`, `addps/addpd`, `paddb/w/d/q`, `psub*`, `pand/por/pxor`, `pmullw`; insertelement/extractelement with a constant lane by `movss`/`shufps`/`unpcklps`/`unpcklpd`/`pinsrw`/`pextrw`/`pshufd`; bitcasts as register moves |
 | switch | dense (at least 4 cases filling at least 40% of their range): `movsx` + `sub lo` + `cmp; ja default` + `lea table(%rip)` + `movslq (table,idx,4)` + `add` + `jmp *r`, the table of rel32 offsets placed right after the jump in `.text` (no relocations), edges into blocks with PHIs through stubs after the table; else a chain of `cmp; je` |
 | branches | `jmp`/`jcc rel8` to blocks already placed (backward), `rel32` forward; no jump to the next block |
@@ -487,7 +493,7 @@ take the data from the store buffer and waits about 15 cycles until the
 stores have reached the cache. Small FP aggregates at -O0 produce such
 sequences everywhere, so the back-end keeps to one rule: memory that a
 lowering writes with stores of width w is read back by loads no wider than
-w. Three places follow from it:
+w. Four places follow from it:
 
 - **Aggregate call results** (`{<2 x float>, <2 x float>}` for a C++ class of
   four floats such as Bullet's `btVector3`, `{double, double}`, `{<2 x float>,
@@ -510,6 +516,12 @@ w. Three places follow from it:
   from a frame or rip-relative address with no memory write in between, are
   deferred like register loads (§5): `load {<2 x float>, <2 x float>}, ptr
   %retval; ret` is two `movq` into xmm0 and xmm1, as in clang's code.
+
+- **Small memcpys** (at most 32 bytes, which the exporter inlines as LLVM's
+  FastISel does) are copied 8, 4, 2 and 1 bytes at a time through a general
+  register, like FastISel's `TryEmitSmallMemcpy`: a 16-byte `movups` load
+  of a temporary that a call result was just stored to in two 8-byte halves
+  (Bullet's `btVector3` copy assignment) missed forwarding.
 
 Legacy lowerings that write a vector result lane by lane into its home still
 leave the next full-width load of that home to miss forwarding (shuffles,
