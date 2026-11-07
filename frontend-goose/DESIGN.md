@@ -1042,9 +1042,12 @@ it for one compile. All files are arrays of 32-bit words.
 
 - `<key hash>.m`, a manifest: magic, version, the key, then one record
   per variant (magic, length, checksum, the blob's id and the head). A
-  key with 16 variants gets a "volatile" record and is no longer looked
-  up or recorded; its includes are units of their own. Variants are
-  tried newest first.
+  key that reaches 16 variants is volatile: its manifest is replaced by
+  one holding a "volatile" record alone, the key is no longer looked up
+  or recorded, and its includes are units of their own (ClamAV's
+  `others.h`, 43 contexts in 98 files, had made every compile read a
+  436 KB manifest only to find that out). Variants are tried newest
+  first.
 - `<key hash>-<blob id>.b`, a blob: magic, version, length, checksum,
   the key (checked against the lookup's), the identifier table, the
   anchors, the source text, the rest of the effect. The id is the
@@ -1083,6 +1086,16 @@ nesting); appending manifest records instead of rewriting them, one
 flat directory (`mkdir` and `ext4` inode allocation were a third of a
 cold compile), and writing a blob in three pieces without assembling it
 cut it by about a third. README.md has the measurements.
+
+With one cache for a whole program, a key collects the variants of
+many contexts and its manifest grows: a warm compile of a ClamAV file
+reads 11 manifests, 620 KB, which with the head checks (210 stats) is
+about a third of its replay time. Most of a head is spellings, mostly
+the full paths its searches tried in vain (10 of the 16 KB of a
+`sys/types.h` variant); storing them relative to their search
+directories would shrink the manifests severalfold (not done). Volatile
+keys had made it worse: every compile read `others.h`'s 436 KB to learn
+that it was volatile, until such a key got a manifest of its own.
 
 B4 also drops the Goose runtime's `madvise(MADV_NOHUGEPAGE)` per data
 stack region at start-up, unless the kernel's transparent huge pages are
