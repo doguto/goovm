@@ -46,8 +46,8 @@ fn gv_alias() {
                 gv_base[i] = i;
                 // (with setjmp, memory changes behind the CFG's back)
                 gv_agen[i] = if o_f.flags & (FN_RETURNS_TWICE | FN_SJLJ) != 0 { NIL } else { 0 };
-            } else if I.op == GIR_GEP && is_inst(I.a) {
-                gv_base[i] = gv_base[I.a];
+            } else if I.op == GIR_GEP && is_inst(res(I.a)) {
+                gv_base[i] = gv_base[res(I.a)];
             }
             i = o_nxt[i];
         }
@@ -61,7 +61,7 @@ fn gv_alias() {
             let op: u32 = I.op;
             vslots(i);
             for s in vs {
-                let v = vget(i, s);
+                let v = res(vget(i, s));
                 if !is_inst(v) || gv_base[v] == NIL { continue; }
                 var ok = false;
                 if op == GIR_LOAD && s == 0 { ok = true; }
@@ -109,8 +109,8 @@ fn gv_clobber(i: u32) {
     let I = o_ins[i];
     let op: u32 = I.op;
     var p: u32 = NIL;
-    if op == GIR_STORE { p = I.b; }
-    else if op == GIR_MEMCPY || op == GIR_MEMSET { p = I.a; }
+    if op == GIR_STORE { p = res(I.b); }
+    else if op == GIR_MEMCPY || op == GIR_MEMSET { p = res(I.a); }
     if p != NIL && is_inst(p) {
         let a = gv_base[p];
         if a != NIL && gv_agen[a] != NIL {
@@ -242,6 +242,7 @@ fn gv_lslot(p: u32, t: u32) -> u64 {
 
 fn gvn() -> bool {
     gv_changed = false;
+    resolve_all();
     gv_grow();
     gv_alias();
     let n = o_ins.len;

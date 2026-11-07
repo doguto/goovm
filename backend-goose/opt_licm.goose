@@ -266,3 +266,61 @@ fn licm_loop(h: u32) -> bool {
     }
     return moved;
 }
+
+// Loop rotation in the layout: a loop whose header ends in a conditional
+// branch (one successor in the loop, one out) and whose only latch ends in a
+// branch to the header gets its header placed right after the latch. The
+// latch then falls through into the header's test, whose branch back into
+// the loop is the only taken branch of an iteration (the preheader jumps to
+// the test once). (build_cfg first.)
+fn rotate_layout() -> bool {
+    if o_pinned { return false; }
+    if lc_mark.len < cfg_nb { lc_mark.resize(cfg_nb, 0); }
+    var any = false;
+    for h in rpo {
+        if h == 0 || b_fl[h] & BF_LP != 0 { continue; }
+        var latch: u32 = NIL;
+        var nl = 0;
+        for k in p_start[h]..p_start[h + 1] {
+            let p = p_list[k];
+            if rpo_num[p] != NIL && dominates(h, p) {
+                if latch != p { nl++; }
+                latch = p;
+            }
+        }
+        if nl != 1 || latch == h { continue; }
+        let lt = b_last[latch];
+        if o_ins[lt].op != GIR_BR || block_invoke(latch) != NIL { continue; }
+        let ht = b_last[h];
+        if o_ins[ht].op != GIR_CONDBR || block_invoke(h) != NIL { continue; }
+        // one successor in the loop: the body is what reaches the latch
+        lc_epoch++;
+        let ep = lc_epoch;
+        lc_mark[h] = ep;
+        tmp_stack.clear();
+        lc_mark[latch] = ep;
+        tmp_stack.push(latch);
+        while tmp_stack.len != 0 {
+            let b = tmp_stack.pop();
+            for k in p_start[b]..p_start[b + 1] {
+                let q = p_list[k];
+                if rpo_num[q] == NIL || lc_mark[q] == ep { continue; }
+                lc_mark[q] = ep;
+                tmp_stack.push(q);
+            }
+        }
+        let s1 = o_ins[ht].b;
+        let s2 = o_ins[ht].c;
+        if (lc_mark[s1] == ep) == (lc_mark[s2] == ep) { continue; }
+        if b_lnext[latch] == h { continue; }   // (already)
+        // unlink h from the layout and put it after the latch
+        var b: u32 = 0;
+        while b != NIL && b_lnext[b] != h { b = b_lnext[b]; }
+        if b == NIL { continue; }
+        b_lnext[b] = b_lnext[h];
+        b_lnext[h] = b_lnext[latch];
+        b_lnext[latch] = h;
+        any = true;
+    }
+    return any;
+}
