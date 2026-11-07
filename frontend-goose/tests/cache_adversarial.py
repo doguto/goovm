@@ -378,7 +378,7 @@ def t_policy(a):
 
 
 def t_evict(a):
-    """A size limit (GOOSECC_CACHE_SIZE): the oldest files go, the cache stays near the limit, results do not change."""
+    """A size limit (GOOSECC_CACHE_SIZE): files go, the cache stays near the limit, results do not change."""
     t = T(a, "evict")
     files = []
     for i in range(12):
@@ -403,7 +403,53 @@ def t_evict(a):
     return t.done()
 
 
-TESTS = [t_policy, t_evict, t_edit_same_size, t_racy, t_macros, t_order, t_include_next, t_counter, t_states, t_symlink, t_relative,
+def t_lru(a):
+    """Eviction goes by last use: entries a replay read survive older ones nobody read since."""
+    t = T(a, "lru")
+    files = []
+    for i in range(10):
+        t.write(f"h{i}.h", f"int lru{i};\n" + BIG * 3)
+        files.append(t.write(f"f{i}.c", f'#include "h{i}.h"\n#include <stdio.h>\nint f{i}(void) {{ return 0; }}\n'))
+    age()
+    for f in files[:9]:
+        t.run(["-c", f], True)
+
+    def entries():
+        """cache file -> the include its key names ("h0.h", "stdio.h"; None for markers)"""
+        names, out = {}, {}
+        for f in os.listdir(os.path.join(t.cache, "v1")):
+            if f.endswith(".m"):
+                w = open(os.path.join(t.cache, "v1", f), "rb").read()
+                n = int.from_bytes(w[8:12], "little")
+                parts = w[12:12 + n].split(b"\x01")
+                names[f[:-2]] = parts[2].decode(errors="replace") if len(parts) > 2 else "?"
+        for f in os.listdir(os.path.join(t.cache, "v1")):
+            out[os.path.join(t.cache, "v1", f)] = names.get(f.split("-")[0].split(".")[0])
+        return out
+
+    # every file last used hours ago; h0.h's and stdio.h's entries the longest
+    now = time.time()
+    for p, name in entries().items():
+        old = now - (20000 if name in ("h0.h", "stdio.h") else 10000)
+        os.utime(p, (old, old))
+    # a replay of both uses them: their manifests and blobs are touched
+    t.same(["-c", files[0]], "f0 replays", expect={"hits": 2})
+    for p, name in entries().items():
+        if name in ("h0.h", "stdio.h") and os.stat(p).st_mtime < now - 100:
+            t.fails.append(f"{os.path.basename(p)} ({name}) not touched by its use")
+    # a limit the next recording exceeds: a quarter of the cache goes
+    lim = sum(os.stat(p).st_blocks * 512 for p in entries())
+    t.same(["-c", files[9]], "f9 records, eviction", env_extra={"GOOSECC_CACHE_SIZE": str(lim)}, expect={"recorded": 1})
+    left = set(name for p, name in entries().items() if p.endswith(".b"))   # the entries with their blob
+    if "h0.h" not in left or "stdio.h" not in left:
+        t.fails.append(f"recently used entries evicted: left {sorted(x for x in left if x)}")
+    if len([x for x in left if x and x.startswith("h")]) >= 10:
+        t.fails.append("nothing evicted")
+    t.same(["-c", files[0]], "f0 replays after the eviction", expect={"hits": 2})
+    return t.done()
+
+
+TESTS = [t_policy, t_evict, t_lru, t_edit_same_size, t_racy, t_macros, t_order, t_include_next, t_counter, t_states, t_symlink, t_relative,
          t_pragmas, t_time, t_deleted, t_concurrent, t_corrupt]
 
 

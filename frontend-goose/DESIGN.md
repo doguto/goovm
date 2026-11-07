@@ -1053,8 +1053,12 @@ it for one compile. All files are arrays of 32-bit words.
 
 `GOOSECC_CACHE_SIZE` (default 2 GB, with K/M/G) bounds the size: on one
 new blob in 64 (on every one below 64 MB), the files are listed and the
-oldest deleted until the cache takes 3/4 of the limit; stale temporary
-files go too. Files of another format version or build are never read
+least recently used deleted until the cache takes 3/4 of the limit (a
+file's last use is the later of its modification and access times; a
+manifest read or a blob mapped more than an hour after its last use has
+both set to now, since access times alone are seldom kept: `relatime`
+updates one once a day, `noatime` never); stale temporary files go too. A manifest whose blob was deleted
+only misses: its include is preprocessed and recorded again. Files of another format version or build are never read
 (their keys differ). `--cache-stats` prints the lookups, hits, misses,
 recordings, bytes written, entries rejected as corrupt, and where a
 replay's time went.

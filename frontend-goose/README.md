@@ -111,7 +111,7 @@ byte-identical with the cache cold, warm or disabled (DESIGN.md, section
 |---|---|
 | `-fno-header-cache` | neither read nor write the cache for this compile (`-fheader-cache`: the default) |
 | `GOOSECC_CACHE=dir` | the cache directory (default `~/.cache/goosecc`; `off`, `none`, `0` or empty: no cache) |
-| `GOOSECC_CACHE_SIZE=n` | its size limit, with K, M or G (default 2G); the oldest files are deleted beyond it |
+| `GOOSECC_CACHE_SIZE=n` | its size limit, with K, M or G (default 2G); the least recently used files are deleted beyond it |
 | `GOOSECC_CACHE_QUOTED=1` | every `"..."` include of the program's files is cached at every compile (the default caches `<...>` includes from the program's files, and the main file's `"..."` includes from its second compile on) |
 | `--cache-stats` | print the lookups, hits, misses, recordings, bytes written, rejected entries, and where a replay's time went |
 | `--pp-state-hash`, `--pp-state-hash=v` | print a checksum of the preprocessor's whole state (with `=v`, per array): what `tests/cache_check.py` compares |
@@ -136,7 +136,7 @@ other builds of goosecc (never read).
 cd frontend-goose
 tests/cache_check.py --corpus torture,unit,regress,bench,ctmark -j 2     # outputs off / cold / warm / warm2 / shared identical
 GOOSECC_CACHE_QUOTED=1 tests/cache_check.py -j 2                        # the same with every "..." include a unit
-tests/cache_adversarial.py                                              # 16 situations where a replay could go wrong
+tests/cache_adversarial.py                                              # 17 situations where a replay could go wrong
 ../tests/bench_hcache.py <CTMark compile_commands.json> --goosecc build/goosecc -n 5 --build --md bench.md
 ```
 
@@ -156,7 +156,7 @@ tests/cache_adversarial.py                                              # 16 sit
   `poison`/`system_header`, `__DATE__`/`__TIME__`, a symlinked and a
   moved directory, relative includes from another directory, a deleted
   or newly shadowing header, eight concurrent writers, corrupted and
-  truncated cache files, eviction, and the default policy.
+  truncated cache files, eviction (by last use), and the default policy.
 - With a cache in `GOOSECC_CACHE`, the oracles below and
   `tests/suite_goosecc.py` and `tests/run.py` run with it warm; README's
   results say what they gave.

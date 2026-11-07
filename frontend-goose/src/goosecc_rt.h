@@ -423,6 +423,19 @@ uint32_t goosecc_words_hash(sl_u32 w, int64_t i, int64_t n) {
     return goosecc_hash_mem((const uint8_t *)(w.data + i), n);
 }
 
+/* A cache file being used (a manifest read, a blob mapped) whose last use
+ * (the later of its modification and access times) is more than an hour
+ * old gets both set to now: the eviction deletes the least recently used
+ * files first, and access times alone are seldom kept (relatime updates
+ * one at the first read after a write and then once a day; noatime
+ * never). At most one system call per file and hour. */
+static void goosecc_touch_used(int fd, const struct stat *st) {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    time_t last = st->st_mtim.tv_sec > st->st_atim.tv_sec ? st->st_mtim.tv_sec : st->st_atim.tv_sec;
+    if (now.tv_sec - last > 3600) futimens(fd, 0);
+}
+
 /* Appends the file at path to the word array out (its size must be a
  * multiple of 4): the number of words, or -1. */
 int64_t goosecc_read_words(sl_u8 path, gs_rref out) {
@@ -435,6 +448,7 @@ int64_t goosecc_read_words(sl_u8 path, gs_rref out) {
         close(fd);
         return -1;
     }
+    goosecc_touch_used(fd, &st);
     int64_t size = st.st_size, total = 0;
     if (size > 8192) goosecc_prefault(out, size);
     while (total < size) {
@@ -472,6 +486,7 @@ int64_t goosecc_map(sl_u8 path) {
         close(fd);
         return -1;
     }
+    goosecc_touch_used(fd, &st);
     void *m = mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
     close(fd);
     if (m == MAP_FAILED) return -1;
@@ -705,9 +720,11 @@ void goosecc_unlink(sl_u8 path) {
     if (goosecc_cpath(path, p, sizeof p)) unlink(p);
 }
 
-/* Eviction: when the files in dir take more than limit bytes, the oldest
- * (by modification time: a manifest's is its last append) are deleted
- * until they take at most 3/4 of it. Temporary files older than an hour
+/* Eviction: when the files in dir take more than limit bytes, the least
+ * recently used are deleted until they take at most 3/4 of it. A file's
+ * last use is the later of its modification and access times (written,
+ * appended to, or touched by goosecc_touch_used when it was used more
+ * than an hour after its last use). Temporary files older than an hour
  * (left by a killed compiler) are deleted as well. Returns the bytes that
  * remain. */
 struct goosecc_ent { int64_t mtime; int64_t size; char name[64]; };
@@ -743,7 +760,9 @@ int64_t goosecc_evict(sl_u8 dir, int64_t limit) {
             if (!nv) break;
             v = nv;
         }
-        v[n].mtime = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
+        int64_t mt = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
+        int64_t at = (int64_t)st.st_atim.tv_sec * 1000000000 + st.st_atim.tv_nsec;
+        v[n].mtime = at > mt ? at : mt;
         v[n].size = (int64_t)st.st_blocks * 512;
         strcpy(v[n].name, fe->d_name);
         total += v[n].size;
