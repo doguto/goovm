@@ -400,8 +400,49 @@ fn pp_term(I: Inst, op: u32, b: u32, j: u32, lo: u32, ncl: u32, mw: u32) {
     }
 }
 
+// A GEP with constant indices of a static alloca (or of such a GEP) is a
+// frame address too: home H_ALLOCA, rematerialized at every use (`[rbp+off]`,
+// `lea r, [rbp+off]`) instead of computed into a register; its offset from
+// the base is in off until the frame layout (frame_geps_fixup). Over-aligned
+// allocas (H_PTR after the layout) are not bases.
+var fg_id: u32[>..] = [];
+var fg_base: u32[>..] = [];
+fn pp_frame_gep(I: Inst, j: u32) {
+    if gir_kind(I.a) != GIR_V_INST { return; }
+    let b = gir_idx(I.a) - f_first_inst;
+    if b >= j || vi[b].home != H_ALLOCA { return; }
+    let B = M.insts[f_first_inst + b];
+    if B.op == GIR_ALLOCA && B.b > 16 { return; }
+    var off = (M.opnds[I.b] | M.opnds[I.b + 1] as u64 << 32) as! i64;
+    let lim: i64 = 0x10000000;
+    if off < 0 - lim || off > lim { return; }
+    for k in 0..I.c {
+        let idx = M.opnds[I.b + 2 + 2 * k];
+        let sc = M.opnds[I.b + 3 + 2 * k];
+        if sc == 0 { continue; }
+        if gir_kind(idx) != GIR_V_CONST || sc > lim { return; }
+        var x: i64 = M.consts[gir_idx(idx)].lo as! i64;
+        let bits = bits_of(M.consts[gir_idx(idx)].ty);
+        if bits < 64 { x = (x << (64 - bits)) >> (64 - bits); }
+        if x < 0 - lim || x > lim { return; }
+        off = off + x * sc;
+        if off < 0 - lim || off > lim { return; }
+    }
+    vi[j].home = H_ALLOCA;
+    vi[j].off = off as! i32;
+    fg_id.push(j);
+    fg_base.push(b);
+}
+// After the frame layout: the frame offsets of the GEPs pp_frame_gep made
+// frame addresses (bases come before the GEPs built on them).
+fn frame_geps_fixup() {
+    for g, k in fg_id { vi[g].off = vi[fg_base[k]].off + vi[g].off; }
+}
+
 fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
     pp_epoch++;
+    fg_id.clear();
+    fg_base.clear();
     pp_ncs = 0;
     f_call = false;
     f_rsp = false;
@@ -455,6 +496,8 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
                 if op == GIR_PHI {
                     vi[j].st |= ST_PHI;
                     t_off[j] = 0;
+                } else if op == GIR_GEP {
+                    pp_frame_gep(I, j);
                 }
             }
             j++;
