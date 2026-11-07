@@ -1337,7 +1337,12 @@ fn lower_memcpy_a(I: Inst) {
     let dst = ra_addr(I.a);
     let src = ra_addr(I.b);
     var k: u32 = 0;
-    if n >= 16 {
+    // Up to 32 bytes (the size the exporter inlines non-volatile memcpys
+    // to): 8, 4, 2, 1-byte moves through a general register, as LLVM's
+    // FastISel copies them. A 16-byte load of data written by two 8-byte
+    // stores (an aggregate call result spilled to a temporary, then copied)
+    // misses store-to-load forwarding (DESIGN.md §14).
+    if n >= 16 && n > 32 {
         let x = ra_xtemp();
         while k + 16 <= n {
             movups_load(x, m_add(src, k));
