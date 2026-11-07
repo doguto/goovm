@@ -558,6 +558,74 @@ fn lower_fcmp_a(I: Inst, j: u32) {
     ra_set(j, rd, false);
 }
 
+// llvm.is.fpclass on f32 / f64 with the masks of C's classification macros
+// (fpclass_fast): nan (3) and not nan (0x3FC) are `ucomis x, x` (parity);
+// finite (0x1F8), infinite (0x204), normal (0x108), zero (0x60) and
+// subnormal (0x90) compare the bits shifted left by one (the sign shifted
+// out), unsigned: b < inf, b == inf, b - minnorm < inf - minnorm, b == 0,
+// b - 1 < minnorm - 1. The legacy lowering computes the whole class.
+fn fpclass_fast(m: u32) -> bool {
+    return m == 3 || m == 0x3FC || m == 0x1F8 || m == 0x204 || m == 0x108 || m == 0x60 || m == 0x90;
+}
+// op (ALU_SUB / ALU_CMP) of r with the constant k at 64 bits or 32 (w = 0).
+fn alu_rk(w: u32, op: u32, r: u32, k: u64) {
+    let ext: u32 = (op >> 3) & 7;
+    if w == 0 { grp1_ri32(ext, r, k as! u32); return; }
+    if fits32(k as! i64) { grp1_ri64(ext, r, (k as! i64) as! i32); return; }
+    let t = ra_temp();
+    mov_ri(t, k);
+    alu_rr64(op, r, t);
+}
+fn lower_isfpclass_a(I: Inst, j: u32) {
+    let dbl = I.aux == GIR_T_F64;
+    let m = I.b;
+    var cc: u32 = CC_P;
+    var r: u32 = 32;
+    if m == 3 || m == 0x3FC {
+        let x = ra_xmm(I.a);
+        ucomis(dbl, x, x);
+        if m != 3 { cc = CC_NP; }
+    } else {
+        let w: u32 = if dbl { 1 } else { 0 };
+        let okm, mm = ra_mem_opnd(I.a, 0);
+        r = ra_temp();
+        if okm {
+            if dbl { load64(r, mm); } else { load32(r, mm); }
+        } else {
+            let x = ra_xmm(I.a);
+            if dbl { movq_rx(r, x); } else { movd_rx(r, x); }
+        }
+        if dbl { shift_imm64(SH_SHL, r, 1); } else { shift_imm32(SH_SHL, r, 1); }
+        let inf2: u64 = if dbl { 0xFFE0000000000000 } else { 0xFF000000 };
+        let mn2: u64 = if dbl { 0x0020000000000000 } else { 0x01000000 };
+        if m == 0x60 {
+            if dbl { test_rr64(r, r); } else { test_rr32(r, r); }
+            cc = CC_E;
+        } else if m == 0x1F8 || m == 0x204 {
+            alu_rk(w, ALU_CMP, r, inf2);
+            cc = if m == 0x204 { CC_E } else { CC_B };
+        } else if m == 0x108 {
+            alu_rk(w, ALU_SUB, r, mn2);
+            alu_rk(w, ALU_CMP, r, inf2 - mn2);
+            cc = CC_B;
+        } else {
+            alu_rk(w, ALU_SUB, r, 1);
+            alu_rk(w, ALU_CMP, r, mn2 - 1);
+            cc = CC_B;
+        }
+    }
+    if fuse_flags(j) {
+        flags_id = j;
+        flags_cc = cc;
+        flags_comb = 0;
+        return;
+    }
+    if r == 32 { r = ra_def(j); }
+    setcc(cc, r);
+    movzx8(r, r);
+    ra_set(j, r, false);
+}
+
 // ------------------------------------------------------------- select
 
 fn lower_select_a(I: Inst, j: u32) {

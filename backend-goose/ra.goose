@@ -201,7 +201,7 @@ let OP_KIND: u8[84] = [
     1, 1, 1, 1, 1, 2, 1, 1,  // fptosi fptoui sitofp uitofp extractvalue insertvalue extractelt insertelt
     2, 2, 2, 2, 18, 16, 16, 2,  // shuffle dynalloca stacksave stackrestore vastart memcpy memset ctlz
     2, 2, 2, 2, 2, 2, 2, 2,  // cttz ctpop bswap bitreverse fshl fshr ovf scmp
-    2, 1, 1, 1, 2, 18, 18, 18,  // ucmp fabs copysign fsqrt isfpclass cmpxchg atomicrmw fence
+    2, 1, 1, 1, 1, 18, 18, 18,  // ucmp fabs copysign fsqrt isfpclass cmpxchg atomicrmw fence
     2, 2, 2, 20, 18, 0, 0, 0,  // tlsaddr frameaddr retaddr sjlj_setjmp sjlj_longjmp trap debugtrap indirectbr
     2, 2, 20, 2,  // blockaddr x86 asm landingpad
 ];
@@ -213,6 +213,9 @@ fn inst_kind(I: Inst) -> u32 {
     let k: u32 = OP_KIND[op] & 15;
     if k != K_T { return k; }
     if op == GIR_EXTRACTVALUE { return ev_kind(I.ty); }
+    if op == GIR_ISFPCLASS {
+        return if (I.aux == GIR_T_F32 || I.aux == GIR_T_F64) && fpclass_fast(I.b) { K_A } else { K_B };
+    }
     // the type that decides: the compared / stored / cast source type, or the result
     var t: u32 = I.ty;
     if op == GIR_ICMP || op == GIR_FCMP || op == GIR_STORE { t = I.aux; }

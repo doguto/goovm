@@ -463,6 +463,7 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_PHI => lower_phi(I, j, cur),
             GIR_MEMCPY, GIR_MEMSET => lower_memcpy_a(I),
             GIR_EXTRACTVALUE => lower_extractvalue_a(I, j),
+            GIR_ISFPCLASS => lower_isfpclass_a(I, j),
             _ => ud2(),
         }
         ra_end_inst();
