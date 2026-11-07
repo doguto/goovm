@@ -653,6 +653,7 @@ fn emit_prologue(insts: const Inst[:], flags: u32) {
     }
     let frame: i64 = (lay_off + 15) & ~15;
     let sub = frame - 8 * nsave;
+    assert(sub == epi_sub);   // (the frame the epilogue's add assumed)
     let leaf = !f_call && !f_rsp && !f_asm && !f_sjlj;
     if sub > 0 && !(leaf && sub <= 128) { grp1_ri64(G1_SUB, RSP, sub as! i32); }
     if flags & FN_VASTART != 0 {
@@ -680,20 +681,29 @@ fn frameless() -> bool {
     let leaf = !f_call && !f_rsp && !f_asm && !f_sjlj;
     return sub <= 0 || leaf && sub <= 128;
 }
+// The epilogue as LLVM's: `add rsp, n` (the prologue's `sub rsp, n`, known
+// now that the body is generated), the pops, `pop rbp`, `ret`; with a
+// dynamic stack `lea rsp, [rbp-8k]` (`mov rsp, rbp`) first. Never `leave`,
+// which costs about 5 cycles per return in chains of small calls on recent
+// Intel cores; `lea`/`mov rsp` before the pops is as slow in deep recursion
+// (NOTES.md §11). emit_prologue checks that its frame is the one assumed.
+var epi_sub: i64 = 0;
 fn emit_epilogue() {
     var nsave: u32 = 0;
     for r in CS_REGS { if r_cs_used & bit(r) != 0 { nsave++; } }
+    let sub = ((lay_off + 15) & ~15) - 8 * nsave;
+    epi_sub = sub;
+    if f_rsp {
+        if nsave == 0 { mov_rr64(RSP, RBP); } else { lea64(RSP, m_rbp((0 - 8 * nsave) as! i32)); }
+    } else if !frameless() {
+        grp1_ri64(G1_ADD, RSP, sub as! i32);
+    }
     if nsave == 0 {
-        // pop rbp, or mov rsp, rbp; pop rbp: not `leave`, which costs about
-        // 5 cycles more per return in chains of small calls (a C++ -O0
-        // program's wrappers) on recent Intel cores (NOTES.md §11)
-        if !frameless() || f_rsp { mov_rr64(RSP, RBP); }
-        b1(0x5D);
+        b1(0x5D);  // pop rbp
         cfi_body.push(CfiEv { pos: here(), kind: CE_DEFCFA, a: 0 });
         b1(0xC3);  // ret
         return;
     }
-    lea64(RSP, m_rbp((0 - 8 * nsave) as! i32));
     var k: i64 = 4;
     while k >= 0 {
         let r = CS_REGS[k];
