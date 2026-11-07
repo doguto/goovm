@@ -156,7 +156,10 @@ fn rg_alloc(insts: const Inst[:], blocks: const Block[:]) {
     }
     for I, j in insts {
         if I.op == GIR_INDIRECTBR { return; }
-        if I.ty == GIR_T_VOID || vi[j].st & (ST_GLOB | ST_KEEP) != ST_GLOB || vi[j].nuse == 0 { continue; }
+        // (a PHI is always a candidate: the edges define it, even if all its
+        // uses are in its block)
+        if I.ty == GIR_T_VOID || vi[j].nuse == 0 || vi[j].st & ST_KEEP != 0 { continue; }
+        if vi[j].st & ST_GLOB == 0 && I.op != GIR_PHI { continue; }
         let c = rc_of(I.ty);
         if c == RC_MEM || vi[j].home == H_ALLOCA || vi[j].home == H_PTR { continue; }
         rg_gid[j] = rg_val.len as! u32;

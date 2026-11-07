@@ -306,7 +306,41 @@ fn gvn() -> bool {
     return gv_changed;
 }
 
+// Dead stores: the stores of the block since the last read that may see them.
+var ds_st: u32[16] = [0; 16];
+var ds_n: u32 = 0;
+// The alloca a non-escaping pointer is based on, or NIL.
+fn gv_ne_base(p: u32) -> u32 {
+    if !is_inst(p) { return NIL; }
+    let a = gv_base[p];
+    if a != NIL && gv_agen[a] != NIL { return a; }
+    return NIL;
+}
+// Pointers p and q may point to the same memory.
+fn gv_may_alias(p: u32, q: u32) -> bool {
+    if p == q { return true; }
+    let a = gv_ne_base(p);
+    let b = gv_ne_base(q);
+    if a == NIL && b == NIL { return true; }
+    return a == b;
+}
+// A read of memory at p (NIL: any escaping memory) ends the stores it may see.
+fn ds_read(p: u32) {
+    var n: u32 = 0;
+    for k in 0..ds_n {
+        let s = ds_st[k];
+        let q = res(o_ins[s].b);
+        let keep = if p == NIL { gv_ne_base(q) != NIL } else { !gv_may_alias(p, q) };
+        if keep {
+            ds_st[n] = s;
+            n++;
+        }
+    }
+    ds_n = n;
+}
+
 fn gv_block(b: u32) {
+    ds_n = 0;
     var i = b_first[b];
     while i != NIL {
         let nx = o_nxt[i];
@@ -321,13 +355,37 @@ fn gv_block(b: u32) {
                 gv_changed = true;
             } else {
                 gv_lput(h, i, p, i);
+                ds_read(p);
             }
         } else if op == GIR_STORE && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 {
             gv_clobber(i);
             let p = res(I.b);
             gv_lput(gv_lslot(p, I.aux), i, p, res(I.a));
+            // an earlier store of the same type to the same address is dead
+            var n: u32 = 0;
+            for k in 0..ds_n {
+                let s = ds_st[k];
+                if res(o_ins[s].b) == p && o_ins[s].aux == I.aux {
+                    unlink(s);
+                    gv_changed = true;
+                } else {
+                    ds_st[n] = s;
+                    n++;
+                }
+            }
+            ds_n = n;
+            if ds_n == 16 {
+                for k in 0..15 { ds_st[k] = ds_st[k + 1]; }
+                ds_n = 15;
+            }
+            ds_st[ds_n] = i;
+            ds_n++;
         } else if writes_mem(I) {
             gv_clobber(i);
+            ds_read(NIL);
+            if op != GIR_CALL { ds_n = 0; }
+        } else if op == GIR_LOAD {
+            ds_n = 0;
         } else if cse_op(I) {
             let j = gv_find_add(i);
             if j != NIL {

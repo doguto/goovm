@@ -251,23 +251,19 @@ fn simp_bin(i: u32) -> u32 {
                 return NIL;
             }
             if (op == GIR_SDIV || op == GIR_SREM) && k < bits - 1 && (bits == 32 || bits == 64) {
-                // t = x + ((x >>s (bits-1)) >>u (bits-k)); q = t >>s k; r = x - (t & -2^k)
-                let s1 = ins_new(i, GIR_ASHR, t, a, int_const(t, (bits - 1) as u64));
-                let s2 = ins_new(i, GIR_LSHR, t, s1, int_const(t, (bits - k) as u64));
-                let s3 = ins_new(i, GIR_ADD, t, a, s2);
-                if op == GIR_SDIV {
-                    o_ins[i].op = GIR_ASHR as! u8;
-                    o_ins[i].a = s3;
-                    o_ins[i].b = int_const(t, k as u64);
-                } else {
-                    let s4 = ins_new(i, GIR_AND, t, s3, int_const(t, (0 - vb) & m));
-                    o_ins[i].op = GIR_SUB as! u8;
-                    o_ins[i].a = a;
-                    o_ins[i].b = s4;
-                }
                 fold_changed = true;
-                return NIL;
+                return sdiv_pow2(i, op, t, bits, a, k, vb, m);
             }
+        }
+        // division of an i32 by another constant: a multiplication by its
+        // reciprocal (Granlund-Montgomery, Hacker's Delight 10-1)
+        if bits == 32 && vb > 1 && log2p(vb) == 0 && (op == GIR_UDIV || op == GIR_UREM) {
+            fold_changed = true;
+            return udiv_magic(i, op, a, vb);
+        }
+        if bits == 32 && vb > 1 && vb < 0x80000000 && log2p(vb) == 0 && (op == GIR_SDIV || op == GIR_SREM) {
+            fold_changed = true;
+            return sdiv_magic(i, op, a, vb);
         }
     }
     if ka && va == 0 {
@@ -279,6 +275,103 @@ fn simp_bin(i: u32) -> u32 {
         if op == GIR_AND || op == GIR_OR { return a; }
     }
     return NIL;
+}
+
+// x / 2^k, x % 2^k for signed x: t = x + ((x >>s (bits-1)) >>u (bits-k));
+// q = t >>s k; r = x - (t & -2^k).
+fn sdiv_pow2(i: u32, op: u32, t: u32, bits: u32, a: u32, k: u32, vb: u64, m: u64) -> u32 {
+    let s1 = ins_new(i, GIR_ASHR, t, a, int_const(t, (bits - 1) as u64));
+    let s2 = ins_new(i, GIR_LSHR, t, s1, int_const(t, (bits - k) as u64));
+    let s3 = ins_new(i, GIR_ADD, t, a, s2);
+    if op == GIR_SDIV { return ins_new(i, GIR_ASHR, t, s3, int_const(t, k as u64)); }
+    let s4 = ins_new(i, GIR_AND, t, s3, int_const(t, (0 - vb) & m));
+    return ins_new(i, GIR_SUB, t, a, s4);
+}
+fn ins_cast(at: u32, op: u32, ty: u32, x: u32, from: u32) -> u32 {
+    let n = new_inst(Inst { op: op as! u8, sub: 0, flags: 0, ty: ty as! u16, aux: from as! u16, a: x, b: 0, c: 0,
+                            dbg: o_ins[at].dbg });
+    link_before(at, n);
+    return n;
+}
+// x / d, x % d for an unsigned i32 x: with l = ceil(log2 d), m = 2^(32+l)/d + 1,
+// q = x * m >> (32 + l) (in 64 bits; when m needs 33 bits, with m - 2^32:
+// q = ((x * (m - 2^32) >> 32) + x) >> l).
+fn udiv_magic(i: u32, op: u32, a: u32, d: u64) -> u32 {
+    let I32: u32 = GIR_T_I32;
+    if d >= 0x80000000 {
+        // the quotient is 0 or 1
+        let c = new_inst(Inst { op: GIR_ICMP as! u8, sub: GIR_UGE as! u8, flags: 0, ty: GIR_T_I1, aux: I32 as! u16,
+                                a: a, b: int_const(I32, d), c: 0, dbg: o_ins[i].dbg });
+        link_before(i, c);
+        let q = ins_cast(i, GIR_ZEXT, I32, c, GIR_T_I1);
+        if op == GIR_UDIV { return q; }
+        let qd = ins_new(i, GIR_MUL, I32, q, int_const(I32, d));
+        return ins_new(i, GIR_SUB, I32, a, qd);
+    }
+    var l: u32 = 0;
+    while ((1 as u64) << l) < d { l++; }
+    let m: u64 = ((1 as u64) << (32 + l)) / d + 1;
+    let I64: u32 = GIR_T_I64;
+    let x = ins_cast(i, GIR_ZEXT, I64, a, I32);
+    var q: u32 = 0;
+    if m < 0x100000000 {
+        let p = ins_new(i, GIR_MUL, I64, x, int_const(I64, m));
+        q = ins_new(i, GIR_LSHR, I64, p, int_const(I64, (32 + l) as u64));
+    } else {
+        let p = ins_new(i, GIR_MUL, I64, x, int_const(I64, m - 0x100000000));
+        let h = ins_new(i, GIR_LSHR, I64, p, int_const(I64, 32));
+        let t = ins_new(i, GIR_ADD, I64, h, x);
+        q = ins_new(i, GIR_LSHR, I64, t, int_const(I64, l as u64));
+    }
+    let q32 = ins_cast(i, GIR_TRUNC, I32, q, I64);
+    if op == GIR_UDIV { return q32; }
+    let qd = ins_new(i, GIR_MUL, I32, q32, int_const(I32, d));
+    return ins_new(i, GIR_SUB, I32, a, qd);
+}
+// x / d, x % d for a signed i32 x and 2 <= d < 2^31 (Hacker's Delight, figure
+// 10-1): q = (mulhs(M, x) [+ x if M < 0]) >>s s, plus 1 if negative.
+fn sdiv_magic(i: u32, op: u32, a: u32, d: u64) -> u32 {
+    let two31: u64 = 0x80000000;
+    let ad = d;
+    let anc: u64 = two31 - 1 - two31 % ad;
+    var p: u32 = 31;
+    var q1: u64 = two31 / anc;
+    var r1: u64 = two31 - q1 * anc;
+    var q2: u64 = two31 / ad;
+    var r2: u64 = two31 - q2 * ad;
+    loop {
+        p++;
+        q1 = (2 * q1) & 0xFFFFFFFF;
+        r1 = (2 * r1) & 0xFFFFFFFF;
+        if r1 >= anc {
+            q1 = (q1 + 1) & 0xFFFFFFFF;
+            r1 = (r1 - anc) & 0xFFFFFFFF;
+        }
+        q2 = (2 * q2) & 0xFFFFFFFF;
+        r2 = (2 * r2) & 0xFFFFFFFF;
+        if r2 >= ad {
+            q2 = (q2 + 1) & 0xFFFFFFFF;
+            r2 = (r2 - ad) & 0xFFFFFFFF;
+        }
+        let delta = (ad - r2) & 0xFFFFFFFF;
+        if !(q1 < delta || q1 == delta && r1 == 0) { break; }
+    }
+    let mm: u64 = (q2 + 1) & 0xFFFFFFFF;   // M as an i32 bit pattern
+    let sh: u32 = p - 32;
+    let I64: u32 = GIR_T_I64;
+    let I32: u32 = GIR_T_I32;
+    let x = ins_cast(i, GIR_SEXT, I64, a, I32);
+    let mm64: u64 = sx(mm, 32) as! u64;
+    let pr = ins_new(i, GIR_MUL, I64, x, int_const(I64, mm64));
+    let h = ins_new(i, GIR_ASHR, I64, pr, int_const(I64, 32));
+    var t = ins_cast(i, GIR_TRUNC, I32, h, I64);
+    if mm >= two31 { t = ins_new(i, GIR_ADD, I32, t, a); }
+    if sh != 0 { t = ins_new(i, GIR_ASHR, I32, t, int_const(I32, sh as u64)); }
+    let u = ins_new(i, GIR_LSHR, I32, t, int_const(I32, 31));
+    let q = ins_new(i, GIR_ADD, I32, t, u);
+    if op == GIR_SDIV { return q; }
+    let qd = ins_new(i, GIR_MUL, I32, q, int_const(I32, d));
+    return ins_new(i, GIR_SUB, I32, a, qd);
 }
 
 fn simp_icmp(i: u32) -> u32 {

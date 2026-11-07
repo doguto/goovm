@@ -214,9 +214,128 @@ fn simplify_cfg() -> bool {
                 ensure_cfg();
                 remove_unreachable();
             }
+            ensure_cfg();
+            if thread_phis() {
+                ch = true;
+                ensure_cfg();
+                remove_unreachable();
+            }
         }
         if !ch { break; }
         any = true;
     }
     return any;
+}
+
+// Jump threading of a branch on a PHI: a block M of only PHIs and `condbr P,
+// X, Y` with P one of its PHIs (what `while (a && b)` leaves: P = phi
+// [false, A], [b, B]) sends each predecessor whose incoming P is a constant
+// straight to X or Y. M's PHIs may only be used by that branch and as
+// incoming values from M in X's and Y's PHIs (they then get the
+// predecessor's value). (build_cfg first.)
+fn thread_phis() -> bool {
+    var cand = false;
+    for m in rpo {
+        if thread_cand(m) != NIL { cand = true; break; }
+    }
+    if !cand { return false; }
+    resolve_all();
+    build_uses();
+    var any = false;
+    for m in rpo {
+        let P = thread_cand(m);
+        if P == NIL || !thread_uses_ok(m) { continue; }
+        let t = b_last[m];
+        let X = o_ins[t].b;
+        let Y = o_ins[t].c;
+        if X == m || Y == m || X == Y { continue; }
+        // the predecessors with a constant P (distinct blocks; one edge each)
+        for k in p_start[m]..p_start[m + 1] {
+            let a = p_list[k];
+            if k > p_start[m] && p_list[k - 1] == a { continue; }
+            if k + 1 < p_start[m + 1] && p_list[k + 1] == a { continue; }   // (several edges: skip)
+            let v = phi_in(P, a);
+            let kc, c = ci(res(v));
+            if !kc { continue; }
+            let T = if c != 0 { X } else { Y };
+            if thread_edge(a, m, T) { any = true; }
+        }
+    }
+    return any;
+}
+// P if block m is a candidate (only PHIs and a condbr on one of them), else NIL.
+fn thread_cand(m: u32) -> u32 {
+    if m == 0 || b_fl[m] & (BF_LP | BF_DEAD) != 0 { return NIL; }
+    let t = b_last[m];
+    if t == NIL || o_ins[t].op != GIR_CONDBR || block_invoke(m) != NIL { return NIL; }
+    let c = res(o_ins[t].a);
+    if !is_inst(c) || o_blk[c] != m || o_ins[c].op != GIR_PHI { return NIL; }
+    var i = b_first[m];
+    while i != t {
+        if o_ins[i].op != GIR_PHI { return NIL; }
+        i = o_nxt[i];
+    }
+    return c;
+}
+// M's PHIs are used only by M's branch and by X's and Y's PHIs (from M).
+fn thread_uses_ok(m: u32) -> bool {
+    let t = b_last[m];
+    let X = o_ins[t].b;
+    let Y = o_ins[t].c;
+    var i = b_first[m];
+    while i != t {
+        for q in u_start[i]..u_start[i + 1] {
+            let u = u_list[q];
+            if u == t { continue; }
+            let U = o_ins[u];
+            if U.op != GIR_PHI || o_blk[u] != X && o_blk[u] != Y { return false; }
+            // only as the value from m
+            for k in 0..U.c {
+                if res(o_ops[U.b + 2 * k]) == i && o_ops[U.b + 2 * k + 1] != m { return false; }
+            }
+        }
+        i = o_nxt[i];
+    }
+    return true;
+}
+// Redirects the edge a -> m to T (m ends in a branch to T among others).
+fn thread_edge(a: u32, m: u32, T: u32) -> bool {
+    if !live_block(a) || a == m { return false; }
+    let at = b_last[a];
+    let op: u32 = o_ins[at].op;
+    if op != GIR_BR && op != GIR_CONDBR { return false; }
+    let iv = block_invoke(a);
+    if iv != NIL { return false; }
+    // T's PHIs: the value of the edge m -> T as seen from a
+    var i = b_first[T];
+    while i != NIL && o_ins[i].op == GIR_PHI {
+        let vm = phi_in(i, m);
+        if vm == NIL { return false; }
+        var va = res(vm);
+        if is_inst(va) && o_blk[va] == m && o_ins[va].op == GIR_PHI { va = res(phi_in(va, a)); }
+        let old = phi_in(i, a);
+        if old != NIL && res(old) != va { return false; }
+        i = o_nxt[i];
+    }
+    if op == GIR_CONDBR && (o_ins[at].b == T || o_ins[at].c == T) { return false; }   // (keep it simple)
+    // T gets an entry for a; m loses a's
+    i = b_first[T];
+    while i != NIL && o_ins[i].op == GIR_PHI {
+        let I = o_ins[i];
+        var va = res(phi_in(i, m));
+        if is_inst(va) && o_blk[va] == m && o_ins[va].op == GIR_PHI { va = res(phi_in(va, a)); }
+        let ns = new_run(2 * (I.c + 1));
+        for q in 0..2 * I.c { o_ops[ns + q] = o_ops[I.b + q]; }
+        o_ops[ns + 2 * I.c] = va;
+        o_ops[ns + 2 * I.c + 1] = a;
+        o_ins[i].b = ns;
+        o_ins[i].c = I.c + 1;
+        i = o_nxt[i];
+    }
+    phi_remove_one(m, a);
+    if op == GIR_BR { o_ins[at].a = T; }
+    else if o_ins[at].b == m { o_ins[at].b = T; }
+    else { o_ins[at].c = T; }
+    o_cfg_ok = false;
+    return true;
 }
