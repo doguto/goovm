@@ -26,7 +26,7 @@ generated Goose struct against `gir.h`.
 
 | table | record | size | content |
 |---|---|---:|---|
-| `header` | `GirHeader` | 32 | one record: version, module flags (`PIE`), the `__tls_get_addr` global |
+| `header` | `GirHeader` | 32 | one record: version, module flags (`PIE`), the `__tls_get_addr` global, the optimization level |
 | `types` | `GirTypeDef` | 24 | every type id: kind, value class, bits, size, alignment, store size, elements |
 | `funcs` | `GirFunc` | 40 | defined functions: block and instruction ranges, argument (type, ABI word) run, return type, flags, DISubprogram |
 | `blocks` | `GirBlock` | 8 | basic blocks: instruction range |
@@ -366,6 +366,30 @@ be empty or a new opcode or flag that older producers never emit.
    for every function and, when `dlocs` has locations, `.debug_line` and a
    minimal `.debug_info` even with empty `dies` - which is how goosecc's
    `-g` gets line tables without a change on its side.
+
+### Additions in milestone E1 (backward compatible)
+
+The optimizing mode (`backend-goose/DESIGN.md` §15, §16) needs four
+additive changes; a producer that does not know them keeps getting -O0 code
+generation and byte-identical objects.
+
+1. **`GirHeader.opt_level`** (was the first `reserved` word, so 0 from
+   older producers): 0 = -O0 code generation; 1 or more = the back-end runs
+   its middle-end on the tables and allocates registers globally.
+   `goovm-llc -O1`, `goovm-cc -O1` and `goosecc -O1` set it (`-O2`/`-O3` set
+   2/3, which currently behave as 1).
+2. **Function flags** `GIR_FN_NOINLINE` (64) and `GIR_FN_ALWAYSINLINE`
+   (128), hints for the inliner. `NOINLINE` is set only for a `noinline`
+   that does not come with `optnone`: clang -O0 marks every function
+   `noinline optnone`, which says nothing about the source, so a user's
+   `noinline` is visible only in IR that `goovm-cc -O1` produces (clang's
+   front end at -O0 semantics without `optnone`).
+3. **Instruction flag** `GIR_IF_NSW` (0x1000) on `ADD`, `SUB`, `MUL`, `SHL`
+   whose signed overflow is undefined (LLVM `nsw`): the optimizer
+   distributes sign extensions over them and widens induction variables.
+4. **`fastcc`** is accepted on definitions and calls (LLVM's optimizers give
+   it to internal functions; on x86-64 it is the C convention for the
+   arguments the exporter supports).
 
 ## Debugging aid
 

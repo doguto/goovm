@@ -56,6 +56,31 @@ fn has_phi(b: u32) -> bool {
     let B = M.blocks[f_first_block + b];
     return B.n_inst != 0 && M.insts[B.first_inst].op == GIR_PHI;
 }
+// Whether edge from -> to has PHI moves that emit code: with global register
+// allocation, an edge whose incoming values all sit in their PHIs' registers
+// (coalesced) has none.
+fn edge_phi(from: u32, to: u32) -> bool {
+    if !has_phi(to) { return false; }
+    if !rg_on { return true; }
+    let B = M.blocks[f_first_block + to];
+    for k in B.first_inst..B.first_inst + B.n_inst {
+        let I = M.insts[k];
+        if I.op != GIR_PHI { break; }
+        let j = k - f_first_inst;
+        if vi[j].nuse == 0 { continue; }
+        if vi[j].st & ST_PIN == 0 { return true; }
+        let d: u32 = rg_reg[j];
+        for p in 0..I.c {
+            if M.opnds[I.b + 2 * p + 1] != from { continue; }
+            let v = M.opnds[I.b + 2 * p];
+            if !is_val(v) { return true; }
+            let r: u32 = vi[vid(v)].reg;
+            if r != d || (r < 16 && vi[vid(v)].st & ST_EXT != 0) { return true; }
+            break;
+        }
+    }
+    return false;
+}
 // Scratch registers for the PHI moves of a terminator, taken before the
 // terminator branches (a move on one path must not evict values: the other
 // path would not see the spill).
@@ -316,8 +341,8 @@ fn lower_condbr(I: Inst, cur: u32, next: u32) {
         flags_comb = 0;
     }
     flags_id = RV_NONE;
-    let pb = has_phi(I.b);
-    let pc = has_phi(I.c);
+    let pb = edge_phi(cur, I.b);
+    let pc = edge_phi(cur, I.c);
     if pb != pc {
         // PHI moves on one edge only: branch straight to the other successor
         // and do the moves on the fall-through path (a loop's back edge then
