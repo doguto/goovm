@@ -1373,6 +1373,9 @@ fn hc_rec_entered() {
     let d = recs.len - 1;
     let ci = ctxs.len - 1;
     recs[d].ctxd = ctxs.len as! u32;
+    // -E: what the unit prints starts after the file's line marker (which
+    // depends on the line before; a replay prints it)
+    recs[d].out0 = out.len as! u32;
     recs[d].so = ctxs[ci].spell;
     recs[d].sl = ctxs[ci].spell_len;
     recs[d].sys = ctxs[ci].sys;
