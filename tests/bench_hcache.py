@@ -16,9 +16,11 @@ that the machine's load hits them alike; the time is the best of N:
   tcc    tcc -c with the -D/-I flags (when installed)
   clang  the command as configured (clang-20 -O0 -c), unless --no-clang
 
---build adds one more number: all the files compiled once, in order, with
-one cache that starts empty (a first build of the whole suite: later files
-replay what earlier ones recorded).
+--build adds builds of all the files in order, one run each: one without
+the cache, then three with one cache that starts empty (a first build of
+the whole suite, where later files replay what earlier ones recorded; a
+second, where the main files' "..." includes are recorded too; a third,
+all warm), and the size of that cache.
 
 goosecc's phases come from one extra --time run per file and variant.
 
@@ -130,8 +132,15 @@ def main():
         envb = dict(env, GOOSECC_CACHE=shared)
         t0 = time.perf_counter()
         for prog, f, d, cc, rest in ents:
-            run([g] + rest + ["-o", obj], d, envb)
-        build = time.perf_counter() - t0
+            run([g, "-fno-header-cache"] + rest + ["-o", obj], d, env)
+        build = {"times": [], "off": time.perf_counter() - t0}
+        for _ in range(3):
+            t0 = time.perf_counter()
+            for prog, f, d, cc, rest in ents:
+                run([g] + rest + ["-o", obj], d, envb)
+            build["times"].append(time.perf_counter() - t0)
+        sizes = [os.path.getsize(os.path.join(dp, x)) for dp, dn, fn in os.walk(shared) for x in fn]
+        build["bytes"], build["files"] = sum(sizes), len(sizes)
     T = defaultdict(float)
     for prog in per:
         for k2, v in per[prog].items():
@@ -153,8 +162,12 @@ def main():
         for v in ("off", "cold", "warm"):
             out.append(f"| {name} | {v} | " + " | ".join(f"{p[f'{v}_{ph}'] * 1e3:.0f}" for ph in PHASES) + " |")
     if build is not None:
+        b1, b2, b3 = build["times"]
         out.append("")
-        out.append(f"First build (all {len(ents)} files once, in order, one cache starting empty): {build:.2f} s")
+        out.append(f"Builds (all {len(ents)} files in order, one run each): without the cache {build['off']:.2f} s; "
+                   f"with one cache starting empty, first {b1:.2f} s, "
+                   f"second {b2:.2f} s, third {b3:.2f} s; the cache then holds {build['files']} files, "
+                   f"{build['bytes'] / 1e6:.1f} MB")
     fails = {v: T["fail_" + v] for v in variants if T["fail_" + v]}
     if fails:
         out.append(f"\nfailures: {fails}")
