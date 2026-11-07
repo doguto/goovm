@@ -326,7 +326,7 @@ fn emit_var1(g: u32) {
     var f = link_flags(s, true) | GF_DEFINED;
     if syms[s].flags & SF_THREAD != 0 { f = f | GF_TLS; }
     let common = init == 0 && opt_common && syms[s].flags & SF_TENTATIVE != 0 && !is_internal_sym(s) && syms[s].flags & SF_THREAD == 0 &&
-        sym_section(s) == 0 && !sym_has_attr(s, AM_WEAK) && syms[s].flags & SF_WEAK == 0 && !sym_has_attr(s, AM_NOCOMMON);
+        sym_section(s) < 0 && !sym_has_attr(s, AM_WEAK) && syms[s].flags & SF_WEAK == 0 && !sym_has_attr(s, AM_NOCOMMON);
     m_globals[g].kind = G_VAR;
     m_globals[g].size = size as! u32;
     m_globals[g].align = var_align(s, q) as! u32;
@@ -336,8 +336,8 @@ fn emit_var1(g: u32) {
     }
     if is_const_object(q) && init != 0 { f = f | GF_CONST; }
     let sec = sym_section(s);
-    if sec != 0 {
-        let nm = strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len];
+    if sec >= 0 {
+        let nm = strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len as i64];
         let bss = starts_with(nm, ".bss") || starts_with(nm, ".tbss") || starts_with(nm, ".sbss");
         var sf: u32 = if f & GF_CONST != 0 { 0 } else { SF_WRITE };
         if f & GF_TLS != 0 { sf = sf | SF_TLS; }
@@ -394,6 +394,10 @@ fn emit_var_data(g: u32, s: i64, q: u32, init: u32, size: i64) {
     let at = m_data.len;
     data_grow(size);
     m_globals[g].data = at as! u32;
+    // G1: a variable without an initializer in a named section that is
+    // not a .bss one (a tentative definition with `section`, as in
+    // noinit-attribute.c) is zeros in that section, as clang emits it
+    if init == 0 { return; }
     let r0 = m_drelocs.len;
     sinit(g, at, 0, q, init);
     sort_relocs(r0);
@@ -414,10 +418,12 @@ fn sort_relocs(r0: i64) {
     }
 }
 
-fn sym_section(s: i64) -> u32 {
+// The offset of a symbol's section name in strbytes, -1 without one (G1:
+// the name may be the translation unit's first string, at offset 0).
+fn sym_section(s: i64) -> i64 {
     let a = syms[s].attr;
-    if a == 0 || sym_attrs[a].sec_len == 0 { return 0; }
-    return sym_attrs[a].sec_off;
+    if a == 0 || sym_attrs[a].sec_len == 0 { return -1; }
+    return sym_attrs[a].sec_off as i64;
 }
 
 // Is the initializer all zero bytes (no relocations)?

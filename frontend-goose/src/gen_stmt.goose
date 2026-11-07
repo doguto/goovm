@@ -1108,7 +1108,7 @@ fn gen_function(fd: u32) {
     m_globals[g].kind = G_FUNC;
     m_globals[g].flags = link_flags(s, true) | GF_DEFINED;
     let sec = sym_section(s);
-    if sec != 0 { m_globals[g].section = get_section(strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len], SF_EXEC, 1); }
+    if sec >= 0 { m_globals[g].section = get_section(strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len as i64], SF_EXEC, 1); }
     let ft = syms[s].ty;
     let fty = types[ft >> 4];
     let ai = fn_abi(ft);
