@@ -1,0 +1,261 @@
+--- a/src/runtime/runtime_impl.h
++++ b/src/runtime/runtime_impl.h
+@@ -215,6 +215,34 @@
+    worked it out, so a reservation past it is a compiler bug. */
+ static GS_TLS long gs_regions_cap;
+ 
++/* Lazy regions (POSIX; -DGS_NO_LAZY_REGIONS for the eager ones): main's
++   regions are slots of one reservation that gs_rt_start makes for all of
++   them, PROT_NONE, so gs_reserve_region hands one out without a system
++   call. A slot's usable part becomes accessible on its first access, which
++   the fault handler turns into one mprotect (gs_lazy_enable) before the
++   access is retried; its guard gap stays PROT_NONE, as the eager gap is.
++   A region the program never touches then costs nothing, and one it does
++   one mprotect, where each used to cost an mmap and an mprotect at
++   start-up and two VMAs to tear down at exit.
++   GS_HOT_REGIONS, a list of registry indices (the order main reserves its
++   regions in), names the regions the program touches on nearly every run:
++   they take the first slots, next to each other, so that their first
++   pages share page-table pages, and are made accessible as they are
++   reserved, which costs less than the fault. It changes only where the
++   regions are and when they become accessible. */
++#if !defined(_WIN32) && !defined(GS_NO_LAZY_REGIONS)
++#define GS_LAZY_REGIONS 1
++static uint8_t *gs_lazy_base;           /* the reservation, NULL if none */
++static size_t gs_lazy_per, gs_lazy_usable;  /* per slot: all of it, the usable part */
++static long gs_lazy_slots;              /* how many it holds: main's regions */
++static volatile long gs_lazy_used;      /* how many are registered */
++static int32_t *gs_lazy_slot, *gs_lazy_reg; /* registry index -> slot, and back */
++static uint8_t *gs_lazy_on;             /* per slot: 1 accessible, 2 hot, 0 neither */
++#ifdef GS_HOT_REGIONS
++static const int32_t gs_hot_regions[] = { GS_HOT_REGIONS };
++#endif
++#endif
++
+ /* Text without stdio, which a fault handler may not call (nor malloc):
+    decimal digits, a size in the largest unit that holds it exactly, and a
+    string. Each returns the end of what it wrote. */
+@@ -292,6 +320,9 @@
+ 
+ static void gs_release_region(const gs_region *r);
+ static void gs_native_stack_free(void);
++#ifdef GS_LAZY_REGIONS
++static void gs_lazy_release(void);
++#endif
+ 
+ /* Unregister before unmapping, then drop the registry. */
+ GS_API void gs_release_regions(void) {
+@@ -302,6 +333,9 @@
+         gs_regions[i].base = NULL;
+         gs_release_region(&r);
+     }
++    #ifdef GS_LAZY_REGIONS
++        gs_lazy_release();
++    #endif
+     free(gs_regions);
+     gs_regions = NULL;
+     gs_native_stack_free();
+@@ -460,9 +494,46 @@
+ /* For gs_trim_memory, which discards whole pages only. */
+ static size_t gs_page_size = 0;
+ 
++#ifdef GS_LAZY_REGIONS
++/* The first access to a lazy slot's usable part: makes it accessible, and
++   returns 1 so the access is retried. Where the platform will not commit
++   that much (strict overcommit accounting counts a writable private
++   mapping in full), the usable part halves, down to GS_REGION_MIN, as
++   gs_reserve_region halves a refused reservation: the rest of it is guard
++   gap. 0 for anything else: the gap, an accessible slot, not a slot. */
++static int gs_lazy_enable(uint8_t *hit) {
++    uintptr_t off = (uintptr_t)hit - (uintptr_t)gs_lazy_base;
++    if (!gs_lazy_base || off >= (uintptr_t)gs_lazy_slots * gs_lazy_per) return 0;
++    long s = (long)(off / gs_lazy_per), i = gs_lazy_reg[s];
++    if (i >= gs_lazy_used || gs_lazy_on[s] == 1 || off % gs_lazy_per >= gs_lazy_usable) return 0;
++    uint8_t *base = gs_lazy_base + (size_t)s * gs_lazy_per;
++    size_t usable = gs_lazy_usable;
++    while (mprotect(base, usable, PROT_READ | PROT_WRITE)) {
++        if (usable <= (1u << 20)) return 0;    /* GS_REGION_MIN */
++        usable /= 2;
++        usable -= usable % gs_region_page;
++        if ((uintptr_t)(hit - base) >= usable) {
++            /* The access is past what the platform gives: a genuine
++               overflow of the smaller region. */
++            gs_regions[i].usable = usable;
++            return 0;
++        }
++    }
++    gs_regions[i].usable = usable;
++    #ifdef MADV_NOHUGEPAGE
++        madvise(base, usable < (2u << 20) ? usable : (2u << 20), MADV_NOHUGEPAGE);
++    #endif
++    gs_lazy_on[s] = 1;
++    return 1;
++}
++#endif
++
+ static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
+     (void)ctx;
+     uint8_t *hit = (uint8_t *)info->si_addr;
++    #ifdef GS_LAZY_REGIONS
++        if (gs_lazy_enable(hit)) return;
++    #endif
+     for (long i = 0; i < gs_nregions; i++) {
+         gs_region *r = &gs_regions[i];
+         if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
+@@ -588,9 +659,103 @@
+ }
+ 
+ static void gs_release_region(const gs_region *r) {
++    #ifdef GS_LAZY_REGIONS
++        /* A slot goes with its reservation (gs_lazy_release). */
++        if ((uintptr_t)r->base - (uintptr_t)gs_lazy_base < (uintptr_t)gs_lazy_slots * gs_lazy_per)
++            return;
++    #endif
+     if (munmap(r->base, r->size)) gs_panic("cannot release data stack address space");
+ }
+ 
++#ifdef GS_LAZY_REGIONS
++#ifdef GS_REGION_PROFILE
++static void gs_lazy_profile(void);
++#endif
++/* Main's reservation for all its regions, as it starts; none if the
++   platform refuses it, and every region is reserved on its own then. */
++static void gs_lazy_start(int64_t n) {
++    size_t per = gs_region_usable + gs_region_gap;
++    if (n <= 0 || n > INT32_MAX || per % gs_region_page || (uint64_t)n > (1ull << 47) / per) return;
++    gs_lazy_on = (uint8_t *)calloc((size_t)n, 1);
++    gs_lazy_slot = (int32_t *)malloc((size_t)n * sizeof(int32_t));
++    gs_lazy_reg = (int32_t *)malloc((size_t)n * sizeof(int32_t));
++    void *p = gs_lazy_on && gs_lazy_slot && gs_lazy_reg
++                  ? mmap(NULL, (size_t)n * per, PROT_NONE,
++                         MAP_PRIVATE | MAP_ANONYMOUS
++                         #ifdef MAP_NORESERVE
++                             | MAP_NORESERVE
++                         #endif
++                         , -1, 0)
++                  : MAP_FAILED;
++    if (p == MAP_FAILED) {
++        free(gs_lazy_on);
++        free(gs_lazy_slot);
++        free(gs_lazy_reg);
++        gs_lazy_on = NULL;
++        gs_lazy_slot = gs_lazy_reg = NULL;
++        return;
++    }
++    /* The hot regions first, in the list's order, then the others in
++       registry order. */
++    int32_t s = 0;
++    for (int32_t i = 0; i < (int32_t)n; i++) gs_lazy_slot[i] = -1;
++    #ifdef GS_HOT_REGIONS
++        for (size_t k = 0; k < sizeof(gs_hot_regions) / sizeof(gs_hot_regions[0]); k++) {
++            int32_t i = gs_hot_regions[k];
++            if (i >= 0 && i < (int32_t)n && gs_lazy_slot[i] < 0) {
++                gs_lazy_on[s] = 2;
++                gs_lazy_slot[i] = s++;
++            }
++        }
++    #endif
++    for (int32_t i = 0; i < (int32_t)n; i++)
++        if (gs_lazy_slot[i] < 0) gs_lazy_slot[i] = s++;
++    for (int32_t i = 0; i < (int32_t)n; i++) gs_lazy_reg[gs_lazy_slot[i]] = i;
++    #ifdef GS_REGION_PROFILE
++        atexit(gs_lazy_profile);    /* a return from main; gs_end calls it too */
++    #endif
++    gs_lazy_per = per;
++    gs_lazy_usable = gs_region_usable;
++    gs_lazy_slots = (long)n;
++    gs_lazy_used = 0;
++    gs_lazy_base = (uint8_t *)p;
++}
++
++#ifdef GS_REGION_PROFILE
++/* -DGS_REGION_PROFILE: the registry indices of the regions the run made
++   accessible, on stderr as it ends, for choosing GS_HOT_REGIONS. */
++static void gs_lazy_profile(void) {
++    static int done;
++    if (!gs_lazy_base || done++) return;
++    fprintf(stderr, "goose regions touched:");
++    for (long i = 0; i < gs_lazy_used; i++) {
++        uint8_t *p = gs_lazy_base + (size_t)gs_lazy_slot[i] * gs_lazy_per;
++        /* A hot region is accessible from the start: count it if its
++           stack's top moved, or its first page is resident. */
++        unsigned char vec = 0;
++        if (gs_lazy_on[gs_lazy_slot[i]] == 1 &&
++            (gs_regions[i].stack->top != p || (!mincore(p, 1, &vec) && (vec & 1))))
++            fprintf(stderr, " %ld", i);
++    }
++    fprintf(stderr, "\n");
++}
++#endif
++
++/* The reservation, once main has released its regions. */
++static void gs_lazy_release(void) {
++    if (!gs_lazy_base || gs_current_thread_id >= 0) return;
++    if (munmap(gs_lazy_base, (size_t)gs_lazy_slots * gs_lazy_per))
++        gs_panic("cannot release data stack address space");
++    gs_lazy_base = NULL;
++    gs_lazy_slots = gs_lazy_used = 0;
++    free(gs_lazy_on);
++    free(gs_lazy_slot);
++    free(gs_lazy_reg);
++    gs_lazy_on = NULL;
++    gs_lazy_slot = gs_lazy_reg = NULL;
++}
++#endif
++
+ /* Faults are handled as before gs_regions_init (gs_rt_stop). */
+ static void gs_fault_uninstall(void) {
+     if (gs_fault_installed & 1) sigaction(SIGSEGV, &gs_prev_segv, NULL);
+@@ -620,6 +785,9 @@
+     gs_jit_exit(code);
+ #else
+     if (!gs_end_first()) gs_park();
++    #if defined(GS_REGION_PROFILE) && defined(GS_LAZY_REGIONS)
++        gs_lazy_profile();
++    #endif
+     fflush(NULL);
+     #ifdef __TINYC__
+         if (gs_current_thread_id < 0) exit(code);
+@@ -644,6 +812,32 @@
+         gs_panic("too many data stack regions");
+     size_t usable = gs_region_usable;
+     uint8_t *p;
++#ifdef GS_LAZY_REGIONS
++    if (gs_lazy_base && gs_current_thread_id < 0 && gs_nregions == gs_lazy_used &&
++        gs_lazy_used < gs_lazy_slots) {
++        long i = gs_nregions, s = gs_lazy_slot[i];
++        p = gs_lazy_base + (size_t)s * gs_lazy_per;
++        gs_regions[i].base = p;
++        gs_regions[i].usable = gs_lazy_usable;
++        gs_regions[i].size = gs_lazy_per;
++        gs_regions[i].stack = stack;
++        gs_regions[i].committed = p;
++        gs_nregions = i + 1;
++        gs_lazy_used = i + 1;  /* Publish only the initialized entry. */
++        /* A hot region now; one the platform refuses stays lazy, and its
++           first access tries again (gs_lazy_enable). */
++        if (gs_lazy_on[s] == 2) {
++            if (!mprotect(p, gs_lazy_usable, PROT_READ | PROT_WRITE)) {
++                #ifdef MADV_NOHUGEPAGE
++                    madvise(p, gs_lazy_usable < (2u << 20) ? gs_lazy_usable : (2u << 20),
++                            MADV_NOHUGEPAGE);
++                #endif
++                gs_lazy_on[s] = 1;
++            }
++        }
++        return p;
++    }
++#endif
+     for (;;) {
+         p = gs_os_reserve(usable, usable + gs_region_gap);
+         if (p) break;
+@@ -1525,6 +1719,9 @@
+     #endif
+     gs_regions_init();
+     gs_regions_begin(mainregions);
++    #ifdef GS_LAZY_REGIONS
++        gs_lazy_start(mainregions);
++    #endif
+     gs_native_stack_init();
+     gs_scan_init();
+ }

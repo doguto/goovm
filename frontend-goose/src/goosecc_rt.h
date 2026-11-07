@@ -121,8 +121,18 @@ int64_t goosecc_skip_text(sl_u8 s, int64_t p) {
 #ifndef MADV_POPULATE_WRITE
 #define MADV_POPULATE_WRITE 23
 #endif
+/* G1: with the runtime's lazy regions (runtime-patches/lazy-regions.patch)
+ * a data stack's region becomes accessible on its first access, through
+ * the runtime's fault handler; a system call that stores there (read,
+ * madvise) would get EFAULT instead. Code that hands the top of a data
+ * stack to one, to append there, first writes a zero byte at the top,
+ * which does that access (and is harmless without the patch: C may store
+ * past the top; a read would map the zero page, and the store after it
+ * fault again). */
+static inline void goosecc_commit(uint8_t *p) { *(volatile uint8_t *)p = 0; }
 void goosecc_prefault(gs_rref a, int64_t bytes) {
     if (bytes > (512 << 10)) bytes = 512 << 10;
+    goosecc_commit(a.stk->top);
     uintptr_t top = (uintptr_t)a.stk->top;
     uintptr_t s = (top + 4095) & ~(uintptr_t)4095, e = (top + (uintptr_t)bytes) & ~(uintptr_t)4095;
     if (e > s) madvise((void *)s, e - s, MADV_POPULATE_WRITE);
@@ -166,6 +176,7 @@ int64_t goosecc_read_file(sl_u8 path, gs_rref out) {
     int64_t len0 = out.hdr->len;
     uint8_t *top0 = out.stk->top;
     int reg = S_ISREG(st.st_mode), ok = 1, direct = 1;
+    goosecc_commit(out.stk->top);
     if (reg && st.st_size > 8192) goosecc_prefault(out, st.st_size + 1);
     size_t size = reg ? (size_t)st.st_size : 0, total = 0;
     for (;;) {
@@ -450,6 +461,7 @@ int64_t goosecc_read_words(sl_u8 path, gs_rref out) {
     }
     goosecc_touch_used(fd, &st);
     int64_t size = st.st_size, total = 0;
+    if (size > 0) goosecc_commit(out.stk->top);
     if (size > 8192) goosecc_prefault(out, size);
     while (total < size) {
         ssize_t n = read(fd, out.stk->top + total, (size_t)(size - total));
