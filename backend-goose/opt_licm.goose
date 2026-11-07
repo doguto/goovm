@@ -260,11 +260,70 @@ fn licm_loop(h: u32) -> bool {
                 unlink(i);
                 link_before(pt, i);
                 moved = true;
+            } else if I.op == GIR_GEP && licm_split_gep(i, pt, ep) {
+                moved = true;
             }
             i = nx;
         }
     }
     return moved;
+}
+
+// A GEP in the loop with an invariant base: its invariant terms (and the
+// invariant halves of i64 additions in its terms) move to a GEP in the
+// preheader, which becomes its base. (`a + (i*n + j)*4` -> row = a + i*n*4
+// outside, row + j*4 inside.)
+var sg_inv: u32[>..] = [];
+var sg_var: u32[>..] = [];
+fn licm_split_gep(i: u32, pt: u32, ep: u32) -> bool {
+    let I = o_ins[i];
+    let base = res(I.a);
+    if is_inst(base) && o_blk[base] != NIL && lc_mark[o_blk[base]] == ep { return false; }
+    sg_inv.clear();
+    sg_var.clear();
+    for k in 0..I.c {
+        let x = res(o_ops[I.b + 2 + 2 * k]);
+        let sc = o_ops[I.b + 3 + 2 * k];
+        if !(is_inst(x) && o_blk[x] != NIL && lc_mark[o_blk[x]] == ep) {
+            sg_inv.push(x);
+            sg_inv.push(sc);
+            continue;
+        }
+        let X = o_ins[x];
+        if X.op == GIR_ADD && X.ty == GIR_T_I64 {
+            let a = res(X.a);
+            let b = res(X.b);
+            let ia = !(is_inst(a) && o_blk[a] != NIL && lc_mark[o_blk[a]] == ep);
+            let ib = !(is_inst(b) && o_blk[b] != NIL && lc_mark[o_blk[b]] == ep);
+            if ia != ib {
+                sg_inv.push(if ia { a } else { b });
+                sg_inv.push(sc);
+                sg_var.push(if ia { b } else { a });
+                sg_var.push(sc);
+                continue;
+            }
+        }
+        sg_var.push(x);
+        sg_var.push(sc);
+    }
+    if sg_inv.len == 0 || sg_var.len == 0 { return false; }
+    let ni: u32 = (sg_inv.len / 2) as! u32;
+    let nv: u32 = (sg_var.len / 2) as! u32;
+    if ni > 2 { return false; }
+    let r1 = new_run(2 + 2 * ni);
+    o_ops[r1] = o_ops[I.b];
+    o_ops[r1 + 1] = o_ops[I.b + 1];
+    for k in 0..2 * ni { o_ops[r1 + 2 + k] = sg_inv[k]; }
+    let g = new_inst(Inst { op: GIR_GEP as! u8, sub: 0, flags: 0, ty: GIR_T_PTR, aux: 0, a: base, b: r1, c: ni, dbg: I.dbg });
+    link_before(pt, g);
+    let r2 = new_run(2 + 2 * nv);
+    o_ops[r2] = 0;
+    o_ops[r2 + 1] = 0;
+    for k in 0..2 * nv { o_ops[r2 + 2 + k] = sg_var[k]; }
+    o_ins[i].a = g;
+    o_ins[i].b = r2;
+    o_ins[i].c = nv;
+    return true;
 }
 
 // Loop rotation in the layout: a loop whose header ends in a conditional

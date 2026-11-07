@@ -250,6 +250,7 @@ let IF_SINGLETHREAD = 0x0100;
 let IF_VARARG = 0x0200;
 let IF_NORETURN = 0x0400;
 let IF_INVOKE = 0x0800;
+let IF_NSW = 0x1000;
 let ORD_SEQ_CST = 7;
 
 // ABI words.

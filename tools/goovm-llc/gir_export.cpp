@@ -1991,7 +1991,12 @@ struct Exporter : GirDwarfHost {
                 vmap[&I] = r;
                 return;
             }
-            vmap[&I] = emit(op, t, 0, 0, 0, a, b, 0, RA | RB);
+            // nsw (signed overflow is undefined): the optimizer may widen
+            uint16_t fl = 0;
+            if ((op == GIR_ADD || op == GIR_SUB || op == GIR_MUL || op == GIR_SHL) &&
+                cast<OverflowingBinaryOperator>(I).hasNoSignedWrap())
+                fl = GIR_IF_NSW;
+            vmap[&I] = emit(op, t, 0, fl, 0, a, b, 0, RA | RB);
             return;
         }
         case Instruction::FAdd: case Instruction::FSub: case Instruction::FMul: case Instruction::FDiv:

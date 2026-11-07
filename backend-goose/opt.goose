@@ -678,6 +678,8 @@ fn opt_module() {
             if g.func != GIR_NONE { fn_pinned[g.func] = 1; }
         }
     }
+    opt_off("");    // (reads GOOVM_OPT)
+    opt_verify_on = find(opt_env, "verify") >= 0;
     inl_scan();
     sroa_init();
     opt_order();
@@ -708,6 +710,7 @@ var fn_order: u32[>..] = [];
 
 // Passes switched off by the environment variable GOOVM_OPT (a list such as
 // "-gvn,-inline": for bisecting; "-all" runs no pass at all).
+var opt_verify_on = false;
 var opt_env: u8[>..] = [];
 var opt_env_read = false;
 fn opt_off(name: const u8[:]) -> bool {
@@ -778,11 +781,15 @@ fn opt_function(fi: u32) {
         }
     }
     opt_round();
-    if !opt_off("licm") && licm() { opt_round(); }
+    if !opt_off("licm") && licm() {
+        if !opt_off("iv") && indvars() { licm(); }
+        opt_round();
+    }
     if !opt_off("rotate") {
         ensure_cfg();
         rotate_layout();
     }
+    if opt_verify_on { opt_verify(); }
     inl_record();
     oir_store(fi);
 }

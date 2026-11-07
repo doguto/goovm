@@ -302,6 +302,9 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
                                       /*   block of its landing pad (the unwind edge);   */
                                       /*   the block's terminator, next, is the BR to    */
                                       /*   the normal destination                        */
+#define GIR_IF_NSW           0x1000u  /* additive (E1): ADD, SUB, MUL, SHL whose signed   */
+                                      /*   overflow is undefined (LLVM nsw); a hint for  */
+                                      /*   the optimizer, ignored by -O0 code generation */
 
 /* ABI words of CALL arguments and Func arguments. 0 = passed by value as
  * its type says. GIR_ABI_BYVAL: the argument is a pointer whose pointee

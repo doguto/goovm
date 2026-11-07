@@ -11,6 +11,8 @@ For every test of the selected corpora:
   O1         clang-20 -O0 -emit-llvm      -> goovm-llc -O1 (Goose middle-end, global RA) -> link -> run
   O1-g       clang-20 -O0 -g -emit-llvm   -> goovm-llc -O1 -> link -> run
   O2ir       clang-20 -O2 -emit-llvm      -> goovm-llc -O1 (LLVM's middle-end, Goose back-end)
+  O2nv       the same with -fno-vectorize -fno-slp-vectorize (the exporter rejects much of the
+             vectorizers' output)
   cc-O1      goovm-cc -O1 (opt-in, with --cc)
 
 The O1, O1-g, O2ir and cc-O1 variants run only the tests that pass when built
@@ -65,7 +67,7 @@ VARIANTS = ["O0", "g", "mem2reg"]
 # + the Goose back-end) instead of clang -emit-llvm + goovm-llc.
 EXTRA_VARIANTS = ["cc", "cc-g", "cc-O1"]
 # Optimizing variants (milestone E1): compared against the clang -O1 baseline.
-OPT_VARIANTS = ["O1", "O1-g", "O2ir"]
+OPT_VARIANTS = ["O1", "O1-g", "O2ir", "O2nv"]
 
 
 def opt_variant(v):
@@ -606,6 +608,8 @@ def emit_bc(t, s, i, wd, variant, args):
         cmd = [cc, "-O0", "-g"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     elif variant == "O2ir":
         cmd = [cc, "-O2"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+    elif variant == "O2nv":
+        cmd = [cc, "-O2", "-fno-vectorize", "-fno-slp-vectorize"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     else:
         raw = base + ".raw.bc"
         r = sh([cc, "-O0", "-Xclang", "-disable-O0-optnone"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", raw])

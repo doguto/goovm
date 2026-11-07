@@ -35,6 +35,8 @@ import rag;
 import opt_inline;
 import opt_sroa;
 import opt_licm;
+import opt_iv;
+import opt_verify;
 import opt_dump;
 
 var M: Module;
