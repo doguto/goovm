@@ -46,7 +46,7 @@ import .dtype;
 import .hcache;
 
 let PT_MAGIC = 0x50484347;      // "GCHP"
-let PT_VERSION = 1;
+let PT_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // The main file's includes (preprocessing).
@@ -202,11 +202,13 @@ let PT_ENUMCN = 19;
 let PT_ENUMCSYMS = 20;
 let PT_RECINREC = 21;
 let PT_ENUMINREC = 22;
-let PT_SCOPELOG = 23;          // limited arrays: set in place after a resize
-let PT_NSCRATCH = 24;
-let PT_TYHASH = 25;
-let PT_DHASH = 26;
-let PT_NTABLES = 27;
+let PT_CVINIT = 23;
+let PT_CVDECL = 24;
+let PT_SCOPELOG = 25;          // limited arrays: set in place after a resize
+let PT_NSCRATCH = 26;
+let PT_TYHASH = 27;
+let PT_DHASH = 28;
+let PT_NTABLES = 29;
 
 fn pt_rs(t: i64) -> i64 {
     return match t {
@@ -298,6 +300,7 @@ fn pt_len(t: i64) -> i64 {
         PT_DTYPES => dtypes.len, PT_DPARAMS => dparams.len, PT_SYMDTY => sym_dty.len, PT_FLDDTY => fld_dty.len,
         PT_RECFN => rec_fn.len, PT_ENUMFN => enum_fn.len, PT_ENUMC0 => enum_c0.len, PT_ENUMCN => enum_cn.len,
         PT_ENUMCSYMS => enum_csyms.len, PT_RECINREC => rec_in_rec.len, PT_ENUMINREC => enum_in_rec.len,
+        PT_CVINIT => cvar_init.len, PT_CVDECL => cvar_decl.len,
         PT_SCOPELOG => scope_log.len, PT_NSCRATCH => nscratch.len, PT_TYHASH => tyhash.len, _ => dhash.len,
     };
 }
@@ -333,6 +336,8 @@ fn pt_put(o: u32[>..]&, t: i64, f: i64, n: i64) -> i64 {
         PT_ENUMCSYMS => put_u32(o, enum_csyms, f, n, rs, o1, -1, kv, ko, io),
         PT_RECINREC => put_i32(o, rec_in_rec, f, n, rs, o1, -1, kv, ko, io),
         PT_ENUMINREC => put_i32(o, enum_in_rec, f, n, rs, o1, -1, kv, ko, io),
+        PT_CVINIT => put_u32(o, cvar_init, f, n, rs, o1, -1, kv, ko, io),
+        PT_CVDECL => put_u32(o, cvar_decl, f, n, rs, o1, -1, kv, ko, io),
         PT_SCOPELOG => puts_u32(o, scope_log, f, n),
         PT_NSCRATCH => puts_u32(o, nscratch, f, n),
         PT_TYHASH => puts_i32(o, tyhash, f, n),
@@ -372,6 +377,8 @@ fn pt_diff(o: u32[>..]&, t: i64, n: i64, w: const u32[:], wi: i64) -> i64 {
         PT_ENUMCSYMS => diff_u32(o, enum_csyms, n, rs, w, wi, o1, -1, kv, ko, io),
         PT_RECINREC => diff_i32(o, rec_in_rec, n, rs, w, wi, o1, -1, kv, ko, io),
         PT_ENUMINREC => diff_i32(o, enum_in_rec, n, rs, w, wi, o1, -1, kv, ko, io),
+        PT_CVINIT => diff_u32(o, cvar_init, n, rs, w, wi, o1, -1, kv, ko, io),
+        PT_CVDECL => diff_u32(o, cvar_decl, n, rs, w, wi, o1, -1, kv, ko, io),
         PT_SCOPELOG => diffs_u32(o, scope_log, n, w, wi),
         PT_NSCRATCH => diffs_u32(o, nscratch, n, w, wi),
         PT_TYHASH => diffs_i32(o, tyhash, n, w, wi),
@@ -410,6 +417,8 @@ fn pt_copy(t: i64, i: i64, n: i64) -> i64 {
         PT_ENUMCSYMS => copy_u32(enum_csyms, i, n, rs, o1, -1, kv, ko),
         PT_RECINREC => copy_i32(rec_in_rec, i, n, rs, o1, -1, kv, ko),
         PT_ENUMINREC => copy_i32(enum_in_rec, i, n, rs, o1, -1, kv, ko),
+        PT_CVINIT => copy_u32(cvar_init, i, n, rs, o1, -1, kv, ko),
+        PT_CVDECL => copy_u32(cvar_decl, i, n, rs, o1, -1, kv, ko),
         _ => -1,
     };
 }
@@ -445,6 +454,8 @@ fn pt_set(t: i64, at: i64, i: i64, n: i64) -> i64 {
         PT_ENUMCSYMS => set_u32(enum_csyms, at, i, n, rs, o1, -1, kv, ko),
         PT_RECINREC => set_i32(rec_in_rec, at, i, n, rs, o1, -1, kv, ko),
         PT_ENUMINREC => set_i32(enum_in_rec, at, i, n, rs, o1, -1, kv, ko),
+        PT_CVINIT => set_u32(cvar_init, at, i, n, rs, o1, -1, kv, ko),
+        PT_CVDECL => set_u32(cvar_decl, at, i, n, rs, o1, -1, kv, ko),
         PT_SCOPELOG => fill_u32(scope_log, at, i, n),
         PT_NSCRATCH => fill_u32(nscratch, at, i, n),
         PT_TYHASH => fill_i32(tyhash, at, i, n),

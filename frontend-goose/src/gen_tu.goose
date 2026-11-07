@@ -43,6 +43,10 @@ fn lower_tu(main_file: const u8[:]) -> bool {
     dbg_init(main_file);
     ensure_sym_tables();
     ensure_sym_gen();
+    // G1: from here on the constant evaluator reads const variables, as
+    // clang's does in CodeGen (sema.goose, fold_cvars)
+    fold_cvars = true;
+    cv_grow();
     let tu = nodes[tu_node];
     let cnt = tu.c as i64;
     // pass 1: definitions and initializers
@@ -58,6 +62,10 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             let s = nd.a as i64;
             if syms[s].kind == SK_VAR {
                 if nd.b != 0 { sym_gen[s].init = nd.b; sym_gen[s].decl = it; }
+                if nd.b != 0 && cv_eligible(s) {
+                    cvar_init[s] = nd.b;
+                    cvar_decl[s] = it;
+                }
             }
         }
     }

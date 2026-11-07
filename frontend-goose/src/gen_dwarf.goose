@@ -152,7 +152,7 @@ var vd_const: u64[>..] = [];
 var m_dvars: DVar[>..] = [];
 var m_dlabs: DLab[>..] = [];         // blk: the module index of the label's instruction
 var m_srecs: DScopeRec[>..] = [];
-struct DFn { sym: i64, fi: u32, v0: u32, v1: u32, l0: u32, l1: u32, r0: u32, r1: u32, e0: u32, e1: u32 }
+struct DFn { sym: i64, fi: u32, v0: u32, v1: u32, l0: u32, l1: u32, r0: u32, r1: u32, e0: u32, e1: u32, nodebug: bool }
 var m_dfns: DFn[>..] = [];
 // The emitted file-scope variable definitions.
 struct DGVar { sym: i64, g: u32, e0: u32, e1: u32 }
@@ -166,6 +166,7 @@ let EV_STATIC = 3;    // a = static local symbol, defined here (EmitStaticVarDec
 let EV_CAST = 4;      // a = written type of an explicit cast (EmitExplicitCastExprType)
 let EV_ENUM = 5;      // a = enum: an enumerator was referenced (EmitDeclRefExprDbgValue)
 let EV_VAR = 6;       // a = m_dvars index (local): a variable's declaration (its type)
+let EV_CVAL = 7;      // a = file-scope variable whose read clang folded (EmitDeclRefExprDbgValue)
 var m_devs: DEv[>..] = [];
 var ev_on = false;
 var ev_noproto = false;              // the next EV_REF is of a function through a type without prototype
@@ -192,8 +193,26 @@ fn dbg_fnref(c: u32) {
     ev_noproto = (types[nodes[n].ty >> 4].flags as i64) & TF_NOPROTO != 0 && !is_krref(n);
 }
 
+// A read of file-scope const variable s folded to bits (has: a value of 64
+// bits or less, which the DIE holds): clang gives a variable that need not
+// be emitted (internal, not used) a DIE with DW_AT_const_value instead.
+var cval_bits = dictionary<u64, u64> {};
+fn cv_note(s: i64, bits: u64, has: bool) {
+    if !opt_debug || !ev_on || dbg_dead != 0 { return; }
+    if syms[s].flags & SF_FILESCOPE == 0 || !is_internal_sym(s) || sym_has_attr(s, AM_USED) { return; }
+    if !cval_bits.contains(s as u64) {
+        if has { cval_bits.insert(s as u64, bits); } else { cval_bits.insert(s as u64, 0xFFFFFFFFFFFFFFFF); cval_none.insert(s as u64, 1); }
+    }
+    dev(EV_CVAL, s as! u32, 0);
+}
+var cval_none = dictionary<u64, u32> {};
+var cval_die = dictionary<u64, u32> {};    // file-scope variable -> 1 once it has a DIE from a folded read
+
 fn dev(kind: u32, a: u32, b: u32) {
-    if ev_on && dbg_dead == 0 { m_devs.push(DEv { kind: kind, a: a, b: b }); }
+    if !ev_on || dbg_dead != 0 { return; }
+    // a nodebug function records what CodeGenModule does only
+    if dbg_nodebug && kind != EV_REF && kind != EV_STR && kind != EV_CAST { return; }
+    m_devs.push(DEv { kind: kind, a: a, b: b });
 }
 
 // Moves the events [m0, m1) after the ones recorded since m1 (the lowering
@@ -244,7 +263,7 @@ var dfn_e0: u32 = 0;
 
 // A parameter (argno from 1) at addr (an alloca, or the byval argument).
 fn dbg_param(p: i64, addr: u32, argno: u32) {
-    if !opt_debug { return; }
+    if !opt_debug || dbg_nodebug { return; }
     // a byval argument has a fixed frame index in LLVM (an MF variable too)
     let mf = (addr >> 30 == 0 && addr >= ATAG) || addr & 0xC0000000 == KARG;
     dev(EV_VAR, f_dvars.len as! u32, 0);
@@ -253,7 +272,7 @@ fn dbg_param(p: i64, addr: u32, argno: u32) {
 
 // A local variable at addr (a static alloca).
 fn dbg_local(s: i64, addr: u32) {
-    if !opt_debug { return; }
+    if !opt_debug || dbg_nodebug { return; }
     let mf = addr >> 30 == 0 && addr >= ATAG;
     dev(EV_VAR, f_dvars.len as! u32, 0);
     f_dvars.push(DVar { sym: s, addr: addr, rec: dbg_cur_rec(), argno: 0, flags: if mf { DV_MF } else { 0 }, n: 0, dq: 0 });
@@ -264,7 +283,7 @@ fn dbg_local(s: i64, addr: u32) {
 // level goes to an artificial 8-byte variable __vla_exprN, stored right
 // after the allocation, which the subranges of the array's type name.
 fn dbg_vla(s: i64, p: u32, q: u32) {
-    if !opt_debug { return; }
+    if !opt_debug || dbg_nodebug { return; }
     let first = vd_var.len as! u32;
     var t = q;
     ensure_vla_table();
@@ -290,7 +309,7 @@ fn dbg_vla(s: i64, p: u32, q: u32) {
 }
 
 fn dbg_label(l: i64, blk: u32, loc: u32) {
-    if !opt_debug { return; }
+    if !opt_debug || dbg_nodebug { return; }
     f_dlabs.push(DLab { sym: l, blk: blk, rec: dbg_cur_rec(), loc: loc });
 }
 
@@ -319,7 +338,7 @@ fn dbg_fn_end(s: i64, fi: u32) {
     // EV_VAR events name the function's own variables: make them module indices
     for k in dfn_e0..m_devs.len as! u32 { if m_devs[k].kind == EV_VAR { m_devs[k].a = m_devs[k].a + v0; } }
     m_dfns.push(DFn { sym: s, fi: fi, v0: v0, v1: m_dvars.len as! u32, l0: l0, l1: m_dlabs.len as! u32, r0: r0,
-        r1: m_srecs.len as! u32, e0: dfn_e0, e1: m_devs.len as! u32 });
+        r1: m_srecs.len as! u32, e0: dfn_e0, e1: m_devs.len as! u32, nodebug: dbg_nodebug });
 }
 
 // A file-scope variable definition (emit_var); its initializer's events.
@@ -479,6 +498,15 @@ fn sim_events(e0: u32, e1: u32) {
             if m != 0 { o_retained.push(m); walk_md(m); }
         } else if E.kind == EV_ENUM {
             walk_md(md_intern(MD_ENUM, E.a, 0, 0));
+        } else if E.kind == EV_CVAL {
+            // CGDebugInfo::EmitGlobalVariable(VD, Init): once per variable,
+            // unless it has its DIE already
+            let s = E.a as i64;
+            if !cval_die.contains(s as u64) && !cv_has_die(s) {
+                cval_die.insert(s as u64, 1);
+                o_globs.push(OGlob { kind: 4, a: s, b: 0 });
+                walk_md(md_of(var_written(s)));
+            }
         } else if E.kind == EV_VAR {
             // a local's declaration sets CurLoc (a parameter's does not)
             let V = m_dvars[E.a];
@@ -495,6 +523,8 @@ fn sim_emit(x: u32) {
         es_var[e] = es_var[e] | ES_EMITTED | ES_CREATED;
         let V = m_dgvars[e];
         sim_events(V.e0, V.e1);
+        // a variable a folded read gave its DIE keeps it (G1)
+        if cval_die.contains(V.sym as u64) { return; }
         o_globs.push(OGlob { kind: 1, a: e, b: 0 });
         sim_cur = var_loc(V.sym);
         walk_md(md_of(var_written(V.sym)));
@@ -511,6 +541,7 @@ fn sim_emit(x: u32) {
     }
     sim_reference(m_funcs[F.fi].global, false);
     es_fn[e] = es_fn[e] | ES_EMITTED;
+    if F.nodebug { sim_events(F.e0, F.e1); return; }
     // the subroutine type: the return type and the parameters' types
     walk_md(md_of(fn_ret_written(F.sym)));
     sim_events(F.e0, F.e1);
@@ -576,6 +607,13 @@ fn sim_alias(s: i64) {
 fn fn_eager(s: i64) -> bool {
     return (!is_internal_sym(s) && !fn_local_inline(s)) || sym_has_attr(s, AM_USED) || sym_has_attr(s, AM_CTOR) ||
         sym_has_attr(s, AM_DTOR);
+}
+
+// Has file-scope variable s got its DIE (an emitted definition's)?
+fn cv_has_die(s: i64) -> bool {
+    let v = ent_var.get(s as u64);
+    if v { return es_var[v] & ES_EMITTED != 0; }
+    return false;
 }
 
 fn sim_run() {
@@ -1375,6 +1413,23 @@ fn global_die(G: OGlob) {
         wattr(d, DWA_location, GDF_GLOBAL, g as u64, 0);
         return;
     }
+    if G.kind == 4 {
+        // a file-scope variable clang only folded reads of: its value
+        let s = G.a;
+        let d = wd_new(DWT_variable, cu_die);
+        sym_die.insert((s as u64) | 0x100000000, d);
+        cur_line_loc = var_loc(s);
+        add_str(d, DWA_name, ident_text(syms[s].name as i64));
+        add_type(d, md_of(var_written(s)));
+        add_source_line(d, var_loc(s));
+        let a = syms[s].attr;
+        if a != 0 && sym_attrs[a].align != 0 { wattr(d, DWA_alignment, DWF_udata, sym_attrs[a].align as u64, 0); }
+        if !cval_none.contains(s as u64) {
+            let b = cval_bits.get(s as u64);
+            if b { wattr(d, DWA_const_value, DWF_udata, b, 0); }
+        }
+        return;
+    }
     var s: i64 = 0;
     var g: u32 = 0;
     var ctx = cu_die;
@@ -1445,7 +1500,7 @@ fn dbg_string(n: u32, g: u32) {
 
 // A static local definition, in the function being lowered.
 fn dbg_static(s: i64) {
-    if !opt_debug || !ev_on { return; }
+    if !opt_debug || !ev_on || dbg_nodebug { return; }
     static_fn.insert(s as u64, f_sym as! u32);
     dev(EV_STATIC, s as! u32, 0);
 }
@@ -1772,7 +1827,9 @@ fn dbg_build() {
     while dvar_die.len < m_dvars.len { dvar_die.push(NONE); }
     sim_run();
     // LLVM makes the unit only when something is in it
-    if o_globs.len == 0 && o_enums.len == 0 && o_retained.len == 0 && o_imports.len == 0 && m_dfns.len == 0 { return; }
+    var nfn = 0;
+    for F in m_dfns { if !F.nodebug { nfn++; } }
+    if o_globs.len == 0 && o_enums.len == 0 && o_retained.len == 0 && o_imports.len == 0 && nfn == 0 { return; }
     // beginModule: the unit
     cu_die = wd_new(DWT_compile_unit, NONE);
     let C = m_dscopes[dbg_cu];
@@ -1789,7 +1846,7 @@ fn dbg_build() {
     for m in o_enums { die_of(m); }
     for m in o_retained { die_of(m); }
     // the functions, in module order
-    for fx in o_fns { function_dies(fx); }
+    for fx in o_fns { if !m_dfns[fx].nodebug { function_dies(fx); } }
     // endModule: the imported entities, then the definitions' attributes
     for I in o_imports {
         let t = sym_die.get((I.target as u64) | 0x100000000);

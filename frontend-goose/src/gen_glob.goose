@@ -301,6 +301,21 @@ recursive fn is_const_object(q: u32) -> bool {
 // Emits the definition of variable global g (symbol s).
 fn emit_var(g: u32) {
     let s = glob_gen[g].sym;
+    // G1: the context of the evaluator's reads of const variables
+    let fs = syms[s].flags & SF_FILESCOPE != 0;
+    let c0 = cv_ctx;
+    let l0 = cv_ctx_late;
+    if fs {
+        cv_ctx = sym_gen[s].decl;
+        cv_ctx_late = is_internal_sym(s) && !sym_has_attr(s, AM_USED);
+    }
+    emit_var0(g);
+    cv_ctx = c0;
+    cv_ctx_late = l0;
+}
+
+fn emit_var0(g: u32) {
+    let s = glob_gen[g].sym;
     // -g: the events of a file-scope definition (gen_dwarf.goose)
     let top = opt_debug && !ev_on && syms[s].flags & SF_FILESCOPE != 0 && syms[s].flags & SF_COMPLIT == 0;
     var e0: u32 = 0;
@@ -769,6 +784,17 @@ recursive fn static_f80(n: u32) -> bool, F80 {
     }
     if k == N_ICAST || k == N_CAST {
         let op = nd.op as i64;
+        if op == CK_LVAL2RVAL && fold_cvars && is_real_float(nd.ty) {
+            // a const variable's value (G1: clang's evaluator reads it)
+            var init: u32 = 0;
+            if nkind(nd.a) == N_DECLREF { init = cvar_value_init(nodes[nd.a].a as i64); }
+            else if nkind(nd.a) == N_MEMBER || nkind(nd.a) == N_INDEX { let i2, w = cvar_member_init(nd.a); init = i2; }
+            if init == 0 { return false, z; }
+            cv_depth++;
+            let ok, x = static_f80(init);
+            cv_depth--;
+            return ok, x;
+        }
         if op == CK_INT2FLOAT || op == CK_FLOATCAST || op == CK_NOOP || op == CK_ATOMIC {
             let ok, x = static_f80(nd.a);
             if !ok { return false, z; }

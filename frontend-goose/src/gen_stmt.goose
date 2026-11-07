@@ -722,6 +722,10 @@ recursive fn gen_local_decl(n: u32) {
     if sy.kind != SK_VAR { return; }
     if sy.sc == SC_EXTERN || sy.flags & SF_LOCALLINK != 0 { return; }
     let q = sy.ty;
+    if nd.b != 0 && cv_eligible(s) {
+        cv_grow();
+        cvar_init[s] = nd.b;
+    }
     if sy.sc == SC_STATIC || sy.flags & SF_THREAD != 0 {
         // a static local: defined here (its initializer may name labels)
         ensure_sym_tables();
@@ -1100,9 +1104,26 @@ fn ret_gir_type(a: Abi) -> u32 {
     return GIR_T_VOID;
 }
 
+// G1: a function with __attribute__((nodebug)) has no debug information
+// of its own, as in clang (StartFunction clears CodeGenFunction's
+// DebugInfo): no subprogram, locations, variables, static locals, enum
+// or folded-read records. What CodeGenModule records still is (the
+// retained types of explicit casts, string literals, the module order of
+// references): the -g lowering runs with dbg_nodebug set.
 fn gen_function(fd: u32) {
+    dbg_nodebug = opt_debug && sym_has_attr(nodes[fd].a as i64, AM_NODEBUG);
+    gen_function0(fd);
+    dbg_nodebug = false;
+}
+
+fn gen_function0(fd: u32) {
     let nd = nodes[fd];
     let s = nd.a as i64;
+    // G1: clang emits an external definition as it is parsed (it sees the
+    // initializers of the const variables defined before it), a deferred
+    // one after the unit
+    cv_ctx = fd;
+    cv_ctx_late = !fn_eager(s);
     let g = func_global(s);
     glob_gen[g].state = 2;
     m_globals[g].kind = G_FUNC;
