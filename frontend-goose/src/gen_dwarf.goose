@@ -167,6 +167,7 @@ let EV_CAST = 4;      // a = written type of an explicit cast (EmitExplicitCastE
 let EV_ENUM = 5;      // a = enum: an enumerator was referenced (EmitDeclRefExprDbgValue)
 let EV_VAR = 6;       // a = m_dvars index (local): a variable's declaration (its type)
 let EV_CVAL = 7;      // a = file-scope variable whose read clang folded (EmitDeclRefExprDbgValue)
+let EV_REFSYM = 8;    // a = function symbol: a reference of a call expanded in place (G1)
 var m_devs: DEv[>..] = [];
 var ev_on = false;
 var ev_noproto = false;              // the next EV_REF is of a function through a type without prototype
@@ -211,7 +212,7 @@ var cval_die = dictionary<u64, u32> {};    // file-scope variable -> 1 once it h
 fn dev(kind: u32, a: u32, b: u32) {
     if !ev_on || dbg_dead != 0 { return; }
     // a nodebug function records what CodeGenModule does only
-    if dbg_nodebug && kind != EV_REF && kind != EV_STR && kind != EV_CAST { return; }
+    if dbg_nodebug && kind != EV_REF && kind != EV_STR && kind != EV_CAST && kind != EV_REFSYM { return; }
     m_devs.push(DEv { kind: kind, a: a, b: b });
 }
 
@@ -317,6 +318,14 @@ fn dbg_label(l: i64, blk: u32, loc: u32) {
 fn dbg_fn_end(s: i64, fi: u32) {
     if !opt_debug { return; }
     ev_on = false;
+    if fi == NONE {
+        // a dropped function (always_inline, expanded wherever called):
+        // its events only
+        m_dfns.push(DFn { sym: s, fi: fi, v0: m_dvars.len as! u32, v1: m_dvars.len as! u32, l0: m_dlabs.len as! u32,
+            l1: m_dlabs.len as! u32, r0: m_srecs.len as! u32, r1: m_srecs.len as! u32, e0: dfn_e0, e1: m_devs.len as! u32,
+            nodebug: true });
+        return;
+    }
     let F = m_funcs[fi];
     let first = F.first_inst;
     let na = f_allocas.len as! u32;
@@ -437,6 +446,10 @@ fn ent_of_global(g: u32) -> i64, bool {
 
 fn sim_reference(g: u32, noproto: bool) {
     let e, is_fn = ent_of_global(g);
+    sim_reference_ent(e, is_fn, noproto);
+}
+
+fn sim_reference_ent(e: i64, is_fn: bool, noproto: bool) {
     if e < 0 { return; }
     if is_fn {
         if es_fn[e] & (ES_CREATED | ES_NOPROTO) == 0 {
@@ -484,6 +497,10 @@ fn sim_events(e0: u32, e1: u32) {
     for k in e0..e1 {
         let E = m_devs[k];
         if E.kind == EV_REF { sim_reference(E.a, E.b != 0); }
+        else if E.kind == EV_REFSYM {
+            let f = ent_fn.get(E.a as u64);
+            if f { sim_reference_ent(f as i64, true, false); }
+        }
         else if E.kind == EV_STR {
             if !str_done.get(E.a as u64) {
                 str_done.insert(E.a as u64, 1);
@@ -539,7 +556,7 @@ fn sim_emit(x: u32) {
         es_fn[e] = es_fn[e] | ES_CREATED;
         o_fns.push(e as! u32);
     }
-    sim_reference(m_funcs[F.fi].global, false);
+    if F.fi != NONE { sim_reference(m_funcs[F.fi].global, false); }
     es_fn[e] = es_fn[e] | ES_EMITTED;
     if F.nodebug { sim_events(F.e0, F.e1); return; }
     // the subroutine type: the return type and the parameters' types

@@ -123,9 +123,19 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             else if syms[ts].kind == SK_VAR && syms[ts].flags & (SF_DEFINED | SF_TENTATIVE) != 0 { var_global(ts); }
         }
     }
-    // emit, following references
+    // emit, following references (and lower the functions only expanded
+    // in place, for their debug records: gen_call.goose, inline_ref)
     var wi = 0;
-    while wi < work.len {
+    var ii = 0;
+    while wi < work.len || ii < inl_work.len {
+        if wi >= work.len {
+            let F = inl_work[ii];
+            ii++;
+            let fg = sym_gen[F].glob;
+            if fg != NONE && glob_gen[fg].state != 0 { continue; }
+            gen_function_dropped(syms[F].def as! u32);
+            continue;
+        }
         let g = work[wi];
         wi++;
         ensure_glob_tables();

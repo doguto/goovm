@@ -118,6 +118,8 @@ recursive fn ex_call(n: u32, dst: u32) -> u32 {
     if ds >= 0 {
         let b = builtin_lib_call(ds, n, dst);
         if b != KEEP_CALL { return b; }
+        let F = inline_target(n);
+        if F >= 0 { return inline_call(n, F, dst); }
     }
     // the ABI of the result and the arguments
     let amark = cabis.len;
@@ -208,9 +210,215 @@ recursive fn ex_call(n: u32, dst: u32) -> u32 {
     return res;
 }
 
+// ------------------------------------------------------------ always_inline (G1)
+// clang inlines always_inline functions even at -O0 (the AlwaysInliner
+// pass): goosecc expands calls of the always_inline nodebug ones (the
+// intrinsics of the x86 headers) in place. The parameters get their slots,
+// the body is lowered into the caller, its returns store the result and
+// branch to the code after the call. A nodebug body has no locations of
+// its own: its code is at the call (LLVM's fixupLineNumbers). The function
+// itself is not emitted unless something else needs it; with -g it is
+// still lowered once, its code dropped, for what clang's emission of it
+// records (references, retained types, string literals: gen_dwarf).
+var inl_depth: i64 = 0;
+var inl_cont: u32 = 0;          // the block after the inlined body
+var inl_slot: u32 = NONE;       // the scalar result's slot
+var inl_direct = false;         // the result is the single final return's value
+var inl_val: u32 = NONE;
+var inl_dst: u32 = NONE;        // the aggregate result's destination
+var inl_rq: u32 = 0;            // the result type
+var inl_cmark: i64 = 0;         // the cleanups at the inlined body's start
+var inl_syms: i64[>..] = [];    // the functions being expanded
+var inl_ok = dictionary<u64, u32> {};      // function -> 1 can be inlined, 2 cannot
+var inl_state = dictionary<u64, u32> {};   // function -> 1 queued for its dropped lowering
+var inl_work: i64[>..<] = [];
+var inl_locals: i64[>..] = [];
+
+// The function a call expands in place, or -1.
+fn inline_target(n: u32) -> i64 {
+    let nd = nodes[n];
+    let ds = direct_callee(nd.a);
+    if ds < 0 || syms[ds].kind != SK_FUNC { return -1; }
+    if !sym_has_attr(ds, AM_ALWAYS_INLINE) || !sym_has_attr(ds, AM_NODEBUG) { return -1; }
+    let def = syms[ds].def;
+    if def < 0 || !fn_emitted_def(ds) || ds == f_sym { return -1; }
+    let fty = types[syms[ds].ty >> 4];
+    if fty.flags & (TF_VARIADIC | TF_NOPROTO) != 0 || nd.c as i64 != fty.n || nodes[def].c as i64 != fty.n { return -1; }
+    for x in inl_syms { if x == ds { return -1; } }
+    let k = inl_ok.get(ds as u64);
+    if k { return if k == 1 { ds } else { -1 }; }
+    let ok = inline_viable(nodes[def].b);
+    inl_ok.insert(ds as u64, if ok { 1 } else { 2 });
+    return if ok { ds } else { -1 };
+}
+
+// Statements an expansion handles (no labels, VLAs, static locals, asm).
+recursive fn inline_viable(n: u32) -> bool {
+    if n == 0 { return true; }
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_COMPOUND {
+        for i in nd.c { if !inline_viable(nlist[nd.v + i]) { return false; } }
+        return true;
+    }
+    if k == N_DECL {
+        let s = nd.a as i64;
+        if syms[s].kind != SK_VAR { return true; }
+        if syms[s].sc == SC_STATIC || syms[s].flags & (SF_THREAD | SF_COMPLIT) != 0 || is_vm_any(syms[s].ty) { return false; }
+        if syms[s].attr != 0 && sym_attrs[syms[s].attr].cleanup >= 0 { return false; }
+        return true;
+    }
+    if k == N_IF { return inline_viable(nd.b) && inline_viable(nd.c); }
+    if k == N_WHILE || k == N_SWITCH { return inline_viable(nd.b); }
+    if k == N_DO { return inline_viable(nd.a); }
+    if k == N_FOR { return inline_viable(nd.a) && inline_viable(nd.v as! u32); }
+    if k == N_CASE || k == N_DEFAULT { return inline_viable(nd.a); }
+    if k == N_LABEL || k == N_GOTO || k == N_IGOTO || k == N_ASM { return false; }
+    return true;
+}
+
+// The local variables of a body (their slots are made per expansion).
+recursive fn inline_locals(n: u32) {
+    if n == 0 { return; }
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_COMPOUND { for i in nd.c { inline_locals(nlist[nd.v + i]); } }
+    else if k == N_DECL { inl_locals.push(nd.a as i64); }
+    else if k == N_IF { inline_locals(nd.b); inline_locals(nd.c); }
+    else if k == N_WHILE || k == N_SWITCH { inline_locals(nd.b); }
+    else if k == N_DO { inline_locals(nd.a); }
+    else if k == N_FOR { inline_locals(nd.a); inline_locals(nd.v as! u32); }
+    else if k == N_CASE || k == N_DEFAULT { inline_locals(nd.a); }
+}
+
+recursive fn count_returns(n: u32) -> i64 {
+    if n == 0 { return 0; }
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_RETURN { return 1; }
+    if k == N_COMPOUND {
+        var c: i64 = 0;
+        for i in nd.c { c += count_returns(nlist[nd.v + i]); }
+        return c;
+    }
+    if k == N_IF { return count_returns(nd.b) + count_returns(nd.c); }
+    if k == N_WHILE || k == N_SWITCH { return count_returns(nd.b); }
+    if k == N_DO { return count_returns(nd.a); }
+    if k == N_FOR { return count_returns(nd.v as! u32); }
+    if k == N_CASE || k == N_DEFAULT { return count_returns(nd.a); }
+    return 0;
+}
+
+// The call's reference to F: clang's call makes F and queues its definition.
+fn inline_ref(F: i64) {
+    if ev_on { dev(EV_REFSYM, F as! u32, 0); }
+    if !opt_debug || inl_state.contains(F as u64) { return; }
+    inl_state.insert(F as u64, 1);
+    inl_work.push(F);
+}
+
+recursive fn inline_call(n: u32, F: i64, dst: u32) -> u32 {
+    let nd = nodes[n];
+    let def = syms[F].def as u32;
+    let fdn = nodes[def];
+    let rq = unqual(types[syms[F].ty >> 4].base);
+    let np = fdn.c as i64;
+    // the arguments, into the parameters' slots (fresh per expansion)
+    let lmark = inl_locals.len;
+    inline_locals(fdn.b);
+    ensure_sym_tables();
+    for k in lmark..inl_locals.len { sym_gen[inl_locals[k]].addr = NONE; }
+    inl_locals.resize(lmark);
+    for i in np {
+        let p = nlist[fdn.v + i] as i64;
+        let pq = unqual(syms[p].ty);
+        let slot = alloca(type_size(pq), local_align(p, pq));
+        store_any(pq, nlist[nd.v + i], slot);
+        sym_gen[p].addr = slot;
+    }
+    inline_ref(F);
+    // the caller's state
+    let s_cont = inl_cont;
+    let s_slot = inl_slot;
+    let s_direct = inl_direct;
+    let s_val = inl_val;
+    let s_dst = inl_dst;
+    let s_rq = inl_rq;
+    let s_cmark = inl_cmark;
+    let s_ev = ev_on;
+    let s_nd = dbg_nodebug;
+    let s_ctx = cv_ctx;
+    let s_late = cv_ctx_late;
+    let s_retq = f_ret_q;
+    ev_on = false;
+    if opt_debug { dbg_nodebug = true; }
+    cv_ctx = def;
+    cv_ctx_late = !fn_eager(F);
+    f_ret_q = rq;
+    let cont = new_block();
+    inl_cont = cont;
+    inl_rq = rq;
+    inl_slot = NONE;
+    inl_direct = false;
+    inl_val = NONE;
+    inl_dst = NONE;
+    let vk = vkind(rq);
+    let body = nodes[fdn.b];
+    if !is_void(rq) {
+        if vk == VK_SCALAR {
+            let last = if body.c > 0 { nlist[body.v + body.c - 1] } else { 0 };
+            if last != 0 && nkind(last) == N_RETURN && count_returns(fdn.b) == 1 { inl_direct = true; }
+            else { inl_slot = alloca(type_size(rq), type_align(rq)); }
+        } else {
+            inl_dst = if dst != NONE { dst } else { alloca(type_size(rq), type_align(rq)) };
+        }
+    }
+    inl_depth++;
+    inl_syms.push(F);
+    push_cleanup_scope();
+    inl_cmark = cleanups.len;
+    gen_stmt(fdn.b);
+    pop_cleanup_scope(true);
+    if has_insert() { br(cont); }
+    start_block(cont);
+    inl_syms.pop();
+    inl_depth--;
+    var res: u32 = NONE;
+    if inl_direct { res = inl_val; }
+    else if inl_slot != NONE { res = load_c(rq, inl_slot, false); }
+    ev_on = s_ev;
+    dbg_nodebug = s_nd;
+    cv_ctx = s_ctx;
+    cv_ctx_late = s_late;
+    f_ret_q = s_retq;
+    inl_cont = s_cont;
+    inl_slot = s_slot;
+    inl_direct = s_direct;
+    inl_val = s_val;
+    inl_dst = s_dst;
+    inl_rq = s_rq;
+    inl_cmark = s_cmark;
+    if res == NONE && vk == VK_SCALAR && !is_void(rq) { return c_zero(vty(rq)); }
+    return res;
+}
+
+// A return statement of an expanded body.
+recursive fn inline_return(n: u32) {
+    let e = nodes[n].a;
+    if e != 0 {
+        if inl_direct { inl_val = ex_val(e); }
+        else if inl_slot != NONE { store_c(inl_rq, ex_val(e), inl_slot, false); }
+        else if inl_dst != NONE { store_any(inl_rq, e, inl_dst); }
+        else { ex_ignore(e); }
+    }
+    if has_insert() { run_cleanups(inl_cmark); }
+    if has_insert() { br(inl_cont); }
+}
+
 // ------------------------------------------------------------ return
 
 recursive fn gen_return(n: u32) {
+    if inl_depth > 0 { inline_return(n); return; }
     let nd = nodes[n];
     let e = nd.a;
     let a = f_ret;

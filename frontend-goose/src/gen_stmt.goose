@@ -1122,6 +1122,15 @@ fn gen_function(fd: u32) {
     dbg_nodebug = false;
 }
 
+// G1: a function only ever expanded in place, lowered for what its
+// emission records (gen_call.goose, inline_ref); its code is dropped.
+var f_drop = false;
+fn gen_function_dropped(fd: u32) {
+    f_drop = true;
+    gen_function(fd);
+    f_drop = false;
+}
+
 // ------------------------------------------------------------ NRVO (G1)
 // clang applies the named return value optimization in C too (Sema's
 // computeNRVO through Scope::updateNRVOCandidate / applyNRVO): a local
@@ -1256,12 +1265,15 @@ fn gen_function0(fd: u32) {
     // one after the unit
     cv_ctx = fd;
     cv_ctx_late = !fn_eager(s);
-    let g = func_global(s);
-    glob_gen[g].state = 2;
-    m_globals[g].kind = G_FUNC;
-    m_globals[g].flags = link_flags(s, true) | GF_DEFINED;
-    let sec = sym_section(s);
-    if sec >= 0 { m_globals[g].section = get_section(strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len as i64], SF_EXEC, 1); }
+    var g: u32 = NONE;
+    if !f_drop {
+        g = func_global(s);
+        glob_gen[g].state = 2;
+        m_globals[g].kind = G_FUNC;
+        m_globals[g].flags = link_flags(s, true) | GF_DEFINED;
+        let sec = sym_section(s);
+        if sec >= 0 { m_globals[g].section = get_section(strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len as i64], SF_EXEC, 1); }
+    }
     let ft = syms[s].ty;
     let fty = types[ft >> 4];
     let ai = fn_abi(ft);
@@ -1403,6 +1415,12 @@ fn gen_function0(fd: u32) {
     }
     flags = flags | (al << FN_ALIGN_SHIFT);
     let dbg = dbg_function_end();
+    if f_drop {
+        fn_drop();
+        dbg_fn_end(s, NONE);
+        f_sym = -1;
+        return;
+    }
     let fi = fn_finish(g, flags, f_nargs, f_args_run, f_ret_ty, dbg);
     dbg_fn_end(s, fi);
     f_sym = -1;

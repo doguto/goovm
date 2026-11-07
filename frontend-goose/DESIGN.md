@@ -22,7 +22,8 @@ This page covers the structure (1), the data (2), the preprocessor (3), the
 parser and semantic analysis (4), how the code fits Goose's recursion rule
 (5), the AST contract (6), the lowering to GIR (7), what is not
 supported (8), what B3 did for speed (9), B4's persistent header
-cache (10), and B5's debug information (11).
+cache (10), B5's debug information (11), and G1's start-up, parse cache
+and clang-style folding (12).
 
 ## 1. Structure
 
@@ -1316,3 +1317,159 @@ differently, not from the debug information:
 - goosecc's own bugs: an array of VLA rows (`char c[10][n]`) gets a
   1-byte allocation (wrong code, which its DWARF follows), and `noinit`
   variables do not compile.
+
+## 12. Start-up, the parse cache and clang's folding (G1)
+
+Milestone G1 made three changes: a process start-up well below a
+millisecond (12.1), a second persistent cache that replays the parser's
+state after a file's leading includes (12.2), and the code generation
+that clang-20 does at -O0 beyond a plain translation (12.3); `noinit`
+compiles (12.4). Results and measurements are in README.md ("Results",
+G1).
+
+### 12.1 Start-up
+
+A compile of a one-line file took 1.19 ms of wall time, about half of it
+the Goose runtime reserving goosecc's 420 data stacks (every growable
+global array is a region of its own: an `mmap` of 257 MB, an `mprotect`
+of its guard gap, two VMAs to unmap at exit). The runtime is embedded in
+the generated C, so `build.sh` patches that copy
+(`runtime-patches/lazy-regions.patch`; the patch, its measurements, its
+risks and a proposal for the Goose authors are in
+[runtime-patches/README.md](runtime-patches/README.md)):
+
+- all of main's regions are slots of **one** `PROT_NONE` reservation
+  made at start-up;
+- a slot becomes accessible on its first access: the runtime's SIGSEGV
+  handler `mprotect`s it and the access is retried; guard gaps stay
+  inaccessible;
+- the 146 regions nearly every compile touches (`hot-regions.txt`, made by
+  `hot_regions.py` from a profiling build over CTMark) take the first
+  slots, packed so that their first pages share page-table pages, and are
+  enabled as they are reserved.
+
+goosecc's own start-up work moved to where it is needed: `goosecc_commit`
+(`goosecc_rt.h`) touches the top of a stack before a `read()` into it,
+so that the kernel does not fault page by page inside the system call.
+One-line file: 0.65 ms (0.63 ms task-clock, `exec` and exit included).
+
+### 12.2 The parse cache
+
+`src/pcache.goose`. With the header cache warm, preprocessing a CTMark
+file costs little, and the parser's work on the same glibc declarations
+(types, symbols, AST nodes for every prototype) became the largest
+repeated cost. The parse cache saves the parser's state after the leading
+includes and replays it.
+
+**The prefix.** A translation unit nearly always begins with a run of
+`#include` lines (directives between them, no token of the main file's
+own): its prefix. Preprocessing makes the prefix's tokens `[0, t1)`
+before parsing starts. `pt_inc_begin` / `pt_inc_end` (`ppdir.goose`)
+follow the main file's top-level includes: each records its token, text
+and identifier ranges and, when the header cache replayed or recorded it
+as a unit, the blob id (`hc_top_bid`); the first token of the main file's
+own ends the prefix.
+
+**The key (chain).** The parser's state at `t1` is a function of the
+tokens `[0, t1)`, of the text and identifiers they refer to, of the
+options, and of the state it starts from. `types_init` and `parse_init`
+now run before preprocessing so that the starting state is fixed. The
+chain hashes the configuration, the options, goosecc's build id, the
+built-in text, the identifiers that exist before the first include, and
+per include its blob id (which determines its tokens and text) or a
+checksum of its tokens and text, plus what the main file's directives
+added between includes. Two compiles with the same chain have the same
+tokens with the same identifier numbers; source offsets after the main
+file's text are shifted by the difference of the main files' lengths.
+
+**The entry** (`<cache>/<key>.p`) is the state at `t1` as a delta from the
+starting state: for each of 29 tables (types, records, fields, symbols,
+attributes, AST nodes and lists, strings, scopes, the debug-type side
+tables, ...) the part appended since the start and the changed words of
+the part that existed; the dictionaries, written whole; the scalars. Every
+field that holds a source offset is relocated on replay (offsets in the
+main file stay, offsets past it move by the length difference); per AST
+node kind, the fields that are locations are known (`goosecc_pc_nodemask`:
+`N_FLOAT.b`, `N_COMPOUND.b`, `N_DECL.c` besides `loc`). The parser may
+lex builtin signatures while it parses the prefix (`builtin_type`); the
+entry lists them and a replay lexes them again, in order, first.
+
+**Exactness.** Not cached: a prefix with a diagnostic, one whose parse
+looked past `t1` or did not end at file scope exactly at `t1`, one that
+reaches into the main file's text (a macro the main file defined expanded
+in a header), state that refers to identifiers or text the main file
+added. `--pp-state-hash` includes a hash of every parser table, so
+`cache_check.py` compares the whole parser state, not only the outputs;
+`pcache_check.py` replays every corpus file's prefix into a compile whose
+main file is padded (`GOOSECC_TEST_MAIN_PAD`), so that every offset moves.
+
+### 12.3 What clang-20 folds at -O0
+
+clang's CodeGen asks its constant evaluator in a few places, and what the
+evaluator can read changes the code and the DWARF: `tryEmitAsConstant`
+for a read of a variable, `VisitMemberExpr` for an integer member,
+`ConstantFoldsToSimpleInteger` for the condition of an `if`, `?:`, `&&`,
+`||` and loops, `EmitBuiltinExpr` for a builtin call, and Sema's array
+bounds in GNU modes. goosecc's evaluator (`fold_int`, `fold_float`,
+`fold_bool`, `fold_addr` in `sema.goose`) follows it when `fold_cvars` is
+set, which the lowering does (the parser's integer constant expressions
+never read variables):
+
+- **const variables.** A non-volatile, non-weak `const` variable (or array
+  of such) with a constant initializer is read from its initializer
+  (`cvar_init`, filled by the parser), with members, elements, string
+  elements, and through const pointers (`p->f`, `p[i]`, `*p`). The
+  initializer must be one clang had seen when it emitted the code: an
+  external definition is emitted as it is parsed, a deferred one after
+  the unit (`cv_ctx`, `cv_ctx_late`). Integer, floating and pointer reads
+  become constants; a file-scope variable that is internal and unused
+  gets a DIE with `DW_AT_const_value` (or without location for a pointer)
+  instead of being emitted (`EmitDeclRefExprDbgValue`, `EV_CVAL`).
+- **addresses**: differences and comparisons of addresses of one object,
+  an object's address against a null pointer (unless weak), `offsetof`
+  written as `(size_t)&((T *)0)->m`.
+- **`strlen` and `memchr`** (and `__builtin_` forms) of string literals,
+  const character arrays and pointers to them (`cptr_eval`: the array's
+  initializer, its length, the index; reading past the array fails, as in
+  clang).
+- `__builtin_huge_val`, `__builtin_inf`, comparisons of complex constants.
+- **`__builtin_constant_p`** of an operand that does not fold while
+  parsing (0 there, as in a constant context) is decided again in CodeGen
+  (`NF_BCP`): it folds to 1 if the operand then folds, and otherwise is
+  not folded at all, so a `?:` on it keeps both arms, as in clang.
+- **GNU array bounds** that only the evaluator folds give constant-size
+  arrays (`fold_gnu`).
+
+Also:
+
+- **NRVO.** clang applies the named return value optimization in C
+  (Sema's `computeNRVO`, scope by scope: `nrvo_mark` in `gen_stmt.goose`
+  replays `Scope::updateNRVOCandidate` / `applyNRVO`). With an `sret`
+  return the variable lives in the caller's memory (no copy at the
+  return; its location is the `sret` pointer's); with an ignored return
+  (an empty struct) it has no debug information.
+- **nodebug** functions have no subprogram, locations or variables;
+  what clang's CodeGenModule records for them (retained cast types,
+  string literals, references) stays (`dbg_nodebug`).
+- **always_inline.** clang inlines `always_inline` functions even at -O0.
+  goosecc expands calls of the `always_inline` + `nodebug` ones (the x86
+  intrinsics headers) in place (`inline_call`, `gen_call.goose`): the
+  arguments go to fresh parameter slots, the body is lowered into the
+  caller with its returns storing the result and branching past it, and
+  every instruction is at the call (LLVM's `fixupLineNumbers` for a
+  callee without debug information). A function only ever expanded is not
+  emitted; with `-g` it is still lowered once, its code dropped
+  (`gen_function_dropped`), for what clang's emission of it records
+  (`EV_REFSYM`). `always_inline` functions with debug information are
+  still emitted out of line and called (clang inlines them and describes
+  them with `DW_TAG_inlined_subroutine`s: README.md lists the files).
+- `DW_AT_prototyped` of a function first declared at block scope without
+  a prototype is that declaration's (clang's local extern declarations).
+
+### 12.4 `noinit`
+
+`__attribute__((noinit))` is ignored by clang-20 on x86-64 (a warning),
+so goosecc ignores it too. Making it compile exposed two bugs in named
+sections: a tentative definition in a named section got data instead of
+zeros, and the first section name could land at string offset 0 (read as
+"no section"). `tests/c/52_noinit_sections.c` covers both.

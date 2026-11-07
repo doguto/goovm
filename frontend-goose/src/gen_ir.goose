@@ -410,6 +410,12 @@ fn remap(v: u32, first: u32, na: u32) -> u32 {
     return first + na + v;
 }
 
+// G1: drops the function being lowered (its operand runs stay, unused).
+fn fn_drop() {
+    for r in f_brelocs { m_drelocs[r].blk = 0; }
+    cur_blk = -1;
+}
+
 // Lays out the function and appends it to the module. Returns its index in m_funcs.
 fn fn_finish(g: u32, flags: u32, nargs: u32, args: u32, ret_ty: u32, dbg: u32) -> u32 {
     if cur_blk >= 0 { emit_term(GIR_UNREACHABLE, 0, 0, 0); }
