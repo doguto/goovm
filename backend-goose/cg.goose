@@ -14,6 +14,7 @@
 //   (backend-goose/CMakeLists.txt does this when goovm-llc is built.)
 
 import std;
+import os;
 import gir;
 import x86;
 import ra;
@@ -25,6 +26,10 @@ import abi;
 import lowera;
 import lower;
 import opt;
+import opt_cfg;
+import opt_ssa;
+import opt_fold;
+import opt_dump;
 
 var M: Module;
 var opt_on = false;          // opt_level >= 1 (the middle-end ran; global register allocation)

@@ -244,7 +244,8 @@ fn ch_hash(lo: u64, hi: u64, t: u32) -> u64 {
     return h;
 }
 fn ch_grow() {
-    let n: i64 = if ch_key.len == 0 { 1024 } else { ch_key.len * 2 };
+    var n: i64 = if ch_key.len == 0 { 1024 } else { ch_key.len * 2 };
+    while n < 4 * (x_consts.len - xb_c) { n *= 2; }
     ch_key.clear();
     ch_key.resize(n, 0);
     ch_n = 0;
@@ -635,6 +636,7 @@ fn opt_module() {
     ch_n = 0;
     ch_grow();
     undef_c.clear();
+    build_type_rc();
     o_dbg = M.dies.len != 0;
     fn_pinned.clear();
     fn_pinned.resize(M.funcs.len, 0);
@@ -653,6 +655,7 @@ fn opt_module() {
     opt_order();
     for fi in fn_order { opt_function(fi); }
     remap_dies();
+    if opt_dump_on() { dump_module(); }
     M = Module { header: M.header, types: M.types, funcs: x_funcs[xb_f..], blocks: x_blocks[xb_b..],
                  insts: x_insts[xb_i..], opnds: x_opnds[xb_o..], consts: x_consts[xb_c..], globals: M.globals,
                  sections: M.sections, data: M.data, drelocs: M.drelocs, strtab: M.strtab, dlocs: M.dlocs,
@@ -669,6 +672,28 @@ fn opt_order() {
     for fi in 0..M.funcs.len { fn_order.push(fi as! u32); }
 }
 
+// Passes switched off by the environment variable GOOVM_OPT (a list such as
+// "-gvn,-inline": for bisecting; "-all" runs no pass at all).
+var opt_env: u8[>..] = [];
+var opt_env_read = false;
+fn opt_off(name: const u8[:]) -> bool {
+    if !opt_env_read {
+        opt_env_read = true;
+        opt_env.clear();
+        if !env("GOOVM_OPT", opt_env) { opt_env.clear(); }
+    }
+    if opt_env.len == 0 { return false; }
+    var w: u8[>..] = [];
+    w.push('-');
+    w.append(name);
+    return find(opt_env, w) >= 0 || find(opt_env, "-all") >= 0;
+}
+
+fn opt_dump_on() -> bool {
+    opt_off("");    // (reads the variable)
+    return find(opt_env, "dump") >= 0;
+}
+
 fn opt_function(fi: u32) {
     o_fi = fi;
     o_f = M.funcs[fi];
@@ -676,5 +701,20 @@ fn opt_function(fi: u32) {
     oir_reset();
     amap_on = false;
     oir_load(M.insts, M.blocks, o_f, true);
+    if !opt_off("m2r") {
+        build_cfg();
+        if remove_unreachable() { build_cfg(); }
+        build_uses();
+        if mem2reg() { simplify_phis(); }
+    }
+    for round in 2 {
+        if !opt_off("fold") {
+            build_cfg();
+            simplify();
+            simplify_phis();
+        }
+        resolve_all();
+        dce();
+    }
     oir_store(fi);
 }
