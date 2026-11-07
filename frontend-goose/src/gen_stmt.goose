@@ -559,7 +559,10 @@ recursive fn gen_local_decl(n: u32) {
     if nd.b != 0 {
         // the initialization is at the variable
         let saved = if dbg_on() { push_loc(nd.loc) } else { 0 };
-        let quiet = dbg_on() && is_aggregate(q) && is_const_init(nd.b, q);
+        let quiet = dbg_on() && is_aggregate(q) && dbg_const_aggregate(nd.b, q);
+        // a constant aggregate: clang's ConstExprEmitter visits the casts
+        // it can emit (and retains their types), no enumerator
+        if quiet { dbg_init_casts(nd.b); }
         if quiet { dbg_no_enum = true; }
         init_object(p, q, nd.b);
         if quiet { dbg_no_enum = false; }
@@ -779,10 +782,57 @@ recursive fn is_const_init(n: u32, q: u32) -> bool {
         let ok, v = fold_int(n);
         return ok && pure_const(n);
     }
+    if ci_ptrs && is_pointer(q) { return ci_addr(n); }
     if is_real_float(q) && kind_of(q) != TY_FLOAT128 {
         let ok, x = static_f80(n);
         return ok && pure_const(n);
     }
+    return false;
+}
+
+// -g: is the initializer of a local aggregate constant as clang's
+// IsConstantAggregate sees it (Expr::isConstantInitializer: null pointers
+// and the addresses of static objects, functions and string literals
+// too)? Then clang emits it as a constant (ConstExprEmitter), visiting its
+// casts but no enumerator.
+var ci_ptrs = false;
+fn dbg_const_aggregate(n: u32, q: u32) -> bool {
+    ci_ptrs = true;
+    let r = is_const_init(n, q);
+    ci_ptrs = false;
+    return r;
+}
+recursive fn ci_addr(n: u32) -> bool {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_ICAST || k == N_CAST {
+        let ck = nd.op as i64;
+        if ck == CK_ARRAY2PTR || ck == CK_FUNC2PTR { return ci_static_lv(nd.a); }
+        if ck == CK_BITCAST || ck == CK_NOOP || ck == CK_NULL2PTR || ck == CK_INT2PTR || ck == CK_INTEGRAL || ck == CK_PTR2INT { return ci_addr(nd.a); }
+        return false;
+    }
+    if k == N_UNARY && nd.op == U_ADDR { return ci_static_lv(nd.a); }
+    if k == N_BINARY && (nd.op == B_PTRADD || nd.op == B_PTRSUB) { return ci_addr(nd.a) && pure_const(nd.b); }
+    let ok, v = fold_int(n);
+    return ok && pure_const(n);
+}
+recursive fn ci_static_lv(n: u32) -> bool {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_STRING { return true; }
+    if k == N_DECLREF {
+        let s = nd.a as i64;
+        if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN { return true; }
+        if syms[s].kind != SK_VAR || syms[s].flags & SF_THREAD != 0 { return false; }
+        return syms[s].flags & SF_FILESCOPE != 0 || syms[s].sc == SC_STATIC || syms[s].sc == SC_EXTERN;
+    }
+    if k == N_MEMBER {
+        if nd.op == 1 { return ci_addr(nd.a); }
+        return ci_static_lv(nd.a);
+    }
+    if k == N_INDEX { return ci_addr(nd.a) && pure_const(nd.b); }
+    if k == N_UNARY && nd.op == U_DEREF { return ci_addr(nd.a); }
+    if k == N_COMPLIT { return syms[nd.b].flags & SF_FILESCOPE != 0; }
     return false;
 }
 

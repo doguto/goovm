@@ -341,36 +341,6 @@ recursive fn dbg_init_casts(n: u32) {
     }
 }
 
-// clang's EmitPointerWithAlignment (the pointer of *, ->, [] and of the
-// memory builtins) looks through bit and no-op casts from a pointer to a
-// non-void type without visiting them as expressions: such an explicit
-// cast retains no type. ex_ptr lowers such a pointer operand.
-var cast_skip: u32[>..] = [];
-recursive fn ex_ptr(n: u32) -> u32 {
-    if !dbg_on() { return ex_val(n); }
-    let mark = cast_skip.len;
-    var c = n;
-    loop {
-        let nd = nodes[c];
-        let k = nd.kind as i64;
-        if (k == N_CAST || k == N_ICAST) && (nd.op as i64 == CK_BITCAST || nd.op as i64 == CK_NOOP) && nd.a != 0 {
-            let st = nty(nd.a);
-            if is_pointer(st) && !is_void(tbase(st)) {
-                if k == N_CAST { cast_skip.push(c); }
-                c = nd.a;
-                continue;
-            }
-        }
-        break;
-    }
-    let v = ex_val(n);
-    cast_skip.resize(mark);
-    return v;
-}
-fn cast_skipped(n: u32) -> bool {
-    for i in cast_skip.len { if cast_skip[i] == n { return true; } }
-    return false;
-}
 
 // An enumerator constant visited by the lowering (ex_val).
 fn dbg_enumc(n: u32) {

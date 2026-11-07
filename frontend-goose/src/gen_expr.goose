@@ -154,7 +154,7 @@ recursive fn ex_lv1(n: u32) -> LV {
         return lv_plain(var_addr(s), nd.ty);
     }
     if k == N_UNARY {
-        if nd.op == U_DEREF { return lv_plain(ex_ptr(nd.a), nd.ty); }
+        if nd.op == U_DEREF { return lv_plain(ex_val(nd.a), nd.ty); }
         if nd.op == U_REAL || nd.op == U_IMAG {
             let l = ex_lv(nd.a);
             if nd.op == U_REAL { return lv_plain(l.addr, nd.ty); }
@@ -169,13 +169,13 @@ recursive fn ex_lv1(n: u32) -> LV {
             let i = ex_val(nd.b);
             return lv_plain(ptr_add(base, nd.ty, i, nty(nd.b), false), nd.ty);
         }
-        let p = ex_ptr(nd.a);
+        let p = ex_val(nd.a);
         let i = ex_val(nd.b);
         return lv_plain(ptr_add(p, nd.ty, i, nty(nd.b), false), nd.ty);
     }
     if k == N_MEMBER {
         var base: u32 = 0;
-        if nd.op == 1 { base = ex_ptr(nd.a); } else { base = agg_addr(nd.a); }
+        if nd.op == 1 { base = ex_val(nd.a); } else { base = agg_addr(nd.a); }
         let f = fields[nd.b];
         if f.width >= 0 {
             return LV { addr: base, fld: nd.b as! i32, vol: quals(nd.ty) & Q_VOLATILE != 0, q: nd.ty };
@@ -382,7 +382,7 @@ recursive fn ex_val(n: u32) -> u32 {
     let saved = push_loc(visit_loc(n));
     let k = nkind(n);
     if k == N_INT { dbg_enumc(n); }
-    else if k == N_CAST && !dbg_no_enum && (cast_skip.len == 0 || !cast_skipped(n)) { dev(EV_CAST, node_written(n), 0); }
+    else if k == N_CAST && !dbg_no_enum { dev(EV_CAST, node_written(n), 0); }
     let v = ex_val1(n);
     pop_loc(saved);
     return v;

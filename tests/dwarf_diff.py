@@ -275,8 +275,13 @@ def items_of(a, flags):
     if a.corpus:
         sys.path.insert(0, os.path.join(ROOT, "frontend-goose", "tests"))
         import corpus
+        only = None
+        if a.only:
+            # a --json report: its files that were not the same
+            only = {f["file"] for f in json.load(open(a.only))["files"] if not f["status"].startswith("same")}
         for c, p, fl in corpus.corpus(a.corpus.split(",")):
-            items.append((p, fl + list(flags)))
+            if only is None or p in only:
+                items.append((p, fl + list(flags)))
     if a.every > 1:
         items = items[::a.every]
     if a.limit:
@@ -291,6 +296,7 @@ def main():
     ap.add_argument("--corpus", default="", help="also the files of these corpora (frontend-goose/tests/corpus.py)")
     ap.add_argument("--every", type=int, default=1, help="every N-th file only")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--only", default="", help="with --corpus: only the files a --json report has as differing")
     ap.add_argument("--verify", action="store_true", help="llvm-dwarfdump --verify every goosecc object")
     ap.add_argument("--goosecc", default=os.path.join(ROOT, "frontend-goose", "build", "goosecc"))
     ap.add_argument("--cache", default=os.environ.get("GOOSECC_CACHE", ""))
