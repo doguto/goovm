@@ -233,18 +233,41 @@ fn simplify_cfg() -> bool {
 // straight to X or Y. M's PHIs may only be used by that branch and as
 // incoming values from M in X's and Y's PHIs (they then get the
 // predecessor's value). (build_cfg first.)
+var th_mark: u8[>..] = [];      // per instruction: 1 = a PHI of a candidate block, 2 = used elsewhere
 fn thread_phis() -> bool {
     var cand = false;
+    if th_mark.len < o_ins.len { th_mark.resize(o_ins.len, 0); }
     for m in rpo {
-        if thread_cand(m) != NIL { cand = true; break; }
+        if thread_cand(m) == NIL { continue; }
+        cand = true;
+        var i = b_first[m];
+        while o_ins[i].op == GIR_PHI {
+            th_mark[i] = 1;
+            i = o_nxt[i];
+        }
     }
     if !cand { return false; }
-    resolve_all();
-    build_uses();
+    // one scan for the uses of the candidates' PHIs (no use lists)
+    for u0 in 0..o_ins.len {
+        let u: u32 = u0 as! u32;
+        if o_blk[u] == NIL { continue; }
+        each_slot(u) { sl =>
+            let v = res(vget(u, sl));
+            if is_inst(v) && v < th_mark.len && th_mark[v] != 0 && !thread_use_ok(v, u, sl) { th_mark[v] = 2; }
+        };
+    }
     var any = false;
     for m in rpo {
         let P = thread_cand(m);
-        if P == NIL || !thread_uses_ok(m) { continue; }
+        if P == NIL { continue; }
+        var ok = true;
+        var i = b_first[m];
+        while o_ins[i].op == GIR_PHI {
+            if th_mark[i] == 2 { ok = false; }
+            th_mark[i] = 0;
+            i = o_nxt[i];
+        }
+        if !ok { continue; }
         let t = b_last[m];
         let X = o_ins[t].b;
         let Y = o_ins[t].c;
@@ -277,26 +300,15 @@ fn thread_cand(m: u32) -> u32 {
     }
     return c;
 }
-// M's PHIs are used only by M's branch and by X's and Y's PHIs (from M).
-fn thread_uses_ok(m: u32) -> bool {
+// Whether the use of PHI v (of candidate block m) by instruction u at slot
+// sl is allowed: m's branch, or a PHI of X or Y taking v as the value from m.
+fn thread_use_ok(v: u32, u: u32, sl: u32) -> bool {
+    let m = o_blk[v];
     let t = b_last[m];
-    let X = o_ins[t].b;
-    let Y = o_ins[t].c;
-    var i = b_first[m];
-    while i != t {
-        for q in u_start[i]..u_start[i + 1] {
-            let u = u_list[q];
-            if u == t { continue; }
-            let U = o_ins[u];
-            if U.op != GIR_PHI || o_blk[u] != X && o_blk[u] != Y { return false; }
-            // only as the value from m
-            for k in 0..U.c {
-                if res(o_ops[U.b + 2 * k]) == i && o_ops[U.b + 2 * k + 1] != m { return false; }
-            }
-        }
-        i = o_nxt[i];
-    }
-    return true;
+    if u == t { return true; }
+    let U = o_ins[u];
+    if U.op != GIR_PHI || o_blk[u] != o_ins[t].b && o_blk[u] != o_ins[t].c || sl < SLOT_RUN { return false; }
+    return o_ops[(sl & ~SLOT_RUN) + 1] == m;
 }
 // Redirects the edge a -> m to T (m ends in a branch to T among others).
 fn thread_edge(a: u32, m: u32, T: u32) -> bool {
