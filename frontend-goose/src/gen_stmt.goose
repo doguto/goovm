@@ -740,8 +740,9 @@ recursive fn gen_local_decl(n: u32) {
         return;
     }
     ensure_sym_tables();
-    if kind_of(q) == TY_VLA {
-        // a VLA: dynamic stack allocation, restored at the end of the scope
+    if is_vm(q) {
+        // a VLA, or an array whose elements are VLAs (char c[10][n]): dynamic
+        // stack allocation of size_val(q), restored at the end of the scope
         if cleanup_marks.len > 0 {
             let mark = cleanup_marks[cleanup_marks.len - 1] as i64;
             var have = false;
@@ -757,7 +758,8 @@ recursive fn gen_local_decl(n: u32) {
         if al < 16 { al = 16; }
         let p = emit(GIR_DYNALLOCA, GIR_T_PTR, 0, 0, 0, size, al as! u32, 0);
         sym_gen[s].addr = p;
-        dbg_vla(s, p, q);
+        if kind_of(q) == TY_VLA { dbg_vla(s, p, q); }
+        else if sy.flags & SF_COMPLIT == 0 { dbg_local(s, p); }
         return;
     }
     if is_vm_any(q) { eval_vm_type(q); }
