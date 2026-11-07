@@ -407,7 +407,11 @@ recursive fn ex_builtin2(full: const u8[:], name: const u8[:], n: u32, dst: u32)
     }
     if name == "prefetch" || name == "assume" || name == "va_end" || name == "__clear_cache" || name == "speculation_safe_value_dummy" {
         if name == "assume" { return NONE; }
-        for i in nargs { let x = barg(n, i); if has_side_effects(x) { ex_ignore(x); } }
+        for i in nargs {
+            let x = barg(n, i);
+            if has_side_effects(x) { ex_ignore(x); }
+            else if dbg_on() { dbg_enum_expr(x); }
+        }
         return NONE;
     }
     if name == "unreachable" { emit_term(GIR_UNREACHABLE, 0, 0, 0); return NONE; }

@@ -870,6 +870,7 @@ recursive fn parse_enum_spec(ds: DeclSpec&) -> u32 {
             if name != 0 { bind_sym(s, true); }
         }
         let ety = enums[e].ty << 4;
+        dt_note_enum_def(e, loc);
         adv();
         var next: i64 = 0;
         var minv: i64 = 0;
@@ -1805,7 +1806,11 @@ recursive fn parse_compound_stmt(stmt_expr: bool) -> u32 {
             // __label__ a, b;
             adv();
             loop {
-                if at(TK_IDENT) { label_ref(tval(), tloc()); adv(); }
+                if at(TK_IDENT) {
+                    let ls = label_ref(tval(), tloc());
+                    dt_note_local_label(ls);
+                    adv();
+                }
                 if !accept(TK_COMMA) { break; }
             }
             expect(TK_SEMI, "';'");

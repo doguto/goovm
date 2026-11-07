@@ -363,3 +363,27 @@ fn dt_note_enum_in(e: i64) {
 }
 fn record_in_record(r: i64) -> i64 { if r < rec_in_rec.len { rec_in_rec[r] as i64 } else { -1 } }
 fn enum_in_record(e: i64) -> i64 { if e < enum_in_rec.len { enum_in_rec[e] as i64 } else { -1 } }
+
+// Labels declared with __label__ (DWARF puts them at that declaration).
+var local_labels = dictionary<u64, u32> {};
+fn dt_note_local_label(s: i64) {
+    if !dbg_types { return; }
+    local_labels.insert(s as u64, 1);
+}
+fn is_local_label(s: i64) -> bool {
+    let r = local_labels.get(s as u64);
+    if r { return true; }
+    return false;
+}
+
+// Where an enum was defined (it may have been named before: enum foo; ...).
+var enum_defloc = dictionary<u64, u32> {};
+fn dt_note_enum_def(e: i64, loc: u32) {
+    if !dbg_types { return; }
+    enum_defloc.insert(e as u64, loc);
+}
+fn enum_def_loc(e: i64, dflt: u32) -> u32 {
+    let r = enum_defloc.get(e as u64);
+    if r { return r; }
+    return dflt;
+}

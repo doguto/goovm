@@ -142,6 +142,7 @@ recursive fn ex_call(n: u32, dst: u32) -> u32 {
     var cref: u32 = 0;
     var cname: const u8[:] = "";
     if ds >= 0 {
+        if dbg_on() { dbg_fnref(callee); }
         cref = gref(func_global(ds));
         cname = ident_text(link_name(ds) as i64);
         if is_returns_twice(cname) { f_flags = f_flags | FN_RETURNS_TWICE; }

@@ -130,7 +130,10 @@ fn complit_global(n: u32) -> u32 {
 
 // A reference to g from emitted code: an on-use definition is queued.
 fn note_use(g: u32) {
-    if ev_on { dev(EV_REF, g, 0); }
+    if ev_on {
+        dev(EV_REF, g, if ev_noproto { 1 } else { 0 });
+        ev_noproto = false;
+    }
     if glob_gen[g].state != 0 { return; }
     let s = glob_gen[g].sym;
     if s < 0 { return; }
@@ -1091,7 +1094,10 @@ recursive fn eval_lvaddr(n: u32) -> bool, i64, i64, i64, i64 {
     if k == N_DECLREF {
         let s = nd.a as i64;
         let sk = syms[s].kind;
-        if sk == SK_FUNC || sk == SK_BUILTIN { return true, func_global(s) as i64, 0, -1, -1; }
+        if sk == SK_FUNC || sk == SK_BUILTIN {
+            if opt_debug { dbg_fnref(n); }
+            return true, func_global(s) as i64, 0, -1, -1;
+        }
         if sk == SK_VAR {
             var c = s;
             if syms[s].canon >= 0 && syms[s].canon as i64 != s { c = syms[s].canon as i64; }

@@ -168,6 +168,28 @@ let EV_ENUM = 5;      // a = enum: an enumerator was referenced (EmitDeclRefExpr
 let EV_VAR = 6;       // a = m_dvars index (local): a variable's declaration (its type)
 var m_devs: DEv[>..] = [];
 var ev_on = false;
+var ev_noproto = false;              // the next EV_REF is of a function through a type without prototype
+
+// A reference to a function (callee c: through casts to its declaration):
+// clang makes the function's llvm::Function with the reference's type, and
+// a type without prototype is variadic there, so the definition then makes
+// a new one (at the end of the module: CodeGenModule's replacement of
+// functions without prototype).
+fn dbg_fnref(c: u32) {
+    var n = c;
+    loop {
+        let nd = nodes[n];
+        if (nd.kind == N_ICAST || nd.kind == N_CAST || (nd.kind == N_UNARY && (nd.op == U_ADDR || nd.op == U_EXTENSION))) && nd.a != 0 {
+            // ((long (*)(int))f)(x): clang visits the cast
+            if nd.kind == N_CAST && !dbg_no_enum { dev(EV_CAST, node_written(n), 0); }
+            n = nd.a;
+            continue;
+        }
+        break;
+    }
+    if nkind(n) != N_DECLREF { return; }
+    ev_noproto = (types[nodes[n].ty >> 4].flags as i64) & TF_NOPROTO != 0;
+}
 
 fn dev(kind: u32, a: u32, b: u32) {
     if ev_on { m_devs.push(DEv { kind: kind, a: a, b: b }); }
@@ -325,6 +347,7 @@ let ES_CREATED: u8 = 1;
 let ES_SEEN: u8 = 2;
 let ES_QUEUED: u8 = 4;
 let ES_EMITTED: u8 = 8;
+let ES_NOPROTO: u8 = 16;             // its llvm::Function so far has the variadic type of a reference without prototype
 var es_fn: u8[>..] = [];             // per DFn
 var es_var: u8[>..] = [];            // per DGVar
 var o_fns: u32[>..] = [];            // DFn indices in LLVM module order
@@ -348,13 +371,17 @@ fn ent_of_global(g: u32) -> i64, bool {
     return -1, false;
 }
 
-fn sim_reference(g: u32) {
+fn sim_reference(g: u32, noproto: bool) {
     let e, is_fn = ent_of_global(g);
     if e < 0 { return; }
     if is_fn {
-        if es_fn[e] & ES_CREATED == 0 {
-            es_fn[e] = es_fn[e] | ES_CREATED;
-            o_fns.push(e as! u32);
+        if es_fn[e] & (ES_CREATED | ES_NOPROTO) == 0 {
+            if noproto && es_fn[e] & ES_EMITTED == 0 {
+                es_fn[e] = es_fn[e] | ES_NOPROTO;
+            } else {
+                es_fn[e] = es_fn[e] | ES_CREATED;
+                o_fns.push(e as! u32);
+            }
         }
         if es_fn[e] & (ES_SEEN | ES_QUEUED | ES_EMITTED) == ES_SEEN {
             es_fn[e] = es_fn[e] | ES_QUEUED;
@@ -382,7 +409,7 @@ fn sim_defer(x: u32) {
     } else {
         let e = x as i64;
         es_fn[e] = es_fn[e] | ES_SEEN;
-        if es_fn[e] & (ES_CREATED | ES_QUEUED | ES_EMITTED) == ES_CREATED {
+        if es_fn[e] & (ES_CREATED | ES_NOPROTO) != 0 && es_fn[e] & (ES_QUEUED | ES_EMITTED) == 0 {
             es_fn[e] = es_fn[e] | ES_QUEUED;
             o_queue.push(x);
         }
@@ -392,7 +419,7 @@ fn sim_defer(x: u32) {
 fn sim_events(e0: u32, e1: u32) {
     for k in e0..e1 {
         let E = m_devs[k];
-        if E.kind == EV_REF { sim_reference(E.a); }
+        if E.kind == EV_REF { sim_reference(E.a, E.b != 0); }
         else if E.kind == EV_STR {
             if !str_done.get(E.a as u64) {
                 str_done.insert(E.a as u64, 1);
@@ -400,6 +427,7 @@ fn sim_events(e0: u32, e1: u32) {
             }
         } else if E.kind == EV_STATIC {
             o_globs.push(OGlob { kind: 2, a: E.a as i64, b: 0 });
+            sim_cur = syms[E.a].loc;
             walk_md(md_of(var_written(E.a as i64)));
         } else if E.kind == EV_CAST {
             let m = md_of(E.a);
@@ -407,6 +435,9 @@ fn sim_events(e0: u32, e1: u32) {
         } else if E.kind == EV_ENUM {
             walk_md(md_intern(MD_ENUM, E.a, 0, 0));
         } else if E.kind == EV_VAR {
+            // a local's declaration sets CurLoc (a parameter's does not)
+            let V = m_dvars[E.a];
+            if V.argno == 0 && V.sym >= 0 { sim_cur = syms[V.sym].loc; }
             walk_md(md_of(dvar_written(E.a as i64)));
         }
     }
@@ -420,18 +451,33 @@ fn sim_emit(x: u32) {
         let V = m_dgvars[e];
         sim_events(V.e0, V.e1);
         o_globs.push(OGlob { kind: 1, a: e, b: 0 });
+        sim_cur = var_loc(V.sym);
         walk_md(md_of(var_written(V.sym)));
         return;
     }
     let e = x as i64;
     if es_fn[e] & ES_EMITTED != 0 { return; }
     let F = m_dfns[e];
-    sim_reference(m_funcs[F.fi].global);
+    // the definition makes its llvm::Function, a new one if references
+    // without prototype made a variadic one
+    if es_fn[e] & ES_CREATED == 0 {
+        es_fn[e] = es_fn[e] | ES_CREATED;
+        o_fns.push(e as! u32);
+    }
+    sim_reference(m_funcs[F.fi].global, false);
     es_fn[e] = es_fn[e] | ES_EMITTED;
     // the subroutine type: the return type and the parameters' types
     walk_md(md_of(fn_ret_written(F.sym)));
     sim_events(F.e0, F.e1);
+    // FinishFunction leaves CurLoc at the body's '}'
+    let def = syms[F.sym].def;
+    if def >= 0 && nodes[nodes[def].b].b != 0 { sim_cur = nodes[nodes[def].b].b; }
 }
+
+// clang's CGDebugInfo::CurLoc as the replay goes: a member without a
+// location (the implicit struct __va_list_tag's) gets its line.
+var sim_cur: u32 = 0;
+var va_loc: u32 = 0xFFFFFFFF;        // CurLoc when clang first made struct __va_list_tag
 
 // clang's EmitDeferred: what the emitted definitions queued, depth first.
 var dq_stack: u32[>..] = [];
@@ -465,8 +511,8 @@ fn sim_deferred() {
     }
 }
 
-// clang's EmitGlobalAlias: an alias of a variable whose definition was
-// emitted before it is an imported declaration of that variable.
+// clang's EmitGlobalAlias: an alias of a variable is an imported
+// declaration of that variable (of its definition's DIE, once emitted).
 struct OImp { sym: i64, target: i64 }
 var o_imports: OImp[>..] = [];
 fn sim_alias(s: i64) {
@@ -477,7 +523,7 @@ fn sim_alias(s: i64) {
     let r = gmap.get(gk(GM_NAMEGLOB, tid));
     if !r { return; }
     let e, is_fn = ent_of_global(r);
-    if e < 0 || is_fn || es_var[e] & ES_EMITTED == 0 { return; }
+    if e < 0 || is_fn { return; }
     o_imports.push(OImp { sym: s, target: m_dgvars[e].sym });
 }
 
@@ -936,6 +982,7 @@ fn walk_md(m0: u32) {
             if u != 0 { walk_stack.push(md_of(u)); }
         } else if k == MD_REC {
             let r = records[M.a];
+            if M.a as i64 == rec_of(t_valist_rec) && va_loc == NONE { va_loc = sim_cur; }
             if r.flags & RF_COMPLETE != 0 {
                 var j = (r.first + r.count) as i64 - 1;
                 while j >= r.first as i64 {
@@ -1106,10 +1153,19 @@ recursive fn die_of(m: u32) -> u32 {
     return d;
 }
 
-// The byte size of a base type (for vectors).
+// The size of a type's metadata in bytes, as LLVM's getSizeInBits: base
+// types, pointers, records, enums, vectors and arrays have one; typedefs and
+// qualified types have none (0).
 fn md_size(m: u32) -> u64 {
     let M = mds[m];
     if M.kind == MD_BASE { return M.b as u64; }
+    if M.kind == MD_PTR { return 8; }
+    if M.kind == MD_VECTOR { return M.c as u64; }
+    if M.kind == MD_REC { return if records[M.a].size > 0 { records[M.a].size as! u64 } else { 0 as u64 }; }
+    if M.kind == MD_ENUM {
+        let u = enums[M.a].underlying;
+        return if u != 0 { type_size(u) as! u64 } else { 0 as u64 };
+    }
     return 0;
 }
 
@@ -1165,7 +1221,9 @@ recursive fn construct_record(d: u32, r: i64) {
             let md = wd_new(DWT_member, d);
             if f.name != 0 { add_str(md, DWA_name, ident_text(f.name as i64)); }
             add_type(md, md_of(field_type_written(j)));
-            add_source_line_cur(md, f.loc);
+            if f.loc != 0 { add_source_line(md, f.loc); }
+            else if r == rec_of(t_valist_rec) && va_loc != NONE { add_source_line(md, va_loc); }
+            else { add_source_line(md, cur_line_loc); }
             if f.width >= 0 {
                 add_uint(md, DWA_bit_size, f.width as! u64);
                 add_uint(md, DWA_data_bit_offset, f.bitpos as! u64);
@@ -1204,7 +1262,7 @@ recursive fn construct_enum(d: u32, e: i64) {
     if E.name != 0 { add_str(d, DWA_name, ident_text(E.name as i64)); }
     if E.complete {
         if u != 0 { add_uint(d, DWA_byte_size, type_size(u) as! u64); }
-        add_source_line(d, E.loc);
+        add_source_line(d, enum_def_loc(e, E.loc));
     } else {
         add_flag(d, DWA_declaration);
     }
@@ -1317,7 +1375,9 @@ fn dbg_string(n: u32, g: u32) {
     if !str_types.get(g as u64) {
         let sl = strs[nodes[n].a];
         let w = type_size(sl.elem);
-        str_types.insert(g as u64, mk_array(unqual(sl.elem), (m_globals[g].size as i64) / (if w > 0 { w } else { 1 })));
+        // __func__ and its kin are const char arrays
+        let et = if nodes[n].flags & NF_PREDEF != 0 { unqual(sl.elem) | (Q_CONST as! u32) } else { unqual(sl.elem) };
+        str_types.insert(g as u64, mk_array(et, (m_globals[g].size as i64) / (if w > 0 { w } else { 1 })));
     }
     dev(EV_STR, g, nodes[n].loc);
 }
@@ -1421,11 +1481,19 @@ fn function_dies(fx: u32) {
     lsc_touched.clear();
     lsc.clear();
     lscope(G.dbg);
+    // LLVM's code generator removes the blocks the entry does not reach
+    // (UnreachableBlockElim, also at -O0): their locations make no scopes
+    // and their labels are gone
+    reach_blocks(fi);
     var prev: u32 = 0;
-    for k in G.first_inst..G.first_inst + G.n_inst {
-        let dl = m_insts[k].dbg;
-        if dl != 0 && dl != prev { lscope(m_dlocs[dl].scope); }
-        if dl != 0 { prev = dl; }
+    for b in 0..G.n_blocks {
+        if reach[b] == 0 { continue; }
+        let B = m_blocks[G.first_block + b];
+        for k in B.first_inst..B.first_inst + B.n_inst {
+            let dl = m_insts[k].dbg;
+            if dl != 0 && dl != prev { lscope(m_dlocs[dl].scope); }
+            if dl != 0 { prev = dl; }
+        }
     }
     // the variables: static allocas first (LLVM's MF side table), then the
     // others; then the labels
@@ -1446,6 +1514,7 @@ fn function_dies(fx: u32) {
     }
     for l in F.l0..F.l1 {
         let L = m_dlabs[l];
+        if !inst_reached(fi, L.blk) { continue; }
         let ds = m_srecs[F.r0 + L.rec].dscope;
         if ds == 0 { continue; }
         let s = lsc_find(ds);
@@ -1461,6 +1530,48 @@ fn function_dies(fx: u32) {
     scope_children(0, d);
     if (types[syms[F.sym].ty >> 4].flags as i64) & TF_VARIADIC != 0 { wd_new(DWT_unspecified_parameters, d); }
     processed.push(fx);
+}
+
+// The blocks of function fi the entry reaches (reach[b] != 0, local block numbers).
+var reach: u8[>..] = [];
+var reach_work: u32[>..] = [];
+fn reach_blocks(fi: u32) {
+    let G = m_funcs[fi];
+    reach.clear();
+    reach.resize(G.n_blocks as i64, 0);
+    reach_work.clear();
+    if G.n_blocks == 0 { return; }
+    reach[0] = 1;
+    reach_work.push(0);
+    while reach_work.len > 0 {
+        let b = reach_work.pop();
+        let B = m_blocks[G.first_block + b];
+        if B.n_inst == 0 { continue; }
+        let I = m_insts[B.first_inst + B.n_inst - 1];
+        let op = I.op as u32;
+        if op == GIR_BR { reach_mark(I.a); }
+        else if op == GIR_CONDBR { reach_mark(I.b); reach_mark(I.c); }
+        else if op == GIR_SWITCH {
+            reach_mark(m_opnds[I.b]);
+            for k in 0..I.c { reach_mark(m_opnds[I.b + 2 + 2 * k]); }
+        } else if op == GIR_INDIRECTBR {
+            for k in 0..I.c { reach_mark(m_opnds[I.b + k]); }
+        }
+    }
+}
+fn reach_mark(b: u32) {
+    if b as i64 >= reach.len || reach[b] != 0 { return; }
+    reach[b] = 1;
+    reach_work.push(b);
+}
+// Is module instruction k (of function fi) in a reached block?
+fn inst_reached(fi: u32, k: u32) -> bool {
+    let G = m_funcs[fi];
+    for b in 0..G.n_blocks {
+        let B = m_blocks[G.first_block + b];
+        if k >= B.first_inst && k < B.first_inst + B.n_inst { return reach[b] != 0; }
+    }
+    return false;
 }
 
 fn lsc_find(ds: u32) -> i32 {
@@ -1568,7 +1679,7 @@ fn entity_attrs(e: u32) {
     if ent_kind[e] == 2 {
         let L = m_dlabs[ent_idx[e]];
         add_str(d, DWA_name, ident_text(syms[L.sym].name as i64));
-        add_source_line(d, L.loc);
+        add_source_line(d, if is_local_label(L.sym) { syms[L.sym].loc } else { L.loc });
         wattr(d, DWA_low_pc, GDF_LABEL, L.blk as u64, 0);
         return;
     }

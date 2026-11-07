@@ -147,7 +147,10 @@ recursive fn ex_lv1(n: u32) -> LV {
     let k = nd.kind as i64;
     if k == N_DECLREF {
         let s = nd.a as i64;
-        if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN { return lv_plain(gref(func_global(s)), nd.ty); }
+        if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN {
+            if dbg_on() { dbg_fnref(n); }
+            return lv_plain(gref(func_global(s)), nd.ty);
+        }
         return lv_plain(var_addr(s), nd.ty);
     }
     if k == N_UNARY {
@@ -425,7 +428,10 @@ recursive fn ex_val1(n: u32) -> u32 {
     if k == N_BUILTIN { return ex_builtin(n, NONE); }
     if k == N_DECLREF {
         let s = nd.a as i64;
-        if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN { return gref(func_global(s)); }
+        if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN {
+            if dbg_on() { dbg_fnref(n); }
+            return gref(func_global(s));
+        }
         return lv_load(ex_lv(n));
     }
     if k == N_SWIZZLE { return ex_swizzle(n); }
@@ -609,7 +615,10 @@ recursive fn ex_unary(n: u32) -> u32 {
     let a = nd.a;
     if op == U_ADDR {
         let an = nodes[a];
-        if an.kind == N_DECLREF && (syms[an.a].kind == SK_FUNC || syms[an.a].kind == SK_BUILTIN) { return gref(func_global(an.a as i64)); }
+        if an.kind == N_DECLREF && (syms[an.a].kind == SK_FUNC || syms[an.a].kind == SK_BUILTIN) {
+            if dbg_on() { dbg_fnref(a); }
+            return gref(func_global(an.a as i64));
+        }
         return ex_lv(a).addr;
     }
     if op == U_DEREF {
