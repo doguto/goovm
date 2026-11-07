@@ -135,6 +135,11 @@ recursive fn lib_builtin(name: const u8[:], n: u32, dst: u32, forced: bool) -> u
         libcall3("memmove", GIR_T_PTR, d, s2, ln);
         return NONE;
     }
+    if name == "strlen" && nargs == 1 {
+        // G1: as clang's evaluator (EmitBuiltinExpr folds what it folds)
+        let ok, v = fold_strlen(barg(n, 0));
+        if ok { return c_int(v as! u64, vty(unqual(nd.ty))); }
+    }
     if (name == "strlen" || name == "strcmp" || name == "strncmp" || name == "memcmp" || name == "bcmp") && nargs >= 1 {
         let ok, v = fold_str_builtin(name, n);
         if ok { return c_int(v as! u64, vty(unqual(nd.ty))); }

@@ -393,6 +393,10 @@ recursive fn ex_val1(n: u32) -> u32 {
     let k = nd.kind as i64;
     if k == N_INT {
         let t = vty(nd.ty);
+        if nd.flags & NF_BCP != 0 {
+            // clang at -O0: the evaluator's answer, else 0
+            return c_int(if bcp_fold(nd.a) { 1 } else { 0 }, t);
+        }
         if tcls(t) == C_INT2 { return c_wide(nd.v as! u64, if nd.v < 0 { 0xFFFFFFFFFFFFFFFF } else { 0 as u64 }, t); }
         if t == GIR_T_I1 { return c_int(if nd.v != 0 { 1 } else { 0 }, t); }
         if t == GIR_T_VOID { return NONE; }
@@ -629,6 +633,28 @@ recursive fn cv_read(n: u32) -> bool, u32 {
     }
     let s = nodes[a].a as i64;
     if syms[s].kind != SK_VAR || cvar_value_init(s) == 0 { return false, 0; }
+    if kind_of(nd.ty) == TY_POINTER {
+        // a constant address (G1): of a global, a function, a string
+        // literal, or an integer
+        let ok, b, o = fold_addr(n);
+        if !ok { return false, 0; }
+        var v: u32 = 0;
+        if b == -1 { v = c_int(o as! u64, GIR_T_PTR); }
+        else if b <= -2 {
+            let sn = (-2 - b) as! u32;
+            let g = string_global(nodes[sn].a);
+            dbg_string(sn, g);
+            v = gep(gref(g), o);
+        } else {
+            let sy = syms[b];
+            let stat = sy.flags & SF_FILESCOPE != 0 || sy.sc == SC_STATIC || sy.sc == SC_EXTERN;
+            if sy.kind == SK_FUNC { v = gep(gref(func_global(b)), o); }
+            else if sy.kind == SK_VAR && stat && sy.flags & SF_THREAD == 0 { v = gep(var_addr(b), o); }
+            else { return false, 0; }
+        }
+        cv_note(s, 0, false);
+        return true, v;
+    }
     if is_integer(nd.ty) {
         let ok, v = fold_int(n);
         if !ok { return false, 0; }

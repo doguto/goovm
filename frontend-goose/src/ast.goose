@@ -140,6 +140,8 @@ let NF_STRINIT = 16;    // N_STRING used to initialize an array
 let NF_ICE = 32;        // known to be an integer constant expression
 let NF_PREDEF = 64;     // __func__ etc.
 let NF_IMPLICIT = 128;  // implicitly generated
+let NF_BCP = 256;       // N_INT: __builtin_constant_p(a) of an operand without side effects that
+                        // did not fold here (0 in a constant context; clang's CodeGen evaluates it again)
 
 struct Node {
     kind: u8,

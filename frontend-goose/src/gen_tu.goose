@@ -47,6 +47,12 @@ fn lower_tu(main_file: const u8[:]) -> bool {
     // clang's does in CodeGen (sema.goose, fold_cvars)
     fold_cvars = true;
     cv_grow();
+    if !opt_no_builtin {
+        let sl = intern("strlen");
+        let mc = intern("memchr");
+        if !gmap.contains(gk(GM_NOBUILTIN, sl)) { fold_lib_strlen = sl as! u32; }
+        if !gmap.contains(gk(GM_NOBUILTIN, mc)) { fold_lib_memchr = mc as! u32; }
+    }
     let tu = nodes[tu_node];
     let cnt = tu.c as i64;
     // pass 1: definitions and initializers

@@ -215,7 +215,10 @@ recursive fn gen_return(n: u32) {
     let e = nd.a;
     let a = f_ret;
     if a.kind == AK_SRET {
-        if e != 0 && vkind(f_ret_q) != VK_AGG {
+        if e != 0 && nkind(e) == N_ICAST && nodes[e].op == CK_LVAL2RVAL && nkind(nodes[e].a) == N_DECLREF &&
+           is_nrvo_var(nodes[nodes[e].a].a as i64) {
+            // G1: the NRVO variable is the result already
+        } else if e != 0 && vkind(f_ret_q) != VK_AGG {
             store_any(f_ret_q, e, f_sret);
         } else if e != 0 {
             let k = nkind(e);

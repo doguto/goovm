@@ -240,15 +240,19 @@ fn builtin_call(s: i64, mark: i64, loc: u32) -> u32 {
     let a0t: u32 = if nargs > 0 { nty(arg(mark, 0)) } else { t_int };
     if name == "__builtin_constant_p" {
         var v: i64 = 0;
+        var x: u32 = 0;
         if nargs == 1 {
-            let x = arg(mark, 0);
+            x = arg(mark, 0);
             let ok, iv = fold_int(x);
             let ok2, fv = fold_float(x);
             if ok || ok2 { v = 1; }
         }
         nscratch.resize(mark);
-        let n = node_v(N_INT, 0, t_int, 0, 0, 0, loc, v);
-        nodes[n].flags = NF_ICE;
+        // G1: an operand that may fold later (clang's evaluator outside a
+        // constant context defers it; with side effects it is 0)
+        let later = v == 0 && x != 0 && bcp_simple(x);
+        let n = node_v(N_INT, 0, t_int, if later { x } else { 0 }, 0, 0, loc, v);
+        nodes[n].flags = (NF_ICE | (if later { NF_BCP } else { 0 })) as! u16;
         return n;
     }
     if name == "__builtin_classify_type" {
