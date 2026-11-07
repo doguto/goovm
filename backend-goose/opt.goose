@@ -696,11 +696,15 @@ fn opt_module() {
     }
     remap_dies();
     if opt_dump_on() { dump_module(); }
-    M = Module { header: M.header, types: M.types, funcs: x_funcs[xb_f..], blocks: x_blocks[xb_b..],
-                 insts: x_insts[xb_i..], opnds: x_opnds[xb_o..], consts: x_consts[xb_c..], globals: M.globals,
-                 sections: M.sections, data: M.data, drelocs: M.drelocs, strtab: M.strtab, dlocs: M.dlocs,
-                 dscopes: M.dscopes, dfiles: M.dfiles, dstr: M.dstr, asms: x_asms[xb_a..], ehs: M.ehs,
-                 comdats: M.comdats, gcomdat: M.gcomdat, dies: x_dies[xb_d..], dattrs: x_dattrs[xb_t..] };
+    // (field by field: the other tables stay the host's)
+    M.funcs = x_funcs[xb_f..];
+    M.blocks = x_blocks[xb_b..];
+    M.insts = x_insts[xb_i..];
+    M.opnds = x_opnds[xb_o..];
+    M.consts = x_consts[xb_c..];
+    M.asms = x_asms[xb_a..];
+    M.dies = x_dies[xb_d..];
+    M.dattrs = x_dattrs[xb_t..];
 }
 
 // The order functions are optimized in: callees before callers (a

@@ -111,7 +111,8 @@ def test_one(p, args):
         expect = execute(ref)
 
         if args.goosecc:
-            for variant, flags in (("goosecc", []), ("goosecc-g", ["-g"])):
+            gvars = [("goosecc", []), ("goosecc-g", ["-g"])] + ([("goosecc-O1", ["-O1"])] if args.o1 else [])
+            for variant, flags in gvars:
                 try:
                     objs = []
                     for i, s in enumerate(p.srcs):

@@ -30,7 +30,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import suite  # noqa: E402
 
-VARIANTS = ["O0", "g"]
+VARIANTS = ["O0", "g", "O1"]   # O1 (milestone E1): goosecc -O1, the tests that also pass with clang -O1
 
 
 def build_goosecc(t, wd, variant, args, info):
@@ -38,7 +38,8 @@ def build_goosecc(t, wd, variant, args, info):
     objs = []
     for i, s in enumerate(t.srcs):
         o = os.path.join(wd, suite.obj_name(s, i) + "." + variant + ".gc.o")
-        cmd = [args.goosecc, "-c", "-O0"] + (["-g"] if variant == "g" else []) + t.cflags + [s, "-o", o]
+        cmd = ([args.goosecc, "-c", "-O1" if variant == "O1" else "-O0"] + (["-g"] if variant == "g" else [])
+               + t.cflags + [s, "-o", o])
         r = suite.sh(cmd, timeout=600)
         err = r.stderr.decode(errors="replace")
         if r.returncode != 0:
@@ -71,8 +72,16 @@ def do_test(t, args, baseline_cache):
     if b["status"] != "pass":
         return res
     tmo = max(60.0, 20 * b["time"]) if t.timeout is None else max(t.timeout, 20 * b["time"])
+    b1 = None
+    if "O1" in args.variants:
+        ck, b1 = suite.baseline_at(t, wd, args, baseline_cache, "O1")
+        res["baseline_O1"] = b1
+        res["baseline_O1_key"] = ck
     for v in args.variants:
         info = {}
+        if v == "O1" and b1["status"] != "pass":
+            res[v] = {"status": "excluded"}
+            continue
         try:
             exe = build_goosecc(t, wd, v, args, info)
             info["time"] = suite.run_and_verify(t, exe, wd, args, timeout=tmo)
@@ -84,7 +93,7 @@ def do_test(t, args, baseline_cache):
             info["status"] = "error"
             info["msg"] = f"harness: {e}"
         res[v] = info
-    if not args.keep and all(res.get(v, {}).get("status") == "pass" for v in args.variants):
+    if not args.keep and all(res.get(v, {}).get("status") in ("pass", "excluded") for v in args.variants):
         for f in os.listdir(wd):
             p = os.path.join(wd, f)
             if f != "run" and os.path.isfile(p) and not f.endswith(".base.o"):
@@ -113,7 +122,8 @@ def report(results, tests, args):
         row = f"| {c} | {len(rs)} | {len(bp)} | {len(rs) - len(bp)} |"
         for v in args.variants:
             st = [r.get(v, {}).get("status") for r in bp]
-            row += f" {st.count('pass')} | {st.count('fail')} | {st.count('error')} |"
+            ex = f" (of {len(st) - st.count('excluded')})" if v == "O1" else ""
+            row += f" {st.count('pass')}{ex} | {st.count('fail')} | {st.count('error')} |"
         lines.append(row)
     lines.append("")
     for c in suite.CORPORA:
@@ -125,7 +135,7 @@ def report(results, tests, args):
                 continue
             for v in args.variants:
                 s = r.get(v, {}).get("status")
-                if s not in ("pass", None):
+                if s not in ("pass", "excluded", None):
                     msg = r[v].get("msg", "")
                     bad.append(f"- `{r['id']}` [{v}] {s}: {msg.splitlines()[0][:200] if msg else ''}")
         if bad:
@@ -192,12 +202,14 @@ def main():
             done += 1
             if "baseline" in r:
                 baseline_cache[t.id] = r["baseline"]
+            if "baseline_O1" in r:
+                baseline_cache[r["baseline_O1_key"]] = r["baseline_O1"]
             st = [f"{v}:{r[v]['status']}" for v in args.variants if v in r]
-            bad = [s for s in st if not s.endswith(":pass")]
+            bad = [s for s in st if not s.endswith((":pass", ":excluded"))]
             if (bad or r.get("baseline", {}).get("status") not in ("pass", None)) and not args.quiet:
                 msg = ""
                 for v in args.variants:
-                    if v in r and r[v]["status"] != "pass":
+                    if v in r and r[v]["status"] not in ("pass", "excluded"):
                         msg = r[v].get("msg", "").splitlines()[0][:150] if r[v].get("msg") else ""
                         break
                 print(f"[{done}/{len(tests)}] {t.id}: baseline={r.get('baseline', {}).get('status')} {' '.join(st)} {msg}",
