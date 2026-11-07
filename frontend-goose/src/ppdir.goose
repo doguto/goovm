@@ -879,6 +879,13 @@ recursive fn do_include(t: Tok, k: i64) {
 // ---------------------------------------------------------------------------
 // #line and GNU line markers.
 
+// Their effect on the presumed locations of the rest of the file, for
+// debug information (B5): from offset `off` of file `file` on, lines are
+// shifted by `delta` and the file is named names[name .. name + name_len]
+// (name_len 0: its own name). A unit that has one is not cached.
+struct PLine { file: u32, off: u32, delta: i32, name: u32, name_len: u32 }
+var plines: PLine[>..] = [];
+
 recursive fn do_line(t: Tok, gnu: bool) {
     var nt = t;
     if !gnu {
@@ -920,6 +927,10 @@ recursive fn do_line(t: Tok, gnu: bool) {
     // The line after this directive is line v.
     let line, col = line_col(lx_file, lx_pos);
     ctxs[ci].line_delta = (v - (line + 1)) as! i32;
+    let renamed = ctxs[ci].pspell != ctxs[ci].spell;
+    plines.push(PLine { file: lx_file as! u32, off: lx_pos as! u32, delta: ctxs[ci].line_delta,
+        name: if renamed { ctxs[ci].pspell } else { 0 }, name_len: if renamed { ctxs[ci].pspell_len } else { 0 } });
+    if rec_on { hk_bad(HC_BAD_LINE); }
     if mode_E {
         pr_marker(v, ctxs[ci].pspell, ctxs[ci].pspell_len, "");
         pr_line = v - 1;

@@ -10,6 +10,45 @@ import .types;
 import .ast;
 import .sema;
 import .builtins;
+import .dtype;
+
+// ---------------------------------------------------------------------------
+// The written type of an expression (-g, dtype.goose), for typeof and
+// __auto_type: what clang's expression types keep of the sugar of
+// declarations (a variable's, a member's, a cast's, a call's return type);
+// otherwise the canonical type.
+
+fn expr_written(n0: u32) -> u32 {
+    if !dbg_types { return nodes[n0].ty; }
+    var n = n0;
+    var drop_quals = false;
+    loop {
+        let nd = nodes[n];
+        let k = nd.kind as i64;
+        if k == N_ICAST && (nd.op == CK_LVAL2RVAL || nd.op == CK_NOOP) {
+            if nd.op == CK_LVAL2RVAL { drop_quals = true; }
+            n = nd.a;
+            continue;
+        }
+        if k == N_UNARY && nd.op == U_EXTENSION { n = nd.a; continue; }
+        var w: u32 = 0;
+        if k == N_DECLREF && syms[nd.a].kind == SK_VAR { w = sym_written(nd.a as i64); }
+        else if k == N_MEMBER { w = field_written(nd.b as i64); }
+        else if k == N_CAST { w = node_written(n); }
+        else if k == N_CALL {
+            // the callee's written function type: through FUNC2PTR to the symbol
+            var c = nd.a;
+            while nodes[c].kind as i64 == N_ICAST { c = nodes[c].a; }
+            if nodes[c].kind as i64 == N_DECLREF && syms[nodes[c].a].kind == SK_FUNC {
+                let f = sym_written(nodes[c].a as i64);
+                if dq_sugar(f) && dtypes[dq_node(f)].kind as i64 == DK_FUNC { w = dtypes[dq_node(f)].base; }
+            }
+        }
+        if w == 0 || dq_canon(d_unqual(w)) != unqual(nodes[n].ty) { return nodes[n0].ty; }
+        if drop_quals { w = d_unqual(w); }
+        return w;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Literals.
@@ -313,6 +352,7 @@ fn string_literal() -> u32 {
     return n;
 }
 
+var pf_out: u8[>..] = [];
 fn make_string_node(s: const u8[:], loc: u32) -> u32 {
     let start = strbytes.len;
     strbytes.append(s);
@@ -439,13 +479,16 @@ recursive fn parse_cast() -> u32 {
         let loc = tloc();
         adv();
         let ty = parse_type_name();
+        let dty = tn_dty;
         expect(TK_R_PAREN, "')'");
         if at(TK_L_BRACE) {
             let e = parse_compound_literal(ty, loc);
             return parse_postfix(e);
         }
         let e = parse_cast();
-        return mk_cast(ty, e, loc);
+        let c = mk_cast(ty, e, loc);
+        if dbg_types && nodes[c].kind as i64 == N_CAST { dt_set_node(c, d_unqual(dty)); }
+        return c;
     }
     return parse_unary();
 }
@@ -641,6 +684,11 @@ recursive fn parse_primary() -> u32 {
             warn(loc, "predefined identifier is only valid inside function");
             return make_string_node("", loc);
         }
+        if ident_text(tu_toks[pc - 1].val as i64) == "__PRETTY_FUNCTION__" {
+            pf_out.clear();
+            pretty_function(pf_out, cur_func);
+            return make_string_node(pf_out, loc);
+        }
         return make_string_node(sym_name(cur_func), loc);
     }
     tok_buf.clear();
@@ -664,21 +712,28 @@ fn ident_expr(id: u32, loc: u32) -> u32 {
     let k = sy.kind as i64;
     syms[s].flags = sy.flags | SF_USED;
     if k == SK_ENUMC {
-        return int_node(sy.v, sy.ty, loc);
+        let n = int_node(sy.v, sy.ty, loc);
+        if dbg_types { dt_note_enumc(n, s); }
+        return n;
     }
     if k == SK_TYPEDEF {
         err_at(loc, str("unexpected type name '", ident_text(id as i64), "': expected expression"));
         return error_node(loc);
     }
     var ty = sy.ty;
+    var krref = false;
     if k == SK_FUNC && sy.flags & SF_KRDEF != 0 && types[ty >> 4].flags & TF_NOPROTO == 0 {
         // a function defined without a prototype is referenced with the
         // type without prototype (clang, C99 DR 316)
         fn_scratch.clear();
         let ft = types[ty >> 4];
         ty = qt(mk_type(TY_FUNC, TF_NOPROTO, ft.base, 0, 0, 0) as i64, 0);
+        krref = true;
     }
     let n = node(N_DECLREF, 0, ty, s, 0, 0, loc);
+    // -g: the declaration has a prototype type all the same (clang's
+    // CodeGen uses it: no variadic llvm::Function)
+    if krref { dt_note_krref(n); }
     if k == SK_VAR { nodes[n].flags = NF_LVALUE; }
     return n;
 }
@@ -1150,7 +1205,10 @@ fn mk_binary(op: i64, l: u32, r: u32, loc: u32) -> u32 {
         }
         if is_integer(ta) && is_pointer(tb) {
             if !ptr_elem_ok(tb, loc) { return error_node(loc); }
-            return node(N_BINARY, B_PTRADD, unqual(tb), b as i64, promote(a) as i64, 0, loc);
+            let pn = node(N_BINARY, B_PTRADD, unqual(tb), b as i64, promote(a) as i64, 0, loc);
+            // -g: clang evaluates the integer (the left operand) first
+            dt_note_swapped(pn);
+            return pn;
         }
         return bad_operands(a, b, loc);
     }

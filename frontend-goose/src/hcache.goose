@@ -48,6 +48,7 @@ let HC_BAD_FILE = 4;     // a file changed less than 2 s ago, or not a regular f
 let HC_BAD_MACRO = 8;    // #pragma pop_macro of a macro pushed before the unit
 let HC_BAD_STATE = 16;   // what the format cannot express (an inconsistency: a bug)
 let HC_BAD_NEST = 32;    // too many nested recordings
+let HC_BAD_LINE = 64;    // a #line directive (its effect is in plines, for debug information)
 
 // Recording events (Ev.kind).
 let EV_LOOK = 1;     // a: identifier, b: offset of its first lookup in the unit; flag 1: intern created it

@@ -3,7 +3,8 @@
 goosecc is about 17,600 lines of Goose without comments and blank lines
 (compiler commit 335fddc, runtime d22ae129d92b): the front end of milestone
 B1 (sections 1-8), the lowering to GIR of B2 (section 9), the speed
-work of B3 (section 10) and the header cache of B4 (section 11), plus the
+work of B3 (section 10), the header cache of B4 (section 11) and the
+debug information of B5 (section 12), plus the
 Goose back-end imported as a package. It is compiled with `goose
 --standalone` to one 5.1 MB C file and then with `clang-20 -O2`
 (2 s and 18 s). This page records what was
@@ -554,3 +555,126 @@ section 1 again.
   offsets.
 - Whole-program compilation made the hooks free when no recording is
   active: a test of a global bool next to a load the code does anyway.
+
+## 12. Milestone B5: debug information
+
+B5 added `gen_dwarf.goose` (1,850 lines with comments: the recording,
+the replay of clang's emission order, the metadata and DIE builder),
+`dtype.goose` (610 lines: written types, side tables, the printer of
+`__PRETTY_FUNCTION__`), about 800 lines in the parser and the lowering
+(hooks, scopes, the port of clang's folded-switch analysis), and
+`tests/dwarf_diff.py`. The work was mostly finding out what
+clang and LLVM do (DESIGN.md, section 11); the language was in the way
+less than in B2. What it was like:
+
+### Precedence, once more
+
+The front end tests type flags everywhere, and the cast binds looser than
+`&`, as B2 found (section 9):
+
+```
+src/gen_dwarf.goose:762: error: expected '{' in if body, found 'TF_NOPROTO'
+    if t.flags as i64 & TF_NOPROTO != 0 { return md_intern(MD_NOPROTO, md_of(t.base), 0, 0); }
+                        ^
+```
+
+four times (`TF_NOPROTO` twice, `TF_ALIGNED`, `TF_NORETURN`; as an
+argument, `expected ')' in call arguments, found 'TF_VARIADIC'`). A range
+with a cast in its bounds is the same trap with another message:
+
+```
+src/gen_dwarf.goose:1132: error: variable mode (..) applies only to ADT type names
+        for j in R.first as i64..(R.first + R.count) as i64 {
+                                 ^
+```
+
+(four times, also for a slice, `names[off as i64..(off + len) as i64]`).
+Each wants parentheses around the cast; the messages point at the right
+column but name a grammar rule, not the cast.
+
+### Several values do not come out of an `if`
+
+```
+src/gen_stmt.goose:283: error: several values exist only in `return a, b;` and in a call's results, so a block or branch cannot end in `a, b`: return from each branch instead (§7.1)
+    let fk, fv = if ok { false, false } else { clang_folds(nd.a, nd.b, nd.c) };
+                                      ^
+```
+
+The message says what to do; the code calls the function unconditionally
+instead (it answers "no" in the other case anyway).
+
+### Recursion in a tree builder
+
+Building DIEs is recursive by nature: a type's DIE needs its context's
+and its base's, a record's needs its members' types, a lexical scope its
+parent's. Thirteen functions of `gen_dwarf.goose` are `recursive fn`
+(`md_of`, `die_of`, `context_of`, `add_type`, `construct_record`,
+`md_array`, `lscope`, ...), each found by a message like
+
+```
+src/gen_dwarf.goose:1300: error: recursive call cycle through lscope, which is not declared `recursive fn` (§7.8)
+        parent = lscope(S.parent);
+```
+
+and one in `dtype.goose` (`pf_name`, rewritten as a loop instead). The
+rule that no growable data may be live across a call into the cycle
+(section 1) shaped the interning of array and function types: their
+subranges and parameters, collected while the element types are
+interned recursively, go on one global stack (`md_tmp`) with marks, as
+the parser's scratch arrays do. The walk of the scope tree that emits
+the DIEs was made iterative with an explicit stack to stay out of the
+cycle, and that version had the only hang of the milestone: a phase
+value of -1 meant both "start" and "no more children", so a scope
+without children restarted forever. The recursive version could not have
+had that bug.
+
+### Cascades
+
+A single error in the front end also produces, at the end of the list,
+
+```
+backend-goose/cg.goose:818: error: export fn gir_codegen: could not resolve one concrete function signature
+backend-goose/cg.goose:831: error: export fn gir_codegen_ex: could not resolve one concrete function signature
+```
+
+in a file B5 did not touch: the exported entry points cannot be
+instantiated once anything they reach failed. Harmless once known, but
+the first time it sends one to the back-end.
+
+### Tables instead of objects
+
+As in B4, a struct cannot own growable arrays (section 10), so the DIE
+tree is two flat arrays (DIEs with first-child, last-child and next
+links, attributes with a next link) that `write_dies` flattens into the
+GIR tables in pre-order, renumbering references. Per-node and per-symbol
+facts that only `-g` needs (written types, enumerator references,
+references to K&R definitions, integer + pointer additions) are side
+tables: arrays indexed by symbol or member, `dictionary<u64, u32>` keyed
+by node; a key that must say what it is packs a tag above bit 32
+(`sym_die` holds functions and variables). None of this was hard, and it
+keeps the AST and the non-`-g` paths untouched: the objects without `-g`
+stayed byte-identical (DESIGN.md 11.5 has the one deliberate exception).
+
+### The lowering's bugs that `-g` found
+
+Comparing DWARF compares what the lowering visits, not only what it
+computes, so it found two bugs that running the programs had not:
+`__c11_atomic_load`/`store`/`exchange` were lowered as the generic
+`__atomic_*` builtins (pointer operands for the value), which the
+back-end's bounds check reported exactly
+(`error: index 1073741823 out of bounds (length 15)
+(backend-goose/loc.goose:268)`: 0x3FFFFFFF is a store of `NONE`), and
+`__PRETTY_FUNCTION__` was the bare function name (now clang's string).
+
+### What went well
+
+- The port of LLVM's DIE construction (from `gir_dwarf.cpp`, itself a
+  port of `DwarfDebug`/`DwarfUnit`) was mechanical: flat arrays of
+  structs with integer references are what that C++ code builds with
+  maps and pointers.
+- A 90-second rebuild and a 25-minute comparison of all 2,357 corpus
+  files at `-j2` made every rule cheap to test against clang; the rules
+  of section 11 were each found by a diff.
+- The back-end's resolution of the GIR forms (from A3) needed no
+  change: once the DIE tables were right, `llvm-dwarfdump --verify`
+  passed on every object.

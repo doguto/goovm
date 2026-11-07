@@ -18,6 +18,15 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 - [検証結果：フェーズ0〜2（2026-11-06）](docs/research/2026-11-06-results.md)
 - [Goose で作ったコンパイラの実装結果（2026-11-07）](docs/research/2026-11-07-goose-compilers.md)
 
+## マイルストーン B5：goosecc のデバッグ情報
+
+`goosecc -g` が、clang-20 `-O0 -g` と同じ DWARF 5 を出すようになりました。行テーブルに加えて、変数、引数、型、スコープ、ラベル、大域変数（関数内の static 変数を含む）、文字列リテラルです。型はビットフィールド、VLA、列挙型、関数ポインタ、ベクトル、複素数、`_Atomic`、typedef（書かれたとおりの名前）を含めてすべて出します。DIE は goosecc 自身の AST と型から作り、GIR の `dies`/`dattrs` 表でバックエンドに渡します。バックエンド、GIR、`tools/` は変えていません。設計は [`frontend-goose/DESIGN.md`](frontend-goose/DESIGN.md) の §11、記録は [`frontend-goose/NOTES.md`](frontend-goose/NOTES.md) の12節です。
+
+- **clang との突き合わせ**（`tests/dwarf_diff.py`）：コーパスの C ファイル2,357本のうち、両方がコンパイルできる2,288本で、正規化した `llvm-dwarfdump --debug-info` が2,231本（97.5%）で clang と同一でした。さらに13本は、フレーム上の位置の書き方だけが違います。残る44本の差は、すべて生成コードの違いから来ます（clang が const 変数の読み出しを畳み込む、`always_inline` を `-O0` でもインライン展開する、など）。CTMark の C ファイルでは、両方がコンパイルできる324本のうち316本が同一です。goosecc の `-g` オブジェクト2,288個は、すべて `llvm-dwarfdump --verify` を通ります。
+- **gdb での比較**（`tests/gdb_oracle.py --goosecc`）：C のプログラム79本（`tests/c` の49本、llvm-test-suite の24本、CTMark の C 6本を入力付きで）、1,458回の停止で、各停止ごとに引数と局所変数すべての `ptype` と `print` も比べました。やりとり全体が一致したのは45本です。ただし両方が同じ場所で止まった6,859回の停止では、両方に現れる変数の `ptype` は1件を除いてすべて一致し（例外は goosecc が VLA にする `const int` 長の配列）、`print` の値も98.9%が一致しました。残りの値の差は、未初期化のメモリの中身と、同じ行の別の命令で止まったことによるものです。やりとりが違う34本のうち32本は、止まる行そのものが違います。これは B4 からの行テーブルの差（たとえば goosecc は then 節から抜ける分岐に `}` の行を付ける）で、B5 では文の行（is_stmt の行）を変えていません。
+- **速さ**（`tests/bench_goosecc.py --g`、CTMark の C ファイル284本）：`-g` を付けると goosecc は1.25倍の時間になります（1.73秒 → 2.17秒、sqlite3.c は1.57倍）。それでも clang-20 `-O0 -g`（19.8秒）より9.1倍速いです。最大メモリは24 MB から35 MB になります（clang は182 MB）。
+- **回帰なし**：`tests/suite_goosecc.py`（1,804件、`-O0` と `-g`）、`tests/run.py --goosecc`（98/98）、フロントエンドの4つの突き合わせ（前処理、構文、レイアウト、型付き構文木）、`cache_check.py`（2,357本、44,783回）がすべて B4 と同じ結果です。`-g` なしのオブジェクトは2,288本中2,239本が B4 とバイト単位で同一で、残る49本は `__PRETTY_FUNCTION__`（主に `assert` 経由）を使うファイルで、その文字列のセクションだけが違います（`.text` は同一）。B5 で `__PRETTY_FUNCTION__` を clang と同じ文字列にしたためです（以前は関数名だけでした）。
+
 ## 現在の状態（マイルストーン A3）
 
 A3 で、Goose 版バックエンドの出力がデバッガと例外処理で使えるようになり、C++ もコンパイルできるようになりました。設計は [`backend-goose/DESIGN.md`](backend-goose/DESIGN.md) の §9〜§12、記録は [`backend-goose/NOTES.md`](backend-goose/NOTES.md) の10節です。

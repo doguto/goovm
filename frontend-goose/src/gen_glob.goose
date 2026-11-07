@@ -130,6 +130,10 @@ fn complit_global(n: u32) -> u32 {
 
 // A reference to g from emitted code: an on-use definition is queued.
 fn note_use(g: u32) {
+    if ev_on {
+        dev(EV_REF, g, if ev_noproto { 1 } else { 0 });
+        ev_noproto = false;
+    }
     if glob_gen[g].state != 0 { return; }
     let s = glob_gen[g].sym;
     if s < 0 { return; }
@@ -296,6 +300,17 @@ recursive fn is_const_object(q: u32) -> bool {
 
 // Emits the definition of variable global g (symbol s).
 fn emit_var(g: u32) {
+    let s = glob_gen[g].sym;
+    // -g: the events of a file-scope definition (gen_dwarf.goose)
+    let top = opt_debug && !ev_on && syms[s].flags & SF_FILESCOPE != 0 && syms[s].flags & SF_COMPLIT == 0;
+    var e0: u32 = 0;
+    if top { e0 = dbg_gvar_begin(); }
+    if opt_debug && sym_gen[s].init != 0 && syms[s].flags & SF_COMPLIT == 0 { dbg_init_casts(sym_gen[s].init); }
+    emit_var1(g);
+    if top { dbg_gvar_end(s, g, e0); }
+}
+
+fn emit_var1(g: u32) {
     let s = glob_gen[g].sym;
     glob_gen[g].state = 2;
     let q = syms[s].ty;
@@ -1063,7 +1078,11 @@ recursive fn eval_addr(n: u32) -> bool, i64, i64, i64, i64 {
         if c { return eval_addr(if nd.b == 0 { nd.a } else { nd.b }); }
         return eval_addr(nd.c);
     }
-    if k == N_STRING { return true, string_global(nd.a) as i64, 0, -1, -1; }
+    if k == N_STRING {
+        let g = string_global(nd.a);
+        dbg_string(n, g);
+        return true, g as i64, 0, -1, -1;
+    }
     let ok, v = fold_int(n);
     if ok { return true, -1, v, -1, -1; }
     return false, -1, 0, -1, -1;
@@ -1075,7 +1094,10 @@ recursive fn eval_lvaddr(n: u32) -> bool, i64, i64, i64, i64 {
     if k == N_DECLREF {
         let s = nd.a as i64;
         let sk = syms[s].kind;
-        if sk == SK_FUNC || sk == SK_BUILTIN { return true, func_global(s) as i64, 0, -1, -1; }
+        if sk == SK_FUNC || sk == SK_BUILTIN {
+            if opt_debug { dbg_fnref(n); }
+            return true, func_global(s) as i64, 0, -1, -1;
+        }
         if sk == SK_VAR {
             var c = s;
             if syms[s].canon >= 0 && syms[s].canon as i64 != s { c = syms[s].canon as i64; }
@@ -1084,7 +1106,11 @@ recursive fn eval_lvaddr(n: u32) -> bool, i64, i64, i64, i64 {
         }
         return false, -1, 0, -1, -1;
     }
-    if k == N_STRING { return true, string_global(nd.a) as i64, 0, -1, -1; }
+    if k == N_STRING {
+        let g = string_global(nd.a);
+        dbg_string(n, g);
+        return true, g as i64, 0, -1, -1;
+    }
     if k == N_COMPLIT { return true, complit_global(n) as i64, 0, -1, -1; }
     if k == N_MEMBER {
         let f = fields[nd.b];

@@ -7,7 +7,8 @@
 | `gdb_oracle.py` | the same scripted gdb session on a clang -O0 -g build and a goovm build, compared; `--unwind`: single-step every function checking the backtrace |
 | `realworld_mixed.py` | (v0) links SPASS and consumer-typeset from a mix of goovm and clang objects |
 | `suite_goosecc.py` | the same corpora compiled by goosecc (`frontend-goose/`, no LLVM) |
-| `bench_goosecc.py` | compile speed and memory of `goosecc -c` vs `clang-20 -O0 -c` and `tcc -c` on CTMark |
+| `bench_goosecc.py` | compile speed and memory of `goosecc -c` vs `clang-20 -O0 -c` and `tcc -c` on CTMark; `--g`: the cost of `-g` |
+| `dwarf_diff.py` | the DWARF of `goosecc -g` and `clang-20 -O0 -g` objects, normalized and compared (files or the frontend-goose corpora), `llvm-dwarfdump --verify` |
 | `bench_hcache.py` | goosecc's header cache: CTMark compile times with the cache disabled, cold and warm, vs `tcc -c` and `clang-20 -O0 -c` |
 
 ## run.py
@@ -127,6 +128,12 @@ values, the length of runs of that poison byte past a buffer, glibc's
 `jmp_buf` in `__libc_start_call_main`) and compared line by line; the
 first differing blocks are printed.
 
+With `--goosecc PATH` (milestone B5) the second build is `goosecc -g` (C
+programs only), `--types` is on: at every stop, for each argument and
+local, `ptype` and `print` of it, and `print *` of a pointer to a struct
+or union; `--corpus ctmark` adds the six CTMark C programs with their
+inputs (as `suite.py` runs them).
+
 With `--unwind` the goovm build alone is checked: for each of the program's
 functions (its first `--unwind-calls` activations), break on its first
 instruction and single-step it (`stepi`, `nexti` over calls) until it has
@@ -163,6 +170,27 @@ tests/bench_goosecc.py --goosecc frontend-goose/build/goosecc -n 3 [--md out.md]
 
 goosecc uses its header cache by default (`frontend-goose/README.md`);
 run with `GOOSECC_CACHE=off` to measure it without, as B2 and B3 did.
+With `--g` it measures `clang-20 -O0 -g -c`, `goosecc -c` and `goosecc -g
+-c` instead, with goosecc's phases with and without `-g`.
+
+## dwarf_diff.py
+
+```
+tests/dwarf_diff.py a.o b.o                                  # the differences, normalized
+tests/dwarf_diff.py --dump a.o                               # the normalized tree
+tests/dwarf_diff.py --cc [--verify] file.c ... [-- flags]    # compile with clang-20 -O0 -g and goosecc -g, compare
+tests/dwarf_diff.py --corpus torture,unit,regress,bench,ctmark --verify -j 2 [-q] [--json out.json] [--only report.json]
+```
+
+`llvm-dwarfdump --debug-info` of each object is parsed into one line per
+DIE, indented by depth: references name their target's tag and name,
+code addresses become `CODE` (low_pc/high_pc/ranges), frame offsets
+`fbreg`, address indices `addrx`, location lists `LOCLIST`; the producer
+and the section bases are dropped and file names reduced to their base
+name. A pair is *identical*, *identical but for frame-location forms*
+(`LOCLIST`, `DW_OP_breg*` against `DW_OP_fbreg`), *identical as
+unordered sets* (the unit's children in another order), or *differing*.
+`--only` reruns the files a `--json` report has as not identical.
 
 ## bench_hcache.py
 

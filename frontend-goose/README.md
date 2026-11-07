@@ -12,12 +12,34 @@ file.c -o file.o` produces objects that link with clang-20's and glibc.
 - [DESIGN.md](DESIGN.md): architecture, data structures, recursion under
   Goose's rules, the AST contract, and the lowering to GIR (section 7:
   values, the SysV calling convention, globals, static data and
-  relocations, builtins, inline assembly, debug locations).
+  relocations, builtins, inline assembly, debug locations), the header
+  cache (section 10) and the DWARF debug information (section 11).
 - [NOTES.md](NOTES.md): what writing it in Goose was like (errors, workarounds),
-  in section 10 what B3's speed work met in the language and runtime, and
-  in section 11 what B4's header cache did.
+  in section 10 what B3's speed work met in the language and runtime, in
+  section 11 what B4's header cache did, and in section 12 B5's debug
+  information.
 
-Status (milestone B4):
+Status (milestone B5):
+
+- `goosecc -g` writes the DWARF 5 of `clang-20 -O0 -g`: variables,
+  parameters, types (bit-fields, VLAs, enums, function pointers, vectors,
+  complex, `_Atomic`, typedef names as written), lexical scopes, labels,
+  global and static local variables, string literals (DESIGN.md, section
+  11). Of the 2,288 corpus files both compilers compile, 2,231 (97.5%)
+  have the same normalized `llvm-dwarfdump --debug-info` as clang's (316
+  of CTMark's 324), 13 more differ only in how a frame location is
+  written, and the 44 others where goosecc's code differs from clang's
+  (folded `const` reads, `always_inline`); `llvm-dwarfdump --verify`
+  passes on every object. In gdb, at the 6,859 stops where both builds
+  stop at the same place, `ptype` agrees for every variable but one and
+  `print` for 98.9% of the values; 45 of 79 whole sessions are identical
+  (the others stop at other lines, as before B5).
+- `-g` costs goosecc 25% on CTMark (1.73 → 2.17 s); `goosecc -g` is 9.1
+  times faster than `clang-20 -O0 -g`. The back-end, GIR and `tools/` did
+  not change.
+- `__PRETTY_FUNCTION__` is now clang's string (it was the bare name).
+
+Status at milestone B4:
 
 - goosecc keeps the preprocessing of headers in a persistent cache
   (`src/hcache.goose`; DESIGN.md, section 10) and replays it exactly:
@@ -103,8 +125,8 @@ goosecc --dump-ast [options] file.c [-o out]  print the typed AST in clang's ter
 Options are clang's: `-I`, `-iquote`, `-isystem`, `-idirafter`, `-nostdinc`,
 `-D`, `-U`, `-include`, `-std=` (c89, gnu89, c99, gnu99, c11, gnu11, c17,
 gnu17), `-O*` (the code is always -O0's; `__OPTIMIZE__` follows the flag),
-`-g` (debug locations in the GIR's tables; the A1 back-end does not write
-DWARF yet), `-fPIC`/`-fpic` (preemptible definitions, GOT
+`-g` (DWARF 5 as `clang-20 -O0 -g` writes it: line table, variables,
+parameters, types, scopes, labels; DESIGN.md, section 11), `-fPIC`/`-fpic` (preemptible definitions, GOT
 references), `-fPIE`, `-fno-pic`, `-fcommon`/`-fno-common` (the default),
 `-fno-builtin`, `-fno-builtin-NAME`, `-pthread`, `-funsigned-char`,
 `-trigraphs`, `-w`, `-Wno-return-type` / `-Wno-int-conversion` /
@@ -156,6 +178,35 @@ can change what goosecc compiles, so it should be private (as
 
 ## Tests
 
+### Debug information tests (B5)
+
+```bash
+GOOSECC_CACHE=/tmp/gcc-cache tests/dwarf_diff.py --corpus torture,unit,regress,bench,ctmark --verify -j 2 \
+    --goosecc frontend-goose/build/goosecc --json dwarf.json -q          # DWARF vs clang-20 -O0 -g, every corpus file
+tests/dwarf_diff.py --cc file.c ... [-- flags]                         # the same for some files
+tests/dwarf_diff.py a.o b.o                                             # two objects
+GOOSECC_CACHE=/tmp/gcc-cache tests/gdb_oracle.py --goosecc frontend-goose/build/goosecc --corpus c,sample,ctmark -j 2
+tests/bench_goosecc.py --goosecc frontend-goose/build/goosecc --g -n 3 --md bench-g.md   # what -g costs
+```
+
+- `dwarf_diff.py` compiles each file with `clang-20 -O0 -g` and `goosecc
+  -g`, prints both objects' `llvm-dwarfdump --debug-info` normalized (one
+  DIE per line; references as the target's tag and name; code addresses,
+  frame offsets, address indices, the producer and the section bases
+  replaced) and compares them: identical, identical but for frame-location
+  forms (a location list or `DW_OP_breg` against `DW_OP_fbreg`),
+  identical as unordered sets of the unit's children, or differing.
+  `--verify` runs `llvm-dwarfdump --verify` on every goosecc object;
+  `--only report.json` reruns the files a report has as not identical.
+- `gdb_oracle.py --goosecc` runs the same scripted gdb session on the
+  clang `-O0 -g` build and the goosecc `-g` build of each C program
+  (breakpoints on its functions and on lines of the reference line table;
+  at each stop `bt`, `info args`, `info locals`, `next`, `step`, and for
+  every argument and local `ptype`, `print` and `print *` of a pointer to
+  a struct or union) and compares the transcripts. The corpora: `tests/c`,
+  a sample of llvm-test-suite programs, and the CTMark C programs with
+  their inputs.
+
 ### Header cache tests (B4)
 
 ```bash
@@ -197,7 +248,7 @@ must pass when each of its C files is compiled by `goosecc -c` (and with
 ```bash
 tests/suite_goosecc.py --goosecc frontend-goose/build/goosecc -j 3 --work /tmp/sgc \
     --corpus torture,ieee,builtins,unittests,regression,benchmarks,ctmark --variants O0,g --report report.md
-tests/run.py --goosecc frontend-goose/build/goosecc -j 3          # the 44 programs of tests/c, with and without -g
+tests/run.py --goosecc frontend-goose/build/goosecc -j 3          # the programs of tests/c, with and without -g
 frontend-goose/tests/abi_cross.py --seeds 20 -n 50               # SysV calling convention, mixed with clang objects
 tests/bench_goosecc.py --goosecc frontend-goose/build/goosecc -n 3 --md bench.md   # speed vs clang-20 -O0 -c and tcc
 frontend-goose/tests/cmp_dbg.py --goovm-llc build/tools/goovm-llc/goovm-llc file.c... [-- flags]   # -g locations vs clang's
@@ -260,6 +311,107 @@ The tables of clang-20 facts are generated, and the generators are kept:
 `tools/gen_builtins.py` (builtin function types).
 
 ## Results
+
+### Debug information (B5)
+
+**DWARF against clang.** `tests/dwarf_diff.py --corpus
+torture,unit,regress,bench,ctmark --verify -j 2` (warm header cache):
+
+| corpus | files | identical | identical but for frame-location forms | differing | not compiled |
+|---|---:|---:|---:|---:|---:|
+| `torture` | 1708 | 1629 | 9 | 26 | 44 |
+| `unit` | 182 | 158 | 1 | 6 | 17 |
+| `regress` | 37 | 34 | 1 | 0 | 2 |
+| `bench` | 102 | 94 | 1 | 5 | 2 |
+| `ctmark` (all CTMark C files) | 328 | 316 | 1 | 7 | 4 |
+| **total** | 2357 | **2231** | 13 | 44 | 69 |
+
+"Not compiled": clang-20 rejects 68 of the files with the corpus flags
+(implicit `int` and implicit declarations, errors in C99 and later; GCC
+nested functions; the Integer tests' `__bitwidthof__`), as for the B1
+oracles, and goosecc does not compile `noinit-attribute.c` (a section
+attribute it does not lower; it did not before B5 either). Of
+the 2,288 files both compile, 2,231 (97.5%) have the same normalized
+`llvm-dwarfdump --debug-info`, and `llvm-dwarfdump --verify` passes on
+all 2,288 goosecc objects. The 13 "frame-location" files differ only
+where clang has a location list or a `DW_OP_breg` (NRVO, VLAs, realigned
+frames) and goosecc a frame offset. The 44 that differ, each for one of
+the reasons of DESIGN.md 11.6:
+
+| reason | files |
+|---|---:|
+| clang folds reads of `const` variables with constant initializers (`const_value`, no location, order) | 18 |
+| clang inlines `always_inline` functions at -O0 (inlined subroutines; the SSE tests' intrinsics) | 12 |
+| clang folds what goosecc computes (address differences, `strlen`/`memchr` of literals, complex constants, `__builtin_constant_p` of a variable, an address-difference array bound) | 9 |
+| an empty struct or a returned (NRVO) variable: clang drops it or gives it a location list | 3 |
+| clang makes a constant array where goosecc makes a VLA (`const int` bound) | 2 |
+
+**gdb.** `tests/gdb_oracle.py --goosecc --corpus c,sample,ctmark -j 2`:
+79 C programs (the 49 of `tests/c`, 24 llvm-test-suite programs, the six
+CTMark C programs with their inputs), 1,458 stops, at each `bt`, `info
+args`, `info locals`, `ptype` and `print` of every argument and local
+(`print *` of struct pointers), two `next` and a `step`:
+
+| | programs | identical transcripts |
+|---|---:|---:|
+| `tests/c` | 49 | 31 |
+| sample | 24 | 12 |
+| CTMark | 6 | 2 |
+| **total** | 79 | **45** |
+
+The transcripts that differ do so where the two builds stop at different
+places, not in what gdb shows of the program's data: aligning the stops
+by position (function, file and line), 6,859 of clang's 7,242 stops have
+a goosecc stop at the same place, and there the `ptype` of every variable
+both list is the same (6,789 of 6,790; the exception is the `const
+int`-sized array that goosecc makes a VLA, 11.6) and so are 7,508 of
+7,588 printed values (the others are uninitialized stack or heap
+contents, which the two frame layouts leave different, or a `next` that
+ends on another instruction of the same line). 32 of the 34 differing
+transcripts have stops at different positions: the line table, whose
+statement rows B5 left as they were (below), differs from clang's where
+the code does, e.g. goosecc gives the
+branch out of a `then` block the line of its `}`, which makes one more
+stop for `next`; and once one stop differs, the rest of the session
+follows another path. The other two differ in a string read past its
+end from an uninitialized buffer, and in the variable of an empty struct
+that clang drops (NRVO).
+
+**Cost.** `tests/bench_goosecc.py --g -n 3` (warm header cache, each
+compile alone, best of 3) on the 284 C files of the six CTMark C
+programs:
+
+| program | files | clang-20 -O0 -g -c | goosecc -c | goosecc -g -c | -g / no -g | clang -g / goosecc -g |
+|---|---:|---:|---:|---:|---:|---:|
+| sqlite3 | 2 | 1036 ms | 59 ms | 92 ms | 1.57x | 11.20x |
+| SPASS | 51 | 4219 ms | 312 ms | 407 ms | 1.31x | 10.37x |
+| ClamAV | 98 | 5214 ms | 565 ms | 665 ms | 1.18x | 7.84x |
+| lencod | 55 | 3878 ms | 352 ms | 447 ms | 1.27x | 8.67x |
+| mafft | 27 | 1969 ms | 157 ms | 197 ms | 1.26x | 9.98x |
+| consumer-typeset | 51 | 3452 ms | 283 ms | 358 ms | 1.27x | 9.63x |
+| **total** | 284 | 19.77 s | 1.73 s | **2.17 s** | **1.25x** | **9.12x** |
+
+`-g` costs 25% (sqlite3.c, with its 11,000 DIEs, 57%): per phase (sum of
+one `--time` run per file) parse+sema 288 → 346 ms (the written types),
+lowering 140 → 356 ms (the recording, clang's order and the DIE builder),
+back-end 129 → 286 ms (the DWARF sections and the line table); peak RSS
+24 → 35 MB (clang -g: 182 MB); objects 10.1 → 17.8 MB. goosecc -g stays
+9.1 times faster than `clang-20 -O0 -g -c`.
+
+**Regressions.** With the final build and a warm cache:
+`tests/suite_goosecc.py` passes all 1,804 tests with and without `-g`
+(3,608 runs), `tests/run.py --goosecc` 98/98; `cmp_E`, `cmp_syntax`,
+`layout_check` and `cmp_ast` give B4's results (all identical, no false
+error, 834,000 assertions, no AST difference); `cache_check.py` finds all
+2,357 files identical in 44,783 runs. Objects without `-g` are
+byte-identical to B4's for 2,239 of the 2,288 files; the other 49 use
+`__PRETTY_FUNCTION__` (mostly through `assert`) and differ only in that
+string's section (their `.text` is identical). The line tables of the
+`-g` objects are B4's for 2,066 files; 207 more have extra rows that
+repeat the previous row's line (B5's lexical scopes change the scope in
+the middle of a line; the back-end, as LLVM, starts a row; breakpoints
+and stepping are unchanged), 10 have the `__vla_exprN` stores, and 5
+follow `#line` (clang's presumed locations, new in B5).
 
 ### Header cache (B4)
 

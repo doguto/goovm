@@ -18,6 +18,7 @@ import .types;
 import .ast;
 import .sema;
 import .builtins;
+import .dtype;
 
 struct LV {
     addr: u32,      // the address (for a bit-field: of the record holding it)
@@ -146,7 +147,10 @@ recursive fn ex_lv1(n: u32) -> LV {
     let k = nd.kind as i64;
     if k == N_DECLREF {
         let s = nd.a as i64;
-        if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN { return lv_plain(gref(func_global(s)), nd.ty); }
+        if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN {
+            if dbg_on() { dbg_fnref(n); }
+            return lv_plain(gref(func_global(s)), nd.ty);
+        }
         return lv_plain(var_addr(s), nd.ty);
     }
     if k == N_UNARY {
@@ -178,7 +182,11 @@ recursive fn ex_lv1(n: u32) -> LV {
         }
         return lv_plain(gep(base, f.offset), nd.ty);
     }
-    if k == N_STRING { return lv_plain(gref(string_global(nd.a)), nd.ty); }
+    if k == N_STRING {
+        let g = string_global(nd.a);
+        dbg_string(n, g);
+        return lv_plain(gref(g), nd.ty);
+    }
     if k == N_COMPLIT { return lv_plain(ex_complit(n), nd.ty); }
     if k == N_SWIZZLE {
         var base: u32 = 0;
@@ -372,6 +380,9 @@ recursive fn ex_ignore(n: u32) {
 recursive fn ex_val(n: u32) -> u32 {
     if !dbg_on() { return ex_val1(n); }
     let saved = push_loc(visit_loc(n));
+    let k = nkind(n);
+    if k == N_INT { dbg_enumc(n); }
+    else if k == N_CAST && !dbg_no_enum { dev(EV_CAST, node_written(n), 0); }
     let v = ex_val1(n);
     pop_loc(saved);
     return v;
@@ -417,7 +428,10 @@ recursive fn ex_val1(n: u32) -> u32 {
     if k == N_BUILTIN { return ex_builtin(n, NONE); }
     if k == N_DECLREF {
         let s = nd.a as i64;
-        if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN { return gref(func_global(s)); }
+        if syms[s].kind == SK_FUNC || syms[s].kind == SK_BUILTIN {
+            if dbg_on() { dbg_fnref(n); }
+            return gref(func_global(s));
+        }
         return lv_load(ex_lv(n));
     }
     if k == N_SWIZZLE { return ex_swizzle(n); }
@@ -532,12 +546,23 @@ recursive fn ex_cast(n: u32) -> u32 {
         return lv_load(LV { addr: l.addr, fld: l.fld, vol: l.vol, q: nd.ty });
     }
     if ck == CK_ARRAY2PTR {
-        if nkind(a) == N_STRING { return gref(string_global(nodes[a].a)); }
+        if nkind(a) == N_STRING {
+            let g = string_global(nodes[a].a);
+            dbg_string(a, g);
+            return gref(g);
+        }
         return ex_lv(a).addr;
     }
     if ck == CK_FUNC2PTR || ck == CK_BUILTIN2PTR { return ex_lv(a).addr; }
     if ck == CK_NULL2PTR {
-        if nkind(a) != N_INT && has_side_effects(a) { ex_ignore(a); }
+        if nkind(a) != N_INT && has_side_effects(a) {
+            // clang does not visit the operand of a null pointer conversion
+            // (its casts and enumerators make no debug types)
+            let q0 = dbg_no_enum;
+            dbg_no_enum = true;
+            ex_ignore(a);
+            dbg_no_enum = q0;
+        }
         return c_null();
     }
     if ck == CK_TOVOID { ex_ignore(a); return NONE; }
@@ -590,7 +615,10 @@ recursive fn ex_unary(n: u32) -> u32 {
     let a = nd.a;
     if op == U_ADDR {
         let an = nodes[a];
-        if an.kind == N_DECLREF && (syms[an.a].kind == SK_FUNC || syms[an.a].kind == SK_BUILTIN) { return gref(func_global(an.a as i64)); }
+        if an.kind == N_DECLREF && (syms[an.a].kind == SK_FUNC || syms[an.a].kind == SK_BUILTIN) {
+            if dbg_on() { dbg_fnref(a); }
+            return gref(func_global(an.a as i64));
+        }
         return ex_lv(a).addr;
     }
     if op == U_DEREF {
@@ -817,8 +845,12 @@ recursive fn ex_binary(n: u32) -> u32 {
         return int_cast(c, GIR_T_I1, vty(nd.ty), false);
     }
     if op == B_PTRADD || op == B_PTRSUB {
+        let m0 = m_devs.len;
         let p = ex_val(nd.a);
+        let m1 = m_devs.len;
         let i = ex_val(nd.b);
+        // -g: integer + pointer: clang visits the integer first
+        if m1 > m0 && m_devs.len > m1 && is_swapped(n) { dbg_rotate_events(m0, m1); }
         return ptr_add(p, tbase(at), i, nty(nd.b), op == B_PTRSUB);
     }
     if op == B_PTRDIFF {
@@ -1064,15 +1096,23 @@ recursive fn ex_condexpr(n: u32, dst: u32) -> u32 {
     let tb = new_block();
     let fb = new_block();
     let end = new_block();
+    // -g: clang may fold what goosecc does not (gen_dwarf.goose, dbg_dead)
+    let fk, fv = clang_folds(nd.a, nd.b, nd.c);
+    if fk { dbg_dead++; }
     ex_cond(nd.a, tb, fb);
+    if fk { dbg_dead--; }
     start_block(tb);
     var x: u32 = NONE;
+    if fk && !fv { dbg_dead++; }
     if vk == VK_AGG { ex_agg(nd.b, dst); } else if vk == VK_VOID { ex_ignore(nd.b); } else { x = ex_val(nd.b); }
+    if fk && !fv { dbg_dead--; }
     let pt = cur_blk;
     if cur_blk >= 0 { br(end); }
     start_block(fb);
     var y: u32 = NONE;
+    if fk && fv { dbg_dead++; }
     if vk == VK_AGG { ex_agg(nd.c, dst); } else if vk == VK_VOID { ex_ignore(nd.c); } else { y = ex_val(nd.c); }
+    if fk && fv { dbg_dead--; }
     let pf = cur_blk;
     if cur_blk >= 0 { br(end); }
     start_block(end);
@@ -1193,6 +1233,8 @@ recursive fn assign_cplx_to_real(n: u32) -> u32 {
 recursive fn ex_cplx(n: u32) -> u32, u32 {
     if !dbg_on() { return ex_cplx1(n); }
     let saved = push_loc(visit_loc(n));
+    // ComplexExprEmitter::VisitCastExpr: EmitExplicitCastExprType
+    if nkind(n) == N_CAST && !dbg_no_enum { dev(EV_CAST, node_written(n), 0); }
     let re, im = ex_cplx1(n);
     pop_loc(saved);
     return re, im;
@@ -1436,6 +1478,8 @@ fn cplx_arith(op: i64, q: u32, ar: u32, ai: u32, ac: bool, yr: u32, yi: u32, bc:
 recursive fn ex_agg(n: u32, dst: u32) {
     if !dbg_on() { ex_agg1(n, dst); return; }
     let saved = push_loc(visit_loc(n));
+    // AggExprEmitter::VisitCastExpr: EmitExplicitCastExprType
+    if nkind(n) == N_CAST && !dbg_no_enum { dev(EV_CAST, node_written(n), 0); }
     ex_agg1(n, dst);
     pop_loc(saved);
 }
@@ -1556,6 +1600,8 @@ recursive fn ex_stmtexpr(n: u32, dst: u32) -> u32 {
     let q = nd.ty;
     var res: u32 = NONE;
     push_cleanup_scope();
+    // the compound statement is a scope (clang's LexicalScope)
+    scope_enter(body);
     for i in cnt {
         let s = nlist[bn.v + i];
         if i == cnt - 1 && !is_void(q) {
@@ -1563,6 +1609,7 @@ recursive fn ex_stmtexpr(n: u32, dst: u32) -> u32 {
             var e = s;
             while nkind(e) == N_LABEL {
                 gen_label(nodes[e].a as i64);
+                if dbg_on() { dbg_label(nodes[e].a as i64, label_block(nodes[e].a as i64), nodes[e].loc); }
                 e = nodes[e].b;
             }
             if nkind(e) == N_EXPR {
@@ -1582,6 +1629,7 @@ recursive fn ex_stmtexpr(n: u32, dst: u32) -> u32 {
             gen_stmt(s);
         }
     }
+    scope_leave();
     pop_cleanup_scope(true);
     if res == NONE && vkind(q) == VK_SCALAR { return c_zero(vty(q)); }
     return res;

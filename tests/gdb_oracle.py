@@ -17,6 +17,11 @@ script fills the 8 KB below the stack pointer with one byte pattern, and an
 uninitialized local reads the same in both builds. The transcripts are
 normalized (addresses, pids, directories) and compared line by line.
 
+With --goosecc, the second build is goosecc -g instead (C programs only),
+and --types adds to every stop, for each argument and local variable,
+`ptype` and `print` of it and `print *` of a pointer to a struct or union
+(on by default with --goosecc).
+
 With --unwind, the goovm build alone is checked instead: for each of the
 program's functions (its first --unwind-calls activations), the session
 breaks on the function's first instruction and single-steps it (`stepi`,
@@ -24,9 +29,10 @@ breaks on the function's first instruction and single-steps it (`stepi`,
 boundary - the prologue's pushes, the body, the epilogue's pops and `ret` -
 that the backtrace is the function over the same callers as on entry.
 
-usage: tests/gdb_oracle.py [--goovm PATH | --cc PATH] [-j 3] [--work DIR] [--stops N]
-                           [--corpus c,sample] [--unwind] [--keep] [filter ...]
-Corpora: c (tests/c/*.c), sample (a sample of llvm-test-suite programs, C and C++).
+usage: tests/gdb_oracle.py [--goovm PATH | --cc PATH | --goosecc PATH] [-j 3] [--work DIR] [--stops N]
+                           [--corpus c,sample,ctmark] [--types] [--unwind] [--keep] [filter ...]
+Corpora: c (tests/c/*.c), sample (a sample of llvm-test-suite programs, C and C++),
+ctmark (the CTMark C programs, with their inputs).
 Exit status 0 iff every transcript matches.
 """
 import argparse
@@ -95,7 +101,24 @@ for f in cfg["funcs"]:
         Poison("*" + f, internal=True)
     except gdb.error:
         pass
-out.write(ex("run " + " ".join(cfg["args"])))
+out.write(ex("run " + " ".join(cfg["args"]) + ((" < " + cfg["stdin"]) if cfg.get("stdin") else "")))
+import re
+def types_of_frame():
+    # ptype and print of each argument and local, print * of struct pointers
+    names = []
+    for c in ("info args", "info locals"):
+        for l in ex(c).splitlines():
+            m = re.match(r"^([A-Za-z_]\w*) = ", l)
+            if m and m.group(1) not in names:
+                names.append(m.group(1))
+    for nm in names[:cfg["types_max"]]:
+        t = ex("ptype " + nm)
+        out.write("ptype " + nm + ": " + t)
+        out.write("print " + nm + ": " + ex("print " + nm))
+        first = t.split("\n", 1)[0]
+        if first.startswith("type = struct") or first.startswith("type = union"):
+            if first.rstrip().endswith("*") or " *" in t.rstrip().splitlines()[-1]:
+                out.write("print *" + nm + ": " + ex("print *" + nm))
 stops = 0
 while stops < cfg["stops"] and alive() and stopped_in_code():
     stops += 1
@@ -103,6 +126,8 @@ while stops < cfg["stops"] and alive() and stopped_in_code():
     out.write(ex("bt"))
     out.write(ex("info args"))
     out.write(ex("info locals"))
+    if cfg["types"]:
+        types_of_frame()
     for i in range(2):
         out.write("--- next\n" + ex("next"))
         if not (alive() and stopped_in_code()):
@@ -278,13 +303,14 @@ def sh(cmd, timeout=600, **kw):
 
 
 class Prog:
-    def __init__(self, name, srcs, cflags=(), ldflags=(), args=(), rundir=None):
+    def __init__(self, name, srcs, cflags=(), ldflags=(), args=(), rundir=None, stdin=None):
         self.name = name
         self.srcs = list(srcs)
         self.cflags = list(cflags)
         self.ldflags = list(ldflags)
         self.args = list(args)
         self.rundir = rundir
+        self.stdin = stdin
 
     @property
     def cxx(self):
@@ -321,6 +347,17 @@ def programs(corpora):
                 p = j(S, d, f)
                 if os.path.exists(p):
                     out.append(Prog("sample/" + d + "/" + os.path.splitext(f)[0], [p], fl, ["-lm"]))
+    if "ctmark" in corpora:
+        # the CTMark C programs as tests/suite.py builds and runs them
+        sys.path.insert(0, HERE)
+        import suite
+        for t in suite.ctmark_tests(SUITE):
+            if t.prepare:
+                try:
+                    t.prepare(t.rundir)
+                except Exception:
+                    continue
+            out.append(Prog("ctmark/" + t.name, t.srcs, t.cflags + ["-w"], t.ldflags, t.args, t.rundir, t.stdin))
     return out
 
 
@@ -346,7 +383,9 @@ def compile_goovm(p, wd, args):
     for i, s in enumerate(p.srcs):
         cc = args.clangxx if s.endswith((".cpp", ".cc")) else args.clang
         o = os.path.join(wd, f"goovm{i}.o")
-        if args.cc:
+        if args.goosecc:
+            r = sh([args.goosecc, "-g", "-c"] + p.cflags + [s, "-o", o])
+        elif args.cc:
             r = sh([args.cc, "--backend=goose", "-O0", "-g"] + p.cflags + ["-c", s, "-o", o])
         else:
             bc = os.path.join(wd, f"goovm{i}.bc")
@@ -408,7 +447,8 @@ def run_gdb(exe, locs, funcs, p, wd, tag, args):
     out = os.path.join(wd, tag + ".gdb.txt")
     cfgf = os.path.join(wd, tag + ".cfg.json")
     json.dump({"out": out, "locs": locs, "funcs": funcs, "args": p.args, "stops": args.stops,
-               "poison_cap": args.poison_cap}, open(cfgf, "w"))
+               "poison_cap": args.poison_cap, "types": args.types, "types_max": 12,
+               "stdin": os.path.join(p.rundir or wd, p.stdin) if p.stdin else ""}, open(cfgf, "w"))
     scr = os.path.join(wd, tag + ".gdb.py")
     open(scr, "w").write(f"CFG = {cfgf!r}\n" + GDB_SCRIPT)
     r = sh(["gdb", "-nx", "-batch", "-x", scr, exe], timeout=600, cwd=p.rundir or wd,
@@ -518,6 +558,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--goovm", default=os.path.join(ROOT, "build/tools/goovm-llc/goovm-llc"))
     ap.add_argument("--cc", default="", help="use goovm-cc for the goovm build")
+    ap.add_argument("--goosecc", default="", help="use goosecc -g for the second build (C programs only)")
+    ap.add_argument("--types", action="store_true", help="ptype and print every argument and local at each stop")
     ap.add_argument("--clang", default="clang-20")
     ap.add_argument("--clangxx", default="clang++-20")
     ap.add_argument("-j", type=int, default=3)
@@ -533,7 +575,12 @@ def main():
     ap.add_argument("--json", default="")
     ap.add_argument("filter", nargs="*")
     args = ap.parse_args()
+    if args.goosecc:
+        args.goosecc = os.path.abspath(args.goosecc)
+        args.types = True
     progs = programs(args.corpus.split(","))
+    if args.goosecc:
+        progs = [p for p in progs if not p.cxx]
     if args.filter:
         progs = [p for p in progs if any(f in p.name for f in args.filter)]
     os.makedirs(args.work, exist_ok=True)

@@ -8,6 +8,7 @@ import .sema;
 import .expr;
 import .builtins;
 import .init;
+import .dtype;
 
 // ---------------------------------------------------------------------------
 // Attributes
@@ -329,6 +330,7 @@ struct DeclSpec {
     nbf16: u8 = 0,
     nnamed: u8 = 0,
     named: u32 = 0,
+    dnamed: u32 = 0,       // -g: the written type of `named` (dtype.goose)
     auto_type: bool = false,
     align: u32 = 0,
     tag_sym: i32 = -1,
@@ -396,6 +398,7 @@ recursive fn parse_declspec(ds: DeclSpec&, a: Attrs&, allow_sc: bool) {
                 // a typedef name, unless it is the declarator (T T;)
                 let s = lookup_ord(t.val);
                 ds.named = syms[s].ty;
+                ds.dnamed = d_typedef(s, syms[s].ty);
                 ds.nnamed++;
                 ds.any = true;
                 syms[s].flags = syms[s].flags | SF_USED;
@@ -430,8 +433,10 @@ recursive fn parse_declspec(ds: DeclSpec&, a: Attrs&, allow_sc: bool) {
             if at(TK_L_PAREN) {
                 adv();
                 let ty = parse_type_name();
+                let dty = tn_dty;
                 expect(TK_R_PAREN, "')'");
                 ds.named = with_quals(ty, Q_ATOMIC);
+                ds.dnamed = d_quals(dty, Q_ATOMIC);
                 ds.nnamed++;
             } else {
                 ds.q = ds.q | Q_ATOMIC;
@@ -457,12 +462,14 @@ recursive fn parse_declspec(ds: DeclSpec&, a: Attrs&, allow_sc: bool) {
         if w == KW_STRUCT || w == KW_UNION {
             ds.any = true;
             ds.named = parse_record_spec(ds, w == KW_UNION);
+            ds.dnamed = ds.named;
             ds.nnamed++;
             continue;
         }
         if w == KW_ENUM {
             ds.any = true;
             ds.named = parse_enum_spec(ds);
+            ds.dnamed = ds.named;
             ds.nnamed++;
             continue;
         }
@@ -471,15 +478,19 @@ recursive fn parse_declspec(ds: DeclSpec&, a: Attrs&, allow_sc: bool) {
             adv();
             expect(TK_L_PAREN, "'('");
             var ty: u32 = t_int;
+            var dty: u32 = 0;
             if starts_type_name(pc) {
                 ty = parse_type_name();
+                dty = tn_dty;
             } else {
                 let e = parse_expr();
                 ty = nty(e);
+                dty = expr_written(e);
             }
             expect(TK_R_PAREN, "')'");
-            if w == KW_TYPEOF_UNQUAL { ty = unqual(ty); }
+            if w == KW_TYPEOF_UNQUAL { ty = unqual(ty); dty = d_unqual(dty); }
             ds.named = ty;
+            ds.dnamed = dty;
             ds.nnamed++;
             continue;
         }
@@ -564,10 +575,19 @@ fn finish_declspec(ds: DeclSpec&, implicit: bool) -> u32 {
     return with_quals(t, ds.q as i64);
 }
 
+// The written type of the specifiers, given finish_declspec's result t
+// (-g; dtype.goose).
+fn declspec_dty(ds: DeclSpec&, t: u32) -> u32 {
+    if !dbg_types || t == 0 || ds.nnamed == 0 || ds.ncomplex > 0 || ds.dnamed == 0 { return t; }
+    if !dq_sugar(ds.dnamed) || dq_canon(ds.dnamed) != ds.named { return t; }
+    return d_quals(ds.dnamed, ds.q as i64);
+}
+
 // ---------------------------------------------------------------------------
 // struct / union / enum
 
 var fscratch: Field[>..<] = [];
+var fdscratch: u32[>..<] = [];       // -g: the members' written types, next to fscratch
 
 fn pack_at(i: i64) -> u32 {
     // the last change at or before token i
@@ -640,11 +660,13 @@ recursive fn parse_record_spec(ds: DeclSpec&, is_union: bool) -> u32 {
         }
         if r < 0 {
             r = new_record(name, is_union, loc);
+            if name == 0 { dt_note_record_in(r); }
             s = new_sym(SK_TAG, name, records[r].ty << 4, loc);
             syms[s].v = records[r].ty as i64;
             if name != 0 { bind_sym(s, true); }
         }
         records[r].flags = records[r].flags | RF_BEING_DEFINED;
+        dt_note_record(r, cur_func);
         records[r].pack = pack_at(start_tok);
         records[r].scope = scope_depth as! u32;
         records[r].loc = loc;
@@ -678,6 +700,7 @@ recursive fn parse_record_spec(ds: DeclSpec&, is_union: bool) -> u32 {
         }
     }
     let r = new_record(name, is_union, loc);
+    dt_note_record(r, cur_func);
     let s2 = new_sym(SK_TAG, name, records[r].ty << 4, loc);
     syms[s2].v = records[r].ty as i64;
     bind_sym(s2, true);
@@ -688,6 +711,8 @@ recursive fn parse_record_spec(ds: DeclSpec&, is_union: bool) -> u32 {
 recursive fn parse_record_body(r: i64) {
     expect(TK_L_BRACE, "'{'");
     let mark = fscratch.len;
+    let outer_rec = cur_rec;
+    cur_rec = r;
     while !at(TK_R_BRACE) && !at(TK_EOF) {
         if at(TK_SEMI) { adv(); continue; }
         if at_kw(KW_STATIC_ASSERT) { parse_static_assert(); continue; }
@@ -706,11 +731,13 @@ recursive fn parse_record_body(r: i64) {
         }
         let base = finish_declspec(ds, true);
         let bt = apply_type_attrs(base, fa, ds.loc);
+        let dbt = d_after(declspec_dty(ds, base), base, bt);
         if at(TK_SEMI) {
             // an anonymous struct/union member (C11), or nothing
             if is_record(bt) && records[rec_of(bt)].name == 0 {
                 fscratch.push(Field { name: 0, ty: bt, offset: 0, bitpos: 0, width: -1, attr_align: fa.aligned,
                     flags: (FF_ANON | (if fa.misc & AM_PACKED != 0 { FF_PACKED } else { 0 })) as! u8, rsv: 0, rsv2: 0, loc: ds.loc });
+                if dbg_types { fdscratch.push(bt); }
             } else if is_record(bt) && ds.tag_defined == false {
                 warn(ds.loc, "declaration does not declare anything");
             } else if is_record(bt) {
@@ -725,12 +752,14 @@ recursive fn parse_record_body(r: i64) {
             var da = fa;
             var name: u32 = 0;
             var ty = bt;
+            var dty = dbt;
             var floc = tloc();
             var width: i64 = -1;
             if !at(TK_COLON) {
-                let d = parse_declarator(bt, 0, da);
+                let d = parse_declarator(bt, dbt, 0, da);
                 name = d.name;
                 ty = d.ty;
+                dty = d.dty;
                 floc = d.loc;
             }
             parse_attributes(da);
@@ -753,7 +782,9 @@ recursive fn parse_record_body(r: i64) {
                 }
             }
             parse_attributes(da);
+            let ty0 = ty;
             ty = apply_type_attrs(ty, da, floc);
+            dty = d_after(dty, ty0, ty);
             if is_func(ty) {
                 err_at(floc, "field declared as a function");
             } else if kind_of(ty) == TY_VLA {
@@ -767,6 +798,7 @@ recursive fn parse_record_body(r: i64) {
             if ds.align > fal { fal = ds.align; }
             fscratch.push(Field { name: name, ty: ty, offset: 0, bitpos: 0, width: width as! i32, attr_align: fal,
                 flags: (if da.misc & AM_PACKED != 0 { FF_PACKED } else { 0 }) as! u8, rsv: 0, rsv2: 0, loc: floc });
+            if dbg_types { fdscratch.push(if dq_canon(dty) == ty { dty } else { ty }); }
             if !accept(TK_COMMA) { break; }
         }
         expect(TK_SEMI, "';' after member declaration");
@@ -792,8 +824,13 @@ recursive fn parse_record_body(r: i64) {
             }
         }
     }
+    cur_rec = outer_rec;
     records[r].first = fields.len as! u32;
     records[r].count = n as! u32;
+    if dbg_types {
+        for i in mark..fscratch.len { dt_set_field(fields.len + i - mark, fdscratch[i]); }
+        fdscratch.resize(mark);
+    }
     for i in mark..fscratch.len { fields.push(fscratch[i]); }
     fscratch.resize(mark);
 }
@@ -826,11 +863,14 @@ recursive fn parse_enum_spec(ds: DeclSpec&) -> u32 {
             e = enums.len;
             let ty = mk_tagged(TY_ENUM, e as! u32);
             enums.push(EnumRec { name: name, ty: ty, underlying: 0, complete: false, packed: false, rsv: 0, loc: loc, scope: scope_depth as! u32 });
+            dt_note_enum(e, cur_func);
+            if name == 0 { dt_note_enum_in(e); }
             s = new_sym(SK_TAG, name, ty << 4, loc);
             syms[s].v = ty as i64;
             if name != 0 { bind_sym(s, true); }
         }
         let ety = enums[e].ty << 4;
+        dt_note_enum_def(e, loc);
         adv();
         var next: i64 = 0;
         var minv: i64 = 0;
@@ -908,6 +948,7 @@ recursive fn parse_enum_spec(ds: DeclSpec&) -> u32 {
             let es = nscratch[j] as i64;
             if syms[es].ty != t_int { syms[es].ty = ety; }
         }
+        dt_note_enumerators(e, nscratch[mark..]);
         nscratch.resize(mark);
         ds.tag_sym = s as! i32;
         ds.tag_defined = true;
@@ -930,6 +971,7 @@ recursive fn parse_enum_spec(ds: DeclSpec&) -> u32 {
     let e = enums.len;
     let ty = mk_tagged(TY_ENUM, e as! u32);
     enums.push(EnumRec { name: name, ty: ty, underlying: if fixed != 0 { fixed } else { 0 }, complete: fixed != 0, packed: false, rsv: 0, loc: loc, scope: scope_depth as! u32 });
+    dt_note_enum(e, cur_func);
     let s2 = new_sym(SK_TAG, name, ty << 4, loc);
     syms[s2].v = ty as i64;
     bind_sym(s2, true);
@@ -944,6 +986,7 @@ struct Declr {
     name: u32 = 0,
     loc: u32 = 0,
     ty: u32 = 0,
+    dty: u32 = 0,         // -g: the written type (dtype.goose)
     params: i64 = -1,     // the parameter symbols of the name's own function declarator (in nlist)
     nparams: i64 = 0,
     kr: bool = false,
@@ -998,8 +1041,9 @@ fn ptr_quals() -> i64 {
 }
 
 // abstract: 0 = a name is required, 1 = no name (type names), 2 = either (parameters)
-recursive fn parse_declarator(base: u32, abstract: i64, a: Attrs&) -> Declr {
+recursive fn parse_declarator(base: u32, dbase: u32, abstract: i64, a: Attrs&) -> Declr {
     var t = base;
+    var dt = dbase;
     while at(TK_STAR) || at(TK_CARET) {
         adv();
         var q = ptr_quals();
@@ -1008,7 +1052,9 @@ recursive fn parse_declarator(base: u32, abstract: i64, a: Attrs&) -> Declr {
             q = q | ptr_quals();
         }
         t = with_quals(mk_ptr(t), q);
+        if dbg_types { dt = d_ptr(dt, t); }
     }
+    if !dbg_types { dt = t; }
     if at(TK_L_PAREN) && nested_paren(abstract) {
         let open = pc;
         // find the matching ')'
@@ -1027,11 +1073,12 @@ recursive fn parse_declarator(base: u32, abstract: i64, a: Attrs&) -> Declr {
         pc = j;
         adv();
         var dummy = Declr { .. };
-        let outer = parse_suffixes(t, dummy, true);
+        let outer = parse_suffixes(t, dt, dummy, true);
+        let douter = sfx_dty;
         let after = pc;
         pc = open + 1;
         parse_attributes(a);
-        var d = parse_declarator(outer, abstract, a);
+        var d = parse_declarator(outer, douter, abstract, a);
         parse_attributes(a);
         // int (f)(params): the parenthesized name is the function itself
         if d.params < 0 && d.ty == outer && dummy.params >= 0 {
@@ -1057,13 +1104,16 @@ recursive fn parse_declarator(base: u32, abstract: i64, a: Attrs&) -> Declr {
         err(tok_buf);
     }
     parse_attributes(a);
-    d.ty = parse_suffixes(t, d, true);
+    d.ty = parse_suffixes(t, dt, d, true);
+    d.dty = sfx_dty;
     return d;
 }
 
 // Array and function suffixes, applied right to left. `first` marks the
 // suffix right after the name, whose parameters belong to the name.
-recursive fn parse_suffixes(base: u32, d: Declr&, first: bool) -> u32 {
+// With -g the written type of the result is left in sfx_dty.
+var sfx_dty: u32 = 0;
+recursive fn parse_suffixes(base: u32, dbase: u32, d: Declr&, first: bool) -> u32 {
     if at(TK_L_SQUARE) {
         let loc = tloc();
         adv();
@@ -1102,7 +1152,8 @@ recursive fn parse_suffixes(base: u32, d: Declr&, first: bool) -> u32 {
             }
         }
         expect(TK_R_SQUARE, "']'");
-        let inner = parse_suffixes(base, d, false);
+        let inner = parse_suffixes(base, dbase, d, false);
+        let dinner = sfx_dty;
         if is_func(inner) {
             err_at(loc, "array of functions is not allowed");
             return inner;
@@ -1129,6 +1180,8 @@ recursive fn parse_suffixes(base: u32, d: Declr&, first: bool) -> u32 {
         }
         if first && q != 0 { d.kr = d.kr; }
         array_quals = q;
+        sfx_dty = at2;
+        if dbg_types { sfx_dty = if vla { d_vla(dinner, at2) } else { d_array(dinner, n, at2) }; }
         return at2;
     }
     if at(TK_L_PAREN) {
@@ -1142,7 +1195,8 @@ recursive fn parse_suffixes(base: u32, d: Declr&, first: bool) -> u32 {
             d.nparams = count;
             d.kr = kr;
         }
-        let ret = parse_suffixes(base, d, false);
+        let ret = parse_suffixes(base, dbase, d, false);
+        let dret = sfx_dty;
         if is_array(ret) || is_func(ret) {
             err_at(loc, str("function cannot return ", if is_func(ret) { "function" } else { "array" }, " type ", tname(ret)));
         }
@@ -1153,8 +1207,22 @@ recursive fn parse_suffixes(base: u32, d: Declr&, first: bool) -> u32 {
         var fl = 0;
         if variadic { fl = fl | TF_VARIADIC; }
         if noproto { fl = fl | TF_NOPROTO; }
-        return qt(mk_type(TY_FUNC, fl, unqual(ret), 0, 0, 0) as i64, 0);
+        let ft = qt(mk_type(TY_FUNC, fl, unqual(ret), 0, 0, 0) as i64, 0);
+        sfx_dty = ft;
+        if dbg_types {
+            let mark = dscratch.len;
+            if !noproto {
+                for i in count {
+                    let p = nlist[start + i] as i64;
+                    let w = sym_written(p);
+                    dscratch.push(if w != 0 { w } else { syms[p].ty });
+                }
+            }
+            sfx_dty = d_func(d_unqual(dret), mark, fl, ft);
+        }
+        return ft;
     }
+    sfx_dty = dbase;
     return base;
 }
 var array_quals: i64 = 0;
@@ -1202,9 +1270,12 @@ recursive fn parse_params(variadic: bool&, noproto: bool&, kr: bool&) -> i64, i6
             }
             let base = finish_declspec(ds, true);
             array_quals = 0;
-            let d = parse_declarator(apply_type_attrs(base, pa, ds.loc), 2, pa);
+            let base2 = apply_type_attrs(base, pa, ds.loc);
+            let d = parse_declarator(base2, d_after(declspec_dty(ds, base), base, base2), 2, pa);
             parse_attributes(pa);
             var ty = apply_type_attrs(d.ty, pa, d.loc);
+            var dty = d_after(d.dty, d.ty, ty);
+            let ty_before = ty;
             // adjustments (C11 6.7.6.3p7-8); a VLA parameter's size is still
             // evaluated on entry (kept in the symbol's v for B2)
             var orig: u32 = 0;
@@ -1219,6 +1290,7 @@ recursive fn parse_params(variadic: bool&, noproto: bool&, kr: bool&) -> i64, i6
                 err_at(d.loc, "'void' must be the first and only parameter if specified");
             }
             let s = new_sym(SK_VAR, d.name, ty, d.loc);
+            if dbg_types { dt_set_sym(s, d_adjust_param(dty, ty_before, ty)); }
             syms[s].flags = SF_PARAM;
             syms[s].v = orig as i64;
             syms[s].sc = if ds.sc == SC_REGISTER { SC_REGISTER } else { SC_NONE };
@@ -1235,18 +1307,24 @@ recursive fn parse_params(variadic: bool&, noproto: bool&, kr: bool&) -> i64, i6
 }
 
 // A type name (C11 6.7.7).
+// With -g its written type is left in tn_dty.
+var tn_dty: u32 = 0;
 recursive fn parse_type_name() -> u32 {
     var ds = DeclSpec { .. };
     var a = Attrs { .. };
     parse_declspec(ds, a, false);
     if !ds.any {
         err("expected a type");
+        tn_dty = t_int;
         return t_int;
     }
     let base = finish_declspec(ds, false);
-    let d = parse_declarator(apply_type_attrs(base, a, ds.loc), 1, a);
+    let base2 = apply_type_attrs(base, a, ds.loc);
+    let d = parse_declarator(base2, d_after(declspec_dty(ds, base), base, base2), 1, a);
     parse_attributes(a);
-    return apply_type_attrs(d.ty, a, ds.loc);
+    let r = apply_type_attrs(d.ty, a, ds.loc);
+    tn_dty = d_after(d.dty, d.ty, r);
+    return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -1302,12 +1380,29 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
         if ds.align != 0 { ty = with_align(ty, ds.align); }
         let prev = lookup_ord(name);
         if prev >= 0 && syms[prev].scope as i64 == scope_depth {
-            if syms[prev].kind == SK_TYPEDEF && compatible(tcanon(syms[prev].ty), tcanon(ty)) { return prev; }
+            if syms[prev].kind == SK_TYPEDEF && compatible(tcanon(syms[prev].ty), tcanon(ty)) {
+                if !dbg_g { return prev; }
+                // -g: uses after this point name this declaration (in DWARF
+                // as in clang); the type stays the first one's
+                let s2 = new_sym(SK_TYPEDEF, name, syms[prev].ty, loc);
+                syms[s2].sc = SC_TYPEDEF;
+                syms[s2].flags = syms[prev].flags;
+                dt_set_sym(s2, if dq_canon(d.dty) == syms[prev].ty { d.dty } else { syms[prev].ty });
+                dt_note_typedef(s2, cur_func);
+                bind_sym(s2, false);
+                return s2;
+            }
             err_at(loc, str("typedef redefinition with different types (", tname(ty), " vs ", tname(syms[prev].ty), ")"));
         }
         let s = new_sym(SK_TYPEDEF, name, ty, loc);
         syms[s].sc = SC_TYPEDEF;
         if scope_depth == 0 { syms[s].flags = SF_FILESCOPE; }
+        if dbg_types {
+            // the written type of what the name stands for (an alignment
+            // override is the typedef's own: DW_AT_alignment)
+            dt_set_sym(s, if dq_canon(d.dty) == d.ty { d.dty } else { d.ty });
+            dt_note_typedef(s, cur_func);
+        }
         bind_sym(s, false);
         return s;
     }
@@ -1329,6 +1424,11 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
         if prev >= 0 && (syms[prev].kind == SK_FUNC || syms[prev].kind == SK_BUILTIN) &&
            (syms[prev].scope as i64 == scope_depth || syms[prev].flags & SF_FILESCOPE != 0 || syms[prev].sc == SC_EXTERN) {
             let pt = syms[prev].ty;
+            // -g: DW_AT_prototyped is the first declaration's (clang's
+            // getCanonicalDecl()->hasPrototype(); an implicit one has none)
+            if dbg_types && !fn_proto_known(prev) {
+                dt_note_proto(prev, syms[prev].flags & SF_IMPLICIT == 0 && types[pt >> 4].flags & TF_NOPROTO == 0);
+            }
             if syms[prev].flags & SF_IMPLICIT != 0 {
                 syms[prev].ty = ty;
                 syms[prev].flags = syms[prev].flags & ~SF_IMPLICIT;
@@ -1337,6 +1437,11 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
                 err_at(loc, str("conflicting types for '", ident_text(name as i64), "'"));
             } else {
                 syms[prev].ty = composite(pt, ty);
+                // clang's mergeTypes: the old declaration's type, unless
+                // the composite differs from it
+                if dbg_types && syms[prev].ty != pt {
+                    dt_set_sym(prev, if syms[prev].ty == ty && dq_canon(d.dty) == ty { d.dty } else { syms[prev].ty });
+                }
             }
             if sc == SC_STATIC && syms[prev].sc != SC_STATIC && syms[prev].flags & SF_IMPLICIT == 0 {
                 // static after non-static: clang errors unless the first was implicit
@@ -1356,6 +1461,10 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
             err_at(loc, str("redefinition of '", ident_text(name as i64), "' as different kind of symbol"));
         }
         let s = new_sym(SK_FUNC, name, ty, loc);
+        if dbg_types {
+            dt_set_sym(s, if dq_canon(d.dty) == ty { d.dty } else { ty });
+            dt_note_proto(s, types[ty >> 4].flags & TF_NOPROTO == 0);
+        }
         syms[s].sc = if sc == SC_STATIC { SC_STATIC } else if sc == SC_EXTERN { SC_EXTERN } else { SC_NONE };
         if scope_depth == 0 { syms[s].flags = SF_FILESCOPE; } else { syms[s].flags = SF_LOCALLINK; }
         if ds.is_inline { syms[s].flags = syms[s].flags | SF_INLINE; }
@@ -1401,6 +1510,7 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
         err_at(loc, str("redefinition of '", ident_text(name as i64), "'"));
     }
     let s = new_sym(SK_VAR, name, ty, loc);
+    if dbg_types { dt_set_sym(s, if dq_canon(d.dty) == ty { d.dty } else { ty }); }
     syms[s].sc = ds.sc;
     if scope_depth == 0 { syms[s].flags = SF_FILESCOPE; }
     else if ds.sc == SC_EXTERN { syms[s].flags = SF_LOCALLINK; }
@@ -1423,7 +1533,14 @@ recursive fn parse_declaration(ctx: i64) {
     parse_declspec(ds, a, true);
     let implicit_ok = true;
     var base = finish_declspec(ds, implicit_ok);
-    base = apply_type_attrs(base, a, ds.loc);
+    var dbase = base;
+    if dbg_types {
+        let b0 = base;
+        base = apply_type_attrs(base, a, ds.loc);
+        dbase = d_after(declspec_dty(ds, b0), b0, base);
+    } else {
+        base = apply_type_attrs(base, a, ds.loc);
+    }
     if at(TK_SEMI) {
         adv();
         if ds.tag_sym >= 0 && ds.tag_defined {
@@ -1434,7 +1551,7 @@ recursive fn parse_declaration(ctx: i64) {
     }
     loop {
         var da = a;
-        let d = parse_declarator(base, 0, da);
+        let d = parse_declarator(base, dbase, 0, da);
         parse_attributes(da);
         parse_asm_label(da);
         parse_attributes(da);
@@ -1442,8 +1559,10 @@ recursive fn parse_declaration(ctx: i64) {
         if base == 0 {
             // __auto_type: the type comes from the initializer
             dd.ty = t_int;
+            dd.dty = t_int;
         } else {
             dd.ty = apply_type_attrs(d.ty, da, d.loc);
+            dd.dty = d_after(d.dty, d.ty, dd.ty);
         }
         if d.name == 0 {
             // error already reported; skip to the end of the declaration
@@ -1469,6 +1588,11 @@ recursive fn parse_declaration(ctx: i64) {
                 // __auto_type x = e;
                 let e = rv(parse_assign());
                 syms[s].ty = unqual(nty(e));
+                if dbg_types {
+                    let w = d_unqual(expr_written(e));
+                    dd.dty = if dq_canon(w) == syms[s].ty { w } else { syms[s].ty };
+                    dt_set_sym(s, dd.dty);
+                }
                 init = e;
             } else {
                 init = parse_initializer_for(s, syms[s].ty, is_static);
@@ -1494,7 +1618,12 @@ recursive fn parse_declaration(ctx: i64) {
         if syms[s].kind == SK_TYPEDEF {
             nscratch.push(node(N_TYPEDEF, 0, syms[s].ty, s, 0, 0, d.loc));
         } else {
-            nscratch.push(node(N_DECL, 0, syms[s].ty, s, init as i64, start_loc as i64, d.loc));
+            let dn = node(N_DECL, 0, syms[s].ty, s, init as i64, start_loc as i64, d.loc);
+            if dbg_types {
+                dt_set_node(dn, dd.dty);
+                if ds.sc == SC_EXTERN { dt_note_extern(dn); }
+            }
+            nscratch.push(dn);
         }
         if !accept(TK_COMMA) { break; }
     }
@@ -1541,16 +1670,21 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
             var pa = Attrs { .. };
             parse_declspec(pds, pa, true);
             let base = finish_declspec(pds, true);
+            let dbase = declspec_dty(pds, base);
             loop {
                 var pa2 = pa;
-                let pd = parse_declarator(base, 0, pa2);
+                let pd = parse_declarator(base, dbase, 0, pa2);
                 parse_attributes(pa2);
                 var found = false;
                 for i in d.nparams {
                     let p = nlist[d.params + i] as i64;
                     if syms[p].name == pd.name {
                         var ty = apply_type_attrs(pd.ty, pa2, pd.loc);
+                        let dty = d_after(pd.dty, pd.ty, ty);
+                        let ty0 = ty;
                         if is_array(ty) { ty = mk_ptr(tbase(ty)); } else if is_func(ty) { ty = mk_ptr(ty); }
+                        if dbg_types { dt_set_sym(p, d_adjust_param(dty, ty0, ty)); }
+                        if dbg_g { syms[p].loc = pd.loc; }
                         syms[p].ty = ty;
                         syms[p].flags = syms[p].flags | SF_KR;
                         if pds.sc == SC_REGISTER { syms[p].sc = SC_REGISTER; }
@@ -1609,7 +1743,9 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
         err_at(d.loc, str("incomplete result type ", tname(rt), " in function definition"));
     }
     let saved_func = cur_func;
+    let saved_pf = pf_dty;
     cur_func = s;
+    pf_dty = if dbg_types { dd.dty } else { 0 };
     func_gen++;
     let lmark = label_syms.len;
     push_scope();
@@ -1634,6 +1770,7 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
     }
     label_syms.resize(lmark);
     cur_func = saved_func;
+    pf_dty = saved_pf;
     let n = node_v(N_FUNCDEF, 0, syms[s].ty, s, body as i64, d.nparams, d.loc, d.params);
     syms[s].def = n as! i32;
     nscratch.push(n);
@@ -1670,7 +1807,11 @@ recursive fn parse_compound_stmt(stmt_expr: bool) -> u32 {
             // __label__ a, b;
             adv();
             loop {
-                if at(TK_IDENT) { label_ref(tval(), tloc()); adv(); }
+                if at(TK_IDENT) {
+                    let ls = label_ref(tval(), tloc());
+                    dt_note_local_label(ls, tloc());
+                    adv();
+                }
                 if !accept(TK_COMMA) { break; }
             }
             expect(TK_SEMI, "';'");
@@ -1878,6 +2019,13 @@ recursive fn parse_stmt() -> u32 {
         var hn: u32 = 0;
         if hi != 0 { hn = int_node(trunc_to(hv, st), st, loc); }
         let cn = node_v(N_CASE, 0, st, 0, if wide { convert(rv(e), st) as i64 } else { 0 }, hn as i64, loc, v);
+        if dbg_types && hi == 0 {
+            // -g: a case value that names an enumerator (clang's EmitCaseStmt)
+            var ce = e;
+            while nodes[ce].kind as i64 == N_ICAST { ce = nodes[ce].a; }
+            let es = enumc_of(ce);
+            if es >= 0 { dt_note_enumc(cn, es); }
+        }
         switch_cases.push(cn);
         let s = if at(TK_R_BRACE) { node(N_NULL, 0, 0, 0, 0, 0, loc) } else { parse_stmt() };
         nodes[cn].a = s;
@@ -2030,6 +2178,19 @@ recursive fn parse_asm_stmt() -> u32 {
 // The translation unit
 
 var tu_node: u32 = 0;
+
+// __PRETTY_FUNCTION__ prints written types: a translation unit that uses
+// it builds them (dtype.goose) without -g too.
+fn pf_scan() {
+    if dbg_types { return; }
+    let id = intern("__PRETTY_FUNCTION__");
+    for t in tu_toks {
+        if t.kind as i64 == TK_KW + KW_FUNC && t.val == id {
+            dbg_types = true;
+            return;
+        }
+    }
+}
 
 recursive fn parse_tu() {
     let mark = nscratch.len;

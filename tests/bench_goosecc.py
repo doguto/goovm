@@ -7,7 +7,10 @@ runs and the peak RSS the largest ru_maxrss. Objects go to a scratch file.
 goosecc's phases (preprocess, parse+sema, lowering, back-end, write) come
 from one extra run with --time.
 
-usage: tests/bench_goosecc.py [--goosecc PATH] [-n 3] [--tcc tcc] [--md out.md] [--json out.json] [program ...]
+With --g, the cost of debug information instead: clang-20 -O0 -g -c,
+goosecc -c and goosecc -g -c, and goosecc's phases with and without -g.
+
+usage: tests/bench_goosecc.py [--goosecc PATH] [-n 3] [--tcc tcc] [--g] [--md out.md] [--json out.json] [program ...]
 """
 import argparse
 import json
@@ -63,12 +66,16 @@ def main():
     ap.add_argument("-n", type=int, default=3)
     ap.add_argument("--md", default="")
     ap.add_argument("--json", default="")
+    ap.add_argument("--g", action="store_true",
+                    help="the cost of debug information: clang-20 -O0 -g -c, goosecc -c and goosecc -g -c")
     ap.add_argument("programs", nargs="*")
     a = ap.parse_args()
     have_tcc = subprocess.run(["which", a.tcc], stdout=subprocess.DEVNULL).returncode == 0
     tests = suite.ctmark_tests(a.suite)
     if a.programs:
         tests = [t for t in tests if t.name in a.programs]
+    if a.g:
+        return bench_g(a, tests)
     tmp = tempfile.mkdtemp(prefix="bench_goosecc_")
     obj = os.path.join(tmp, "x.o")
     rows = []
@@ -144,6 +151,73 @@ def main():
     for name, t in rows:
         out.append(f"| {name} | " + " | ".join(f"{x * 1e3:.0f} ms" for x in t["ph"]) + " |")
     out.append("| **total** | " + " | ".join(f"{x * 1e3:.0f} ms" for x in T["ph"]) + " |")
+    text = "\n".join(out) + "\n"
+    print(text)
+    if a.md:
+        open(a.md, "w").write(text)
+    if a.json:
+        json.dump({"files": files, "programs": {n: t for n, t in rows}}, open(a.json, "w"), indent=1)
+
+
+def bench_g(a, tests):
+    # --g: what -g costs goosecc, next to clang -O0 -g
+    tmp = tempfile.mkdtemp(prefix="bench_goosecc_")
+    obj = os.path.join(tmp, "x.o")
+    rows, files = [], []
+    keys = ("clang_g", "goosecc", "goosecc_g")
+    for t in tests:
+        tot = {k: 0.0 for k in keys}
+        tot.update({"files": 0, "ph": [0.0] * 5, "ph_g": [0.0] * 5, "rss_goosecc": 0, "rss_goosecc_g": 0,
+                    "rss_clang_g": 0, "size": 0, "size_g": 0, "fail": 0})
+        for s in t.srcs:
+            fl = ["-w"] + t.cflags
+            tc, rc_, ec, _ = best([a.clang, "-O0", "-g", "-c"] + fl + [s, "-o", obj], a.n)
+            tg, rg, eg, _ = best([a.goosecc, "-c"] + fl + [s, "-o", obj], a.n)
+            sz = os.path.getsize(obj) if eg == 0 else 0
+            tgg, rgg, egg, _ = best([a.goosecc, "-g", "-c"] + fl + [s, "-o", obj], a.n)
+            szg = os.path.getsize(obj) if egg == 0 else 0
+            ph = phases(a.goosecc, fl, s, obj)
+            phg = phases(a.goosecc, ["-g"] + fl, s, obj)
+            tot["files"] += 1
+            tot["clang_g"] += tc
+            tot["goosecc"] += tg
+            tot["goosecc_g"] += tgg
+            tot["size"] += sz
+            tot["size_g"] += szg
+            tot["fail"] += (eg != 0) + (egg != 0)
+            tot["rss_clang_g"] = max(tot["rss_clang_g"], rc_)
+            tot["rss_goosecc"] = max(tot["rss_goosecc"], rg)
+            tot["rss_goosecc_g"] = max(tot["rss_goosecc_g"], rgg)
+            for i in range(5):
+                tot["ph"][i] += ph[i]
+                tot["ph_g"][i] += phg[i]
+            files.append({"program": t.name, "file": os.path.relpath(s, a.suite), "clang_g": tc, "goosecc": tg,
+                          "goosecc_g": tgg, "phases": ph, "phases_g": phg})
+            print(f"{t.name} {os.path.basename(s)}: clang -g {tc * 1e3:.1f} ms, goosecc {tg * 1e3:.1f} ms, "
+                  f"goosecc -g {tgg * 1e3:.1f} ms", flush=True)
+        rows.append((t.name, tot))
+    T = {k: sum(t[k] for _, t in rows) for k in keys + ("files", "size", "size_g", "fail")}
+    T["ph"] = [sum(t["ph"][i] for _, t in rows) for i in range(5)]
+    T["ph_g"] = [sum(t["ph_g"][i] for _, t in rows) for i in range(5)]
+    for k in ("rss_clang_g", "rss_goosecc", "rss_goosecc_g"):
+        T[k] = max(t[k] for _, t in rows)
+    out = ["| program | files | clang-20 -O0 -g -c | goosecc -c | goosecc -g -c | -g / no -g | clang -g / goosecc -g |",
+           "|---|---:|---:|---:|---:|---:|---:|"]
+    for name, t in rows + [("**total**", T)]:
+        out.append(f"| {name} | {t['files']} | {t['clang_g'] * 1e3:.0f} ms | {t['goosecc'] * 1e3:.0f} ms | "
+                   f"{t['goosecc_g'] * 1e3:.0f} ms | {t['goosecc_g'] / t['goosecc']:.2f}x | "
+                   f"{t['clang_g'] / t['goosecc_g']:.2f}x |")
+    out.append("")
+    out.append(f"Peak RSS: clang -g {T['rss_clang_g'] / 1024:.0f} MB, goosecc {T['rss_goosecc'] / 1024:.0f} MB, "
+               f"goosecc -g {T['rss_goosecc_g'] / 1024:.0f} MB. Objects: {T['size'] / 1e6:.1f} MB without -g, "
+               f"{T['size_g'] / 1e6:.1f} MB with." + (f" Failures: {T['fail']}." if T["fail"] else ""))
+    out.append("")
+    out.append("goosecc phases (sum of one --time run per file), without and with -g:")
+    out.append("")
+    out.append("| | " + " | ".join(PHASES) + " |")
+    out.append("|---|" + "---:|" * 5)
+    out.append("| goosecc -c | " + " | ".join(f"{x * 1e3:.0f} ms" for x in T["ph"]) + " |")
+    out.append("| goosecc -g -c | " + " | ".join(f"{x * 1e3:.0f} ms" for x in T["ph_g"]) + " |")
     text = "\n".join(out) + "\n"
     print(text)
     if a.md:
