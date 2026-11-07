@@ -352,6 +352,7 @@ fn string_literal() -> u32 {
     return n;
 }
 
+var pf_out: u8[>..] = [];
 fn make_string_node(s: const u8[:], loc: u32) -> u32 {
     let start = strbytes.len;
     strbytes.append(s);
@@ -682,6 +683,11 @@ recursive fn parse_primary() -> u32 {
         if cur_func < 0 {
             warn(loc, "predefined identifier is only valid inside function");
             return make_string_node("", loc);
+        }
+        if ident_text(tu_toks[pc - 1].val as i64) == "__PRETTY_FUNCTION__" {
+            pf_out.clear();
+            pretty_function(pf_out, cur_func);
+            return make_string_node(pf_out, loc);
         }
         return make_string_node(sym_name(cur_func), loc);
     }

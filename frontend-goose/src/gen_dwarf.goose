@@ -192,7 +192,24 @@ fn dbg_fnref(c: u32) {
 }
 
 fn dev(kind: u32, a: u32, b: u32) {
-    if ev_on { m_devs.push(DEv { kind: kind, a: a, b: b }); }
+    if ev_on && dbg_dead == 0 { m_devs.push(DEv { kind: kind, a: a, b: b }); }
+}
+
+// > 0 while the lowering emits code that clang's CodeGen leaves out: the
+// condition of an if or ?: that clang constant-folds (ConstantFoldsTo-
+// SimpleInteger accepts 0 && x, 1 || x, &global, which goosecc's lowering
+// does not fold) and the arm that does not run. The code is the same
+// either way; the debug information records nothing of it.
+var dbg_dead: i32 = 0;
+// Does clang fold condition c (and leave out the other arm, which has no
+// label)? Only asked where goosecc's const_bool did not fold it.
+fn clang_folds(c: u32, then_arm: u32, else_arm: u32) -> bool, bool {
+    if !dbg_on() { return false, false; }
+    let ok, v = fold_bool(c);
+    if !ok { return false, false; }
+    let dead = if v { else_arm } else { then_arm };
+    if dead != 0 && contains_label(dead) { return false, false; }
+    return true, v;
 }
 
 fn dbg_fn_begin() {
@@ -299,22 +316,60 @@ fn dbg_gvar_end(s: i64, g: u32, e0: u32) {
 
 // The explicit casts of a static initializer, in the order clang's
 // ConstExprEmitter visits them.
+// clang's ConstExprEmitter visits an initializer through initializer
+// lists, compound literals, __extension__ and the casts it can emit (no-op,
+// atomic, null to pointer, to union, integral from an integer); the rest
+// it leaves to the evaluator, which visits no cast. Each explicit cast it
+// visits retains its type (EmitExplicitCastExprType), whatever its kind.
 recursive fn dbg_init_casts(n: u32) {
     if n == 0 || !opt_debug || !ev_on { return; }
     let nd = nodes[n];
     let k = nd.kind as i64;
-    if k == N_CAST {
-        dev(EV_CAST, node_written(n), 0);
-        dbg_init_casts(nd.a);
+    if k == N_CAST || k == N_ICAST {
+        if k == N_CAST { dev(EV_CAST, node_written(n), 0); }
+        let ck = nd.op as i64;
+        if ck == CK_NOOP || ck == CK_ATOMIC || ck == CK_NULL2PTR || ck == CK_TOUNION { dbg_init_casts(nd.a); }
+        else if ck == CK_INTEGRAL && is_integer(nty(nd.a)) { dbg_init_casts(nd.a); }
+        else if ck == CK_LVAL2RVAL && nkind(nd.a) == N_COMPLIT { dbg_init_casts(nodes[nd.a].a); }
         return;
     }
-    if k == N_ICAST || k == N_UNARY || k == N_MEMBER { dbg_init_casts(nd.a); return; }
-    if k == N_BINARY || k == N_INDEX { dbg_init_casts(nd.a); dbg_init_casts(nd.b); return; }
-    if k == N_COND { dbg_init_casts(nd.a); dbg_init_casts(nd.b); dbg_init_casts(nd.c); return; }
+    if k == N_UNARY && nd.op == U_EXTENSION { dbg_init_casts(nd.a); return; }
+    if k == N_COMPLIT { dbg_init_casts(nd.a); return; }
     if k == N_INITLIST {
         for i in nd.c { dbg_init_casts(nlist[nd.v + i]); }
         return;
     }
+}
+
+// clang's EmitPointerWithAlignment (the pointer of *, ->, [] and of the
+// memory builtins) looks through bit and no-op casts from a pointer to a
+// non-void type without visiting them as expressions: such an explicit
+// cast retains no type. ex_ptr lowers such a pointer operand.
+var cast_skip: u32[>..] = [];
+recursive fn ex_ptr(n: u32) -> u32 {
+    if !dbg_on() { return ex_val(n); }
+    let mark = cast_skip.len;
+    var c = n;
+    loop {
+        let nd = nodes[c];
+        let k = nd.kind as i64;
+        if (k == N_CAST || k == N_ICAST) && (nd.op as i64 == CK_BITCAST || nd.op as i64 == CK_NOOP) && nd.a != 0 {
+            let st = nty(nd.a);
+            if is_pointer(st) && !is_void(tbase(st)) {
+                if k == N_CAST { cast_skip.push(c); }
+                c = nd.a;
+                continue;
+            }
+        }
+        break;
+    }
+    let v = ex_val(n);
+    cast_skip.resize(mark);
+    return v;
+}
+fn cast_skipped(n: u32) -> bool {
+    for i in cast_skip.len { if cast_skip[i] == n { return true; } }
+    return false;
 }
 
 // An enumerator constant visited by the lowering (ex_val).
@@ -685,6 +740,10 @@ recursive fn md_of(d: u32) -> u32 {
         else if k == DK_PTR { m = md_intern(MD_PTR, md_of(t.base), 0, 0); }
         else if k == DK_ARRAY || k == DK_VLA { m = md_array(d & 0xFFFFFFF0); }
         else if k == DK_FUNC { m = md_func_d(d & 0xFFFFFFF0); }
+        else if k == DK_VECTOR {
+            let vt = types[t.canon >> 4];
+            m = md_intern(MD_VECTOR, md_of(t.base), vt.n as! u32, type_size(t.canon) as! u32);
+        }
         return md_quals(m, q);
     }
     let c = tcanon(d);
@@ -1059,6 +1118,16 @@ fn add_source_line(d: u32, loc: u32) {
     add_uint(d, DWA_decl_line, l as! u64);
 }
 fn add_source_line_cur(d: u32, loc: u32) { add_source_line(d, if loc != 0 { loc } else { cur_line_loc }); }
+// A member without a location (clang's createFieldType of an implicit
+// field, getOrCreateFile of an invalid location): the unit's file, the
+// line of CurLoc.
+fn add_source_line_cu(d: u32, loc: u32) {
+    if loc == 0 { return; }
+    let file, l, c = dloc_of(loc);
+    if file == 0 || l <= 0 { return; }
+    wattr(d, DWA_decl_file, GDF_FILE, m_dscopes[dbg_cu].file as u64, 0);
+    add_uint(d, DWA_decl_line, l as! u64);
+}
 
 recursive fn add_type(d: u32, m: u32) {
     let t = die_of(m);
@@ -1134,7 +1203,9 @@ recursive fn die_of(m: u32) -> u32 {
         add_flag(d, DWA_GNU_vector);
         let em = M.a;
         let es = md_size(em);
-        if es > 0 && M.c as u64 != (M.b as u64) * es { add_uint(d, DWA_byte_size, M.c as u64); }
+        // LLVM's hasVectorBeenPadded: the element's DI size (0 for a
+        // typedef or a qualified type) times the lanes is not the size
+        if M.c as u64 != (M.b as u64) * es { add_uint(d, DWA_byte_size, M.c as u64); }
         add_type(d, em);
         let idx = get_index_ty();
         let sr = wd_new(DWT_subrange_type, d);
@@ -1222,8 +1293,8 @@ recursive fn construct_record(d: u32, r: i64) {
             if f.name != 0 { add_str(md, DWA_name, ident_text(f.name as i64)); }
             add_type(md, md_of(field_type_written(j)));
             if f.loc != 0 { add_source_line(md, f.loc); }
-            else if r == rec_of(t_valist_rec) && va_loc != NONE { add_source_line(md, va_loc); }
-            else { add_source_line(md, cur_line_loc); }
+            else if r == rec_of(t_valist_rec) && va_loc != NONE { add_source_line_cu(md, va_loc); }
+            else { add_source_line_cu(md, cur_line_loc); }
             if f.width >= 0 {
                 add_uint(md, DWA_bit_size, f.width as! u64);
                 add_uint(md, DWA_data_bit_offset, f.bitpos as! u64);
@@ -1679,7 +1750,7 @@ fn entity_attrs(e: u32) {
     if ent_kind[e] == 2 {
         let L = m_dlabs[ent_idx[e]];
         add_str(d, DWA_name, ident_text(syms[L.sym].name as i64));
-        add_source_line(d, if is_local_label(L.sym) { syms[L.sym].loc } else { L.loc });
+        add_source_line(d, local_label_loc(L.sym, L.loc));
         wattr(d, DWA_low_pc, GDF_LABEL, L.blk as u64, 0);
         return;
     }

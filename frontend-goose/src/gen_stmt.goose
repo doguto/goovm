@@ -279,19 +279,28 @@ recursive fn gen_if1(n: u32) {
     let tb = new_block();
     let end = new_block();
     let eb = if nd.c != 0 { new_block() } else { end };
+    // -g: clang may fold what goosecc does not (gen_dwarf.goose, dbg_dead;
+    // when const_bool folded, the dead arm has a label and clang keeps it)
+    let fk, fv = clang_folds(nd.a, nd.b, nd.c);
     // the condition branches at the condition
     let saved = if dbg_on() { push_loc(expr_loc(nd.a)) } else { 0 };
     let lc = dbg_loopcond;
     dbg_loopcond = false;
+    if fk { dbg_dead++; }
     ex_cond(nd.a, tb, eb);
+    if fk { dbg_dead--; }
     dbg_loopcond = lc;
     if dbg_on() { pop_loc(saved); }
     start_block(tb);
+    if fk && !fv { dbg_dead++; }
     gen_stmt(nd.b);
+    if fk && !fv { dbg_dead--; }
     if nd.c != 0 {
         if has_insert() { br(end); }
         start_block(eb);
+        if fk && fv { dbg_dead++; }
         gen_stmt(nd.c);
+        if fk && fv { dbg_dead--; }
         // the branch out of the else arm has no location (clang)
         if has_insert() {
             let s2 = cur_dbg;

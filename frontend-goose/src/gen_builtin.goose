@@ -65,8 +65,8 @@ recursive fn lib_builtin(name: const u8[:], n: u32, dst: u32, forced: bool) -> u
     let nargs = nd.c as i64;
     if name == "memcpy" || name == "memmove" || name == "memset" {
         if nargs != 3 { return KEEP_CALL; }
-        let d = ex_val(barg(n, 0));
-        let s2 = ex_val(barg(n, 1));
+        let d = ex_ptr(barg(n, 0));
+        let s2 = if name == "memset" { ex_val(barg(n, 1)) } else { ex_ptr(barg(n, 1)) };
         let ln = ex_val(barg(n, 2));
         let len = conv(ln, nty(barg(n, 2)), t_ulong);
         if name == "memset" {
@@ -122,15 +122,15 @@ recursive fn lib_builtin(name: const u8[:], n: u32, dst: u32, forced: bool) -> u
         return emit(GIR_DYNALLOCA, GIR_T_PTR, 0, 0, 0, conv(sz, nty(barg(n, 0)), t_ulong), 16, 0);
     }
     if name == "bzero" && nargs == 2 {
-        let d = ex_val(barg(n, 0));
+        let d = ex_ptr(barg(n, 0));
         let ln = conv(ex_val(barg(n, 1)), nty(barg(n, 1)), t_ulong);
         if is_const(ln) && c_lo(ln) <= 256 { mem_set(d, c_i8(0), c_lo(ln) as! i64, false); }
         else { libcall3("memset", GIR_T_PTR, d, c_i32(0), ln); }
         return NONE;
     }
     if name == "bcopy" && nargs == 3 {
-        let s2 = ex_val(barg(n, 0));
-        let d = ex_val(barg(n, 1));
+        let s2 = ex_ptr(barg(n, 0));
+        let d = ex_ptr(barg(n, 1));
         let ln = conv(ex_val(barg(n, 2)), nty(barg(n, 2)), t_ulong);
         libcall3("memmove", GIR_T_PTR, d, s2, ln);
         return NONE;
@@ -654,8 +654,11 @@ recursive fn chk_builtin(name: const u8[:], n: u32) -> u32 {
         if ok2 && len <= os && len >= 0 { fits = true; }
     }
     if fits && (base == "memcpy" || base == "memmove" || base == "memset" || base == "mempcpy") {
-        let d = ex_val(barg(n, 0));
-        let s = ex_val(barg(n, 1));
+        // clang folds the memcpy, memmove and memset ones with constant sizes
+        let okl, lenv = fold_int(barg(n, 2));
+        let pw = okl && base != "mempcpy";
+        let d = if pw { ex_ptr(barg(n, 0)) } else { ex_val(barg(n, 0)) };
+        let s = if base == "memset" || !pw { ex_val(barg(n, 1)) } else { ex_ptr(barg(n, 1)) };
         let ln = conv(ex_val(barg(n, 2)), nty(barg(n, 2)), t_ulong);
         ex_ignore(barg(n, 3));
         if base == "memset" {

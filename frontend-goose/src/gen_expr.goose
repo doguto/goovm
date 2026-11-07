@@ -154,7 +154,7 @@ recursive fn ex_lv1(n: u32) -> LV {
         return lv_plain(var_addr(s), nd.ty);
     }
     if k == N_UNARY {
-        if nd.op == U_DEREF { return lv_plain(ex_val(nd.a), nd.ty); }
+        if nd.op == U_DEREF { return lv_plain(ex_ptr(nd.a), nd.ty); }
         if nd.op == U_REAL || nd.op == U_IMAG {
             let l = ex_lv(nd.a);
             if nd.op == U_REAL { return lv_plain(l.addr, nd.ty); }
@@ -169,13 +169,13 @@ recursive fn ex_lv1(n: u32) -> LV {
             let i = ex_val(nd.b);
             return lv_plain(ptr_add(base, nd.ty, i, nty(nd.b), false), nd.ty);
         }
-        let p = ex_val(nd.a);
+        let p = ex_ptr(nd.a);
         let i = ex_val(nd.b);
         return lv_plain(ptr_add(p, nd.ty, i, nty(nd.b), false), nd.ty);
     }
     if k == N_MEMBER {
         var base: u32 = 0;
-        if nd.op == 1 { base = ex_val(nd.a); } else { base = agg_addr(nd.a); }
+        if nd.op == 1 { base = ex_ptr(nd.a); } else { base = agg_addr(nd.a); }
         let f = fields[nd.b];
         if f.width >= 0 {
             return LV { addr: base, fld: nd.b as! i32, vol: quals(nd.ty) & Q_VOLATILE != 0, q: nd.ty };
@@ -382,7 +382,7 @@ recursive fn ex_val(n: u32) -> u32 {
     let saved = push_loc(visit_loc(n));
     let k = nkind(n);
     if k == N_INT { dbg_enumc(n); }
-    else if k == N_CAST && !dbg_no_enum { dev(EV_CAST, node_written(n), 0); }
+    else if k == N_CAST && !dbg_no_enum && (cast_skip.len == 0 || !cast_skipped(n)) { dev(EV_CAST, node_written(n), 0); }
     let v = ex_val1(n);
     pop_loc(saved);
     return v;
@@ -1092,15 +1092,23 @@ recursive fn ex_condexpr(n: u32, dst: u32) -> u32 {
     let tb = new_block();
     let fb = new_block();
     let end = new_block();
+    // -g: clang may fold what goosecc does not (gen_dwarf.goose, dbg_dead)
+    let fk, fv = clang_folds(nd.a, nd.b, nd.c);
+    if fk { dbg_dead++; }
     ex_cond(nd.a, tb, fb);
+    if fk { dbg_dead--; }
     start_block(tb);
     var x: u32 = NONE;
+    if fk && !fv { dbg_dead++; }
     if vk == VK_AGG { ex_agg(nd.b, dst); } else if vk == VK_VOID { ex_ignore(nd.b); } else { x = ex_val(nd.b); }
+    if fk && !fv { dbg_dead--; }
     let pt = cur_blk;
     if cur_blk >= 0 { br(end); }
     start_block(fb);
     var y: u32 = NONE;
+    if fk && fv { dbg_dead++; }
     if vk == VK_AGG { ex_agg(nd.c, dst); } else if vk == VK_VOID { ex_ignore(nd.c); } else { y = ex_val(nd.c); }
+    if fk && fv { dbg_dead--; }
     let pf = cur_blk;
     if cur_blk >= 0 { br(end); }
     start_block(end);
@@ -1221,6 +1229,8 @@ recursive fn assign_cplx_to_real(n: u32) -> u32 {
 recursive fn ex_cplx(n: u32) -> u32, u32 {
     if !dbg_on() { return ex_cplx1(n); }
     let saved = push_loc(visit_loc(n));
+    // ComplexExprEmitter::VisitCastExpr: EmitExplicitCastExprType
+    if nkind(n) == N_CAST && !dbg_no_enum { dev(EV_CAST, node_written(n), 0); }
     let re, im = ex_cplx1(n);
     pop_loc(saved);
     return re, im;
@@ -1464,6 +1474,8 @@ fn cplx_arith(op: i64, q: u32, ar: u32, ai: u32, ac: bool, yr: u32, yi: u32, bc:
 recursive fn ex_agg(n: u32, dst: u32) {
     if !dbg_on() { ex_agg1(n, dst); return; }
     let saved = push_loc(visit_loc(n));
+    // AggExprEmitter::VisitCastExpr: EmitExplicitCastExprType
+    if nkind(n) == N_CAST && !dbg_no_enum { dev(EV_CAST, node_written(n), 0); }
     ex_agg1(n, dst);
     pop_loc(saved);
 }

@@ -314,8 +314,8 @@ fn options() {
         else if s == "--dump-ast" { opt_mode = 3; }
         else if s == "-c" { if opt_mode == 0 { opt_mode = 4; } }
         else if s == "--emit-gir" { opt_mode = 5; }
-        else if s == "-g" || starts_with(s, "-g") && s != "-g0" && !starts_with(s, "-gno") { gen::opt_debug = true; dbg_types = true; }
-        else if s == "-g0" { gen::opt_debug = false; dbg_types = false; }
+        else if s == "-g" || starts_with(s, "-g") && s != "-g0" && !starts_with(s, "-gno") { gen::opt_debug = true; dbg_types = true; dbg_g = true; }
+        else if s == "-g0" { gen::opt_debug = false; dbg_types = false; dbg_g = false; }
         else if s == "-fPIC" || s == "-fpic" { gen::opt_pic = true; gen::opt_pie = false; opt_pic_mode = if s == "-fPIC" { 2 } else { 3 }; }
         else if s == "-fPIE" || s == "-fpie" { gen::opt_pic = false; gen::opt_pie = true; opt_pic_mode = if s == "-fPIE" { 0 } else { 1 }; }
         else if s == "-fno-pic" || s == "-fno-PIC" || s == "-fno-pie" || s == "-fno-PIE" { gen::opt_pic = false; opt_pic_mode = 4; }
@@ -414,6 +414,7 @@ fn main() {
         let t1 = clock_ns();
         types_init();
         parse_init();
+        pf_scan();
         parse_tu();
         if (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
             let t2 = clock_ns();

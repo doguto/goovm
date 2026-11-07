@@ -28,6 +28,7 @@ import std;
 import dictionary;
 import .common;
 import .types;
+import .ast;
 
 let DQ_SUGAR: u32 = 0x80000000;
 let DK_TYPEDEF = 1;    // sym: the typedef symbol; canon: its type
@@ -35,6 +36,7 @@ let DK_PTR = 2;        // base: the pointee
 let DK_ARRAY = 3;      // base: the element, n: the length (-1: incomplete)
 let DK_VLA = 4;        // base: the element, canon: the canonical TY_VLA type (its size expression)
 let DK_FUNC = 5;       // base: the return type, n: params at dparams[extra ..], flags: TF_*
+let DK_VECTOR = 6;     // base: the element; canon: the canonical vector type
 
 struct DType { kind: u8, flags: u8, rsv: u16, base: u32, sym: u32, extra: u32, n: i64, canon: u32, hnext: i32 }
 var dtypes: DType[>..] = [];
@@ -43,7 +45,8 @@ var dhash: i32[>..<] = [];
 var dmask: i64 = 0;
 var dscratch: u32[>..<] = [];        // the parameters of a function type being built
 
-var dbg_types: bool = false;         // -g: build the written types
+var dbg_types: bool = false;         // -g (or __PRETTY_FUNCTION__): build the written types
+var dbg_g: bool = false;             // -g itself: what only debug information may change
 
 inline fn dq_sugar(d: u32) -> bool { d & DQ_SUGAR != 0 }
 inline fn dq_node(d: u32) -> i64 { ((d & 0x7FFFFFFF) >> 4) as i64 }
@@ -175,6 +178,11 @@ fn d_func(ret: u32, mark: i64, flags: i64, cres: u32) -> u32 {
 // mode, aligned on a declarator): the sugar no longer applies.
 fn d_after(d: u32, before: u32, after: u32) -> u32 {
     if after == before { return d; }
+    // vector_size / ext_vector_type of a written type: a vector of it
+    let k = kind_of(after);
+    if dq_sugar(d) && (k == TY_VECTOR || k == TY_EXTVECTOR) && unqual(tbase(after)) == unqual(before) {
+        return dt_node(DK_VECTOR, 0, d_unqual(d), 0, 0, 0, unqual(after), 0) | ((quals(after) & 15) as! u32);
+    }
     return after;
 }
 
@@ -366,14 +374,203 @@ fn enum_in_record(e: i64) -> i64 { if e < enum_in_rec.len { enum_in_rec[e] as i6
 
 // Labels declared with __label__ (DWARF puts them at that declaration).
 var local_labels = dictionary<u64, u32> {};
-fn dt_note_local_label(s: i64) {
+fn dt_note_local_label(s: i64, loc: u32) {
     if !dbg_types { return; }
-    local_labels.insert(s as u64, 1);
+    local_labels.insert(s as u64, loc);
 }
-fn is_local_label(s: i64) -> bool {
+fn local_label_loc(s: i64, dflt: u32) -> u32 {
     let r = local_labels.get(s as u64);
-    if r { return true; }
-    return false;
+    if r { return r; }
+    return dflt;
+}
+
+// ------------------------------------------------------------ __PRETTY_FUNCTION__
+//
+// clang's PredefinedExpr::ComputeName(PrettyFunction) in C: the function's
+// return type printed (TypePrinter) around "name(parameter types)", with the
+// types as written: typedef names, the parameters as adjusted (arrays and
+// functions to pointers), "()" without a written prototype, "(void)" for no
+// parameters. The written types are those of the definition's declarator,
+// which a translation unit that uses __PRETTY_FUNCTION__ records without -g
+// too (pf_scan): only the side tables, nothing that changes the code.
+
+var pf_dty: u32 = 0;                 // the written type of the function being defined
+var pf_ph: u8[>..] = [];
+
+fn pretty_function(out: u8[>..]&, s: i64) {
+    let d = if pf_dty != 0 { pf_dty } else { syms[s].ty };
+    pf_ph.clear();
+    pf_ph.append(ident_text(syms[s].name as i64));
+    pf_ph.push('(');
+    pf_params(pf_ph, d);
+    pf_ph.push(')');
+    var ret: u32 = 0;
+    if dq_sugar(d) && dtypes[dq_node(d)].kind as i64 == DK_FUNC { ret = dtypes[dq_node(d)].base; }
+    else { ret = types[dq_canon(d) >> 4].base; }
+    pf_before(out, ret, false);
+    out.append(pf_ph);
+    pf_after(out, ret, false);
+}
+
+// What a written type is for printing: 0 a name (builtin, tag, typedef),
+// 1 pointer, 2 array, 3 incomplete array, 4 VLA, 5 function; its base type;
+// an array's length.
+fn pf_class(d: u32) -> i64, u32, i64 {
+    if dq_sugar(d) {
+        let t = dtypes[dq_node(d)];
+        let k = t.kind as i64;
+        if k == DK_PTR { return 1, t.base, 0; }
+        if k == DK_ARRAY {
+            let c = if t.n < 0 { 3 } else { 2 };
+            return c, t.base, t.n;
+        }
+        if k == DK_VLA { return 4, t.base, 0; }
+        if k == DK_FUNC { return 5, t.base, 0; }
+        return 0, 0, 0;
+    }
+    let k = kind_of(d);
+    if k == TY_POINTER { return 1, tbase(d), 0; }
+    if k == TY_ARRAY {
+        let n = types[d >> 4].n;
+        let c = if n < 0 { 3 } else { 2 };
+        return c, tbase(d), n;
+    }
+    if k == TY_VLA { return 4, tbase(d), 0; }
+    if k == TY_FUNC { return 5, types[d >> 4].base, 0; }
+    return 0, 0, 0;
+}
+
+fn pf_qual(d: u32) -> i64 {
+    if dq_sugar(d) { return dq_quals(d); }
+    return quals(d);
+}
+
+// Qualifiers::print: const volatile restrict.
+fn pf_quals(out: u8[>..]&, q: i64) {
+    var any = false;
+    if q & Q_CONST != 0 { out.append("const"); any = true; }
+    if q & Q_VOLATILE != 0 {
+        if any { out.push(' '); }
+        out.append("volatile");
+        any = true;
+    }
+    if q & Q_RESTRICT != 0 {
+        if any { out.push(' '); }
+        out.append("restrict");
+    }
+}
+
+// A name: a typedef name, or the canonical type's.
+fn pf_name(out: u8[>..]&, d: u32) {
+    var u = unqual(d);
+    if dq_sugar(d) {
+        let t = dtypes[dq_node(d)];
+        if t.kind as i64 == DK_TYPEDEF {
+            out.append(ident_text(syms[t.sym].name as i64));
+            return;
+        }
+        u = unqual(t.canon);
+    }
+    if kind_of(u) == TY_VECTOR {
+        let v = types[u >> 4];
+        format(out, "__attribute__((__vector_size__(", v.n, " * sizeof(");
+        base_name(out, v.base);
+        out.append(")))) ");
+        base_name(out, v.base);
+        return;
+    }
+    base_name(out, u);
+}
+
+// TypePrinter::printBefore / printAfter; `empty`: the placeholder is empty.
+recursive fn pf_before(out: u8[>..]&, d: u32, empty: bool) {
+    let k, b, n = pf_class(d);
+    let q = pf_qual(d) & (Q_CONST | Q_VOLATILE | Q_RESTRICT);
+    if k == 0 {
+        if q != 0 {
+            pf_quals(out, q);
+            out.push(' ');
+        }
+        if pf_qual(d) & Q_ATOMIC != 0 {
+            out.append("_Atomic(");
+            pf_name(out, d);
+            out.push(')');
+        } else {
+            pf_name(out, d);
+        }
+        if !empty { out.push(' '); }
+        return;
+    }
+    if k == 1 {
+        pf_before(out, b, false);
+        let bk, bb, bn = pf_class(b);
+        if bk >= 2 && bk <= 4 { out.push('('); }
+        out.push('*');
+        if q != 0 {
+            pf_quals(out, q);
+            if !empty { out.push(' '); }
+        }
+        return;
+    }
+    if k == 5 {
+        pf_before(out, b, false);
+        if !empty { out.push('('); }
+        return;
+    }
+    pf_before(out, b, empty);
+}
+
+recursive fn pf_after(out: u8[>..]&, d: u32, empty: bool) {
+    let k, b, n = pf_class(d);
+    if k == 1 {
+        let bk, bb, bn = pf_class(b);
+        if bk >= 2 && bk <= 4 { out.push(')'); }
+        pf_after(out, b, false);
+        return;
+    }
+    if k == 2 || k == 3 || k == 4 {
+        out.push('[');
+        if k == 2 { format(out, n); } else if k == 4 { out.push('*'); }
+        out.push(']');
+        pf_after(out, b, empty);
+        return;
+    }
+    if k == 5 {
+        if !empty { out.push(')'); }
+        out.push('(');
+        pf_params(out, d);
+        out.push(')');
+        pf_after(out, b, false);
+    }
+}
+
+// The parameter types of function type d: none without a prototype.
+recursive fn pf_params(out: u8[>..]&, d: u32) {
+    var np: i64 = 0;
+    var flags: i64 = 0;
+    var sugar = false;
+    var at: i64 = 0;
+    if dq_sugar(d) && dtypes[dq_node(d)].kind as i64 == DK_FUNC {
+        let t = dtypes[dq_node(d)];
+        np = t.n;
+        flags = t.flags as i64;
+        sugar = true;
+        at = t.extra as i64;
+    } else {
+        let ft = types[dq_canon(d) >> 4];
+        np = ft.n as i64;
+        flags = ft.flags as i64;
+        at = ft.extra as i64;
+    }
+    if flags & TF_NOPROTO != 0 { return; }
+    for i in np {
+        if i > 0 { out.append(", "); }
+        let p = if sugar { dparams[at + i] } else { tparams[at + i] };
+        pf_before(out, p, true);
+        pf_after(out, p, true);
+    }
+    if flags & TF_VARIADIC != 0 { out.append(if np > 0 { ", ..." } else { "..." }); }
+    else if np == 0 { out.append("void"); }
 }
 
 // Where an enum was defined (it may have been named before: enum foo; ...).

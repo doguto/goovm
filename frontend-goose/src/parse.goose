@@ -1381,7 +1381,7 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
         let prev = lookup_ord(name);
         if prev >= 0 && syms[prev].scope as i64 == scope_depth {
             if syms[prev].kind == SK_TYPEDEF && compatible(tcanon(syms[prev].ty), tcanon(ty)) {
-                if !dbg_types { return prev; }
+                if !dbg_g { return prev; }
                 // -g: uses after this point name this declaration (in DWARF
                 // as in clang); the type stays the first one's
                 let s2 = new_sym(SK_TYPEDEF, name, syms[prev].ty, loc);
@@ -1683,10 +1683,8 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
                         let dty = d_after(pd.dty, pd.ty, ty);
                         let ty0 = ty;
                         if is_array(ty) { ty = mk_ptr(tbase(ty)); } else if is_func(ty) { ty = mk_ptr(ty); }
-                        if dbg_types {
-                            dt_set_sym(p, d_adjust_param(dty, ty0, ty));
-                            syms[p].loc = pd.loc;
-                        }
+                        if dbg_types { dt_set_sym(p, d_adjust_param(dty, ty0, ty)); }
+                        if dbg_g { syms[p].loc = pd.loc; }
                         syms[p].ty = ty;
                         syms[p].flags = syms[p].flags | SF_KR;
                         if pds.sc == SC_REGISTER { syms[p].sc = SC_REGISTER; }
@@ -1745,7 +1743,9 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
         err_at(d.loc, str("incomplete result type ", tname(rt), " in function definition"));
     }
     let saved_func = cur_func;
+    let saved_pf = pf_dty;
     cur_func = s;
+    pf_dty = if dbg_types { dd.dty } else { 0 };
     func_gen++;
     let lmark = label_syms.len;
     push_scope();
@@ -1770,6 +1770,7 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
     }
     label_syms.resize(lmark);
     cur_func = saved_func;
+    pf_dty = saved_pf;
     let n = node_v(N_FUNCDEF, 0, syms[s].ty, s, body as i64, d.nparams, d.loc, d.params);
     syms[s].def = n as! i32;
     nscratch.push(n);
@@ -1808,7 +1809,7 @@ recursive fn parse_compound_stmt(stmt_expr: bool) -> u32 {
             loop {
                 if at(TK_IDENT) {
                     let ls = label_ref(tval(), tloc());
-                    dt_note_local_label(ls);
+                    dt_note_local_label(ls, tloc());
                     adv();
                 }
                 if !accept(TK_COMMA) { break; }
@@ -2177,6 +2178,19 @@ recursive fn parse_asm_stmt() -> u32 {
 // The translation unit
 
 var tu_node: u32 = 0;
+
+// __PRETTY_FUNCTION__ prints written types: a translation unit that uses
+// it builds them (dtype.goose) without -g too.
+fn pf_scan() {
+    if dbg_types { return; }
+    let id = intern("__PRETTY_FUNCTION__");
+    for t in tu_toks {
+        if t.kind as i64 == TK_KW + KW_FUNC && t.val == id {
+            dbg_types = true;
+            return;
+        }
+    }
+}
 
 recursive fn parse_tu() {
     let mark = nscratch.len;
