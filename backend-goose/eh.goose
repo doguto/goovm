@@ -7,7 +7,7 @@
 // rsp`, pushes of the callee-saved registers it uses, then the body, which
 // addresses its frame through rbp; the epilogue is the last code of the
 // function. So the CFA is rbp + 16 from the fourth byte to the epilogue's
-// `pop rbp` / `leave`, whatever the body does to rsp (dynamic allocas,
+// `pop rbp`, whatever the body does to rsp (dynamic allocas,
 // call areas, the red zone of leaf functions), and the CFI only describes
 // the prologue's pushes, the epilogue's pops and, for invokes that pass
 // arguments on the stack, the outgoing argument area (DW_CFA_GNU_args_size,

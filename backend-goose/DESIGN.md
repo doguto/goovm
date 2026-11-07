@@ -7,6 +7,13 @@ without `-g`, and the same IR after `opt -passes=mem2reg`. It is written in
 Goose and called from `goovm-llc` and `goovm-cc` (C++) and from `goosecc`
 (Goose) through two `export fn`s (`gir_codegen`, `gir_codegen_ex`).
 
+Milestone C1 brought floating-point-heavy code to the speed of clang -O0's
+(§14; `NOTES.md` §11): small aggregates returned in registers no longer go
+through memory in ways that miss store-to-load forwarding, conversions break
+their false dependency on the destination, a GEP's base pointer is loaded in
+program order, `is.fpclass` has fast paths, and the epilogue is LLVM's
+`add rsp, n` instead of `leave`.
+
 Milestone A3 added what a debugger, an unwinder and a C++ program need:
 `.eh_frame` for every function with CFI exact at every instruction (§10),
 C++ exception tables (§11), comdat groups (§9) and DWARF 5 debug
@@ -193,8 +200,9 @@ rsp             16-byte aligned; dynamic allocas and call areas below
 
 Leaf functions (no calls, no dynamic stack, no inline asm) whose frame
 fits in the red zone have no `sub rsp`; frameless functions end with
-`pop rbp; ret`, others with `leave; ret` or `lea rsp, [rbp-8n]; pop ...;
-pop rbp; ret`.
+`pop rbp; ret`, others with `add rsp, n; pop ...; pop rbp; ret` as LLVM's
+(`mov rsp, rbp` / `lea rsp, [rbp-8k]` instead of the `add` when the body
+moves rsp; never `leave`, §14).
 
 ## 5. Deferred loads and addresses
 
@@ -225,16 +233,18 @@ starts from it with an `lea` when both have an index.
 | sdiv, udiv, srem, urem | dividend in eax/rax, `cdq/cqo` or `xor edx, edx`, `idiv/div r` or `[mem]` at 32 or 64 bits |
 | icmp | `cmp`/`test` at the value's width (8, 16, 32, 64: no extension), immediates and memory operands; fused with the next `condbr` (`jcc`) or `select` (`cmov`), else `setcc` + `movzx` (into a dying operand's register) |
 | fcmp | `ucomiss/sd` (one or two flag tests per predicate), fused with the next `condbr` or `select` |
+| is.fpclass (f32, f64) | nan / not nan: `ucomis x, x` + parity; finite, inf, normal, zero, subnormal: the bits shifted left by one compared unsigned (§14); fused like a compare; other masks legacy |
 | select | `cmov` (INT), a short branch around `movaps` (FP, vectors) |
 | zext, sext, trunc, ptr casts | nothing (the register is reused), `mov r32, r32`, `movzx`, `movsx`, `movsxd`, or the load itself (`movsbl (%rcx,%rax), %edx`); of a constant: `mov r, imm` |
 | int/FP conversions | `cvtsi2sd xmm, r32/r64/[mem]`, `cvttsd2si`, unsigned 64-bit with the 2^63 split |
 | fadd..fdiv, fsqrt | `addsd xmm, xmm/[mem]/[rip+const]`; fneg/fabs/copysign with xorps/andps/orps masks in `.rodata.cst16` |
 | load, store | typed moves on the folded address; constants stored as immediates (FP constants as their bit pattern); seq_cst stores are `xchg` |
 | GEP | an address mode (folded into the next load/store), else one `lea` |
-| memcpy, memset <= 64 bytes | `movups` 16-byte chunks and a scratch register; `rep movsb/stosb` above |
+| memcpy, memset <= 64 bytes | memcpy up to 32 bytes (the exporter's inline limit for non-volatile copies): 8/4/2/1-byte moves through a scratch register, as FastISel copies them (§14); larger copies `movups` 16-byte chunks; memset 8-byte stores of the replicated byte; `rep movsb/stosb` above 64 |
 | vectors (RC_VX) | `movups/movq`, `addps/addpd`, `paddb/w/d/q`, `psub*`, `pand/por/pxor`, `pmullw`; insertelement/extractelement with a constant lane by `movss`/`shufps`/`unpcklps`/`unpcklpd`/`pinsrw`/`pextrw`/`pshufd`; bitcasts as register moves |
 | switch | dense (at least 4 cases filling at least 40% of their range): `movsx` + `sub lo` + `cmp; ja default` + `lea table(%rip)` + `movslq (table,idx,4)` + `add` + `jmp *r`, the table of rel32 offsets placed right after the jump in `.text` (no relocations), edges into blocks with PHIs through stubs after the table; else a chain of `cmp; je` |
 | branches | `jmp`/`jcc rel8` to blocks already placed (backward), `rel32` forward; no jump to the next block |
+| extractvalue of a register-class field | a load at the field's width from the aggregate's memory; nothing when the call before it defined it (§14) |
 | everything else | the A1 lowerings (§7 of the A1 design: INT2 add/adc..., x87, lane-by-lane vectors, aggregates, atomics, TLS, sjlj, inline asm) |
 
 PHIs: every edge writes the PHI's home (or its temp slot) from the incoming
@@ -323,7 +333,7 @@ each callee-saved register it uses, `sub rsp, n` (not for a leaf whose frame
 fits in the red zone), the body, and one epilogue at the end of the
 function (returns elsewhere jump to it). The body addresses its frame
 through rbp, so from the fourth byte of the function to the epilogue's `pop
-rbp` / `leave` the CFA is rbp + 16 whatever the body does to rsp (dynamic
+rbp` the CFA is rbp + 16 whatever the body does to rsp (dynamic
 allocas, outgoing argument areas, red-zone frames). The CFI therefore only
 has to describe a handful of events, which `emit_prologue` and
 `emit_epilogue` record as they emit the instructions (`CfiEv`: pos, kind,
@@ -337,7 +347,7 @@ FDE   advance 1, def_cfa_offset 16, offset rbp at cfa-16   (push rbp)
       advance, offset r at cfa-24, -32, ...                (each push r)
       [body: advance, GNU_args_size n                      (invoke with stack arguments)]
       advance, restore r ...                               (each pop r)
-      advance, def_cfa rsp+8                               (pop rbp / leave)
+      advance, def_cfa rsp+8                               (pop rbp)
 ```
 
 So the rules are exact at every instruction boundary, including between
@@ -463,3 +473,96 @@ time (gen-20000, spass, typeset; goovm-llc in total 1.02x to 1.07x), of which
 and 4x on template-heavy C++, the exporter 4x to 6x; goovm with `-g` is
 still 8.5x faster than LLVM's -O0 code generator with `-g` on sqlite3 and
 tramp3d-v4.
+
+## 14. Floating point and small aggregates
+
+FP scalars (f32, f64) and vectors of 8 or 16 bytes live in xmm registers
+like integers in general registers (§3, §4): there are no callee-saved xmm
+registers in the SysV ABI, so values that live across a call are written to
+their home before it, as with LLVM -O0. Arithmetic takes its second operand
+from memory or the constant pool (`addsd xmm, [rbp-8]`, `mulss xmm,
+[rip+c]`), FP zero is `xorps`, fneg/fabs/copysign are `xorps`/`andps`/`orps`
+with masks in `.rodata.cst16`, conversions read a deferred load in place
+(`cvtsi2sd xmm, [mem]`, `cvtss2sd xmm, [mem]`), and an `fcmp` sets the flags
+for the branch or select after it (`fcmp_plan`: the predicate's operand
+order and one or two condition codes, `oeq` = `e && np`, `une` = `ne || p`;
+the ordered "less" predicates swap the operands so that unordered results
+take the false edge without a parity test).
+
+**Store-to-load forwarding.** A load that reads data written by narrower
+stores (an 8-byte load of two 4-byte stores, a 16-byte load of four) cannot
+take the data from the store buffer and waits about 15 cycles until the
+stores have reached the cache. Small FP aggregates at -O0 produce such
+sequences everywhere, so the back-end keeps to one rule: memory that a
+lowering writes with stores of width w is read back by loads no wider than
+w. Four places follow from it:
+
+- **Aggregate call results** (`{<2 x float>, <2 x float>}` for a C++ class of
+  four floats such as Bullet's `btVector3`, `{double, double}`, `{<2 x float>,
+  float}`, `{ptr, i32}`, ...). The pre-pass counts each value's uses by
+  extractvalues of its block (`nev`); when all uses of an aggregate call
+  result are such extractvalues and each reads exactly one return-register
+  part (`ret_parts_fuse`: offset, size and register class of the part from
+  `classify_ret`; no x87 part, no part read twice), the call defines the
+  extractvalues' values in the return registers (`ra_set` on xmm0/xmm1,
+  rax/rdx) and their instructions emit nothing (kind `K_DONE`). A value that
+  lives past a later call is saved like any other. Otherwise the parts are
+  stored to the aggregate's home at their width (`ret_result`).
+- **extractvalue** of a field of a register class is allocator-aware: a load
+  of the field at its width from the aggregate's memory (its home, the
+  memory of a deferred aggregate load, or a constant's pool entry). (The
+  legacy lowering copied the field lane by lane into the field's home, and
+  the 8-byte load of that home missed forwarding twice per `btVector3`
+  returned.)
+- **Aggregate loads** with a single use by a `ret` or an extractvalue,
+  from a frame or rip-relative address with no memory write in between, are
+  deferred like register loads (§5): `load {<2 x float>, <2 x float>}, ptr
+  %retval; ret` is two `movq` into xmm0 and xmm1, as in clang's code.
+
+- **Small memcpys** (at most 32 bytes, which the exporter inlines as LLVM's
+  FastISel does) are copied 8, 4, 2 and 1 bytes at a time through a general
+  register, like FastISel's `TryEmitSmallMemcpy`: a 16-byte `movups` load
+  of a temporary that a call result was just stored to in two 8-byte halves
+  (Bullet's `btVector3` copy assignment) missed forwarding.
+
+Legacy lowerings that write a vector result lane by lane into its home still
+leave the next full-width load of that home to miss forwarding (shuffles,
+vector compares, conversions of vectors); vector homes written by the
+allocator-aware code are written and read at full width.
+
+**is.fpclass.** clang emits `llvm.is.fpclass` for `isnan` (mask 3),
+`isfinite` (0x1F8), `isnormal` (0x108) and the zero/subnormal tests. For f32
+and f64 these masks are lowered without computing the class: nan and not-nan
+are `ucomis x, x` and the parity flag; the others take the bits (from memory
+or by `movq`/`movd`), shift them left by one (dropping the sign) and compare
+unsigned: finite `b < inf`, infinite `b == inf`, normal `b - minnorm < inf -
+minnorm`, zero `b == 0`, subnormal `b - 1 < minnorm - 1` (inf and minnorm
+shifted likewise). Other masks and f80 keep the legacy lowering.
+
+**False dependencies.** `cvtsi2sd/ss`, `cvtss2sd`, `cvtsd2ss` and
+`sqrtsd/ss` write only the low lanes of their destination and so wait for
+its previous value. The destination is zeroed first (`xorps x, x`, a
+dependency-breaking idiom) unless it is the operand itself; otherwise a
+conversion into a register that last held a loop-carried sum serializes
+the iterations (spectral-norm: `cvtsi2sd %eax, %xmm0` in a function called
+from an `addsd` loop over xmm0). LLVM breaks these dependencies only at -O1
+and above (BreakFalseDeps); its -O0 code avoids them or not by its register
+choice.
+
+**Load order.** A load deferred to a later user (§5) executes after the
+loads in between. For the base pointer of a GEP that is not the next
+instruction this reorders `a[i]` into "index, then pointer", which runs
+about 20% slower in linpack's daxpy loop than the program order (the loops
+are otherwise identical; measured in isolation at equal alignment) and
+saves nothing, because a GEP's base is a register: such loads are emitted at
+their position (`late_gep_base`).
+
+**Epilogue.** Functions with a frame end as LLVM's do, `add rsp, n; pop
+...; pop rbp; ret`, with `mov rsp, rbp` / `lea rsp, [rbp-8k]` only when the
+body moves rsp. On the Sapphire Rapids host of the measurements `leave`
+makes each return about 5 cycles slower in a chain of small calls (four
+nested calls of a 16-byte frame: 0.93 s per 10^8 chains with `leave`, 0.48 s
+with any of the other forms), and in deep recursion the `mov`/`lea` forms
+are as slow as `leave` (fibo 1.14x clang -O0 with them, 0.94x with `add`).
+The frame size is known when the epilogue is emitted (after the body);
+`emit_prologue` asserts that it has not changed.

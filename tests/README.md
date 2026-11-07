@@ -2,7 +2,7 @@
 
 | script | what |
 |---|---|
-| `run.py` | the small differential tests in `c/` (49 programs), `cxx/` and `mixed/` (C and C++ linked together) |
+| `run.py` | the small differential tests in `c/` (51 programs), `cxx/`, `mixed/` (C and C++ linked together) and `ll/` (hand-written LLVM IR with a C driver) |
 | `suite.py` | the llvm-test-suite C and C++ corpora through goovm-llc (and goovm-cc), against their reference outputs |
 | `gdb_oracle.py` | the same scripted gdb session on a clang -O0 -g build and a goovm build, compared; `--unwind`: single-step every function checking the backtrace |
 | `realworld_mixed.py` | (v0) links SPASS and consumer-typeset from a mix of goovm and clang objects |
@@ -24,7 +24,13 @@ is also built with only its C files (`c-goovm`) or only its C++ files
 compiler: `mixed/eh_through_c` throws C++ exceptions through goovm-compiled
 C frames (plain calls, `qsort` callbacks, function pointers, frames with
 dynamic allocas and stack arguments) and checks that the stack pointer is
-the same after each catch.
+the same after each catch. `ll/<name>/` holds hand-written LLVM IR (`.ll`)
+with a C driver, for IR shapes clang does not produce at -O0
+(`ll/agg_returns`: aggregate call results read back by extractvalue in
+every arrangement the back-end's call-result fusion accepts or rejects);
+the reference build compiles the IR with `clang-20 -O0` too, the goovm
+variants pass it through `opt-20 -passes=verify` (O0) or `mem2reg`. With
+`--goosecc` these programs are skipped.
 
 ```
 tests/run.py --goovm build/tools/goovm-llc/goovm-llc -j3 [--opt-passes PASSES] [filter ...]

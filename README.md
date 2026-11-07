@@ -18,6 +18,18 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 - [検証結果：フェーズ0〜2（2026-11-06）](docs/research/2026-11-06-results.md)
 - [Goose で作ったコンパイラの実装結果（2026-11-07）](docs/research/2026-11-07-goose-compilers.md)
 
+## 現在の状態（マイルストーン C1）
+
+C1 で、浮動小数点を多く使うコードの実行時間が clang `-O0` と同等になりました。CTMark の全10本が clang `-O0` の0.95〜1.02倍です（幾何平均0.98倍。C1 前は1.07倍）。Bullet は1.69倍から0.97倍、tramp3d-v4 は1.19倍から1.02倍になりました。設計は [`backend-goose/DESIGN.md`](backend-goose/DESIGN.md) の §14、原因とその割合、計測は [`backend-goose/NOTES.md`](backend-goose/NOTES.md) の11節と [`bench/results/c1-2026-11-07/`](bench/results/c1-2026-11-07/) です。
+
+- **原因は浮動小数点の演算ではありませんでした。** 加減乗除・比較・変換の命令列は、もともと LLVM の FastISel と同等でした。
+  - Bullet（差の100%）：`btVector3` のような小さな構造体の戻り値を、狭い幅で書いて広い幅で読み直していました。ストアからロードへの転送が失敗して、1回ごとに約15サイクル待ちます。呼び出しの戻り値を戻りのレジスタのまま受け取り、`extractvalue` を読み込みにし、小さな `memcpy` を FastISel と同じ8バイト単位で写すようにしました。
+  - tramp3d-v4（差の95%）：関数の出口の `leave` です。このホストでは戻りごとに約5サイクル余分にかかります。出口を LLVM と同じ `add rsp, n; pop rbp` にしました。
+- **SingleSource の浮動小数点ベンチマーク**：変換命令の偽の依存（書き込み先の前の値を待つ）を断ち、配列の読み込みをプログラムの順にしました。spectral-norm は1.63倍から0.53倍、fp-convert は1.53倍から0.77倍、Linpack は1.14倍から0.98倍です。
+- 整数のカーネル集（`bench/codequal`）は llc `-O0` の1.03倍から0.99倍。バックエンドのコンパイル時間は A3 の1.02倍です。
+- テストを足しました：`tests/ll/`（手書きの LLVM IR と C の呼び出し側。`tests/run.py` が扱います）、`tests/cxx/03_fp_structs.cpp`、`tests/c/50_fp_classify.c`、`tests/c/51_fp_convert.c`。
+- 正しさ：全コーパス（C と C++ の1,921本、clang で通る1,915本）の全変種（O0、g、mem2reg、cc、cc-g）で失敗0、フォールバック0。`-g` の全オブジェクト（5,266個）が `llvm-dwarfdump --verify` を通ります。
+
 ## マイルストーン B5：goosecc のデバッグ情報
 
 `goosecc -g` が、clang-20 `-O0 -g` と同じ DWARF 5 を出すようになりました。行テーブルに加えて、変数、引数、型、スコープ、ラベル、大域変数（関数内の static 変数を含む）、文字列リテラルです。型はビットフィールド、VLA、列挙型、関数ポインタ、ベクトル、複素数、`_Atomic`、typedef（書かれたとおりの名前）を含めてすべて出します。DIE は goosecc 自身の AST と型から作り、GIR の `dies`/`dattrs` 表でバックエンドに渡します。バックエンド、GIR、`tools/` は変えていません。設計は [`frontend-goose/DESIGN.md`](frontend-goose/DESIGN.md) の §11、記録は [`frontend-goose/NOTES.md`](frontend-goose/NOTES.md) の12節です。
@@ -27,7 +39,7 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 - **速さ**（`tests/bench_goosecc.py --g`、CTMark の C ファイル284本）：`-g` を付けると goosecc は1.25倍の時間になります（1.73秒 → 2.17秒、sqlite3.c は1.57倍）。それでも clang-20 `-O0 -g`（19.8秒）より9.1倍速いです。最大メモリは24 MB から35 MB になります（clang は182 MB）。
 - **回帰なし**：`tests/suite_goosecc.py`（1,804件、`-O0` と `-g`）、`tests/run.py --goosecc`（98/98）、フロントエンドの4つの突き合わせ（前処理、構文、レイアウト、型付き構文木）、`cache_check.py`（2,357本、44,783回）がすべて B4 と同じ結果です。`-g` なしのオブジェクトは2,288本中2,239本が B4 とバイト単位で同一で、残る49本は `__PRETTY_FUNCTION__`（主に `assert` 経由）を使うファイルで、その文字列のセクションだけが違います（`.text` は同一）。B5 で `__PRETTY_FUNCTION__` を clang と同じ文字列にしたためです（以前は関数名だけでした）。
 
-## 現在の状態（マイルストーン A3）
+## マイルストーン A3：デバッガ、例外、C++
 
 A3 で、Goose 版バックエンドの出力がデバッガと例外処理で使えるようになり、C++ もコンパイルできるようになりました。設計は [`backend-goose/DESIGN.md`](backend-goose/DESIGN.md) の §9〜§12、記録は [`backend-goose/NOTES.md`](backend-goose/NOTES.md) の10節です。
 
@@ -72,7 +84,7 @@ A1 から変わらない点:
 | `backend-cpp/` | v0 の C++ 版バックエンド。`8f55b18` で凍結し、ビルドしない |
 | `frontend-goose/` | Goose で一から書いた C コンパイラ `goosecc`（プリプロセッサ・構文解析・型検査・GIR への変換。Goose 版バックエンドを同じプロセスで呼び、LLVM なしで ELF オブジェクトを出す） |
 | `tools/goovm-cc/` | clang のフロントエンドを同じプロセス内で動かし、LLVM IR をそのままバックエンドへ渡す `clang -c` 代替 |
-| `tests/` | `suite.py`（C と C++ の各コーパスでの正しさの検証、`--verify-dwarf`）、`gdb_oracle.py`（clang `-O0 -g` との gdb の比較と巻き戻しの検査）、`suite_goosecc.py`（同じコーパスを goosecc で）、`bench_goosecc.py`（goosecc の速さ）、C と C++ のテストプログラム52本（`run.py`） |
+| `tests/` | `suite.py`（C と C++ の各コーパスでの正しさの検証、`--verify-dwarf`）、`gdb_oracle.py`（clang `-O0 -g` との gdb の比較と巻き戻しの検査）、`suite_goosecc.py`（同じコーパスを goosecc で）、`bench_goosecc.py`（goosecc の速さ）、C、C++、LLVM IR のテストプログラム57本（`run.py`） |
 | `bench/` | CTMark、LLVM 自身のビルド、バックエンド、要因の切り分け、出力コードの質、全体への効果の計測 |
 | `poc/` | Goose コンパイラの伸び方、C++ との接続、変更可能な IR グラフの試作 |
 
