@@ -1,6 +1,6 @@
 # goovm：Goose で作ったコンパイラの実装結果
 
-報告日: 2026-11-07。[2026-11-06 の検証結果](2026-11-06-results.md)を受けて、「Goose で本格的に作る」方針で実施した開発（A1〜A5、B1〜B4）をまとめる。
+報告日: 2026-11-07。[2026-11-06 の検証結果](2026-11-06-results.md)を受けて、「Goose で本格的に作る」方針で実施した開発（A1〜A5、B1〜B5）をまとめる。
 
 数値はすべて、この環境（4コアの VM、clang/LLVM 20.1.2）での [実測] である。最終計測は他の作業を止めて行った（負荷平均およそ1）。
 
@@ -16,12 +16,13 @@
 | **`goovm-cc`** (`tools/goovm-cc/`) | clang のフロントエンドを同じプロセス内で動かし、IR を Goose 製バックエンドへ直接渡す。`clang -c` の代わりにそのまま使える | C++ 約5,300行（LLVM IR から GIR への変換と DWARF の構築を含む） |
 | **`goosecc`** (`frontend-goose/`) | LLVM を一切使わない C コンパイラ。前処理・構文解析・型検査・GIR 生成を Goose で書き、同じプロセスで Goose 製バックエンドを呼ぶ | Goose 約23,000行（手書き。B5 の DWARF を含む）＋約6,100行（生成） |
 
-**正しさ：** 次の4つが、どれも clang と同じ結果になった。
+**正しさ：** 次の5つが、どれも clang と同じ結果になった。
 
 - `goovm-llc` と `goovm-cc` で、C/C++ のテスト1,915本を5通りの変種（`-O0`、`-g`、mem2reg、`goovm-cc`、`goovm-cc -g`）で実行し、全部通った。LLVM への逃げ道は0回。
 - `goosecc` で、C のテスト1,804本を `-O0` と `-g` で実行し、全部通った。
 - CTMark の全10プログラム（C 6本、C++ 4本）が、公式の期待出力を出した。
 - `-g` を付けたオブジェクトは、すべて `llvm-dwarfdump --verify` を通った。
+- `goosecc -g` の DWARF（変数・型・スコープまで）は、両方がコンパイルできる2,288ファイルのうち2,231本で clang `-O0 -g` と同一になった（B5、§2.2）。
 
 **速さ（CTMark 全632ファイル、`-O0`）：**
 
@@ -133,7 +134,9 @@ B5 で、`goosecc -g` が変数・引数・型・スコープ・ラベル・大�
 |---|---|---|
 | 正規化した `llvm-dwarfdump --debug-info`（`tests/dwarf_diff.py`） | 両方がコンパイルできる2,288ファイル | 2,231本が同一（97.5%）。13本はフレーム上の位置の書き方だけが違う。CTMark の C ファイルでは324本中316本が同一 |
 | `llvm-dwarfdump --verify` | goosecc の `-g` オブジェクト2,288個 | すべて通過 |
-| gdb のやりとり（`tests/gdb_oracle.py --goosecc`、`ptype` と `print` を含む） | GDB_PROGS_JA | GDB_RESULT_JA |
+| gdb のやりとり（`tests/gdb_oracle.py --goosecc`、`ptype` と `print` を含む） | C のプログラム79本、1,458回の停止 | やりとり全体の一致は45本。両方が同じ場所で止まった6,859回では、`ptype` は1件を除き一致、`print` は98.9%が一致。違う34本のうち32本は止まる行が違う（B4 からの行テーブルの差） |
+
+`-g` を付けたときの `goosecc` の時間は、CTMark の C ファイル284本で1.25倍（1.73秒 → 2.17秒）で、clang-20 `-O0 -g`（19.8秒）より9.1倍速い（`tests/bench_goosecc.py --g`）。`-g` なしのオブジェクトは、`__PRETTY_FUNCTION__` を使う49本（その文字列だけが違う）を除いて B4 とバイト単位で同一である。
 
 残る44本の差は、すべて生成コードの違いから来る。clang は const 変数の読み出しを畳み込み（18本）、`always_inline` 関数を `-O0` でもインライン展開し（12本）、アドレスの差や文字列リテラルの `strlen` などを畳み込む（9本）。ほかに NRVO と空の構造体（3本）、clang が定数長の配列にする VLA（2本）がある。
 
@@ -317,6 +320,10 @@ tests/run.py --goosecc frontend-goose/build/goosecc -j3
 tests/suite.py --goovm build/tools/goovm-llc/goovm-llc --cc build/tools/goovm-cc/goovm-cc \
     --variants O0,g,mem2reg,cc,cc-g --verify-dwarf -j3
 tests/suite_goosecc.py --goosecc frontend-goose/build/goosecc --variants O0,g -j3
+tests/dwarf_diff.py --corpus torture,unit,regress,bench,ctmark --verify -j 2 -q \
+    --goosecc frontend-goose/build/goosecc --json dwarf.json      # B5：DWARF を clang -O0 -g と比較
+tests/gdb_oracle.py --goosecc frontend-goose/build/goosecc --corpus c,sample,ctmark -j 2   # B5：gdb で比較
+tests/bench_goosecc.py --goosecc frontend-goose/build/goosecc --g -n 3   # B5：-g の時間
 bench/e2e/compilers.py <CTMark O0 の compile_commands.json> --goovm-cc build/tools/goovm-cc/goovm-cc \
     --goosecc frontend-goose/build/goosecc --runs 3 [--g]
 ```
