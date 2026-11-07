@@ -1198,7 +1198,9 @@ recursive fn context_of(m: u32) -> u32 {
     } else if M.kind == MD_TYPEDEF {
         f = typedef_func(M.a as i64);
     }
-    if f < 0 { return cu_die; }
+    // a nodebug function has no subprogram: clang's RegionMap has no
+    // entry for it, and the unit is the context (G1)
+    if f < 0 || sym_has_attr(f, AM_NODEBUG) { return cu_die; }
     return subprogram_die(f);
 }
 

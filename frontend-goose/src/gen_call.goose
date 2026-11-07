@@ -233,6 +233,7 @@ var inl_ok = dictionary<u64, u32> {};      // function -> 1 can be inlined, 2 ca
 var inl_state = dictionary<u64, u32> {};   // function -> 1 queued for its dropped lowering
 var inl_work: i64[>..<] = [];
 var inl_locals: i64[>..] = [];
+var inl_pslots: u32[>..] = [];
 
 // The function a call expands in place, or -1.
 fn inline_target(n: u32) -> i64 {
@@ -323,20 +324,25 @@ recursive fn inline_call(n: u32, F: i64, dst: u32) -> u32 {
     let fdn = nodes[def];
     let rq = unqual(types[syms[F].ty >> 4].base);
     let np = fdn.c as i64;
-    // the arguments, into the parameters' slots (fresh per expansion)
-    let lmark = inl_locals.len;
-    inline_locals(fdn.b);
-    ensure_sym_tables();
-    for k in lmark..inl_locals.len { sym_gen[inl_locals[k]].addr = NONE; }
-    inl_locals.resize(lmark);
+    // the callee first, as clang emits it before the arguments
+    inline_ref(F);
+    // the arguments, into the parameters' slots (fresh per expansion; an
+    // argument may expand F itself, so the slots are bound afterwards)
+    let pmark = inl_pslots.len;
     for i in np {
         let p = nlist[fdn.v + i] as i64;
         let pq = unqual(syms[p].ty);
         let slot = alloca(type_size(pq), local_align(p, pq));
         store_any(pq, nlist[nd.v + i], slot);
-        sym_gen[p].addr = slot;
+        inl_pslots.push(slot);
     }
-    inline_ref(F);
+    ensure_sym_tables();
+    for i in np { sym_gen[nlist[fdn.v + i] as i64].addr = inl_pslots[pmark + i]; }
+    inl_pslots.resize(pmark);
+    let lmark = inl_locals.len;
+    inline_locals(fdn.b);
+    for k in lmark..inl_locals.len { sym_gen[inl_locals[k]].addr = NONE; }
+    inl_locals.resize(lmark);
     // the caller's state
     let s_cont = inl_cont;
     let s_slot = inl_slot;
