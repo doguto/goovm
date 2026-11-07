@@ -8,6 +8,7 @@
 | `realworld_mixed.py` | (v0) links SPASS and consumer-typeset from a mix of goovm and clang objects |
 | `suite_goosecc.py` | the same corpora compiled by goosecc (`frontend-goose/`, no LLVM) |
 | `bench_goosecc.py` | compile speed and memory of `goosecc -c` vs `clang-20 -O0 -c` and `tcc -c` on CTMark |
+| `bench_hcache.py` | goosecc's header cache: CTMark compile times with the cache disabled, cold and warm, vs `tcc -c` and `clang-20 -O0 -c` |
 
 ## run.py
 
@@ -158,4 +159,25 @@ Compile speed of `goosecc -c` against `clang-20 -O0 -c` and TinyCC
 
 ```
 tests/bench_goosecc.py --goosecc frontend-goose/build/goosecc -n 3 [--md out.md] [--json out.json] [program ...]
+```
+
+goosecc uses its header cache by default (`frontend-goose/README.md`);
+run with `GOOSECC_CACHE=off` to measure it without, as B2 and B3 did.
+
+## bench_hcache.py
+
+The header cache of goosecc (milestone B4): every C file of a CTMark
+`compile_commands.json` (llvm-test-suite configured with
+`cmake/caches/O0.cmake`; the 316 C files of sqlite3, SPASS, ClamAV,
+consumer-typeset, lencod, mafft and 7zip) compiled with the cache
+disabled (`off`), with an empty cache (`cold`), with the cache a previous
+compile of the same file filled (`warm`), by tcc and by the configured
+clang command; the variants interleaved file by file, best of N
+wall-clock runs, single-threaded, and goosecc's phases from one `--time`
+run per file and variant. `--build` adds a first build: all the files
+once, in order, with one cache that starts empty.
+
+```
+tests/bench_hcache.py compile_commands.json --goosecc frontend-goose/build/goosecc -n 5 \
+    [--build] [--no-clang] [--md out.md] [--json out.json] [program ...]
 ```

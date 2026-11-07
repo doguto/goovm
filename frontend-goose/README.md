@@ -130,6 +130,37 @@ other builds of goosecc (never read).
 
 ## Tests
 
+### Header cache tests (B4)
+
+```bash
+cd frontend-goose
+tests/cache_check.py --corpus torture,unit,regress,bench,ctmark -j 2     # outputs off / cold / warm / warm2 / shared identical
+GOOSECC_CACHE_QUOTED=1 tests/cache_check.py -j 2                        # the same with every "..." include a unit
+tests/cache_adversarial.py                                              # 16 situations where a replay could go wrong
+../tests/bench_hcache.py <CTMark compile_commands.json> --goosecc build/goosecc -n 5 --build --md bench.md
+```
+
+- `cache_check.py` compiles every corpus file in five modes (`-E`,
+  `--dump-ast`, `--layout-check`, `-c`, `-c -g`) with the cache disabled,
+  cold (an empty cache of the file's own), warm (the same cache again),
+  warm2 (once more: it must record nothing) and shared (one cache for the
+  whole run, written by the parallel workers at once); the output file,
+  standard output, standard error with `--pp-state-hash=v` and the exit
+  status of every run must be those of the run without the cache.
+- `cache_adversarial.py` builds small trees of headers and checks, in
+  each, that every compile with the cache gives what the same compile
+  gives without it, and that the cache hits or misses as it should: a
+  header edited keeping its size and mtime, a header edited within the
+  racy window, different `-D`/`-U` and macro states, include order,
+  `#include_next`, `__COUNTER__`, `#pragma once`/`push_macro`/`pack`/
+  `poison`/`system_header`, `__DATE__`/`__TIME__`, a symlinked and a
+  moved directory, relative includes from another directory, a deleted
+  or newly shadowing header, eight concurrent writers, corrupted and
+  truncated cache files, eviction, and the default policy.
+- With a cache in `GOOSECC_CACHE`, the oracles below and
+  `tests/suite_goosecc.py` and `tests/run.py` run with it warm; README's
+  results say what they gave.
+
 ### Compiler tests (B2)
 
 The lowering and the back-end are checked by running programs: every test

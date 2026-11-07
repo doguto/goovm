@@ -1078,7 +1078,7 @@ preprocessing of the unit (the effect is serialized at every level of
 nesting); appending manifest records instead of rewriting them, one
 flat directory (`mkdir` and `ext4` inode allocation were a third of a
 cold compile), and writing a blob in three pieces without assembling it
-halved it. README.md has the measurements.
+cut it by about a third. README.md has the measurements.
 
 B4 also drops the Goose runtime's `madvise(MADV_NOHUGEPAGE)` per data
 stack region at start-up, unless the kernel's transparent huge pages are
