@@ -69,8 +69,11 @@ var ra_carry = false;    // the current instruction's registers stay locked into
 //   ncl   calls and legacy lowerings before it in its block (saturating)
 //   kind  for instructions: how it is lowered (K_*)
 //   hint  the register its (only) use wants it in: a return value, a call argument
+//   nev   uses by an extractvalue in its block (saturating): an aggregate call
+//         result whose uses are all extractvalues gets their values in its
+//         return registers (call_result)
 //   last  last use (local position), for values used only in their block
-struct VInfo { reg: u8, st: u8, home: u8, nuse: u8, ncl: u8, kind: u8, hint: u8, spare: u8, last: u32, off: i32 }
+struct VInfo { reg: u8, st: u8, home: u8, nuse: u8, ncl: u8, kind: u8, hint: u8, nev: u8, last: u32, off: i32 }
 var vi: VInfo[>..] = [];
 var t_off: i32[>..] = [];       // PHI temp slots (blocks that need them)
 var b_tag: u32[>..] = [];       // per local block: == pp_epoch if its PHIs need temp slots
@@ -187,6 +190,7 @@ let K_T = 1;
 let K_B = 2;
 let K_CALL = 3;
 let K_ALL = 4;
+let K_DONE = 5;    // an extractvalue whose value the call before it defined (call_result)
 let K_W = 16;
 let OP_KIND: u8[84] = [
     0, 0, 0, 0, 0, 1, 1, 1,  // ret br condbr switch unreachable add sub mul
@@ -194,7 +198,7 @@ let OP_KIND: u8[84] = [
     1, 1, 1, 1, 1, 1, 1, 1,  // lshr ashr icmp select zext sext trunc ptrtoint
     1, 1, 0, 1, 17, 0, 19, 0,  // inttoptr bitcast alloca load store gep call phi
     1, 1, 1, 1, 1, 1, 1, 1,  // fadd fsub fmul fdiv fneg fcmp fpext fptrunc
-    1, 1, 1, 1, 2, 2, 1, 1,  // fptosi fptoui sitofp uitofp extractvalue insertvalue extractelt insertelt
+    1, 1, 1, 1, 1, 2, 1, 1,  // fptosi fptoui sitofp uitofp extractvalue insertvalue extractelt insertelt
     2, 2, 2, 2, 18, 16, 16, 2,  // shuffle dynalloca stacksave stackrestore vastart memcpy memset ctlz
     2, 2, 2, 2, 2, 2, 2, 2,  // cttz ctpop bswap bitreverse fshl fshr ovf scmp
     2, 1, 1, 1, 2, 18, 18, 18,  // ucmp fabs copysign fsqrt isfpclass cmpxchg atomicrmw fence
@@ -208,6 +212,7 @@ fn inst_kind(I: Inst) -> u32 {
     if op >= GIR_NOPS { return K_B; }
     let k: u32 = OP_KIND[op] & 15;
     if k != K_T { return k; }
+    if op == GIR_EXTRACTVALUE { return ev_kind(I.ty); }
     // the type that decides: the compared / stored / cast source type, or the result
     var t: u32 = I.ty;
     if op == GIR_ICMP || op == GIR_FCMP || op == GIR_STORE { t = I.aux; }
@@ -217,6 +222,14 @@ fn inst_kind(I: Inst) -> u32 {
     if rc == RC_VX { return vx_kind(I, op, t); }
     if op < GIR_ZEXT { return K_A; }   // binops, icmp
     return inst_kind2(I, op, t, rc);
+}
+// extractvalue of a field of a register class is a load from the aggregate's
+// memory (INT fields whose store size is their register width: no odd sizes).
+fn ev_kind(t: u32) -> u32 {
+    let rc = t_rc[t];
+    if in_xmm(rc) { return K_A; }
+    if rc == RC_GPR && store_of(t) == int_bytes(bits_of(t)) { return K_A; }
+    return K_B;
 }
 // Operations on vectors that live in xmm registers; the others are legacy
 // (lane by lane in memory).
@@ -392,7 +405,7 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
     f_asm = false;
     let nv: i64 = f_nins as i64 + f_nargs;
     assert(vi.len >= nv);
-    let z = VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, hint: NOREG, spare: 0, last: 0, off: 0 };
+    let z = VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, hint: NOREG, nev: 0, last: 0, off: 0 };
     for q in 0..nv { vi[q] = z; }
     // static allocas (entry block): their uses need no bookkeeping
     let E = blocks[0];
@@ -419,6 +432,10 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
             if m >= U_GEP { pp_runs(I, m, j, lo, ncl, mw, nodef); }
             if op == GIR_RET { pp_hint(I.a, RAX); }
             else if op == GIR_CALL { pp_call_hints(I); }
+            else if op == GIR_EXTRACTVALUE && gir_kind(I.a) == GIR_V_INST {
+                let u = gir_idx(I.a) - f_first_inst;
+                if u >= lo && u < j && vi[u].nev != 255 { vi[u].nev++; }
+            }
             if op <= GIR_SWITCH || op == GIR_INDIRECTBR { pp_term(I, op, b as! u32, j, lo, ncl, mw); }
             // the instruction itself
             if kd & K_W != 0 { mw = j + 1; }

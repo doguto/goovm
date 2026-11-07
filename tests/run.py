@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Differential tests for goovm-llc.
 
-Programs: tests/c/*.c, tests/cxx/*.cpp, and tests/mixed/<name>/ (several C
-and C++ files linked together). For each program:
+Programs: tests/c/*.c, tests/cxx/*.cpp, tests/mixed/<name>/ (several C
+and C++ files linked together) and tests/ll/<name>/ (hand-written LLVM IR
+files, for IR shapes clang does not produce, with a C driver; the reference
+build compiles the IR with clang -O0 too). For each program:
   reference:  clang-20 / clang++-20 -O0 (run, record stdout + exit code)
   O0:         -O0 -emit-llvm -> goovm-llc --backend=goose -> link -> run, compare
   mem2reg:    -O0 -Xclang -disable-O0-optnone -emit-llvm
@@ -57,6 +59,10 @@ def execute(exe):
 
 def is_cxx(s):
     return s.endswith((".cpp", ".cc"))
+
+
+def is_ll(s):
+    return s.endswith(".ll")
 
 
 class Prog:
@@ -121,6 +127,10 @@ def test_one(p, args):
         def bitcode(s, i, variant):
             cc = compiler(s, args)
             base = os.path.join(wd, f"{variant}{i}")
+            if is_ll(s):
+                passes = "verify" if variant == "O0" else "mem2reg" if variant == "mem2reg" else args.opt_passes
+                step([args.opt, f"-passes={passes}", s, "-o", base + ".bc"], "opt")
+                return base + ".bc"
             if variant == "O0":
                 step([cc, "-O0", "-w", "-c", "-emit-llvm", s, "-o", base + ".bc"], "clang -emit-llvm")
                 return base + ".bc"
@@ -179,11 +189,13 @@ def programs():
     for f in sorted(os.listdir(os.path.join(HERE, "cxx"))):
         if f.endswith(".cpp"):
             out.append(Prog("cxx/" + f[:-4], [os.path.join(HERE, "cxx", f)]))
-    md = os.path.join(HERE, "mixed")
-    for d in sorted(os.listdir(md)):
-        srcs = sorted(os.path.join(md, d, f) for f in os.listdir(os.path.join(md, d)) if f.endswith((".c", ".cpp")))
-        if srcs:
-            out.append(Prog("mixed/" + d, srcs))
+    for kind in ("mixed", "ll"):
+        md = os.path.join(HERE, kind)
+        for d in sorted(os.listdir(md)):
+            srcs = sorted(os.path.join(md, d, f) for f in os.listdir(os.path.join(md, d))
+                          if f.endswith((".c", ".cpp", ".ll")))
+            if srcs:
+                out.append(Prog(kind + "/" + d, srcs))
     return out
 
 
@@ -212,7 +224,7 @@ def main():
         args.work = tmp
     progs = programs()
     if args.goosecc:
-        progs = [p for p in progs if not p.cxx]   # goosecc compiles C
+        progs = [p for p in progs if not p.cxx and not any(is_ll(s) for s in p.srcs)]   # goosecc compiles C
     if args.filter:
         progs = [p for p in progs if any(f in p.name for f in args.filter)]
 

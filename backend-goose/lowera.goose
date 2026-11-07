@@ -969,6 +969,26 @@ fn lower_store_a(I: Inst) {
     if t == GIR_T_F32 { movss_store(m, x); } else { movsd_store(m, x); }
 }
 
+// extractvalue of a field of a register class (ev_kind): a load from the
+// aggregate's memory (its home, a deferred load's memory or a constant), at
+// the field's width, so that data stored by wide stores (a call's return
+// registers) is read back by loads of the same width.
+fn lower_extractvalue_a(I: Inst, j: u32) {
+    let t = I.ty;
+    let m = m_add(val_mem(I.a), I.b);
+    if in_xmm(rc_of(t)) {
+        let xd = ra_xdef(j);
+        xmm_load_t(xd, m, t);
+        ra_xset(j, xd);
+        return;
+    }
+    let b = bits_of(t);
+    let rd = ra_def(j);
+    load_int(rd, m, b);
+    if !exact_width(b) { zext_reg(rd, b); }
+    ra_set(j, rd, false);
+}
+
 // ------------------------------------------------------------------ GEP
 
 // The address computed by GEP I as a memory operand (registers locked).

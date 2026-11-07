@@ -404,6 +404,7 @@ fn gen_inst(gi: u32, cur: u32) {
     let next = cur + 1;
     cur_pos = j;
     let k: u32 = vi[j].kind;
+    if k == K_DONE { return; }   // (an extractvalue the call before it defined)
     if k == K_A || k == K_CALL {
         match I.op {   // (the most frequent first: the match is a chain of compares)
             GIR_LOAD => lower_load_a(I, j),
@@ -461,8 +462,13 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_ALLOCA => {},
             GIR_PHI => lower_phi(I, j, cur),
             GIR_MEMCPY, GIR_MEMSET => lower_memcpy_a(I),
+            GIR_EXTRACTVALUE => lower_extractvalue_a(I, j),
             _ => ud2(),
         }
+        ra_end_inst();
+        return;
+    }
+    if I.op == GIR_LOAD && agg_load_pend(I, j) {
         ra_end_inst();
         return;
     }
@@ -470,6 +476,22 @@ fn gen_inst(gi: u32, cur: u32) {
     gen_inst_b(I, j);
     ra_tierb_end();
     ra_end_inst();
+}
+
+// A single-use aggregate load from a frame or rip-relative address whose user
+// reads the aggregate from memory (a return, an extractvalue) is deferred
+// like a register-class load (DESIGN.md §5): the user reads the source memory
+// itself instead of a copy in the load's home (`load {<2 x float>, <2 x
+// float>}, ptr %retval; ret` is two movq into xmm0, xmm1).
+fn agg_load_pend(I: Inst, j: u32) -> bool {
+    if rc_of(I.ty) != RC_MEM || I.flags & (IF_VOLATILE | IF_ORD_MASK) != 0 { return false; }
+    let u = vi[j].last;
+    if vi[j].nuse != 1 || vi[j].st & (ST_GLOB | ST_NODEF) != 0 || u <= j { return false; }
+    let U = M.insts[f_first_inst + u];
+    if U.op != GIR_RET && !(U.op == GIR_EXTRACTVALUE && vi[u].kind == K_A) { return false; }
+    if !addr_is_static(I.a) { return false; }
+    ra_pend_add(j, ra_addr(I.a));
+    return true;
 }
 
 // Legacy lowerings (A1): every caller-saved register is free when they run.
@@ -682,7 +704,7 @@ fn gen_function(fi: u32) {
     let blocks = M.blocks[f.first_block..f.first_block + f.n_blocks];
     let nv: i64 = f.n_inst as i64 + f.n_args;
     if vi.len < nv {
-        vi.resize(nv, VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, hint: NOREG, spare: 0, last: 0, off: 0 });
+        vi.resize(nv, VInfo { reg: NOREG, st: 0, home: H_NONE, nuse: 0, ncl: 0, kind: 0, hint: NOREG, nev: 0, last: 0, off: 0 });
     }
     if t_off.len < f.n_inst { t_off.resize(f.n_inst, 0); }
     if b_tag.len < f.n_blocks { b_tag.resize(f.n_blocks, 0); }

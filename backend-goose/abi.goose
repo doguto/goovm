@@ -517,7 +517,54 @@ fn call_result(j: u32, t: u32) {
         ra_set(j, 16 + XMM0, false);
         return;
     }
+    if c == RC_MEM && vi[j].st & ST_GLOB == 0 && vi[j].nev == vi[j].nuse && vi[j].nuse != 255 && ret_parts_fuse(j, t) {
+        return;
+    }
     ret_result(j, t);
+}
+// An aggregate call result whose uses are all extractvalues in its block
+// (`{<2 x float>, <2 x float>}`, `{double, double}`, `{ptr, i64}` returns):
+// each extractvalue that reads exactly one return register's part gets its
+// value in that register, without the round trip through the aggregate's
+// home, and its instruction emits nothing (K_DONE). False (nothing done) if
+// a use reads anything else, two read the same part, or a part is x87.
+fn ret_parts_fuse(j: u32, t: u32) -> bool {
+    classify_ret(t);
+    for p in ret_parts { if p.kind == RP_X87 { return false; } }
+    let n: u32 = vi[j].nuse;
+    if n == 0 { return true; }
+    let r = inst_ref(j);
+    let last = vi[j].last;
+    var claimed: u32 = 0;
+    for pass in 2 {
+        var e = j + 1;
+        while e <= last {
+            let E = M.insts[f_first_inst + e];
+            if E.op == GIR_EXTRACTVALUE && E.a == r {
+                var k: u32 = 32;
+                for p, q in ret_parts {
+                    if p.off == E.b { k = q as! u32; }
+                }
+                if k == 32 { return false; }
+                let p = ret_parts[k];
+                let ft = E.ty;
+                let fc = rc_of(ft);
+                if pass == 0 {
+                    if claimed & bit(k) != 0 || store_of(ft) != p.size { return false; }
+                    if p.kind == RP_XMM && !in_xmm(fc) { return false; }
+                    if p.kind == RP_GPR && (fc != RC_GPR || !exact_width(bits_of(ft))) { return false; }
+                    claimed |= bit(k);
+                } else {
+                    let reg: u32 = if p.kind == RP_XMM { 16 + p.reg } else { p.reg };
+                    ra_set(e, reg, p.kind == RP_GPR && bits_of(ft) < 64);
+                    vi[e].kind = K_DONE;
+                }
+            }
+            e++;
+        }
+        if pass == 0 && claimed == 0 { return false; }
+    }
+    return true;
 }
 
 // Calls whose arguments are all plain INT, f32 or f64 values in registers
