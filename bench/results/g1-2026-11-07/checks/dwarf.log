@@ -1,0 +1,320 @@
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20000822-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20001026-1.c: same-loc, 26 vs 26 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010209-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010605-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20020412-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20030501-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20040308-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20040423-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20040520-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20040811-1.c: same-loc, 14 vs 14 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20041218-2.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20061220-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20070919-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20080424-1.c: diff, 30 vs 25 DIEs, -variable 4, -subprogram 2, -formal_parameter 2, -lexical_block 2, +subprogram 2, +variable 2, +formal_parameter 1, +lexical_block 1
+--- clang
++++ goosecc
+@@ -12,7 +12,11 @@
+   base_type name="__ARRAY_SIZE_TYPE__" byte_size=0x08 encoding=DW_ATE_unsigned
+-  subprogram name="foo" decl_file="20080424-1.c" decl_line=16 prototyped=true inline=DW_INL_inlined
+-    formal_parameter name="x" decl_file="20080424-1.c" decl_line=16 type=->pointer_type "int (*)[3][3]"
+-    variable name="i" decl_file="20080424-1.c" decl_line=18 type=->base_type "int"
+-    lexical_block 
+-      variable name="k" decl_file="20080424-1.c" decl_line=21 type=->base_type "int"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="main" decl_file="20080424-1.c" decl_line=27 type=->base_type "int" external=true
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="foo" decl_file="20080424-1.c" decl_line=16 prototyped=true
++    formal_parameter location=DW_OP_fbreg name="x" decl_file="20080424-1.c" decl_line=16 type=->pointer_type "int (*)[3][3]"
++    variable location=DW_OP_fbreg name="i" decl_file="20080424-1.c" decl_line=18 type=->base_type "int"
++    lexical_block code=CODE
++      variable location=DW_OP_fbreg name="k" decl_file="20080424-1.c" decl_line=21 type=->base_type "int"
++  pointer_type type=->array_type "int[3]"
++  array_type type=->base_type "int"
++    subrange_type type=->base_type "__ARRAY_SIZE_TYPE__" count=0x03
+   pointer_type type=->array_type "int[3][3]"
+@@ -21,10 +25 @@
+     subrange_type type=->base_type "__ARRAY_SIZE_TYPE__" count=0x03
+-  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="main" decl_file="20080424-1.c" decl_line=27 type=->base_type "int" external=true
+-    inlined_subroutine abstract_origin=->subprogram "foo" code=CODE call_file="20080424-1.c" call_line=29 call_column=3
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "x"
+-      variable location=DW_OP_fbreg abstract_origin=->variable "i"
+-      lexical_block code=CODE
+-        variable location=DW_OP_fbreg abstract_origin=->variable "k"
+-  pointer_type type=->array_type "int[3]"
+-  array_type type=->base_type "int"
+-    subrange_type type=->base_type "__ARRAY_SIZE_TYPE__" count=0x03
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20090113-3.c: diff, 69 vs 63 DIEs, -formal_parameter 8, -member 4, +formal_parameter 4, +member 4, -pointer_type 3, +pointer_type 3, -subprogram 2, -inlined_subroutine 2
+--- clang
++++ goosecc
+@@ -19,18 +19,2 @@
+     variable location=DW_OP_fbreg name="live_throughout" decl_file="20090113-3.c" decl_line=134 type=->typedef "bitmap_head"
+-  subprogram name="bmp_iter_set" decl_file="20090113-3.c" decl_line=80 prototyped=true type=->base_type "unsigned char" inline=DW_INL_inlined
+-    formal_parameter name="bi" decl_file="20090113-3.c" decl_line=80 type=->pointer_type "bitmap_iterator *"
+-    formal_parameter name="bit_no" decl_file="20090113-3.c" decl_line=80 type=->pointer_type "unsigned int *"
+-  base_type name="unsigned char" encoding=DW_ATE_unsigned_char byte_size=0x01
+-  pointer_type type=->typedef "bitmap_iterator"
+-  typedef type=->structure_type "structure " name="bitmap_iterator" decl_file="20090113-3.c" decl_line=38
+-  structure_type byte_size=0x20 decl_file="20090113-3.c" decl_line=32
+-    member name="elt1" type=->pointer_type "bitmap_element *" decl_file="20090113-3.c" decl_line=34 data_member_location=0x00
+-    member name="elt2" type=->pointer_type "bitmap_element *" decl_file="20090113-3.c" decl_line=35 data_member_location=0x08
+-    member name="word_no" type=->base_type "unsigned int" decl_file="20090113-3.c" decl_line=36 data_member_location=0x10
+-    member name="bits" type=->typedef "BITMAP_WORD" decl_file="20090113-3.c" decl_line=37 data_member_location=0x18
+-  pointer_type type=->typedef "bitmap_element"
+-  pointer_type type=->base_type "unsigned int"
+-  subprogram name="bmp_iter_next" decl_file="20090113-3.c" decl_line=73 prototyped=true inline=DW_INL_inlined
+-    formal_parameter name="bi" decl_file="20090113-3.c" decl_line=73 type=->pointer_type "bitmap_iterator *"
+-    formal_parameter name="bit_no" decl_file="20090113-3.c" decl_line=73 type=->pointer_type "unsigned int *"
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="foobar" decl_file="20090113-3.c" decl_line=122 prototyped=true
+@@ -39,8 +23,2 @@
+     variable location=DW_OP_fbreg name="regno" decl_file="20090113-3.c" decl_line=125 type=->base_type "unsigned int"
+-    inlined_subroutine abstract_origin=->subprogram "bmp_iter_set" code=CODE call_file="20090113-3.c" call_line=127 call_column=8
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "bi"
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "bit_no"
+-    inlined_subroutine abstract_origin=->subprogram "bmp_iter_next" code=CODE call_file="20090113-3.c" call_line=128 call_column=8
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "bi"
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "bit_no"
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="bmp_iter_set_init" decl_file="20090113-3.c" decl_line=41 prototyped=true
+@@ -50,3 +28,10 @@
+     formal_parameter location=DW_OP_fbreg name="bit_no" decl_file="20090113-3.c" decl_line=42 type=->pointer_type "unsigned int *"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="bmp_iter_set" decl_file="20090113-3.c" decl_line=80 prototyped=true type=->base_type "unsigned char"
++    formal_parameter location=DW_OP_fbreg name="bi" decl_file="20090113-3.c" decl_line=80 type=->pointer_type "bitmap_iterator *"
++    formal_parameter location=DW_OP_fbreg name="bit_no" decl_file="20090113-3.c" decl_line=80 type=->pointer_type "unsigned int *"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="bmp_iter_next" decl_file="20090113-3.c" decl_line=73 prototyped=true
++    formal_parameter location=DW_OP_fbreg name="bi" decl_file="20090113-3.c" decl_line=73 type=->pointer_type "bitmap_iterator *"
++    formal_parameter location=DW_OP_fbreg name="bit_no" decl_file="20090113-3.c" decl_line=73 type=->pointer_type "unsigned int *"
+   base_type name="int" encoding=DW_ATE_signed byte_size=0x04
++  base_type name="unsigned char" encoding=DW_ATE_unsigned_char byte_size=0x01
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20090219-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/920415-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/920428-2.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/920501-7.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/920612-2.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/920721-2.c: diff, 7 vs 12 DIEs, +base_type 2, +variable 1, +array_type 1, +subrange_type 1
+--- clang
++++ goosecc
+@@ -5,3 +5,8 @@
+     variable location=DW_OP_fbreg name="__vla_expr0" type=->base_type "unsigned long" artificial=true
++    variable location=DW_OP_fbreg, DW_OP_deref name="x" decl_file="920721-2.c" decl_line=3 type=->array_type "double[]"
+   base_type name="int" encoding=DW_ATE_signed byte_size=0x04
+   base_type name="unsigned long" encoding=DW_ATE_unsigned byte_size=0x08
++  array_type type=->base_type "double"
++    subrange_type type=->base_type "__ARRAY_SIZE_TYPE__" count=->variable "__vla_expr0"
++  base_type name="double" encoding=DW_ATE_float byte_size=0x08
++  base_type name="__ARRAY_SIZE_TYPE__" byte_size=0x08 encoding=DW_ATE_unsigned
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/920721-4.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/920929-1.c: same-loc, 13 vs 13 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/921017-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/921215-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/931002-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/991014-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/align-nest.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/comp-goto-2.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/nest-align-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/nest-stdar-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/nestfunc-1.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/nestfunc-2.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/nestfunc-3.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/nestfunc-5.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/nestfunc-6.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/nestfunc-7.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr22061-3.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr22061-4.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr24135.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr28865.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr33992.c: diff, 17 vs 14 DIEs, -formal_parameter 2, -variable 2, -subprogram 1, -pointer_type 1, -base_type 1, -inlined_subroutine 1, +subprogram 1, +formal_parameter 1
+--- clang
++++ goosecc
+@@ -4,7 +4,2 @@
+     formal_parameter location=DW_OP_fbreg name="i" decl_file="pr33992.c" decl_line=4 type=->base_type "unsigned long long"
+-  subprogram name="foo" decl_file="pr33992.c" decl_line=11 prototyped=true inline=DW_INL_inlined
+-    formal_parameter name="r" decl_file="pr33992.c" decl_line=11 type=->pointer_type "unsigned long long *"
+-    variable name="i" decl_file="pr33992.c" decl_line=13 type=->base_type "int"
+-  pointer_type type=->base_type "unsigned long long"
+-  base_type name="int" encoding=DW_ATE_signed byte_size=0x04
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="do_test" decl_file="pr33992.c" decl_line=23 prototyped=true external=true
+@@ -12,6 +7,8 @@
+     variable location=DW_OP_fbreg name="i" decl_file="pr33992.c" decl_line=25 type=->base_type "int"
+-    inlined_subroutine abstract_origin=->subprogram "foo" code=CODE call_file="pr33992.c" call_line=28 call_column=5
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "r"
+-      variable location=DW_OP_fbreg abstract_origin=->variable "i"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="foo" decl_file="pr33992.c" decl_line=11 prototyped=true
++    formal_parameter location=DW_OP_fbreg name="r" decl_file="pr33992.c" decl_line=11 type=->pointer_type "unsigned long long *"
++    variable location=DW_OP_fbreg name="i" decl_file="pr33992.c" decl_line=13 type=->base_type "int"
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="main" decl_file="pr33992.c" decl_line=31 type=->base_type "int" external=true
+     variable location=DW_OP_fbreg name="r" decl_file="pr33992.c" decl_line=33 type=->base_type "unsigned long long"
++  base_type name="int" encoding=DW_ATE_signed byte_size=0x04
++  pointer_type type=->base_type "unsigned long long"
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr36093.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr39228.c: diff, 24 vs 15 DIEs, -formal_parameter 6, -variable 6, -subprogram 4, +subprogram 4, +formal_parameter 3, +variable 3, -inlined_subroutine 3
+--- clang
++++ goosecc
+@@ -1,24 +1,15 @@
+ compile_unit producer=PRODUCER language=DW_LANG_C11 name="/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr39228.c" comp_dir="agent-aa8ba5719319454b2" code=CODE
+-  subprogram name="testf" decl_file="pr39228.c" decl_line=6 prototyped=true type=->base_type "int" inline=DW_INL_inlined
+-    formal_parameter name="b" decl_file="pr39228.c" decl_line=6 type=->base_type "float"
+-    variable name="c" decl_file="pr39228.c" decl_line=8 type=->base_type "float"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="main" decl_file="pr39228.c" decl_line=27 type=->base_type "int" external=true
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="testf" decl_file="pr39228.c" decl_line=6 prototyped=true type=->base_type "int"
++    formal_parameter location=DW_OP_fbreg name="b" decl_file="pr39228.c" decl_line=6 type=->base_type "float"
++    variable location=DW_OP_fbreg name="c" decl_file="pr39228.c" decl_line=8 type=->base_type "float"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="test" decl_file="pr39228.c" decl_line=13 prototyped=true type=->base_type "int"
++    formal_parameter location=DW_OP_fbreg name="b" decl_file="pr39228.c" decl_line=13 type=->base_type "double"
++    variable location=DW_OP_fbreg name="c" decl_file="pr39228.c" decl_line=15 type=->base_type "double"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="testl" decl_file="pr39228.c" decl_line=20 prototyped=true type=->base_type "int"
++    formal_parameter location=DW_OP_fbreg name="b" decl_file="pr39228.c" decl_line=20 type=->base_type "long double"
++    variable location=DW_OP_fbreg name="c" decl_file="pr39228.c" decl_line=22 type=->base_type "long double"
+   base_type name="int" encoding=DW_ATE_signed byte_size=0x04
+   base_type name="float" encoding=DW_ATE_float byte_size=0x04
+-  subprogram name="test" decl_file="pr39228.c" decl_line=13 prototyped=true type=->base_type "int" inline=DW_INL_inlined
+-    formal_parameter name="b" decl_file="pr39228.c" decl_line=13 type=->base_type "double"
+-    variable name="c" decl_file="pr39228.c" decl_line=15 type=->base_type "double"
+   base_type name="double" encoding=DW_ATE_float byte_size=0x08
+-  subprogram name="testl" decl_file="pr39228.c" decl_line=20 prototyped=true type=->base_type "int" inline=DW_INL_inlined
+-    formal_parameter name="b" decl_file="pr39228.c" decl_line=20 type=->base_type "long double"
+-    variable name="c" decl_file="pr39228.c" decl_line=22 type=->base_type "long double"
+   base_type name="long double" encoding=DW_ATE_float byte_size=0x10
+-  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="main" decl_file="pr39228.c" decl_line=27 type=->base_type "int" external=true
+-    inlined_subroutine abstract_origin=->subprogram "testf" code=CODE call_file="pr39228.c" call_line=29 call_column=7
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "b"
+-      variable location=DW_OP_fbreg abstract_origin=->variable "c"
+-    inlined_subroutine abstract_origin=->subprogram "test" code=CODE call_file="pr39228.c" call_line=32 call_column=7
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "b"
+-      variable location=DW_OP_fbreg abstract_origin=->variable "c"
+-    inlined_subroutine abstract_origin=->subprogram "testl" code=CODE call_file="pr39228.c" call_line=35 call_column=7
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "b"
+-      variable location=DW_OP_fbreg abstract_origin=->variable "c"
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr41935.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr43220.c: same-loc, 20 vs 20 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr43783.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr51447.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr63843.c: diff, 19 vs 17 DIEs, -formal_parameter 2, -subprogram 1, -base_type 1, -inlined_subroutine 1, +subprogram 1, +formal_parameter 1, +base_type 1
+--- clang
++++ goosecc
+@@ -1,5 +1,2 @@
+ compile_unit producer=PRODUCER language=DW_LANG_C11 name="/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr63843.c" comp_dir="agent-aa8ba5719319454b2" code=CODE
+-  subprogram name="foo" decl_file="pr63843.c" decl_line=4 prototyped=true type=->base_type "unsigned short" inline=DW_INL_inlined
+-    formal_parameter name="v" decl_file="pr63843.c" decl_line=4 type=->base_type "unsigned short"
+-  base_type name="unsigned short" encoding=DW_ATE_unsigned byte_size=0x02
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="bar" decl_file="pr63843.c" decl_line=10 prototyped=true type=->base_type "unsigned short" external=true
+@@ -8,6 +5,7 @@
+     variable location=DW_OP_fbreg name="b" decl_file="pr63843.c" decl_line=13 type=->base_type "unsigned short"
+-    inlined_subroutine abstract_origin=->subprogram "foo" code=CODE call_file="pr63843.c" call_line=18 call_column=10
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "v"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="foo" decl_file="pr63843.c" decl_line=4 prototyped=true type=->base_type "unsigned short"
++    formal_parameter location=DW_OP_fbreg name="v" decl_file="pr63843.c" decl_line=4 type=->base_type "unsigned short"
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="main" decl_file="pr63843.c" decl_line=22 type=->base_type "int" external=true
+     variable location=DW_OP_fbreg name="x" decl_file="pr63843.c" decl_line=24 type=->array_type "unsigned char[8]"
++  base_type name="unsigned short" encoding=DW_ATE_unsigned byte_size=0x02
+   base_type name="int" encoding=DW_ATE_signed byte_size=0x04
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr65956.c: same-loc, 39 vs 39 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr70903.c: same-loc, 20 vs 20 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr71494.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr79043.c: diff, 11 vs 10 DIEs, -subprogram 1, -inlined_subroutine 1, +subprogram 1
+--- clang
++++ goosecc
+@@ -8,4 +8,3 @@
+   variable name="val" type=->base_type "int" external=true decl_file="pr79043.c" decl_line=3 location=DW_OP_addrx
+-  subprogram name="typepun" decl_file="pr79043.c" decl_line=10 type=->base_type "int" inline=DW_INL_inlined
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="main" decl_file="pr79043.c" decl_line=15 type=->base_type "int" external=true
+-    inlined_subroutine abstract_origin=->subprogram "typepun" code=CODE call_file="pr79043.c" call_line=18 call_column=3
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="typepun" decl_file="pr79043.c" decl_line=10 type=->base_type "int"
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr80692.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr82210.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr85169.c: same-loc, 16 vs 16 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr85331.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/stdarg-4.c: diff, 58 vs 50 DIEs, -formal_parameter 6, -member 4, -inlined_subroutine 4, +member 4, -subprogram 2, -pointer_type 2, +subprogram 2, +formal_parameter 2
+--- clang
++++ goosecc
+@@ -4,12 +4,2 @@
+   variable name="y" type=->base_type "long" external=true decl_file="stdarg-4.c" decl_line=4 location=DW_OP_addrx
+-  subprogram name="f1i" decl_file="stdarg-4.c" decl_line=7 prototyped=true external=true inline=DW_INL_inlined
+-    formal_parameter name="ap" decl_file="stdarg-4.c" decl_line=7 type=->pointer_type "__va_list_tag *"
+-  pointer_type type=->structure_type "__va_list_tag"
+-  structure_type name="__va_list_tag" byte_size=0x18
+-    member name="gp_offset" type=->base_type "unsigned int" decl_file="stdarg-4.c" decl_line=17 data_member_location=0x00
+-    member name="fp_offset" type=->base_type "unsigned int" decl_file="stdarg-4.c" decl_line=17 data_member_location=0x04
+-    member name="overflow_arg_area" type=->pointer_type "void *" decl_file="stdarg-4.c" decl_line=17 data_member_location=0x08
+-    member name="reg_save_area" type=->pointer_type "void *" decl_file="stdarg-4.c" decl_line=17 data_member_location=0x10
+-  base_type name="unsigned int" encoding=DW_ATE_unsigned byte_size=0x04
+-  pointer_type 
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="f1" decl_file="stdarg-4.c" decl_line=15 prototyped=true external=true
+@@ -17,7 +7,5 @@
+     variable location=DW_OP_fbreg name="ap" decl_file="stdarg-4.c" decl_line=17 type=->typedef "va_list"
+-    inlined_subroutine abstract_origin=->subprogram "f1i" code=CODE call_file="stdarg-4.c" call_line=19 call_column=3
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "ap"
+     unspecified_parameters 
+-  subprogram name="f2i" decl_file="stdarg-4.c" decl_line=24 prototyped=true external=true inline=DW_INL_inlined
+-    formal_parameter name="ap" decl_file="stdarg-4.c" decl_line=24 type=->pointer_type "__va_list_tag *"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="f1i" decl_file="stdarg-4.c" decl_line=7 prototyped=true
++    formal_parameter location=DW_OP_fbreg name="ap" decl_file="stdarg-4.c" decl_line=7 type=->pointer_type "__va_list_tag *"
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="f2" decl_file="stdarg-4.c" decl_line=33 prototyped=true external=true
+@@ -25,7 +13,5 @@
+     variable location=DW_OP_fbreg name="ap" decl_file="stdarg-4.c" decl_line=35 type=->typedef "va_list"
+-    inlined_subroutine abstract_origin=->subprogram "f2i" code=CODE call_file="stdarg-4.c" call_line=37 call_column=3
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "ap"
+-      inlined_subroutine abstract_origin=->subprogram "f1i" code=CODE call_file="stdarg-4.c" call_line=29 call_column=3
+-        formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "ap"
+     unspecified_parameters 
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="f2i" decl_file="stdarg-4.c" decl_line=24 prototyped=true
++    formal_parameter location=DW_OP_fbreg name="ap" decl_file="stdarg-4.c" decl_line=24 type=->pointer_type "__va_list_tag *"
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="f3h" decl_file="stdarg-4.c" decl_line=42 prototyped=true type=->base_type "long" external=true
+@@ -48,4 +34,2 @@
+     variable location=DW_OP_fbreg name="ap" decl_file="stdarg-4.c" decl_line=92 type=->typedef "va_list"
+-    inlined_subroutine abstract_origin=->subprogram "f1i" code=CODE call_file="stdarg-4.c" call_line=107 call_column=3
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "ap"
+     unspecified_parameters 
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/va-arg-pack-1.c: diff, 65 vs 56 DIEs, -formal_parameter 6, -inlined_subroutine 5, -subprogram 1, +subprogram 1, +formal_parameter 1, +unspecified_parameters 1
+--- clang
++++ goosecc
+@@ -41,15 +41,6 @@
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="foo3" decl_file="va-arg-pack-1.c" decl_line=116 prototyped=true type=->base_type "int" external=true
+-  subprogram name="bar" decl_file="va-arg-pack-1.c" decl_line=122 prototyped=true type=->base_type "int" external=true inline=DW_INL_inlined
+-    formal_parameter name="x" decl_file="va-arg-pack-1.c" decl_line=122 type=->base_type "int"
+   subprogram code=CODE frame_base=DW_OP_reg6 RBP name="main" decl_file="va-arg-pack-1.c" decl_line=130 prototyped=true type=->base_type "int" external=true
+-    inlined_subroutine abstract_origin=->subprogram "bar" code=CODE call_file="va-arg-pack-1.c" call_line=132 call_column=7
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "x"
+-    inlined_subroutine abstract_origin=->subprogram "bar" code=CODE call_file="va-arg-pack-1.c" call_line=134 call_column=7
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "x"
+-    inlined_subroutine abstract_origin=->subprogram "bar" code=CODE call_file="va-arg-pack-1.c" call_line=136 call_column=7
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "x"
+-    inlined_subroutine abstract_origin=->subprogram "bar" code=CODE call_file="va-arg-pack-1.c" call_line=138 call_column=7
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "x"
+-    inlined_subroutine abstract_origin=->subprogram "bar" code=CODE call_file="va-arg-pack-1.c" call_line=140 call_column=7
+-      formal_parameter location=DW_OP_fbreg abstract_origin=->formal_parameter "x"
++  subprogram code=CODE frame_base=DW_OP_reg6 RBP name="bar" decl_file="va-arg-pack-1.c" decl_line=122 prototyped=true type=->base_type "int"
++    formal_parameter location=DW_OP_fbreg name="x" decl_file="va-arg-pack-1.c" decl_line=122 type=->base_type "int"
++    unspecified_parameters 
+   typedef type=->typedef "__builtin_va_list" name="va_list" decl_file="__stdarg_va_list.h" decl_line=12
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/vla-dealloc-1.c: same-loc, 14 vs 14 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/big_bit_concat.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/big_part_set.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/bigint.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/bit_concat.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/bit_select.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/bit_set.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/extern-inline-redef.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/integer_all_onesp.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/multiple_assign.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/negConst.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/part_select.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/part_select2.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/part_set.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/reduce_xor.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/reductions.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/test4.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/test_part_set.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Vector/sumarray-dbl.c: same-loc, 32 vs 32 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/2003-05-22-VarSizeArray.c: same-loc, 15 vs 15 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/DuffsDevice.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/PR10189.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/BenchmarkGame/spectral-norm.c: same-loc, 52 vs 52 DIEs
+/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/Polybench/linear-algebra/kernels/doitgen/doitgen.c: clang failed
+/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/Polybench/stencils/heat-3d/heat-3d.c: clang failed
+/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/engine.c: clang failed
+/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/test_libclamav_libclamav.c: clang failed
+/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/test_mbox_debugm.c: clang failed
+/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/mafft/blosum.c: clang failed
+/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/C/Alloc.c: same-loc, 179 vs 179 DIEs
+
+2357 files: 2268 identical, 12 identical but for frame-location forms, 0 identical as unordered sets, 9 differing, 68 not compiled
+differing lines (diff only): -formal_parameter 32, -inlined_subroutine 18, -subprogram 14, +subprogram 14, +formal_parameter 13, -variable 12, -member 8, +member 8, +variable 7, +pointer_type 7, -pointer_type 7, +base_type 6, -base_type 4, -lexical_block 2, +array_type 2, +subrange_type 2, -structure_type 2, +structure_type 2, +lexical_block 1, -array_type 1, -subrange_type 1, -typedef 1, +typedef 1, +unspecified_parameters 1
+llvm-dwarfdump --verify: 2289 objects, 0 failed

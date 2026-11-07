@@ -1,0 +1,6 @@
+
+torture  files  1708  ok  1665  diff    0  clang-invalid  43  goosecc-error   0  skipped   0  functions compared   7449
+unit     files   182  ok   165  diff    0  clang-invalid  17  goosecc-error   0  skipped   0  functions compared   2596
+regress  files    37  ok    35  diff    0  clang-invalid   2  goosecc-error   0  skipped   0  functions compared    544
+bench    files   102  ok   100  diff    0  clang-invalid   2  goosecc-error   0  skipped   0  functions compared   1698
+ctmark   files   328  ok   324  diff    0  clang-invalid   4  goosecc-error   0  skipped   0  functions compared  29070

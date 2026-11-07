@@ -1,0 +1,6 @@
+
+torture  files  1708  checked  1665  ok  1665  mismatch    0  goosecc-error   0  assertions   78173
+unit     files   182  checked   165  ok   165  mismatch    0  goosecc-error   0  assertions   72195
+regress  files    37  checked    35  ok    35  mismatch    0  goosecc-error   0  assertions   14202
+bench    files   102  checked   100  ok   100  mismatch    0  goosecc-error   0  assertions   95677
+ctmark   files   328  checked   324  ok   324  mismatch    0  goosecc-error   0  assertions  573750

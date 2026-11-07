@@ -393,6 +393,10 @@ recursive fn ex_val1(n: u32) -> u32 {
     let k = nd.kind as i64;
     if k == N_INT {
         let t = vty(nd.ty);
+        if nd.flags & NF_BCP != 0 {
+            // clang at -O0: the evaluator's answer, else 0
+            return c_int(if bcp_fold(nd.a) { 1 } else { 0 }, t);
+        }
         if tcls(t) == C_INT2 { return c_wide(nd.v as! u64, if nd.v < 0 { 0xFFFFFFFFFFFFFFFF } else { 0 as u64 }, t); }
         if t == GIR_T_I1 { return c_int(if nd.v != 0 { 1 } else { 0 }, t); }
         if t == GIR_T_VOID { return NONE; }
@@ -541,6 +545,10 @@ recursive fn ex_cast(n: u32) -> u32 {
     let ck = nd.op as i64;
     let a = nd.a;
     if ck == CK_LVAL2RVAL {
+        if fold_cvars && (nkind(a) == N_DECLREF || nkind(a) == N_MEMBER) {
+            let ok, v = cv_read(n);
+            if ok { return v; }
+        }
         let l = ex_lv(a);
         if quals(nd.ty) & Q_ATOMIC != 0 || quals(nty(a)) & Q_ATOMIC != 0 { return atomic_load_lv(l, unqual(nd.ty)); }
         return lv_load(LV { addr: l.addr, fld: l.fld, vol: l.vol, q: nd.ty });
@@ -600,6 +608,81 @@ recursive fn ex_cast(n: u32) -> u32 {
         return v;
     }
     return conv(v, nty(a), nd.ty);
+}
+
+// ------------------------------------------------------------ const reads (G1)
+
+// clang's CodeGen emits a read of a const variable with a constant
+// initializer as that constant (tryEmitAsConstant: EvaluateAsRValue of the
+// DeclRefExpr), and an integer read of a member of one (VisitMemberExpr:
+// EvaluateAsInt, after evaluating the base as an ignored lvalue). A
+// file-scope variable that need not be emitted then gets a DIE with the
+// value instead (EmitDeclRefExprDbgValue). Pointer and complex values are
+// read from memory as before.
+recursive fn cv_read(n: u32) -> bool, u32 {
+    let nd = nodes[n];
+    let a = nd.a;
+    let t = vty(nd.ty);
+    if quals(nty(a)) & Q_VOLATILE != 0 { return false, 0; }
+    if nkind(a) == N_MEMBER {
+        if nodes[a].op != 0 || !is_integer(nd.ty) { return false, 0; }
+        let ok, v = fold_int(n);
+        if !ok { return false, 0; }
+        let l = ex_lv(nodes[a].a);
+        return true, cv_int(v, nd.ty);
+    }
+    let s = nodes[a].a as i64;
+    if syms[s].kind != SK_VAR || cvar_value_init(s) == 0 { return false, 0; }
+    if kind_of(nd.ty) == TY_POINTER {
+        // a constant address (G1): of a global, a function, a string
+        // literal, or an integer
+        let ok, b, o = fold_addr(n);
+        if !ok { return false, 0; }
+        var v: u32 = 0;
+        if b == -1 { v = c_int(o as! u64, GIR_T_PTR); }
+        else if b <= -2 {
+            let sn = (-2 - b) as! u32;
+            let g = string_global(nodes[sn].a);
+            dbg_string(sn, g);
+            v = gep(gref(g), o);
+        } else {
+            let sy = syms[b];
+            let stat = sy.flags & SF_FILESCOPE != 0 || sy.sc == SC_STATIC || sy.sc == SC_EXTERN;
+            if sy.kind == SK_FUNC { v = gep(gref(func_global(b)), o); }
+            else if sy.kind == SK_VAR && stat && sy.flags & SF_THREAD == 0 { v = gep(var_addr(b), o); }
+            else { return false, 0; }
+        }
+        cv_note(s, 0, false);
+        return true, v;
+    }
+    if is_integer(nd.ty) {
+        let ok, v = fold_int(n);
+        if !ok { return false, 0; }
+        cv_note(s, v as! u64, type_size(nd.ty) <= 8);
+        return true, cv_int(v, nd.ty);
+    }
+    if is_real_float(nd.ty) && t != GIR_T_VOID {
+        let ok, x = static_f80(n);
+        if !ok { return false, 0; }
+        if t == GIR_T_F80 {
+            cv_note(s, 0, false);
+            return true, c_fp(x.lo, x.hi, t);
+        }
+        let d = f80_to_f64(x);
+        var bits: u64 = reinterpret_i64(d) as! u64;
+        if t == GIR_T_F32 { bits = f80_to_f32bits(x) as u64; }
+        if t == GIR_T_F16 { bits = f64_to_f16bits(d) as u64; }
+        cv_note(s, bits, true);
+        return true, c_fp(bits, 0, t);
+    }
+    return false, 0;
+}
+
+fn cv_int(v: i64, q: u32) -> u32 {
+    let t = vty(q);
+    if tcls(t) == C_INT2 { return c_wide(v as! u64, if v < 0 { 0xFFFFFFFFFFFFFFFF } else { 0 as u64 }, t); }
+    if t == GIR_T_I1 { return c_int(if v != 0 { 1 } else { 0 }, t); }
+    return c_int(v as! u64, t);
 }
 
 fn has_side_effects(n: u32) -> bool {
@@ -1040,9 +1123,12 @@ recursive fn ex_cond(n: u32, t: u32, f: u32) {
     condbr(b, t, f);
 }
 
-// The value of a condition that is a constant without side effects.
+// The value of a condition that is a constant without side effects, as
+// clang's ConstantFoldsToSimpleInteger finds it (G1: its constant evaluator,
+// which reads const variables and stops at 0 && x; it was pure_const's
+// literal arithmetic, and clang_folds kept the rest out of the debug
+// information only).
 fn const_bool(n: u32) -> bool, bool {
-    if !pure_const(n) { return false, false; }
     return fold_bool(n);
 }
 

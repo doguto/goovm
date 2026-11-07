@@ -1,0 +1,358 @@
+[1/316] 7zip 7zStream.c: off 2.1, cold 2.7, warm 1.9, tcc 2.3, clang 28.9
+[2/316] 7zip Aes.c: off 2.2, cold 2.5, warm 2.4, tcc 2.2, clang 28.3
+[3/316] 7zip Alloc.c: off 3.8, cold 6.8, warm 2.7, tcc 5.5, clang 34.3
+[4/316] 7zip Bra.c: off 1.6, cold 1.9, warm 1.6, tcc 1.7, clang 22.3
+[5/316] 7zip Bra86.c: off 1.6, cold 1.9, warm 1.4, tcc 1.5, clang 18.9
+[6/316] 7zip BraIA64.c: off 1.5, cold 1.7, warm 1.4, tcc 1.5, clang 18.2
+[7/316] 7zip BwtSort.c: off 1.8, cold 2.0, warm 1.9, tcc 1.9, clang 21.4
+[8/316] 7zip Delta.c: off 1.4, cold 1.7, warm 1.5, tcc 1.8, clang 19.5
+[9/316] 7zip HuffEnc.c: off 1.6, cold 2.1, warm 1.7, tcc 1.7, clang 19.2
+[10/316] 7zip LzFind.c: off 2.7, cold 3.2, warm 2.4, tcc 2.5, clang 29.5
+[11/316] 7zip LzFindMt.c: off 3.4, cold 4.8, warm 3.0, tcc 3.8, clang 36.2
+[12/316] 7zip Lzma2Dec.c: off 2.4, cold 3.1, warm 2.1, tcc 2.5, clang 27.6
+[13/316] 7zip Lzma2Enc.c: off 3.0, cold 4.8, warm 2.5, tcc 3.6, clang 32.0
+[14/316] 7zip LzmaDec.c: off 3.5, cold 3.6, warm 3.2, tcc 2.7, clang 37.3
+[15/316] 7zip LzmaEnc.c: off 5.5, cold 7.2, warm 3.9, tcc 5.3, clang 45.5
+[16/316] 7zip MtCoder.c: off 3.5, cold 4.8, warm 2.7, tcc 4.1, clang 33.5
+[17/316] 7zip Ppmd7.c: off 3.1, cold 3.8, warm 2.7, tcc 2.7, clang 32.5
+[18/316] 7zip Ppmd7Dec.c: off 2.0, cold 2.3, warm 1.9, tcc 1.9, clang 23.5
+[19/316] 7zip Ppmd7Enc.c: off 1.9, cold 2.2, warm 1.7, tcc 1.8, clang 22.2
+[20/316] 7zip Ppmd8.c: off 3.5, cold 3.6, warm 3.1, tcc 2.8, clang 32.4
+[21/316] 7zip Ppmd8Dec.c: off 1.7, cold 2.0, warm 1.6, tcc 2.0, clang 20.4
+[22/316] 7zip Ppmd8Enc.c: off 2.0, cold 2.0, warm 1.6, tcc 1.9, clang 19.6
+[23/316] 7zip Sha256.c: off 1.7, cold 1.9, warm 1.6, tcc 1.6, clang 18.8
+[24/316] 7zip Sort.c: off 1.5, cold 1.8, warm 1.4, tcc 1.5, clang 17.8
+[25/316] 7zip Threads.c: off 3.9, cold 5.9, warm 2.3, tcc 5.0, clang 27.3
+[26/316] 7zip Xz.c: off 1.8, cold 2.2, warm 2.1, tcc 1.9, clang 22.8
+[27/316] 7zip XzCrc64.c: off 1.7, cold 2.0, warm 1.6, tcc 1.7, clang 21.8
+[28/316] 7zip XzDec.c: off 3.6, cold 4.4, warm 3.5, tcc 4.3, clang 38.2
+[29/316] 7zip XzEnc.c: off 3.0, cold 4.5, warm 3.0, tcc 3.4, clang 32.7
+[30/316] 7zip XzIn.c: off 2.3, cold 3.3, warm 2.3, tcc 2.6, clang 28.8
+[31/316] 7zip 7zCrc.c: off 1.8, cold 1.9, warm 1.8, tcc 1.5, clang 18.4
+[32/316] 7zip 7zCrcOpt.c: off 1.5, cold 1.9, warm 1.5, tcc 1.6, clang 21.7
+[33/316] lencod annexb.c: off 3.8, cold 4.7, warm 2.3, tcc 3.6, clang 30.9
+[34/316] lencod biariencode.c: off 3.9, cold 5.1, warm 2.7, tcc 3.7, clang 32.9
+[35/316] lencod block.c: off 9.8, cold 10.7, warm 7.6, tcc 9.1, clang 84.9
+[36/316] lencod cabac.c: off 5.6, cold 7.4, warm 4.4, tcc 5.3, clang 52.0
+[37/316] lencod configfile.c: off 5.6, cold 7.8, warm 4.7, tcc 4.8, clang 51.3
+[38/316] lencod context_ini.c: off 5.9, cold 9.6, warm 3.7, tcc 7.5, clang 56.5
+[39/316] lencod decoder.c: off 4.0, cold 6.0, warm 3.7, tcc 4.3, clang 37.7
+[40/316] lencod explicit_gop.c: off 4.2, cold 6.2, warm 3.8, tcc 4.4, clang 42.0
+[41/316] lencod filehandle.c: off 4.1, cold 5.9, warm 3.1, tcc 4.3, clang 32.6
+[42/316] lencod fmo.c: off 4.1, cold 5.1, warm 3.1, tcc 3.9, clang 37.0
+[43/316] lencod header.c: off 4.9, cold 7.0, warm 3.3, tcc 6.1, clang 45.3
+[44/316] lencod image.c: off 6.8, cold 10.6, warm 5.3, tcc 8.2, clang 60.3
+[45/316] lencod img_chroma.c: off 3.4, cold 5.6, warm 2.9, tcc 4.2, clang 31.9
+[46/316] lencod img_luma.c: off 4.4, cold 5.3, warm 3.4, tcc 4.0, clang 33.1
+[47/316] lencod intrarefresh.c: off 3.2, cold 5.3, warm 2.4, tcc 4.1, clang 30.8
+[48/316] lencod leaky_bucket.c: off 4.0, cold 5.9, warm 2.9, tcc 4.7, clang 36.9
+[49/316] lencod lencod.c: off 6.9, cold 9.6, warm 6.6, tcc 9.2, clang 67.8
+[50/316] lencod loopFilter.c: off 5.0, cold 7.1, warm 3.6, tcc 5.0, clang 33.8
+[51/316] lencod macroblock.c: off 6.7, cold 8.6, warm 7.2, tcc 5.7, clang 82.3
+[52/316] lencod mb_access.c: off 3.0, cold 5.1, warm 2.8, tcc 3.7, clang 33.2
+[53/316] lencod mbuffer.c: off 6.1, cold 9.7, warm 5.9, tcc 6.4, clang 77.8
+[54/316] lencod md_high.c: off 6.0, cold 8.8, warm 4.4, tcc 6.2, clang 47.9
+[55/316] lencod md_highfast.c: off 5.2, cold 7.4, warm 3.5, tcc 6.0, clang 41.7
+[56/316] lencod md_highloss.c: off 5.0, cold 8.8, warm 3.4, tcc 7.2, clang 41.0
+[57/316] lencod md_low.c: off 5.2, cold 8.6, warm 4.2, tcc 7.2, clang 48.8
+[58/316] lencod me_distortion.c: off 4.7, cold 6.2, warm 4.4, tcc 4.7, clang 52.2
+[59/316] lencod me_epzs.c: off 6.4, cold 9.4, warm 5.9, tcc 6.3, clang 73.2
+[60/316] lencod me_fullfast.c: off 4.4, cold 6.1, warm 3.6, tcc 5.2, clang 42.1
+[61/316] lencod me_fullsearch.c: off 4.2, cold 6.2, warm 3.3, tcc 4.8, clang 36.6
+[62/316] lencod me_umhex.c: off 5.5, cold 8.3, warm 4.4, tcc 4.9, clang 61.5
+[63/316] lencod me_umhexsmp.c: off 5.6, cold 7.9, warm 4.1, tcc 5.4, clang 48.1
+[64/316] lencod memalloc.c: off 3.7, cold 5.9, warm 2.9, tcc 3.8, clang 36.8
+[65/316] lencod mode_decision.c: off 5.7, cold 8.1, warm 4.2, tcc 6.4, clang 46.4
+[66/316] lencod mv-search.c: off 6.5, cold 8.7, warm 5.8, tcc 6.7, clang 64.6
+[67/316] lencod nal.c: off 3.3, cold 5.5, warm 2.5, tcc 3.6, clang 33.1
+[68/316] lencod nalu.c: off 2.9, cold 4.4, warm 2.1, tcc 3.3, clang 28.3
+[69/316] lencod nalucommon.c: off 3.1, cold 5.5, warm 2.3, tcc 4.1, clang 28.4
+[70/316] lencod output.c: off 3.6, cold 6.6, warm 3.0, tcc 3.8, clang 34.4
+[71/316] lencod parset.c: off 5.4, cold 6.4, warm 4.2, tcc 5.0, clang 39.6
+[72/316] lencod parsetcommon.c: off 3.6, cold 5.9, warm 2.6, tcc 4.5, clang 34.4
+[73/316] lencod q_matrix.c: off 4.6, cold 5.6, warm 3.5, tcc 4.1, clang 41.1
+[74/316] lencod q_offsets.c: off 3.9, cold 5.8, warm 2.9, tcc 3.8, clang 32.1
+[75/316] lencod ratectl.c: off 4.5, cold 6.6, warm 3.4, tcc 5.5, clang 41.2
+[76/316] lencod rc_quadratic.c: off 5.9, cold 8.4, warm 5.2, tcc 7.9, clang 57.6
+[77/316] lencod rdopt.c: off 7.9, cold 10.1, warm 7.0, tcc 7.9, clang 88.9
+[78/316] lencod rdopt_coding_state.c: off 4.0, cold 6.0, warm 2.6, tcc 5.5, clang 34.2
+[79/316] lencod rdpicdecision.c: off 4.5, cold 6.5, warm 2.9, tcc 6.1, clang 35.4
+[80/316] lencod refbuf.c: off 3.9, cold 5.4, warm 2.9, tcc 3.8, clang 35.2
+[81/316] lencod rtp.c: off 4.5, cold 6.1, warm 3.1, tcc 4.3, clang 31.0
+[82/316] lencod sei.c: off 4.3, cold 6.1, warm 4.0, tcc 4.4, clang 41.8
+[83/316] lencod slice.c: off 5.7, cold 7.5, warm 4.8, tcc 6.2, clang 50.6
+[84/316] lencod symbol.c: off 3.2, cold 3.9, warm 2.3, tcc 3.6, clang 28.3
+[85/316] lencod transform8x8.c: off 7.8, cold 10.1, warm 5.7, tcc 8.0, clang 63.9
+[86/316] lencod vlc.c: off 5.3, cold 7.2, warm 4.3, tcc 5.9, clang 49.3
+[87/316] lencod weighted_prediction.c: off 4.0, cold 5.9, warm 3.2, tcc 4.1, clang 38.3
+[88/316] SPASS analyze.c: off 5.9, cold 9.3, warm 3.7, tcc 7.8, clang 54.3
+[89/316] SPASS clause.c: off 9.1, cold 11.5, warm 6.4, tcc 7.8, clang 101.6
+[90/316] SPASS clock.c: off 2.9, cold 4.8, warm 2.2, tcc 3.6, clang 25.2
+[91/316] SPASS closure.c: off 5.3, cold 9.3, warm 3.9, tcc 7.5, clang 52.6
+[92/316] SPASS cnf.c: off 10.7, cold 12.1, warm 7.9, tcc 8.7, clang 99.4
+[93/316] SPASS component.c: off 4.5, cold 6.8, warm 2.8, tcc 5.6, clang 40.3
+[94/316] SPASS condensing.c: off 6.0, cold 9.1, warm 3.7, tcc 7.4, clang 53.2
+[95/316] SPASS context.c: off 4.4, cold 6.8, warm 2.9, tcc 5.6, clang 44.6
+[96/316] SPASS defs.c: off 7.1, cold 9.6, warm 5.1, tcc 7.2, clang 62.9
+[97/316] SPASS dfgparser.c: off 8.4, cold 9.5, warm 6.2, tcc 8.8, clang 69.2
+[98/316] SPASS dfgscanner.c: off 8.5, cold 10.3, warm 8.9, tcc 8.1, clang 65.0
+[99/316] SPASS doc-proof.c: off 6.1, cold 9.2, warm 3.9, tcc 7.9, clang 54.9
+[100/316] SPASS flags.c: off 4.0, cold 6.8, warm 3.2, tcc 6.3, clang 41.9
+[101/316] SPASS foldfg.c: off 6.9, cold 9.5, warm 4.2, tcc 7.6, clang 64.9
+[102/316] SPASS graph.c: off 3.4, cold 4.5, warm 2.8, tcc 3.2, clang 34.7
+[103/316] SPASS hash.c: off 3.2, cold 4.9, warm 2.3, tcc 3.7, clang 32.8
+[104/316] SPASS hasharray.c: off 3.2, cold 4.6, warm 2.4, tcc 3.3, clang 28.9
+[105/316] SPASS iaparser.c: off 6.1, cold 7.5, warm 4.7, tcc 7.7, clang 57.0
+[106/316] SPASS iascanner.c: off 6.1, cold 9.0, warm 5.3, tcc 7.6, clang 55.9
+[107/316] SPASS kbo.c: off 5.8, cold 7.2, warm 3.6, tcc 6.1, clang 44.8
+[108/316] SPASS list.c: off 3.8, cold 4.8, warm 2.6, tcc 3.4, clang 36.6
+[109/316] SPASS memory.c: off 3.3, cold 4.5, warm 2.6, tcc 3.3, clang 32.1
+[110/316] SPASS misc.c: off 3.2, cold 4.1, warm 2.4, tcc 3.4, clang 31.4
+[111/316] SPASS options.c: off 6.5, cold 7.9, warm 4.8, tcc 6.9, clang 53.3
+[112/316] SPASS order.c: off 5.8, cold 7.4, warm 3.1, tcc 5.9, clang 44.6
+[113/316] SPASS partition.c: off 3.3, cold 4.7, warm 2.3, tcc 3.6, clang 27.3
+[114/316] SPASS proofcheck.c: off 7.1, cold 10.9, warm 5.1, tcc 7.9, clang 62.4
+[115/316] SPASS renaming.c: off 6.8, cold 8.0, warm 4.6, tcc 6.5, clang 66.4
+[116/316] SPASS resolution.c: off 5.8, cold 8.6, warm 3.3, tcc 6.9, clang 51.2
+[117/316] SPASS rpos.c: off 4.8, cold 7.9, warm 3.4, tcc 5.7, clang 48.0
+[118/316] SPASS rules-inf.c: off 8.0, cold 12.0, warm 6.7, tcc 8.8, clang 99.2
+[119/316] SPASS rules-red.c: off 8.3, cold 11.1, warm 6.0, tcc 8.0, clang 102.6
+[120/316] SPASS rules-sort.c: off 7.2, cold 10.1, warm 5.3, tcc 6.8, clang 70.5
+[121/316] SPASS rules-split.c: off 5.8, cold 9.3, warm 3.9, tcc 7.3, clang 50.1
+[122/316] SPASS rules-ur.c: off 5.2, cold 7.5, warm 3.3, tcc 6.1, clang 47.7
+[123/316] SPASS search.c: off 7.2, cold 8.7, warm 4.8, tcc 7.9, clang 69.7
+[124/316] SPASS sharing.c: off 6.1, cold 8.6, warm 4.3, tcc 7.1, clang 53.5
+[125/316] SPASS sort.c: off 7.7, cold 9.7, warm 5.8, tcc 7.5, clang 71.3
+[126/316] SPASS st.c: off 6.6, cold 8.0, warm 3.9, tcc 6.3, clang 52.3
+[127/316] SPASS stack.c: off 3.0, cold 4.5, warm 1.7, tcc 3.0, clang 24.3
+[128/316] SPASS strings.c: off 4.8, cold 6.5, warm 3.1, tcc 5.1, clang 35.8
+[129/316] SPASS subst.c: off 5.4, cold 6.9, warm 3.4, tcc 6.8, clang 42.9
+[130/316] SPASS subsumption.c: off 7.6, cold 9.4, warm 5.2, tcc 7.8, clang 67.6
+[131/316] SPASS symbol.c: off 4.6, cold 6.7, warm 3.6, tcc 6.1, clang 55.9
+[132/316] SPASS table.c: off 4.3, cold 6.2, warm 3.2, tcc 5.4, clang 40.4
+[133/316] SPASS tableau.c: off 5.4, cold 7.6, warm 4.6, tcc 6.4, clang 54.0
+[134/316] SPASS term.c: off 5.1, cold 8.1, warm 3.9, tcc 6.6, clang 52.7
+[135/316] SPASS terminator.c: off 6.4, cold 7.9, warm 3.9, tcc 6.4, clang 47.8
+[136/316] SPASS top.c: off 7.1, cold 9.9, warm 5.0, tcc 7.5, clang 66.9
+[137/316] SPASS unify.c: off 4.6, cold 6.6, warm 3.6, tcc 5.5, clang 51.2
+[138/316] SPASS vector.c: off 3.0, cold 4.3, warm 2.2, tcc 3.0, clang 29.3
+[139/316] ClamAV clamscan_clamscan.c: off 4.0, cold 5.4, warm 3.0, tcc 4.6, clang 34.1
+[140/316] ClamAV clamscan_manager.c: off 5.6, cold 7.7, warm 4.6, tcc 6.4, clang 47.8
+[141/316] ClamAV clamscan_others.c: off 3.9, cold 6.8, warm 2.9, tcc 5.1, clang 29.4
+[142/316] ClamAV clamscan_treewalk.c: off 4.0, cold 6.3, warm 3.4, tcc 4.8, clang 30.8
+[143/316] ClamAV libclamav_aspack.c: off 4.3, cold 5.4, warm 3.0, tcc 4.0, clang 29.7
+[144/316] ClamAV libclamav_autoit.c: off 5.0, cold 6.4, warm 3.6, tcc 4.9, clang 41.0
+[145/316] ClamAV libclamav_binhex.c: off 3.4, cold 5.1, warm 2.5, tcc 4.0, clang 26.3
+[146/316] ClamAV libclamav_blob.c: off 4.9, cold 6.9, warm 3.9, tcc 5.6, clang 33.6
+[147/316] ClamAV libclamav_cab.c: off 5.2, cold 7.7, warm 4.5, tcc 5.8, clang 43.0
+[148/316] ClamAV libclamav_chmunpack.c: off 4.6, cold 7.8, warm 3.9, tcc 5.8, clang 40.3
+[149/316] ClamAV libclamav_cvd.c: off 4.8, cold 7.0, warm 3.3, tcc 5.1, clang 32.1
+[150/316] ClamAV libclamav_dconf.c: off 4.0, cold 5.4, warm 3.3, tcc 4.3, clang 29.4
+[151/316] ClamAV libclamav_dsig.c: off 1.2, cold 1.3, warm 1.3, tcc 1.6, clang 17.3
+[152/316] ClamAV libclamav_elf.c: off 4.1, cold 6.8, warm 3.7, tcc 5.7, clang 31.9
+[153/316] ClamAV libclamav_entconv.c: off 6.7, cold 9.5, warm 5.1, tcc 6.8, clang 52.3
+[154/316] ClamAV libclamav_filetypes.c: off 4.3, cold 6.5, warm 3.5, tcc 5.0, clang 31.6
+[155/316] ClamAV libclamav_fsg.c: off 4.0, cold 6.0, warm 3.4, tcc 4.0, clang 28.3
+[156/316] ClamAV libclamav_hashtab.c: off 3.9, cold 6.8, warm 3.9, tcc 4.9, clang 35.4
+[157/316] ClamAV libclamav_htmlnorm.c: off 5.6, cold 9.3, warm 4.8, tcc 5.8, clang 49.9
+[158/316] ClamAV libclamav_is_tar.c: off 4.1, cold 6.6, warm 3.1, tcc 5.0, clang 32.8
+[159/316] ClamAV libclamav_jscript.c: off 3.5, cold 4.8, warm 2.8, tcc 4.9, clang 26.5
+[160/316] ClamAV libclamav_line.c: off 3.6, cold 5.8, warm 2.9, tcc 4.5, clang 25.8
+[161/316] ClamAV libclamav_lockdb.c: off 3.9, cold 6.4, warm 3.7, tcc 4.7, clang 29.3
+[162/316] ClamAV libclamav_matcher-ac.c: off 4.5, cold 6.4, warm 4.4, tcc 4.8, clang 38.8
+[163/316] ClamAV libclamav_matcher-bm.c: off 4.0, cold 5.5, warm 3.3, tcc 4.9, clang 28.6
+[164/316] ClamAV libclamav_matcher.c: off 5.0, cold 7.9, warm 4.3, tcc 5.5, clang 34.2
+[165/316] ClamAV libclamav_mbox.c: off 7.7, cold 12.2, warm 6.7, tcc 8.7, clang 75.7
+[166/316] ClamAV libclamav_md5.c: off 2.3, cold 2.8, warm 2.0, tcc 2.3, clang 25.8
+[167/316] ClamAV libclamav_message.c: off 6.0, cold 7.4, warm 5.2, tcc 5.2, clang 55.0
+[168/316] ClamAV libclamav_mew.c: off 4.5, cold 6.6, warm 4.2, tcc 4.7, clang 41.9
+[169/316] ClamAV libclamav_msexpand.c: off 3.8, cold 5.7, warm 3.0, tcc 4.5, clang 26.5
+[170/316] ClamAV libclamav_mspack.c: off 6.1, cold 7.3, warm 6.4, tcc 5.4, clang 53.4
+[171/316] ClamAV libclamav_nsis_LZMADecode.c: off 3.7, cold 7.1, warm 3.4, tcc 5.3, clang 32.1
+[172/316] ClamAV libclamav_nsis_bzlib.c: off 5.3, cold 7.7, warm 4.3, tcc 5.8, clang 45.2
+[173/316] ClamAV libclamav_nsis_infblock.c: off 3.0, cold 3.6, warm 3.0, tcc 2.8, clang 34.4
+[174/316] ClamAV libclamav_nsis_nulsft.c: off 4.8, cold 7.9, warm 4.6, tcc 5.0, clang 37.2
+[175/316] ClamAV libclamav_ole2_extract.c: off 5.5, cold 8.3, warm 4.8, tcc 6.1, clang 45.1
+[176/316] ClamAV libclamav_others.c: off 4.8, cold 8.9, warm 5.4, tcc 6.2, clang 39.5
+[177/316] ClamAV libclamav_packlibs.c: off 3.7, cold 6.3, warm 3.4, tcc 4.8, clang 30.2
+[178/316] ClamAV libclamav_pdf.c: off 5.5, cold 7.5, warm 5.0, tcc 6.2, clang 42.9
+[179/316] ClamAV libclamav_pe.c: off 8.2, cold 10.9, warm 7.3, tcc 7.9, clang 80.9
+[180/316] ClamAV libclamav_petite.c: off 4.6, cold 6.8, warm 4.1, tcc 5.4, clang 38.5
+[181/316] ClamAV libclamav_phish_domaincheck_db.c: off 3.9, cold 6.5, warm 3.8, tcc 4.3, clang 32.5
+[182/316] ClamAV libclamav_phish_whitelist.c: off 3.9, cold 5.5, warm 3.2, tcc 4.3, clang 33.2
+[183/316] ClamAV libclamav_phishcheck.c: off 4.8, cold 6.7, warm 4.1, tcc 4.6, clang 45.5
+[184/316] ClamAV libclamav_pst.c: off 3.3, cold 6.1, warm 3.5, tcc 4.1, clang 26.4
+[185/316] ClamAV libclamav_readdb.c: off 5.0, cold 7.3, warm 5.2, tcc 5.4, clang 43.6
+[186/316] ClamAV libclamav_rebuildpe.c: off 3.5, cold 6.3, warm 2.9, tcc 3.9, clang 32.4
+[187/316] ClamAV libclamav_regex_list.c: off 4.7, cold 6.6, warm 5.7, tcc 5.0, clang 41.0
+[188/316] ClamAV libclamav_regex_regcomp.c: off 5.0, cold 6.9, warm 5.2, tcc 5.2, clang 51.6
+[189/316] ClamAV libclamav_regex_regerror.c: off 4.3, cold 6.6, warm 3.6, tcc 4.2, clang 27.5
+[190/316] ClamAV libclamav_regex_regexec.c: off 5.1, cold 6.6, warm 5.2, tcc 5.0, clang 51.8
+[191/316] ClamAV libclamav_regex_regfree.c: off 3.3, cold 5.5, warm 3.3, tcc 4.0, clang 30.4
+[192/316] ClamAV libclamav_regex_strlcpy.c: off 2.0, cold 3.3, warm 1.7, tcc 2.3, clang 24.3
+[193/316] ClamAV libclamav_rtf.c: off 5.1, cold 6.4, warm 4.8, tcc 4.8, clang 34.8
+[194/316] ClamAV libclamav_scanners.c: off 7.2, cold 9.2, warm 6.5, tcc 6.5, clang 48.4
+[195/316] ClamAV libclamav_sis.c: off 5.5, cold 7.4, warm 4.3, tcc 6.2, clang 34.4
+[196/316] ClamAV libclamav_snprintf.c: off 1.2, cold 1.3, warm 1.2, tcc 1.6, clang 19.5
+[197/316] ClamAV libclamav_special.c: off 4.1, cold 6.8, warm 4.0, tcc 4.9, clang 30.6
+[198/316] ClamAV libclamav_spin.c: off 5.1, cold 6.7, warm 3.7, tcc 4.9, clang 41.2
+[199/316] ClamAV libclamav_str.c: off 3.9, cold 5.8, warm 3.4, tcc 4.2, clang 31.5
+[200/316] ClamAV libclamav_suecrypt.c: off 4.0, cold 5.9, warm 3.3, tcc 4.4, clang 28.5
+[201/316] ClamAV libclamav_table.c: off 3.6, cold 5.6, warm 3.4, tcc 4.7, clang 31.8
+[202/316] ClamAV libclamav_text.c: off 4.2, cold 6.4, warm 3.1, tcc 4.9, clang 37.3
+[203/316] ClamAV libclamav_tnef.c: off 4.8, cold 7.3, warm 4.6, tcc 5.1, clang 37.9
+[204/316] ClamAV libclamav_unarj.c: off 4.5, cold 6.6, warm 3.9, tcc 4.8, clang 35.4
+[205/316] ClamAV libclamav_unsp.c: off 3.7, cold 6.4, warm 3.1, tcc 4.1, clang 33.0
+[206/316] ClamAV libclamav_untar.c: off 4.0, cold 5.6, warm 3.6, tcc 4.5, clang 27.3
+[207/316] ClamAV libclamav_unzip.c: off 4.3, cold 7.2, warm 3.7, tcc 5.0, clang 35.1
+[208/316] ClamAV libclamav_upack.c: off 5.1, cold 7.9, warm 4.6, tcc 4.9, clang 42.5
+[209/316] ClamAV libclamav_upx.c: off 3.7, cold 6.5, warm 3.3, tcc 4.3, clang 36.2
+[210/316] ClamAV libclamav_uuencode.c: off 3.6, cold 5.6, warm 3.3, tcc 5.1, clang 33.3
+[211/316] ClamAV libclamav_vba_extract.c: off 5.3, cold 7.7, warm 4.4, tcc 5.2, clang 40.9
+[212/316] ClamAV libclamav_wwunpack.c: off 4.2, cold 6.5, warm 4.6, tcc 4.2, clang 35.1
+[213/316] ClamAV libclamav_yc.c: off 3.4, cold 6.1, warm 2.8, tcc 4.1, clang 33.1
+[214/316] ClamAV shared_cdiff.c: off 4.7, cold 8.2, warm 4.2, tcc 5.2, clang 42.1
+[215/316] ClamAV shared_cfgparser.c: off 3.5, cold 5.5, warm 3.6, tcc 4.2, clang 33.1
+[216/316] ClamAV shared_getopt.c: off 2.5, cold 2.9, warm 1.8, tcc 2.5, clang 21.3
+[217/316] ClamAV shared_misc.c: off 4.2, cold 7.4, warm 4.7, tcc 5.7, clang 37.0
+[218/316] ClamAV shared_network.c: off 2.9, cold 4.4, warm 2.9, tcc 3.5, clang 25.2
+[219/316] ClamAV shared_options.c: off 3.0, cold 4.8, warm 3.2, tcc 4.0, clang 33.5
+[220/316] ClamAV shared_output.c: off 4.3, cold 6.3, warm 4.2, tcc 4.7, clang 29.2
+[221/316] ClamAV shared_sha256.c: off 3.1, cold 4.5, warm 3.2, tcc 3.3, clang 32.7
+[222/316] ClamAV zlib_adler32.c: off 3.1, cold 4.8, warm 2.5, tcc 3.5, clang 30.3
+[223/316] ClamAV zlib_compress.c: off 2.6, cold 3.8, warm 2.0, tcc 2.8, clang 21.9
+[224/316] ClamAV zlib_crc32.c: off 3.7, cold 5.4, warm 2.7, tcc 3.8, clang 28.0
+[225/316] ClamAV zlib_deflate.c: off 4.7, cold 6.4, warm 4.6, tcc 5.4, clang 43.2
+[226/316] ClamAV zlib_gzclose.c: off 3.4, cold 5.9, warm 2.8, tcc 4.3, clang 31.5
+[227/316] ClamAV zlib_gzlib.c: off 4.2, cold 5.8, warm 2.7, tcc 4.2, clang 30.1
+[228/316] ClamAV zlib_gzread.c: off 4.0, cold 5.8, warm 2.6, tcc 4.1, clang 32.6
+[229/316] ClamAV zlib_gzwrite.c: off 4.2, cold 6.4, warm 2.6, tcc 4.8, clang 29.8
+[230/316] ClamAV zlib_infback.c: off 4.1, cold 5.7, warm 3.9, tcc 4.7, clang 38.6
+[231/316] ClamAV zlib_inffast.c: off 4.1, cold 5.6, warm 2.8, tcc 4.3, clang 30.5
+[232/316] ClamAV zlib_inflate.c: off 5.4, cold 6.5, warm 3.8, tcc 4.4, clang 41.0
+[233/316] ClamAV zlib_inftrees.c: off 3.9, cold 5.6, warm 2.2, tcc 3.4, clang 29.0
+[234/316] ClamAV zlib_trees.c: off 4.5, cold 6.1, warm 3.5, tcc 4.3, clang 40.6
+[235/316] ClamAV zlib_uncompr.c: off 2.8, cold 4.3, warm 2.2, tcc 3.2, clang 22.4
+[236/316] ClamAV zlib_zutil.c: off 3.5, cold 6.6, warm 3.0, tcc 4.7, clang 29.9
+[237/316] sqlite3 sqlite3.c: off 43.3, cold 41.2, warm 39.4, tcc 24.6, clang 403.2
+[238/316] sqlite3 shell.c: off 5.7, cold 6.9, warm 4.8, tcc 4.8, clang 48.3
+[239/316] consumer-typeset z01.c: off 3.7, cold 5.6, warm 3.5, tcc 4.4, clang 42.5
+[240/316] consumer-typeset z02.c: off 5.0, cold 6.3, warm 4.0, tcc 5.2, clang 49.4
+[241/316] consumer-typeset z03.c: off 4.2, cold 7.0, warm 3.2, tcc 5.5, clang 47.6
+[242/316] consumer-typeset z04.c: off 3.1, cold 4.3, warm 2.5, tcc 3.6, clang 27.4
+[243/316] consumer-typeset z05.c: off 5.2, cold 6.3, warm 3.9, tcc 5.1, clang 52.2
+[244/316] consumer-typeset z06.c: off 8.9, cold 11.7, warm 7.6, tcc 8.5, clang 77.2
+[245/316] consumer-typeset z07.c: off 4.6, cold 5.9, warm 4.1, tcc 5.8, clang 45.4
+[246/316] consumer-typeset z08.c: off 9.3, cold 10.5, warm 9.5, tcc 8.9, clang 105.7
+[247/316] consumer-typeset z09.c: off 4.2, cold 5.6, warm 2.9, tcc 4.9, clang 38.9
+[248/316] consumer-typeset z10.c: off 5.0, cold 6.6, warm 4.7, tcc 5.5, clang 57.7
+[249/316] consumer-typeset z11.c: off 3.6, cold 4.3, warm 2.5, tcc 3.7, clang 33.3
+[250/316] consumer-typeset z12.c: off 7.4, cold 9.1, warm 6.4, tcc 7.4, clang 70.3
+[251/316] consumer-typeset z13.c: off 4.7, cold 5.1, warm 3.5, tcc 5.1, clang 34.9
+[252/316] consumer-typeset z14.c: off 5.2, cold 7.3, warm 5.1, tcc 6.2, clang 53.2
+[253/316] consumer-typeset z15.c: off 4.6, cold 6.3, warm 3.4, tcc 7.1, clang 40.5
+[254/316] consumer-typeset z16.c: off 3.4, cold 4.9, warm 3.1, tcc 4.0, clang 35.8
+[255/316] consumer-typeset z17.c: off 3.4, cold 4.8, warm 2.7, tcc 3.6, clang 30.9
+[256/316] consumer-typeset z18.c: off 4.9, cold 6.2, warm 4.0, tcc 5.1, clang 43.7
+[257/316] consumer-typeset z19.c: off 6.8, cold 7.7, warm 5.6, tcc 5.8, clang 71.4
+[258/316] consumer-typeset z20.c: off 6.0, cold 6.8, warm 5.2, tcc 5.5, clang 58.8
+[259/316] consumer-typeset z21.c: off 5.0, cold 6.5, warm 3.8, tcc 5.0, clang 47.1
+[260/316] consumer-typeset z22.c: off 7.1, cold 7.7, warm 5.7, tcc 6.5, clang 63.2
+[261/316] consumer-typeset z23.c: off 4.8, cold 6.3, warm 3.9, tcc 5.0, clang 49.1
+[262/316] consumer-typeset z24.c: off 3.4, cold 4.7, warm 2.1, tcc 4.0, clang 27.0
+[263/316] consumer-typeset z25.c: off 3.0, cold 3.8, warm 1.9, tcc 3.3, clang 22.6
+[264/316] consumer-typeset z26.c: off 3.5, cold 4.5, warm 2.5, tcc 4.1, clang 26.2
+[265/316] consumer-typeset z27.c: off 2.8, cold 4.2, warm 1.7, tcc 3.6, clang 25.2
+[266/316] consumer-typeset z28.c: off 3.2, cold 4.3, warm 2.2, tcc 3.4, clang 25.3
+[267/316] consumer-typeset z29.c: off 3.9, cold 5.3, warm 2.9, tcc 4.4, clang 42.8
+[268/316] consumer-typeset z30.c: off 3.1, cold 4.1, warm 2.1, tcc 3.5, clang 27.1
+[269/316] consumer-typeset z31.c: off 2.8, cold 4.3, warm 2.3, tcc 3.5, clang 22.9
+[270/316] consumer-typeset z32.c: off 3.2, cold 5.1, warm 2.5, tcc 3.6, clang 27.6
+[271/316] consumer-typeset z33.c: off 4.9, cold 5.8, warm 4.1, tcc 4.7, clang 45.4
+[272/316] consumer-typeset z34.c: off 3.8, cold 5.8, warm 2.4, tcc 6.2, clang 34.9
+[273/316] consumer-typeset z35.c: off 5.2, cold 7.1, warm 4.2, tcc 4.7, clang 49.1
+[274/316] consumer-typeset z36.c: off 4.4, cold 6.8, warm 3.7, tcc 4.4, clang 36.7
+[275/316] consumer-typeset z37.c: off 6.1, cold 6.8, warm 5.3, tcc 5.4, clang 51.7
+[276/316] consumer-typeset z38.c: off 4.2, cold 5.6, warm 3.4, tcc 4.6, clang 38.6
+[277/316] consumer-typeset z39.c: off 3.5, cold 5.0, warm 2.5, tcc 4.2, clang 25.1
+[278/316] consumer-typeset z40.c: off 3.5, cold 4.5, warm 2.5, tcc 3.9, clang 33.4
+[279/316] consumer-typeset z41.c: off 3.6, cold 4.9, warm 2.7, tcc 4.0, clang 33.5
+[280/316] consumer-typeset z42.c: off 3.2, cold 5.2, warm 2.3, tcc 3.8, clang 31.0
+[281/316] consumer-typeset z43.c: off 3.7, cold 4.8, warm 2.8, tcc 4.5, clang 36.4
+[282/316] consumer-typeset z44.c: off 5.0, cold 6.0, warm 4.2, tcc 5.1, clang 47.0
+[283/316] consumer-typeset z45.c: off 3.3, cold 5.0, warm 2.5, tcc 4.0, clang 30.4
+[284/316] consumer-typeset z46.c: off 4.5, cold 6.4, warm 4.1, tcc 5.7, clang 46.7
+[285/316] consumer-typeset z47.c: off 3.9, cold 4.9, warm 2.9, tcc 4.1, clang 30.5
+[286/316] consumer-typeset z48.c: off 5.4, cold 7.5, warm 4.5, tcc 6.6, clang 51.5
+[287/316] consumer-typeset z49.c: off 4.5, cold 6.7, warm 3.7, tcc 4.7, clang 39.8
+[288/316] consumer-typeset z50.c: off 4.3, cold 6.2, warm 3.4, tcc 5.7, clang 36.9
+[289/316] consumer-typeset z51.c: off 4.2, cold 4.5, warm 3.2, tcc 3.7, clang 36.3
+[290/316] mafft Calignm1.c: off 5.7, cold 7.1, warm 3.6, tcc 6.5, clang 40.0
+[291/316] mafft constants.c: off 6.4, cold 9.8, warm 5.1, tcc 6.9, clang 53.2
+[292/316] mafft defs.c: off 4.0, cold 6.4, warm 2.8, tcc 6.4, clang 32.7
+[293/316] mafft Falign.c: off 5.8, cold 8.4, warm 4.1, tcc 7.4, clang 62.0
+[294/316] mafft fft.c: off 4.6, cold 7.2, warm 2.8, tcc 5.6, clang 36.2
+[295/316] mafft fftFunctions.c: off 4.8, cold 7.3, warm 3.2, tcc 6.9, clang 41.3
+[296/316] mafft Galign11.c: off 5.8, cold 8.5, warm 3.9, tcc 6.8, clang 52.5
+[297/316] mafft genalign11.c: off 4.7, cold 7.5, warm 3.4, tcc 6.8, clang 37.6
+[298/316] mafft genGalign11.c: off 4.4, cold 8.4, warm 3.4, tcc 6.6, clang 43.3
+[299/316] mafft Halignmm.c: off 4.9, cold 7.2, warm 3.8, tcc 6.8, clang 50.6
+[300/316] mafft io.c: off 6.6, cold 8.9, warm 5.7, tcc 6.6, clang 83.9
+[301/316] mafft Lalign11.c: off 4.8, cold 6.9, warm 3.3, tcc 6.6, clang 37.0
+[302/316] mafft Lalignmm.c: off 5.6, cold 8.3, warm 4.0, tcc 6.1, clang 48.3
+[303/316] mafft mltaln9.c: off 9.3, cold 11.5, warm 7.6, tcc 8.3, clang 94.0
+[304/316] mafft MSalign11.c: off 6.4, cold 7.4, warm 4.3, tcc 5.9, clang 46.7
+[305/316] mafft MSalignmm.c: off 5.3, cold 7.6, warm 4.0, tcc 5.8, clang 41.2
+[306/316] mafft mtxutl.c: off 2.8, cold 3.8, warm 2.3, tcc 2.9, clang 28.2
+[307/316] mafft pairlocalalign.c: off 5.1, cold 7.3, warm 3.2, tcc 6.0, clang 41.5
+[308/316] mafft partQalignmm.c: off 4.9, cold 7.0, warm 3.6, tcc 5.7, clang 46.0
+[309/316] mafft partSalignmm.c: off 5.6, cold 7.6, warm 3.9, tcc 6.9, clang 50.7
+[310/316] mafft Qalignmm.c: off 5.5, cold 11.1, warm 4.7, tcc 8.6, clang 59.3
+[311/316] mafft Ralignmm.c: off 5.1, cold 7.4, warm 4.1, tcc 5.8, clang 42.3
+[312/316] mafft rna.c: off 5.5, cold 7.6, warm 3.4, tcc 6.0, clang 38.8
+[313/316] mafft SAalignmm.c: off 4.4, cold 6.8, warm 2.7, tcc 5.5, clang 35.4
+[314/316] mafft Salignmm.c: off 5.4, cold 7.3, warm 3.6, tcc 6.0, clang 48.1
+[315/316] mafft suboptalign11.c: off 4.7, cold 8.2, warm 3.4, tcc 6.7, clang 43.7
+[316/316] mafft tddis.c: off 4.6, cold 6.8, warm 3.3, tcc 5.5, clang 49.6
+| program | files | off | cold | warm | tcc | clang | warm/tcc | warm/off |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 7zip | 32 | 79 | 100 | 70 | 83 | 852 | 1.18x | 1.12x |
+| ClamAV | 98 | 417 | 622 | 364 | 460 | 3486 | 1.27x | 1.15x |
+| SPASS | 51 | 291 | 400 | 208 | 320 | 2723 | 1.54x | 1.40x |
+| consumer-typeset | 51 | 230 | 302 | 185 | 250 | 2158 | 1.35x | 1.24x |
+| lencod | 55 | 270 | 384 | 214 | 293 | 2499 | 1.37x | 1.26x |
+| mafft | 27 | 143 | 209 | 103 | 172 | 1284 | 1.67x | 1.39x |
+| sqlite3 | 2 | 49 | 48 | 44 | 29 | 451 | 0.67x | 1.11x |
+| **total** | 316 | 1479 | 2067 | 1188 | 1607 | 13453 | 1.35x | 1.24x |
+
+(milliseconds, best of 3 per file; warm/tcc and warm/off: how many times faster warm is)
+
+goosecc phases (ms, sum of one --time run per file):
+
+| program | variant | preprocess | parse+sema | lowering | back-end | write |
+|---|---|---:|---:|---:|---:|---:|
+| 7zip | off | 30 | 7 | 6 | 6 | 2 |
+| 7zip | cold | 45 | 12 | 6 | 6 | 1 |
+| 7zip | warm | 19 | 8 | 6 | 6 | 2 |
+| ClamAV | off | 234 | 54 | 28 | 24 | 6 |
+| ClamAV | cold | 411 | 82 | 28 | 25 | 5 |
+| ClamAV | warm | 171 | 46 | 29 | 25 | 6 |
+| SPASS | off | 164 | 57 | 23 | 18 | 4 |
+| SPASS | cold | 234 | 90 | 24 | 18 | 3 |
+| SPASS | warm | 73 | 40 | 24 | 19 | 3 |
+| consumer-typeset | off | 119 | 34 | 25 | 24 | 3 |
+| consumer-typeset | cold | 167 | 53 | 24 | 25 | 3 |
+| consumer-typeset | warm | 64 | 30 | 26 | 24 | 3 |
+| lencod | off | 143 | 46 | 22 | 21 | 4 |
+| lencod | cold | 225 | 72 | 23 | 22 | 3 |
+| lencod | warm | 85 | 32 | 22 | 21 | 4 |
+| mafft | off | 86 | 23 | 12 | 11 | 2 |
+| mafft | cold | 152 | 41 | 13 | 15 | 3 |
+| mafft | warm | 37 | 16 | 13 | 11 | 2 |
+| sqlite3 | off | 16 | 12 | 10 | 9 | 0 |
+| sqlite3 | cold | 20 | 13 | 11 | 9 | 0 |
+| sqlite3 | warm | 13 | 11 | 10 | 8 | 0 |
+| **total** | off | 792 | 233 | 126 | 113 | 21 |
+| **total** | cold | 1255 | 363 | 130 | 120 | 19 |
+| **total** | warm | 462 | 183 | 130 | 115 | 20 |
+

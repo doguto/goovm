@@ -43,6 +43,7 @@ import .gen_debug;
 import .gen_dwarf;
 import .gen_tu;
 import .hcache;
+import .pcache;
 import cg from "../../backend-goose";
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
@@ -374,10 +375,27 @@ fn options() {
     while k + 1 < sys_dirs_after.len { add_dir(names[sys_dirs_after[k]..sys_dirs_after[k] + sys_dirs_after[k + 1]], true); k += 2; }
 }
 
-// After preprocessing: the header cache's report, the state checksum.
+// After preprocessing: the header cache's report (with -E; else after
+// parsing, with the parse cache's), the state checksum.
 fn after_pp() {
-    hc_report();
+    if mode_E { hc_report(); }
     if opt_state_hash > 0 { hc_state_hash(opt_state_hash == 2); }
+}
+
+// The options in the parse cache's key (pcache.goose): all but the input,
+// the output and the reports.
+fn pt_setup_opts() {
+    opt_mode_pt = opt_mode;
+    let a = args();
+    var i = 1;
+    while i < a.len {
+        let s = a[i];
+        i++;
+        if s == "-o" { i++; continue; }
+        if s == opt_input() || s == "--time" || s == "--cache-stats" || starts_with(s, "--pp-state-hash") { continue; }
+        pt_opts.append(s);
+        pt_opts.push(0);
+    }
 }
 
 fn main() {
@@ -408,14 +426,21 @@ fn main() {
         opt_kw_gnu = opt_gnu;
         opt_c89 = v.len == 0;
         keywords_init();
+        // G1: the parser's starting state before preprocessing, so that the
+        // identifiers it interns are the same in every translation unit
+        // (the parse cache's entries refer to them: pcache.goose)
+        types_init();
+        parse_init();
+        pt_track = hc_on;
+        pt_setup_opts();
         if hc_on { hc_tu_check(); }
         pp_fill();
         after_pp();
         let t1 = clock_ns();
-        types_init();
-        parse_init();
         pf_scan();
         parse_tu();
+        if opt_state_hash > 0 { pt_state_hash(opt_state_hash == 2); }
+        hc_report();
         if (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
             let t2 = clock_ns();
             let ok = gen::lower_tu(opt_input());

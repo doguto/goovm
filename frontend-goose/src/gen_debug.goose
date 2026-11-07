@@ -20,6 +20,7 @@ import .ppexpr;
 var dfile_of: i32[>..] = [];               // frontend file -> dfiles index (-1 not yet)
 var dbg_cu: u32 = 0;
 var dbg_sp: u32 = 0;                       // the current subprogram
+var dbg_nodebug = false;                   // the function being lowered is nodebug (gen_function)
 // The stack of lexical scopes: its DScope (0 = not made yet), where it
 // starts, its record in f_srecs, and the scope locations in it get: the
 // block, or a lexical block file over it once a location is in another
@@ -153,6 +154,7 @@ fn dbg_function_begin(s: i64, loc: u32) {
     dbg_scopes.clear();
     cur_dbg = 0;
     if !opt_debug { return; }
+    if dbg_nodebug { f_srecs.clear(); return; }
     let file, line, col = dloc_of(loc);
     m_dscopes.push(DScope { kind: 2, parent: dbg_cu, file: file, line: line as! u32, name: dstring(ident_text(syms[s].name as i64)), extra: 0 });
     dbg_sp = (m_dscopes.len - 1) as! u32;
@@ -164,6 +166,7 @@ fn dbg_function_begin(s: i64, loc: u32) {
 fn dbg_function_end() -> u32 {
     if !opt_debug { return 0; }
     cur_dbg = 0;
+    if dbg_nodebug { return 0; }
     return dbg_sp;
 }
 
@@ -171,7 +174,7 @@ fn dbg_scope_enter(n: u32) { dbg_scope_enter_at(nodes[n].loc); }
 
 // A scope that starts at loc.
 fn dbg_scope_enter_at(loc: u32) {
-    if !opt_debug { return; }
+    if !opt_debug || dbg_nodebug { return; }
     // the function body is the subprogram itself
     if dbg_scopes.len == 0 {
         dbg_scopes.push(DbgScope { scope: dbg_sp, loc: loc, rec: 0, eff: f_eff });
@@ -183,7 +186,7 @@ fn dbg_scope_enter_at(loc: u32) {
 }
 
 fn dbg_scope_leave() {
-    if !opt_debug { return; }
+    if !opt_debug || dbg_nodebug { return; }
     let t = dbg_scopes.pop();
     if t.rec != 0 { f_srecs[t.rec].dscope = t.scope; }
 }
@@ -353,7 +356,7 @@ var last_raw: u32 = 0;                     // the source offset of the current l
 var dloc_raw: u32[>..] = [];               // per m_dlocs entry: its source offset
 
 fn set_loc_dbg(loc0: u32) {
-    if !opt_debug || f_sym < 0 { return; }
+    if !opt_debug || f_sym < 0 || dbg_nodebug { return; }
     var sc = dbg_cur_scope();
     if loc0 == last_raw && sc == last_scope && cur_dbg != 0 { return; }
     let file, line, col = dloc_of(loc0);

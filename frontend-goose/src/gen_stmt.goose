@@ -722,6 +722,10 @@ recursive fn gen_local_decl(n: u32) {
     if sy.kind != SK_VAR { return; }
     if sy.sc == SC_EXTERN || sy.flags & SF_LOCALLINK != 0 { return; }
     let q = sy.ty;
+    if nd.b != 0 && cv_eligible(s) {
+        cv_grow();
+        cvar_init[s] = nd.b;
+    }
     if sy.sc == SC_STATIC || sy.flags & SF_THREAD != 0 {
         // a static local: defined here (its initializer may name labels)
         ensure_sym_tables();
@@ -732,6 +736,12 @@ recursive fn gen_local_decl(n: u32) {
             dbg_static(s);
         }
         return;
+    }
+    let nrvo = is_nrvo_var(s);
+    if nrvo && f_ret.kind == AK_SRET {
+        // G1: in the caller's memory
+        ensure_sym_tables();
+        sym_gen[s].addr = f_sret;
     }
     if !has_insert() && !is_vm_any(q) {
         // unreachable: the storage still exists for jumps into the scope
@@ -768,7 +778,7 @@ recursive fn gen_local_decl(n: u32) {
         p = alloca(type_size(q), local_align(s, q));
         sym_gen[s].addr = p;
     }
-    if sy.flags & SF_COMPLIT == 0 { dbg_local(s, p); }
+    if sy.flags & SF_COMPLIT == 0 && !(nrvo && f_ret.kind == AK_IGNORE) { dbg_local(s, p); }
     if nd.b != 0 {
         // the initialization is at the variable
         let saved = if dbg_on() { push_loc(nd.loc) } else { 0 };
@@ -1100,15 +1110,170 @@ fn ret_gir_type(a: Abi) -> u32 {
     return GIR_T_VOID;
 }
 
+// G1: a function with __attribute__((nodebug)) has no debug information
+// of its own, as in clang (StartFunction clears CodeGenFunction's
+// DebugInfo): no subprogram, locations, variables, static locals, enum
+// or folded-read records. What CodeGenModule records still is (the
+// retained types of explicit casts, string literals, the module order of
+// references): the -g lowering runs with dbg_nodebug set.
 fn gen_function(fd: u32) {
+    dbg_nodebug = opt_debug && sym_has_attr(nodes[fd].a as i64, AM_NODEBUG);
+    gen_function0(fd);
+    dbg_nodebug = false;
+}
+
+// G1: a function only ever expanded in place, lowered for what its
+// emission records (gen_call.goose, inline_ref); its code is dropped.
+var f_drop = false;
+fn gen_function_dropped(fd: u32) {
+    f_drop = true;
+    gen_function(fd);
+    f_drop = false;
+}
+
+// ------------------------------------------------------------ NRVO (G1)
+// clang applies the named return value optimization in C too (Sema's
+// computeNRVO through Scope::updateNRVOCandidate / applyNRVO): a local
+// variable that the return statements of its scope return lives in the
+// return slot. With an sret return that is the caller's memory (no copy at
+// the return; the variable's location is the sret pointer's); with an
+// ignored one (an empty struct) the variable has no debug information.
+var f_nrvo = dictionary<u64, u32> {};     // NRVO variables of the function being lowered
+struct NvScope { id: u32, nrvo: i64 }      // nrvo: -2 no return seen, -1 not allowed, else the variable
+var nv_scopes: NvScope[>..] = [];
+struct NvSlot { scope: u32, sym: i64, live: bool }
+var nv_slots: NvSlot[>..] = [];
+var nv_decl = dictionary<u64, u32> {};     // variable -> the id of the scope declaring it
+var nv_next: u32 = 0;
+var nv_ret: u32 = 0;                        // the function's return type
+
+fn nv_push() {
+    nv_next++;
+    nv_scopes.push(NvScope { id: nv_next, nrvo: -2 });
+}
+
+fn nv_pop() {
+    let S = nv_scopes.pop();
+    if S.nrvo >= 0 { let d = nv_decl.get(S.nrvo as u64); if d && d == S.id { f_nrvo.insert(S.nrvo as u64, 1); } }
+    if S.nrvo != -2 && nv_scopes.len > 0 { nv_scopes[nv_scopes.len - 1].nrvo = S.nrvo; }
+}
+
+// The NRVO candidate a return statement's operand names, or -1.
+fn nv_candidate(e: u32) -> i64 {
+    var x = e;
+    if nkind(x) == N_ICAST && nodes[x].op == CK_LVAL2RVAL { x = nodes[x].a; }
+    if nkind(x) != N_DECLREF { return -1; }
+    let s = nodes[x].a as i64;
+    let sy = syms[s];
+    if sy.kind != SK_VAR || sy.flags & (SF_PARAM | SF_FILESCOPE | SF_THREAD | SF_LOCALLINK) != 0 { return -1; }
+    if sy.sc == SC_STATIC || sy.sc == SC_EXTERN { return -1; }
+    if quals(sy.ty) & Q_VOLATILE != 0 || unqual(sy.ty) != unqual(nv_ret) { return -1; }
+    if sy.attr != 0 && sym_attrs[sy.attr].align as i64 > type_align(sy.ty) { return -1; }
+    return s;
+}
+
+fn nv_return(e: u32) {
+    let vd = if e == 0 { -1 } else { nv_candidate(e) };
+    var can = false;
+    var k = nv_scopes.len - 1;
+    while k >= 0 {
+        let id = nv_scopes[k].id;
+        var found = false;
+        for i in 0..nv_slots.len {
+            if nv_slots[i].scope != id || !nv_slots[i].live { continue; }
+            if nv_slots[i].sym == vd { found = true; } else { nv_slots[i].live = false; }
+        }
+        can = can || found;
+        k--;
+    }
+    nv_scopes[nv_scopes.len - 1].nrvo = if can { vd } else { -1 };
+}
+
+// A substatement of a selection or iteration statement: a block (C99).
+recursive fn nv_sub(n: u32) {
+    if n == 0 { return; }
+    if nkind(n) == N_COMPOUND { nv_walk(n); return; }
+    nv_push();
+    nv_walk(n);
+    nv_pop();
+}
+
+recursive fn nv_walk(n: u32) {
+    if n == 0 { return; }
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_COMPOUND {
+        nv_push();
+        for i in nd.c { nv_walk(nlist[nd.v + i]); }
+        nv_pop();
+    } else if k == N_DECL {
+        let s = nd.a as i64;
+        if syms[s].kind == SK_VAR && syms[s].flags & SF_PARAM == 0 {
+            let id = nv_scopes[nv_scopes.len - 1].id;
+            nv_slots.push(NvSlot { scope: id, sym: s, live: true });
+            nv_decl.insert(s as u64, id);
+        }
+    } else if k == N_IF {
+        nv_push();
+        nv_sub(nd.b);
+        nv_sub(nd.c);
+        nv_pop();
+    } else if k == N_WHILE || k == N_SWITCH {
+        nv_push();
+        nv_sub(nd.b);
+        nv_pop();
+    } else if k == N_DO {
+        nv_push();
+        nv_sub(nd.a);
+        nv_pop();
+    } else if k == N_FOR {
+        nv_push();
+        if nd.a != 0 { nv_walk(nd.a); }
+        nv_sub(nd.v as! u32);
+        nv_pop();
+    } else if k == N_CASE || k == N_DEFAULT {
+        nv_walk(nd.a);
+    } else if k == N_LABEL {
+        nv_walk(nd.b);
+    } else if k == N_RETURN {
+        nv_return(nd.a);
+    }
+}
+
+// The NRVO variables of function fd (f_nrvo).
+fn nrvo_mark(fd: u32, ret: u32) {
+    if f_nrvo.count > 0 { f_nrvo.clear(); }
+    if !is_record(ret) { return; }
+    nv_scopes.clear();
+    nv_slots.clear();
+    if nv_decl.count > 0 { nv_decl.clear(); }
+    nv_ret = ret;
+    // the function scope holds the body's declarations
+    nv_push();
+    let body = nodes[nodes[fd].b];
+    for i in body.c { nv_walk(nlist[body.v + i]); }
+    nv_pop();
+}
+
+fn is_nrvo_var(s: i64) -> bool { f_nrvo.count > 0 && f_nrvo.contains(s as u64) }
+
+fn gen_function0(fd: u32) {
     let nd = nodes[fd];
     let s = nd.a as i64;
-    let g = func_global(s);
-    glob_gen[g].state = 2;
-    m_globals[g].kind = G_FUNC;
-    m_globals[g].flags = link_flags(s, true) | GF_DEFINED;
-    let sec = sym_section(s);
-    if sec != 0 { m_globals[g].section = get_section(strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len], SF_EXEC, 1); }
+    // G1: clang emits an external definition as it is parsed (it sees the
+    // initializers of the const variables defined before it), a deferred
+    // one after the unit
+    cv_ctx = fd;
+    cv_ctx_late = !fn_eager(s);
+    var g: u32 = NONE;
+    if !f_drop {
+        g = func_global(s);
+        glob_gen[g].state = 2;
+        m_globals[g].kind = G_FUNC;
+        m_globals[g].flags = link_flags(s, true) | GF_DEFINED;
+        let sec = sym_section(s);
+        if sec >= 0 { m_globals[g].section = get_section(strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len as i64], SF_EXEC, 1); }
+    }
     let ft = syms[s].ty;
     let fty = types[ft >> 4];
     let ai = fn_abi(ft);
@@ -1127,6 +1292,7 @@ fn gen_function(fd: u32) {
     if fmap.count > 0 { fmap.clear(); }   // clear walks every slot
     cleanups.clear();
     cleanup_marks.clear();
+    if f_ret.kind == AK_SRET || f_ret.kind == AK_IGNORE { nrvo_mark(fd, f_ret_q); } else if f_nrvo.count > 0 { f_nrvo.clear(); }
     dbg_function_begin(s, nd.loc);
     dbg_fn_begin();
     last_loc = nd.loc;
@@ -1249,6 +1415,12 @@ fn gen_function(fd: u32) {
     }
     flags = flags | (al << FN_ALIGN_SHIFT);
     let dbg = dbg_function_end();
+    if f_drop {
+        fn_drop();
+        dbg_fn_end(s, NONE);
+        f_sym = -1;
+        return;
+    }
     let fi = fn_finish(g, flags, f_nargs, f_args_run, f_ret_ty, dbg);
     dbg_fn_end(s, fi);
     f_sym = -1;

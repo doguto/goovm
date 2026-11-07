@@ -25,6 +25,38 @@ LDFLAGS="${LDFLAGS--static}"
 GOOSE_FLAGS="${GOOSE_FLAGS---stack-reserve 256M}"
 mkdir -p "$OUT"
 "$GOOSE" --standalone ${GOOSE_FLAGS} --include "$HERE/src/goosecc_rt.h" -o "$OUT/goosecc.c" "$HERE/src/main.goose"
+# G1: patches to the Goose runtime, which a standalone program holds
+# verbatim (runtime-patches/README.md). Each is a diff against the
+# runtime's own sources (src/runtime/*.h of the Goose tree), applied to the
+# generated C; one that does not apply stops the build, since the runtime
+# it was written for has changed. RUNTIME_PATCHES=0 builds without them.
+if [ "${RUNTIME_PATCHES:-1}" != 0 ]; then
+    for p in "$HERE"/runtime-patches/*.patch; do
+        patch --quiet --forward -p1 "$OUT/goosecc.c" "$p" ||
+            { echo "build.sh: runtime patch $p does not apply (RUNTIME_PATCHES=0 skips it)" >&2; exit 1; }
+    done
+    rm -f "$OUT/goosecc.c.orig" "$OUT/goosecc.c.rej"
+    # The regions nearly every compile touches (runtime-patches/hot-regions.txt,
+    # by the names of their globals; hot_regions.py makes the list) get the
+    # first slots of the reservation and are made accessible at start-up.
+    # Registry indices: main's runtime stacks first (gs_rt_init's third
+    # argument), then the globals in the order their stacks are set up. A
+    # name the program no longer has is left out; the list only places
+    # regions, so a stale one costs time, never correctness.
+    printf '' > "$OUT/hot_regions.h"
+    NRT=$(grep -o 'gs_rt_init(argc, argv, [0-9]*' "$OUT/goosecc.c" | grep -o '[0-9]*$')
+    { seq 0 $((NRT - 1)) | sed 's/^/rt/'
+      grep -o 'gs_stack_init((&GS_GL->gs_gstk_[A-Za-z0-9_]*' "$OUT/goosecc.c" | sed 's/.*gs_gstk_//'; } > "$OUT/regions.txt"
+    if [ -f "$HERE/runtime-patches/hot-regions.txt" ]; then
+        HOT=$(awk 'NR == FNR { if ($1 !~ /^#/) hot[$1] = 1; next } ($1 in hot) { printf "%s%d", (n++ ? "," : ""), FNR - 1 }' \
+            "$HERE/runtime-patches/hot-regions.txt" "$OUT/regions.txt")
+        [ -n "$HOT" ] && printf '#define GS_HOT_REGIONS %s\n' "$HOT" > "$OUT/hot_regions.h"
+    fi
+    CFLAGS="$CFLAGS -include $OUT/hot_regions.h"
+    # PROFILE_REGIONS=1: each run lists the regions it touched on stderr
+    # (runtime-patches/hot_regions.py)
+    [ "${PROFILE_REGIONS:-0}" = 1 ] && CFLAGS="$CFLAGS -DGS_REGION_PROFILE"
+fi
 # The header cache (B4) keys its entries by this build's identity: a hash
 # of the generated C, so that a rebuilt compiler never reads entries
 # written by another one.

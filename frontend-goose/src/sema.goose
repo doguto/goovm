@@ -138,6 +138,7 @@ var pc: i64 = 0;
 fn tk() -> i64 { tu_toks[pc].kind as i64 }
 fn tk_n(k: i64) -> i64 {
     let i = pc + k;
+    if pt_rec && i > pt_peek && i <= pt_eof { pt_peek = i; }
     if i < tu_toks.len { return tu_toks[i].kind as i64; }
     return TK_EOF;
 }
@@ -479,17 +480,554 @@ fn trunc_to(v: i64, t: u32) -> i64 {
     return u;
 }
 
+// G1: the lowering's constant folding reads const variables as clang's
+// constant evaluator does (EvaluateAsRValue / EvaluateAsInt: CodeGen's
+// reads of such variables, the conditions it folds, static initializers).
+// The front end's own constant expressions never do: an integer constant
+// expression of C reads no variable (fold_cvars is off while parsing).
+var fold_cvars: bool = false;
+var cvar_init: u32[>..] = [];   // per symbol: the initializer the evaluator reads (0: none)
+var cvar_decl: u32[>..] = [];   // per file-scope symbol: the N_DECL that defines it
+var cv_ctx: u32 = 0;            // the definition being lowered (its N_FUNCDEF / N_DECL node)
+var cv_ctx_late: bool = false;  // emitted after the whole unit (clang's deferred definitions)
+var cv_depth: i64 = 0;
+// The library functions the evaluator folds, by identifier (lower_tu:
+// unless -fno-builtin or -fno-builtin-NAME): strlen and memchr.
+var fold_lib_strlen: u32 = 0xFFFFFFFF;
+var fold_lib_memchr: u32 = 0xFFFFFFFF;
+
+// A const, non-volatile, non-weak variable (an array of such elements),
+// not a parameter: clang's evaluator reads its initializer
+// (isConstantEmittableObjectType, evaluateVarDeclInit).
+fn cv_eligible(s: i64) -> bool {
+    let sy = syms[s];
+    if sy.kind != SK_VAR || sy.flags & SF_PARAM != 0 || sy.flags & SF_WEAK != 0 { return false; }
+    var t = sy.ty;
+    while is_array(t) && kind_of(t) != TY_VLA { t = tbase(t); }
+    let q = quals(t);
+    return q & Q_CONST != 0 && q & (Q_VOLATILE | Q_ATOMIC) == 0;
+}
+
+fn cv_grow() {
+    while cvar_init.len < syms.len { cvar_init.push(0); cvar_decl.push(0); }
+}
+
+// The parser: variable s is defined at decl with initializer init.
+fn cv_define(s: i64, decl: u32, init: u32) {
+    if init == 0 || !cv_eligible(s) { return; }
+    cv_grow();
+    cvar_init[s] = init;
+    cvar_decl[s] = decl;
+}
+
+// GNU modes accept an array bound that clang's evaluator folds (reads of
+// const variables, differences of addresses) as a constant size, as an
+// extension (Sema's checkArraySize with AllowFold). n: an integer rvalue.
+recursive fn fold_gnu(n: u32) -> bool, i64 {
+    let f0 = fold_cvars;
+    let l0 = cv_ctx_late;
+    fold_cvars = true;
+    cv_ctx_late = true;
+    let ok, v = fold_int(n);
+    fold_cvars = f0;
+    cv_ctx_late = l0;
+    return ok, v;
+}
+
+// The address pointer expression n computes, as (base, offset in bytes):
+// base -1 for an integer (a null pointer plus an offset), else a variable
+// or function symbol. clang folds differences and comparisons of addresses
+// of one base, and offsetof written as (size_t)&((T *)0)->m (G1).
+recursive fn fold_addr(n: u32) -> bool, i64, i64 {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_ICAST || k == N_CAST {
+        let op = nd.op as i64;
+        if op == CK_BITCAST || op == CK_NOOP { return fold_addr(nd.a); }
+        if op == CK_NULL2PTR { return true, -1, 0; }
+        if op == CK_INT2PTR {
+            let ok, v = fold_int(nd.a);
+            return ok, -1, v;
+        }
+        if op == CK_ARRAY2PTR || op == CK_FUNC2PTR { return fold_lvaddr(nd.a); }
+        if op == CK_LVAL2RVAL && kind_of(nd.ty) == TY_POINTER && cv_depth <= 32 {
+            // a const pointer variable (G1)
+            let init, w = cvar_member_init(nd.a);
+            if init == 0 || w >= 0 { return false, 0, 0; }
+            cv_depth++;
+            let ok, b, o = fold_addr(init);
+            cv_depth--;
+            return ok, b, o;
+        }
+        return false, 0, 0;
+    }
+    if k == N_UNARY && nd.op == U_ADDR { return fold_lvaddr(nd.a); }
+    if (k == N_CALL || k == N_BUILTIN) && fold_call_kind(n) == 2 {
+        // memchr: where it finds the byte, or a null pointer
+        let ok, j = fold_memchr(n);
+        if !ok { return false, 0, 0; }
+        if j < 0 { return true, -1, 0; }
+        let ok2, b, o = fold_addr(nlist[nd.v]);
+        if !ok2 { return false, 0, 0; }
+        return true, b, o + j;
+    }
+    if k == N_BINARY && (nd.op == B_PTRADD || nd.op == B_PTRSUB) {
+        let ok, b, o = fold_addr(nd.a);
+        if !ok { return false, 0, 0; }
+        let ok2, i = fold_int(nd.b);
+        if !ok2 { return false, 0, 0; }
+        var es: i64 = 1;
+        let pt = tbase(nd.ty);
+        if !is_void(pt) { es = type_size(pt); }
+        if es <= 0 { return false, 0, 0; }
+        if nd.op == B_PTRADD { return true, b, o + i * es; }
+        return true, b, o - i * es;
+    }
+    return false, 0, 0;
+}
+
+recursive fn fold_lvaddr(n: u32) -> bool, i64, i64 {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_STRING { return true, -2 - (n as i64), 0; }
+    if k == N_DECLREF {
+        let s = nd.a as i64;
+        if syms[s].kind != SK_VAR && syms[s].kind != SK_FUNC { return false, 0, 0; }
+        return true, s, 0;
+    }
+    if k == N_INDEX {
+        let ok, b, o = fold_addr(nd.a);
+        if !ok { return false, 0, 0; }
+        let ok2, i = fold_int(nd.b);
+        let es = type_size(nd.ty);
+        if !ok2 || es <= 0 { return false, 0, 0; }
+        return true, b, o + i * es;
+    }
+    if k == N_MEMBER {
+        if nd.flags & NF_BITFIELD != 0 { return false, 0, 0; }
+        var ok = false;
+        var b: i64 = 0;
+        var o: i64 = 0;
+        if nd.op == 1 { ok, b, o = fold_addr(nd.a); } else { ok, b, o = fold_lvaddr(nd.a); }
+        if !ok { return false, 0, 0; }
+        return true, b, o + fields[nd.b].offset;
+    }
+    if k == N_UNARY && nd.op == U_DEREF { return fold_addr(nd.a); }
+    return false, 0, 0;
+}
+
+// A constant complex value (re, im) for the comparisons clang folds.
+recursive fn fold_cplx(n: u32) -> bool, f64, f64 {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_ICAST || k == N_CAST {
+        let op = nd.op as i64;
+        if op == CK_REAL2COMPLEX {
+            if is_real_float(nodes[nd.a].ty) {
+                let ok, f = fold_float(nd.a);
+                return ok, f, 0.0;
+            }
+            let ok, v = fold_int(nd.a);
+            if !ok { return false, 0.0, 0.0; }
+            if is_signed(nodes[nd.a].ty) { return true, v as f64, 0.0; }
+            return true, (v as! u64) as f64, 0.0;
+        }
+        if op == CK_COMPLEXCAST || op == CK_NOOP {
+            let ok, re, im = fold_cplx(nd.a);
+            if !ok { return false, 0.0, 0.0; }
+            if kind_of(cplx_base_of(nd.ty)) == TY_FLOAT { return true, round_f32(re), round_f32(im); }
+            return true, re, im;
+        }
+        return false, 0.0, 0.0;
+    }
+    if k == N_UNARY && (nd.op == U_NEG || nd.op == U_PLUS) {
+        let ok, re, im = fold_cplx(nd.a);
+        if nd.op == U_NEG { return ok, -re, -im; }
+        return ok, re, im;
+    }
+    return false, 0.0, 0.0;
+}
+fn cplx_base_of(t: u32) -> u32 { tbase(t) }
+
+// A pointer clang's evaluator follows into a constant object (G1): the
+// initializer of the array it points into (single: of the one object it
+// points at, an array of one), the element count, the element index (up
+// to one past the end) and the element type.
+struct CPtr { init: u32, single: bool, alen: i64, k: i64, ety: u32 }
+
+recursive fn cptr_eval(p: u32) -> bool, CPtr {
+    let none = CPtr { init: 0, single: false, alen: 0, k: 0, ety: 0 };
+    let nd = nodes[p];
+    let k = nd.kind as i64;
+    if k == N_ICAST || k == N_CAST {
+        let op = nd.op as i64;
+        if op == CK_NOOP || op == CK_BITCAST { return cptr_eval(nd.a); }
+        if op == CK_ARRAY2PTR {
+            let a = nd.a;
+            let at = unqual(nodes[a].ty);
+            if nodes[a].kind == N_STRING {
+                let sl = strs[nodes[a].a];
+                return true, CPtr { init: a, single: false, alen: sl.len as i64 + 1, k: 0, ety: sl.elem };
+            }
+            if !is_array(at) || kind_of(at) == TY_VLA || types[at >> 4].n < 0 { return false, none; }
+            let init, w = cvar_member_init(a);
+            if init == 0 { return false, none; }
+            return true, CPtr { init: init, single: false, alen: types[at >> 4].n, k: 0, ety: tbase(at) };
+        }
+        if op == CK_LVAL2RVAL && kind_of(nd.ty) == TY_POINTER && fold_cvars {
+            // a const pointer variable: what its initializer points at
+            if cv_depth > 32 { return false, none; }
+            let init, w = cvar_member_init(nd.a);
+            if init == 0 || w >= 0 { return false, none; }
+            cv_depth++;
+            let ok, P = cptr_eval(init);
+            cv_depth--;
+            return ok, P;
+        }
+        return false, none;
+    }
+    if k == N_UNARY && nd.op == U_ADDR {
+        let a = nodes[nd.a];
+        if a.kind == N_INDEX {
+            // &p[i]: p + i
+            let ok, P = cptr_eval(a.a);
+            if !ok { return false, none; }
+            let ok2, i = fold_int(a.b);
+            if !ok2 { return false, none; }
+            return cptr_adjust(P, i, a.ty);
+        }
+        if a.kind == N_UNARY && a.op == U_DEREF { return cptr_eval(a.a); }
+        // the whole object: &c, &s, &x.f
+        var init: u32 = 0;
+        if a.kind == N_STRING { init = nd.a; } else {
+            let i2, w = cvar_member_init(nd.a);
+            if w >= 0 { return false, none; }
+            init = i2;
+        }
+        if init == 0 { return false, none; }
+        return true, CPtr { init: init, single: true, alen: 1, k: 0, ety: unqual(a.ty) };
+    }
+    if k == N_BINARY && (nd.op == B_PTRADD || nd.op == B_PTRSUB) {
+        let ok, P = cptr_eval(nd.a);
+        if !ok { return false, none; }
+        let ok2, i = fold_int(nd.b);
+        if !ok2 { return false, none; }
+        return cptr_adjust(P, if nd.op == B_PTRADD { i } else { -i }, tbase(nd.ty));
+    }
+    return false, none;
+}
+
+// P moved by i elements of type et (that of the pointer arithmetic).
+fn cptr_adjust(P: CPtr, i: i64, et: u32) -> bool, CPtr {
+    if type_size(et) != type_size(P.ety) { return false, P; }
+    let k = P.k + i;
+    if k < 0 || k > P.alen { return false, P; }
+    var Q = P;
+    Q.k = k;
+    return true, Q;
+}
+
+// Element P.k + j, a character (one-byte integer type) the evaluator reads.
+fn cptr_read(P: CPtr, j: i64) -> bool, i64 {
+    let i = P.k + j;
+    if i < 0 || i >= P.alen || type_size(P.ety) != 1 || !is_integer(P.ety) || kind_of(P.ety) == TY_BOOL { return false, 0; }
+    var e: u32 = 0;
+    if P.single { e = P.init; } else {
+        let nd = nodes[P.init];
+        if nd.kind == N_STRING {
+            let sl = strs[nd.a];
+            if type_size(sl.elem) != 1 { return false, 0; }
+            if i < sl.len as i64 { return true, trunc_to(strbytes[sl.start as i64 + i] as i64, P.ety); }
+            return true, 0;
+        }
+        if nd.kind != N_INITLIST { return false, 0; }
+        if i < nd.c as i64 { e = nlist[nd.v + i]; } else { e = nd.b; }
+        if e == 0 { return true, 0; }
+    }
+    cv_depth++;
+    let ok, v = fold_int(e);
+    cv_depth--;
+    if !ok { return false, 0; }
+    return true, trunc_to(v, P.ety);
+}
+
+// A call of a library function the evaluator folds (strlen 1, memchr 2), or
+// of its __builtin_ form; 0 if none.
+fn fold_call_kind(n: u32) -> i64 {
+    let nd = nodes[n];
+    if nd.kind == N_BUILTIN && nd.op == BI_CALL {
+        let nm = ident_text(syms[nd.a].name as i64);
+        if nm == "__builtin_strlen" && nd.c == 1 { return 1; }
+        if nm == "__builtin_memchr" && nd.c == 3 { return 2; }
+        return 0;
+    }
+    if nd.kind != N_CALL { return 0; }
+    var c = nd.a;
+    while nodes[c].kind == N_ICAST && nodes[c].op == CK_FUNC2PTR { c = nodes[c].a; }
+    if nodes[c].kind != N_DECLREF { return 0; }
+    let s = nodes[c].a as i64;
+    let sy = syms[s];
+    if sy.kind != SK_FUNC || sy.sc == SC_STATIC { return 0; }
+    if sy.attr != 0 && sym_attrs[sy.attr].asm_len != 0 { return 0; }
+    let ft = types[sy.ty >> 4];
+    if sy.name == fold_lib_strlen && nd.c == 1 && ft.n == 1 && kind_of(ft.base) == TY_ULONG { return 1; }
+    if sy.name == fold_lib_memchr && nd.c == 3 && ft.n == 3 && kind_of(ft.base) == TY_POINTER { return 2; }
+    return 0;
+}
+
+// strlen(p) as the evaluator folds it (EvaluateBuiltinStrLen).
+fn fold_strlen(p: u32) -> bool, i64 {
+    let ok, P = cptr_eval(p);
+    if !ok { return false, 0; }
+    var j: i64 = 0;
+    loop {
+        let ok2, c = cptr_read(P, j);
+        if !ok2 { return false, 0; }
+        if c == 0 { return true, j; }
+        j++;
+    }
+    return false, 0;
+}
+
+// memchr(p, c, n): the index of the byte found (-1 not found: a null pointer).
+fn fold_memchr(n: u32) -> bool, i64 {
+    let nd = nodes[n];
+    let ok, P = cptr_eval(nlist[nd.v]);
+    if !ok { return false, 0; }
+    let okc, c = fold_int(nlist[nd.v + 1]);
+    let okn, len = fold_int(nlist[nd.v + 2]);
+    if !okc || !okn { return false, 0; }
+    if len == 0 { return true, -1; }
+    var j: i64 = 0;
+    while (j as! u64) < (len as! u64) {
+        let ok2, v = cptr_read(P, j);
+        if !ok2 { return false, 0; }
+        if v & 255 == c & 255 { return true, j; }
+        j++;
+    }
+    return true, -1;
+}
+
+// The initializer of variable s that a read of it folds to, or 0: a const,
+// non-volatile, non-weak variable defined with an initializer (cvar_init,
+// filled by the lowering), whose definition clang had seen when it emitted
+// the code being lowered (CodeGen emits an external definition as it is
+// parsed, deferred ones after the unit).
+fn cvar_value_init(s: i64) -> u32 {
+    if !fold_cvars || s < 0 || s >= cvar_init.len || cv_depth > 32 { return 0; }
+    let init = cvar_init[s];
+    if init == 0 { return 0; }
+    if syms[s].flags & SF_FILESCOPE != 0 && !cv_ctx_late && cvar_decl[s] >= cv_ctx { return 0; }
+    return init;
+}
+
+// The initializer a read of member chain n (s.f.g, a[2].f: a const
+// variable's, with constant indices) folds to, and the bit-field width of
+// the last member (-1: none); 0 if none.
+recursive fn cvar_member_init(n: u32) -> u32, i64 {
+    let nd = nodes[n];
+    if nd.kind == N_DECLREF { return cvar_value_init(nd.a as i64), -1; }
+    if nd.kind == N_INDEX {
+        let ok, i = fold_int(nd.b);
+        if !ok || i < 0 { return 0, -1; }
+        let b = nodes[nd.a];
+        if b.kind != N_ICAST || b.op != CK_ARRAY2PTR {
+            // p[i]: through a pointer clang's evaluator follows (G1)
+            let pinit, k = cvar_ptr_init(nd.a);
+            if pinit == 0 { return 0, -1; }
+            return cvar_elem_init(pinit, k, i), -1;
+        }
+        let init, w = cvar_member_init(b.a);
+        if init == 0 || nodes[init].kind != N_INITLIST { return 0, -1; }
+        let il = nodes[init];
+        if i < il.c as i64 { return nlist[il.v + i], -1; }
+        if il.b != 0 { return il.b, -1; }
+        return 0, -1;
+    }
+    if nd.kind == N_UNARY && nd.op == U_DEREF {
+        // *p: through a pointer clang's evaluator follows (G1)
+        let init, k = cvar_ptr_init(nd.a);
+        if init == 0 { return 0, -1; }
+        return cvar_elem_init(init, k, 0), -1;
+    }
+    if nd.kind == N_MEMBER && nd.op == 0 {
+        let init, w = cvar_member_init(nd.a);
+        return cvar_field_init(init, nodes[nd.a].ty, nd.b as i64);
+    }
+    if nd.kind == N_MEMBER && nd.op == 1 {
+        // p->f: the object p points at (G1)
+        let init, k = cvar_ptr_init(nd.a);
+        if init == 0 { return 0, -1; }
+        return cvar_field_init(cvar_elem_init(init, k, 0), tbase(nodes[nd.a].ty), nd.b as i64);
+    }
+    return 0, -1;
+}
+
+// Member f's initializer in a record initializer of record type rt, and its
+// bit-field width (-1: none); 0 if none.
+fn cvar_field_init(init: u32, rt: u32, f: i64) -> u32, i64 {
+    if init == 0 || nodes[init].kind != N_INITLIST || !is_record(rt) { return 0, -1; }
+    let il = nodes[init];
+    let r = rec_of(rt);
+    if records[r].flags & RF_UNION != 0 {
+        if il.a as i64 != f - (records[r].first as i64) + 1 || il.c == 0 { return 0, -1; }
+        return nlist[il.v], fields[f].width as i64;
+    }
+    // one child per member but unnamed bit-fields
+    var ci: i64 = 0;
+    for i in (records[r].first as i64)..f {
+        if fields[i].width >= 0 && fields[i].name == 0 { continue; }
+        ci++;
+    }
+    if ci >= il.c as i64 { return 0, -1; }
+    return nlist[il.v + ci], fields[f].width as i64;
+}
+
+// Element k + i of the array whose initializer is init (k -1: init is a
+// single object, element 0 only); 0 if none.
+fn cvar_elem_init(init: u32, k: i64, i: i64) -> u32 {
+    if k < 0 { return if i == 0 { init } else { 0 }; }
+    if nodes[init].kind != N_INITLIST { return 0; }
+    let il = nodes[init];
+    let j = k + i;
+    if j < il.c as i64 { return nlist[il.v + j]; }
+    if il.b != 0 { return il.b; }
+    return 0;
+}
+
+// The object pointer rvalue p points at when clang's evaluator follows
+// it: a const pointer variable's initializer &X or X (an array), X a
+// const variable (or a member or element of one) or a string literal. The
+// object's initializer, and the element index (-1: not an array element).
+recursive fn cvar_ptr_init(p: u32) -> u32, i64 {
+    var n = p;
+    while nodes[n].kind == N_ICAST && nodes[n].op == CK_NOOP { n = nodes[n].a; }
+    let nd = nodes[n];
+    if nd.kind == N_ICAST && nd.op == CK_LVAL2RVAL {
+        if cv_depth > 32 { return 0, -1; }
+        let init, w = cvar_member_init(nd.a);
+        if init == 0 || w >= 0 { return 0, -1; }
+        cv_depth++;
+        let r, k = cvar_ptr_init(init);
+        cv_depth--;
+        return r, k;
+    }
+    if nd.kind == N_UNARY && nd.op == U_ADDR {
+        let a = nodes[nd.a];
+        if a.kind == N_INDEX {
+            // &b[i]: b + i
+            let ok, i = fold_int(a.b);
+            if !ok { return 0, -1; }
+            let init, k = cvar_ptr_init(a.a);
+            if init == 0 || k < 0 { return 0, -1; }
+            return init, k + i;
+        }
+        let init, w = cvar_member_init(nd.a);
+        return init, -1;
+    }
+    if nd.kind == N_ICAST && nd.op == CK_ARRAY2PTR {
+        if nodes[nd.a].kind == N_STRING { return nd.a, 0; }
+        let init, w = cvar_member_init(nd.a);
+        return init, 0;
+    }
+    if nd.kind == N_BINARY && (nd.op == B_PTRADD || nd.op == B_PTRSUB) {
+        let ok, i = fold_int(nd.b);
+        if !ok { return 0, -1; }
+        let init, k = cvar_ptr_init(nd.a);
+        if init == 0 { return 0, -1; }
+        let d = if nd.op == B_PTRADD { i } else { -i };
+        if k < 0 { return if d == 0 { init } else { 0 }, -1; }
+        if k + d < 0 { return 0, -1; }
+        return init, k + d;
+    }
+    return 0, -1;
+}
+
+// A read of a const variable (or a member of one) folded as an integer.
+recursive fn fold_cvar_int(n: u32) -> bool, i64 {
+    let nd = nodes[n];
+    let a = nodes[nd.a];
+    var init: u32 = 0;
+    var w: i64 = -1;
+    if a.kind == N_DECLREF {
+        init = cvar_value_init(a.a as i64);
+    } else if a.kind == N_MEMBER || a.kind == N_INDEX {
+        init, w = cvar_member_init(nd.a);
+        if init == 0 && a.kind == N_INDEX && is_integer(nd.ty) {
+            // an element of a const character array initialized by a string
+            let ok, i0 = fold_int(a.b);
+            if !ok || i0 < 0 { return false, 0; }
+            var i = i0;
+            let b = nodes[a.a];
+            var si: u32 = 0;
+            if b.kind == N_ICAST && b.op == CK_ARRAY2PTR {
+                if nodes[b.a].kind == N_STRING { si = b.a; } else { let si2, w2 = cvar_member_init(b.a); si = si2; }
+            } else {
+                // through a pointer to a character array (G1)
+                let si2, k = cvar_ptr_init(a.a);
+                if k < 0 { return false, 0; }
+                si = si2;
+                i = i + k;
+            }
+            if si == 0 || nodes[si].kind != N_STRING { return false, 0; }
+            let sl = strs[nodes[si].a];
+            let es = type_size(sl.elem);
+            let at = types[unqual(nodes[si].ty) >> 4];
+            if es <= 0 || es > 8 || at.n >= 0 && i >= at.n { return false, 0; }
+            var v: i64 = 0;
+            if i < sl.len as i64 {   // (len counts elements)
+                for k in es { v = v | ((strbytes[sl.start as i64 + i * es + k] as i64) << ((8 * k) as! u64)); }
+            }
+            return true, trunc_to(v, nd.ty);
+        }
+    }
+    if init == 0 { return false, 0; }
+    cv_depth++;
+    let ok, v0 = fold_int(init);
+    cv_depth--;
+    if !ok { return false, 0; }
+    var v = v0;
+    if w > 0 && w < 64 {
+        // a bit-field holds its width's bits
+        let m = (1 << (w as! u64)) - 1;
+        v = v & m;
+        if is_signed(nd.ty) && v >= (1 << ((w - 1) as! u64)) { v = v - (1 << (w as! u64)); }
+    }
+    if kind_of(nd.ty) == TY_POINTER { return true, v; }
+    if !is_integer(nd.ty) { return false, 0; }
+    return true, trunc_to(v, nd.ty);
+}
+
 recursive fn fold_int(n: u32) -> bool, i64 {
     let nd = nodes[n];
     let k = nd.kind as i64;
-    if k == N_INT { return true, nd.v; }
+    if k == N_INT {
+        if nd.flags & NF_BCP != 0 && fold_cvars {
+            // G1: folds now if its operand does; else not at all
+            if bcp_fold(nd.a) { return true, 1; }
+            return false, 0;
+        }
+        return true, nd.v;
+    }
     if k == N_SIZEOF || k == N_OFFSETOF {
         if nd.v < 0 { return false, 0; }
         return true, nd.v;
     }
+    if (k == N_CALL || k == N_BUILTIN) && fold_cvars && fold_call_kind(n) == 1 {
+        let ok, v = fold_strlen(nlist[nd.v]);
+        if !ok { return false, 0; }
+        return true, trunc_to(v, nd.ty);
+    }
     if k == N_ICAST || k == N_CAST {
         let op = nd.op as i64;
+        if op == CK_LVAL2RVAL && fold_cvars { return fold_cvar_int(n); }
         if op == CK_LVAL2RVAL || op == CK_ARRAY2PTR || op == CK_FUNC2PTR { return false, 0; }
+        if op == CK_PTR2INT && fold_cvars {
+            // (size_t)&((T *)0)->m and other offsets from a null pointer
+            let ok, b, o = fold_addr(nd.a);
+            if !ok || b != -1 { return false, 0; }
+            return true, trunc_to(o, nd.ty);
+        }
         if op == CK_FLOAT2INT {
             let ok, f = fold_float(nd.a);
             if !ok { return false, 0; }
@@ -499,6 +1037,10 @@ recursive fn fold_int(n: u32) -> bool, i64 {
             let ok, f = fold_float(nd.a);
             if !ok { return false, 0; }
             return true, if f != 0.0 { 1 } else { 0 };
+        }
+        if op == CK_PTR2BOOL && fold_cvars {
+            let ok, b = fold_bool(nd.a);
+            return ok, if b { 1 } else { 0 };
         }
         if !is_integer(nodes[nd.a].ty) && !(op == CK_NULL2PTR) { return false, 0; }
         let ok, v = fold_int(nd.a);
@@ -514,6 +1056,10 @@ recursive fn fold_int(n: u32) -> bool, i64 {
             if is_real_float(nodes[nd.a].ty) {
                 let ok, f = fold_float(nd.a);
                 return ok, if f == 0.0 { 1 } else { 0 };
+            }
+            if fold_cvars && kind_of(nodes[nd.a].ty) == TY_POINTER {
+                let ok, b = fold_bool(nd.a);
+                return ok, if b { 0 } else { 1 };
             }
             let ok, v = fold_int(nd.a);
             return ok, if v == 0 { 1 } else { 0 };
@@ -538,6 +1084,39 @@ recursive fn fold_int(n: u32) -> bool, i64 {
         }
         if op == B_COMMA { return false, 0; }
         let at = nodes[nd.a].ty;
+        if fold_cvars && (op == B_PTRDIFF || (kind_of(at) == TY_POINTER && is_cmp_op_s(op))) {
+            // addresses of one base: their difference, their order (G1)
+            let ok, b1, o1 = fold_addr(nd.a);
+            if !ok { return false, 0; }
+            let ok2, b2, o2 = fold_addr(nd.b);
+            if !ok2 { return false, 0; }
+            if b1 != b2 {
+                // the address of an object is not a null pointer (unless weak)
+                let nul1 = b1 == -1 && o1 == 0;
+                let nul2 = b2 == -1 && o2 == 0;
+                if (op == B_EQ || op == B_NE) && nul1 != nul2 && (nul1 || b1 != -1) && (nul2 || b2 != -1) &&
+                   !addr_weak(if nul1 { b2 } else { b1 }) {
+                    return true, if op == B_NE { 1 } else { 0 };
+                }
+                return false, 0;
+            }
+            if op == B_PTRDIFF {
+                var es: i64 = 1;
+                let pt = tbase(at);
+                if !is_void(pt) { es = type_size(pt); }
+                if es <= 0 { return false, 0; }
+                return true, trunc_to((o1 - o2) / es, nd.ty);
+            }
+            let c = match op { B_LT => o1 < o2, B_GT => o1 > o2, B_LE => o1 <= o2, B_GE => o1 >= o2, B_EQ => o1 == o2, _ => o1 != o2 };
+            return true, if c { 1 } else { 0 };
+        }
+        if fold_cvars && (op == B_EQ || op == B_NE) && is_complex(at) {
+            let ok, r1, i1 = fold_cplx(nd.a);
+            let ok2, r2, i2 = fold_cplx(nd.b);
+            if !ok || !ok2 { return false, 0; }
+            let eq = r1 == r2 && i1 == i2;
+            return true, if (op == B_EQ) == eq { 1 } else { 0 };
+        }
         if (op == B_LT || op == B_GT || op == B_LE || op == B_GE || op == B_EQ || op == B_NE) && is_real_float(at) {
             let ok, x = fold_float(nd.a);
             let ok2, y = fold_float(nd.b);
@@ -612,6 +1191,53 @@ recursive fn fold_int(n: u32) -> bool, i64 {
     return false, 0;
 }
 
+// Is base b (fold_addr) a weak symbol?
+fn addr_weak(b: i64) -> bool {
+    if b < 0 { return false; }
+    let sy = syms[b];
+    return sy.flags & SF_WEAK != 0 || (sy.attr != 0 && sym_attrs[sy.attr].flags & AM_WEAK != 0);
+}
+
+// An operand of __builtin_constant_p without side effects for sure (reads
+// of non-volatile objects, constants, casts and arithmetic of such).
+recursive fn bcp_simple(n: u32) -> bool {
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_INT || k == N_FLOAT || k == N_STRING || k == N_DECLREF || k == N_SIZEOF || k == N_OFFSETOF { return true; }
+    if k == N_ICAST || k == N_CAST {
+        if nd.op == CK_LVAL2RVAL && quals(nodes[nd.a].ty) & Q_VOLATILE != 0 { return false; }
+        return bcp_simple(nd.a);
+    }
+    if k == N_UNARY {
+        let op = nd.op as i64;
+        if op == U_PREINC || op == U_PREDEC || op == U_POSTINC || op == U_POSTDEC { return false; }
+        return bcp_simple(nd.a);
+    }
+    if k == N_BINARY { return nd.op != B_COMMA && bcp_simple(nd.a) && bcp_simple(nd.b); }
+    if k == N_MEMBER { return bcp_simple(nd.a); }
+    if k == N_INDEX { return bcp_simple(nd.a) && bcp_simple(nd.b); }
+    return false;
+}
+
+// __builtin_constant_p of operand x as clang's evaluator decides it in
+// CodeGen (EvaluateBuiltinConstantP): a constant, or a pointer that is null
+// or to the first character of a string literal.
+recursive fn bcp_fold(x: u32) -> bool {
+    let t = nodes[x].ty;
+    if kind_of(t) == TY_POINTER {
+        let ok, b, o = fold_addr(x);
+        return ok && (b == -1 || (b <= -2 && o == 0));
+    }
+    if is_real_float(t) {
+        let ok, f = fold_float(x);
+        return ok;
+    }
+    let ok, v = fold_int(x);
+    return ok;
+}
+
+fn is_cmp_op_s(op: i64) -> bool { op == B_LT || op == B_GT || op == B_LE || op == B_GE || op == B_EQ || op == B_NE }
+
 recursive fn fold_bool(n: u32) -> bool, bool {
     if is_real_float(nodes[n].ty) {
         let ok, f = fold_float(n);
@@ -619,9 +1245,16 @@ recursive fn fold_bool(n: u32) -> bool, bool {
     }
     let ok, v = fold_int(n);
     if ok { return true, v != 0; }
-    // the address of an object or function is never null
+    // the address of an object or function is never null, unless it is
+    // weak (G1: clang's evaluator does not fold that one)
     let ok2, sym = address_base(n);
-    if ok2 { return true, true; }
+    if ok2 && (sym < 0 || syms[sym].flags & SF_WEAK == 0) { return true, true; }
+    if fold_cvars && kind_of(nodes[n].ty) == TY_POINTER {
+        // G1: what fold_addr follows (const pointer variables, memchr)
+        let ok3, b, o = fold_addr(n);
+        if ok3 && b == -1 { return true, o != 0; }
+        if ok3 && !addr_weak(b) { return true, true; }
+    }
     return false, false;
 }
 
@@ -674,12 +1307,37 @@ recursive fn fold_float(n: u32) -> bool, f64 {
     let nd = nodes[n];
     let k = nd.kind as i64;
     if k == N_FLOAT { return true, reinterpret_f64(nd.v); }
+    if k == N_BUILTIN && nd.op == BI_CALL && fold_cvars && nd.c == 0 {
+        // __builtin_huge_val, __builtin_inf and their f/l forms (G1)
+        let nm = ident_text(syms[nd.a].name as i64);
+        if nm == "__builtin_huge_val" || nm == "__builtin_huge_valf" || nm == "__builtin_huge_vall" ||
+           nm == "__builtin_inf" || nm == "__builtin_inff" || nm == "__builtin_infl" {
+            return true, 1.0 / 0.0;
+        }
+        return false, 0.0;
+    }
     if k == N_INT {
+        if nd.flags & NF_BCP != 0 && fold_cvars {
+            if bcp_fold(nd.a) { return true, 1.0; }
+            return false, 0.0;
+        }
         if is_signed(nd.ty) { return true, nd.v as f64; }
         return true, (nd.v as! u64) as f64;
     }
     if k == N_ICAST || k == N_CAST {
         let op = nd.op as i64;
+        if op == CK_LVAL2RVAL && fold_cvars && is_real_float(nd.ty) {
+            // a const variable's (G1)
+            var init: u32 = 0;
+            let ak = nodes[nd.a].kind as i64;
+            if ak == N_DECLREF { init = cvar_value_init(nodes[nd.a].a as i64); }
+            else if ak == N_MEMBER || ak == N_INDEX { let i2, w = cvar_member_init(nd.a); init = i2; }
+            if init == 0 { return false, 0.0; }
+            cv_depth++;
+            let ok, f = fold_float(init);
+            cv_depth--;
+            return ok, f;
+        }
         if op == CK_INT2FLOAT {
             let ok, v = fold_int(nd.a);
             if !ok { return false, 0.0; }

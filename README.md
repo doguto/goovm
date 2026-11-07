@@ -30,6 +30,27 @@ C1 で、浮動小数点を多く使うコードの実行時間が clang `-O0` �
 - テストを足しました：`tests/ll/`（手書きの LLVM IR と C の呼び出し側。`tests/run.py` が扱います）、`tests/cxx/03_fp_structs.cpp`、`tests/c/50_fp_classify.c`、`tests/c/51_fp_convert.c`。
 - 正しさ：全コーパス（C と C++ の1,921本、clang で通る1,915本）の全変種（O0、g、mem2reg、cc、cc-g）で失敗0、フォールバック0。`-g` の全オブジェクト（5,266個）が `llvm-dwarfdump --verify` を通ります。
 
+## マイルストーン G1：goosecc の起動、構文解析のキャッシュ、clang の畳み込み
+
+G1 で、`goosecc` のプロセス起動を1ミリ秒よりずっと短くし、ヘッダの宣言の構文解析と型検査を永続キャッシュで再生するようにし、clang-20 が `-O0` でも行う畳み込みとインライン展開を取り入れました。設計は [`frontend-goose/DESIGN.md`](frontend-goose/DESIGN.md) の §12、記録は [`frontend-goose/NOTES.md`](frontend-goose/NOTES.md) の13節、ランタイムへのパッチと Goose の作者への提案は [`frontend-goose/runtime-patches/README.md`](frontend-goose/runtime-patches/README.md)、計測と検証の記録は [`bench/results/g1-2026-11-07/`](bench/results/g1-2026-11-07/) です。バックエンド、GIR、`tools/` は変えていません。
+
+- **起動：** 1行のファイルのコンパイルが1.19 ms から0.65 ms になりました（静かなマシンで、`exec` と終了を含む）。以前の半分は、Goose ランタイムが420個のデータスタック領域を1つずつ `mmap` していた時間です。生成された C に埋め込まれたランタイムに `build.sh` がパッチを当て、全領域を1回の予約の中の枠にしました。枠は最初に触れたときに SIGSEGV ハンドラが `mprotect` で有効にします。ほぼ毎回使う146領域は先頭に詰め、起動時に有効にします。
+- **構文解析のキャッシュ：** ファイル先頭の `#include` の並びを読み終えた時点の構文解析器の状態（29個の表と辞書）を差分として保存し、同じ並びで始まる次のコンパイルで再生します。キーはインクルードごとのヘッダキャッシュの blob、オプション、組み込みの定義です。ソース上の位置は、メインファイルの長さの差だけずらします。CTMark の構文解析と型検査は218 ms から153 ms になりました。
+- **速さ**（`tests/bench_hcache.py -n 3`、CTMark の C ファイル316本を1本ずつ単独で、3回の最良値。マシンは別の作業と共用で、負荷平均1.6〜3）：
+
+  | 設定 | G1 前 | G1 | TinyCC | clang `-O0` |
+  |---|---:|---:|---:|---:|
+  | キャッシュなし | 1.60秒 | **1.48秒** | 1.61秒 | 13.45秒 |
+  | 温まったキャッシュ | 1.33秒 | **1.19秒（TinyCC の1.35倍、clang の11.3倍速い）** | | |
+
+  - 目標の「温まったキャッシュで TinyCC の1.3倍以上」と「キャッシュなしで TinyCC より遅くない」は満たしました。
+  - **sqlite3.c 単体は TinyCC に届きませんでした**（キャッシュなしで34.0 ms、G1 前は37.5 ms。TinyCC は24.5 ms）。25万行のほぼ全部が自分のコードで、どちらのキャッシュも効きません。実行命令数は約2.8億で、TinyCC の約2.1億より多く、その4分の1が前処理のマクロ展開と字句解析です。
+- **clang との一致：** const 変数の読み出し（`DW_AT_const_value` を含む）、アドレスの差、`strlen`/`memchr`、`__builtin_constant_p`、GNU モードの配列の長さ、NRVO、`nodebug` 関数、`always_inline` かつ `nodebug` の関数（x86 の組み込み関数）のインライン展開を、clang と同じにしました。
+  - `tests/dwarf_diff.py`：両方がコンパイルできる2,289本のうち、clang と同一の DWARF が2,231本から2,268本に、違うものが44本から9本になりました。CTMark では324本中323本が同一です。残る9本のうち8本は、デバッグ情報を持つ `always_inline` 関数です（clang は展開して `DW_TAG_inlined_subroutine` で記述し、goosecc は呼び出します）。
+  - gdb での比較：B5 と同じ79本のうち、やりとり全体が一致したのは46本（B5 は45本）。
+- **正しさ：** 構文解析のキャッシュを含めて、`cache_check.py`（2,357本、44,783回。構文解析器の全状態のチェックサムも比較）、`pcache_check.py`（メインファイルを水増しして全位置をずらした再生、9,428回）、敵対的な試験17件がすべて一致しました。`tests/suite_goosecc.py`（1,804件、`-O0` と `-g`）、`tests/run.py --goosecc`（108/108）、フロントエンドの4つの突き合わせも失敗0です。G1 前とのオブジェクトの差113本は、すべて意図した変更のどれかに由来することを確かめました（`noinit` 1本、const の畳み込み74本、`strlen`・NRVO など34本、組み込み関数の展開4本）。
+- `__attribute__((noinit))` がコンパイルできるようになりました（clang-20 は x86-64 では無視するので、同じく無視します）。
+
 ## マイルストーン B5：goosecc のデバッグ情報
 
 `goosecc -g` が、clang-20 `-O0 -g` と同じ DWARF 5 を出すようになりました。行テーブルに加えて、変数、引数、型、スコープ、ラベル、大域変数（関数内の static 変数を含む）、文字列リテラルです。型はビットフィールド、VLA、列挙型、関数ポインタ、ベクトル、複素数、`_Atomic`、typedef（書かれたとおりの名前）を含めてすべて出します。DIE は goosecc 自身の AST と型から作り、GIR の `dies`/`dattrs` 表でバックエンドに渡します。バックエンド、GIR、`tools/` は変えていません。設計は [`frontend-goose/DESIGN.md`](frontend-goose/DESIGN.md) の §11、記録は [`frontend-goose/NOTES.md`](frontend-goose/NOTES.md) の12節です。

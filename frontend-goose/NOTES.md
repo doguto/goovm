@@ -3,8 +3,9 @@
 goosecc is about 17,600 lines of Goose without comments and blank lines
 (compiler commit 335fddc, runtime d22ae129d92b): the front end of milestone
 B1 (sections 1-8), the lowering to GIR of B2 (section 9), the speed
-work of B3 (section 10), the header cache of B4 (section 11) and the
-debug information of B5 (section 12), plus the
+work of B3 (section 10), the header cache of B4 (section 11), the
+debug information of B5 (section 12) and G1's start-up, parse cache and
+clang-style folding (section 13), plus the
 Goose back-end imported as a package. It is compiled with `goose
 --standalone` to one 5.1 MB C file and then with `clang-20 -O2`
 (2 s and 18 s). This page records what was
@@ -678,3 +679,132 @@ back-end's bounds check reported exactly
 - The back-end's resolution of the GIR forms (from A3) needed no
   change: once the DIE tables were right, `llvm-dwarfdump --verify`
   passed on every object.
+
+## 13. Milestone G1: start-up, the parse cache, clang's folding
+
+G1 added `pcache.goose` (930 lines with comments), a patch to the Goose
+runtime (`runtime-patches/lazy-regions.patch`, 260 lines of diff), about
+1,600 lines in the front end, the lowering and the DWARF builder (the
+evaluator's reads of const objects, `strlen`/`memchr`, NRVO, the
+expansion of `always_inline` calls, nodebug functions), C helpers in
+`goosecc_rt.h`, and the tests `cmp_bins.py`, `pcache_check.py` and
+`tests/c/52_noinit_sections.c` (DESIGN.md, section 12). What it was like:
+
+### The runtime is part of the program, and patching it is the only lever
+
+Start-up was half the runtime's work: one `mmap` and one `mprotect` per
+global array, 420 of them, and 840 VMAs to unmap at exit. Nothing in the
+language controls where a data stack lives or when it is mapped, so the
+fix is a patch to the runtime that `goose --standalone` copies into the
+generated C (runtime-patches/README.md, with a proposal). Two things made
+it harder than it needed to be:
+
+- A program whose `main` returns does not go through the runtime's end
+  hook, so the patch's profiling output (which regions a run touched) was
+  silently missing until it registered an `atexit` handler of its own.
+- The registry order of the regions is only visible in the generated C
+  (`gs_stack_init((&GS_GL->gs_gstk_NAME`); `build.sh` greps it out to map
+  the hot regions' names to indices. A stable, documented order (or an
+  attribute on the declaration) would make that a build option instead of
+  a text search.
+
+### What crosses to C
+
+The parse cache's inner loops (relocating offsets in 29 tables, delta
+encoding) are C helpers, as B4's were. The arrays that the parser grows
+in place are limited arrays (`T[>..<]`), and those do not cross:
+
+```
+error: extern fn put_u32l: parameter a of type u32[>..<]& cannot cross to C: only fixed-size values cross by value
+```
+
+(six helpers, `put_`, `diff_`, `set_` for `u32` and `i32`). The workaround
+is to pass a slice of the array and keep a second set of helpers with
+other C names for the growable arrays, which do cross as `T[:]`. A
+mapped file cannot come back as a slice either:
+
+```
+error: extern fn mapped cannot return const u32[:]: nested references and slices do not cross
+```
+
+so the entry is read through an index-returning helper, and a helper with
+two results is two helpers:
+
+```
+error: extern fn scan2 returns at most one value
+```
+
+### A struct of tables
+
+The first design kept the 29 tables of an entry in one struct:
+
+```
+error: resizable field a of struct Tables must be the final field; use root struct for independently stored fields
+```
+
+Only the last field of a struct may grow. The tables became a numbered
+set (`PT_TYPES` ... `PT_DHASH`) with a `match` per operation (length,
+put, diff, copy, set), which is longer but keeps each table a global
+array.
+
+### Recursion that appears later
+
+The evaluator is a group of mutually recursive functions (`fold_int`,
+`fold_bool`, `fold_addr`, `cvar_member_init`, `cptr_eval`, ...). Adding a
+call from `fold_int` to a new helper that calls `fold_int` back makes the
+helper part of the cycle, and the error names it, not the function that
+closed the cycle:
+
+```
+src/sema.goose:1321: error: recursive call cycle through bcp_fold, which is not declared `recursive fn` (§7.8)
+            if bcp_fold(nd.a) { return true, 1.0; }
+```
+
+(and earlier `recursive call cycle through lscope`). The message is
+right; it only arrives one build later than one would like, since each
+build stops at the first such cycle.
+
+### Small type frictions
+
+Flag constants are untyped `let`s, so they are `i64`, and a node's flags
+are `u16`:
+
+```
+src/builtins.goose:255: error: expected a value of type u16, got i64 (narrowing and sign changes require an explicit `as`)
+        nodes[n].flags = NF_ICE | (if later { NF_BCP } else { 0 });
+```
+
+A dictionary's `get` is an optional, which does not compare with a value:
+
+```
+src/gen_stmt.goose:1148: error: == requires operands of the same type, got u32? and u32
+    if S.nrvo >= 0 && nv_decl.get(S.nrvo as u64) == S.id { f_nrvo.insert(S.nrvo as u64, 1); }
+```
+
+(bind it, test it, then compare). Both are reasonable rules; they cost a
+build each.
+
+### One error, two messages
+
+Any error in the front end is followed by two more in the back-end
+package, which has no error of its own:
+
+```
+backend-goose/cg.goose:871: error: export fn gir_codegen: could not resolve one concrete function signature
+backend-goose/cg.goose:884: error: export fn gir_codegen_ex: could not resolve one concrete function signature
+```
+
+They come from the export of the back-end's entry points failing to
+instantiate once the importing program does not type-check. They are
+always the last lines of the output, so the real error has to be looked
+for above them.
+
+### What worked well
+
+- The exactness proofs of B4 carried over: `--pp-state-hash` gained a
+  hash of every parser table, and `cache_check.py` compared the parser's
+  whole state on every run without a change to the script.
+- Bounds checks turned two bugs into aborts with the source line instead
+  of wrong output: `index 0 out of bounds (length 0) (src/hcache.goose:501)`
+  during an early replay, and a string element read past the literal
+  (the evaluator's, which the torture test `widechar-2` hit).

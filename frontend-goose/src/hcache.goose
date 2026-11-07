@@ -161,6 +161,7 @@ var st_wbytes: i64 = 0;
 var st_werr: i64 = 0;
 var st_skipped: i64 = 0;
 var st_volatile: i64 = 0;
+var hc_replay_bid: u64 = 0;     // G1: the blob hc_replay just replayed
 var hc_norec: bool = false;    // the include just looked up is not to be recorded (its key is volatile)
 var tm_replay: i64 = 0;    // ns in replays: all, reading, checking, appending, committing; in recordings' ends
 var tm_read: i64 = 0;
@@ -1089,6 +1090,7 @@ fn hc_replay1(name: const u8[:], angled: bool, k: i64) -> bool {
         if hok {
             if blob_replay(bid) {
                 st_hits++;
+                hc_replay_bid = bid;
                 return true;
             }
         }
@@ -2093,6 +2095,8 @@ fn rec_save(r: Rec) -> bool {
     hcv[3] = (cs & 0xFFFFFFFF) as! u32;
     hcv[4] = (cs >> 32) as! u32;
     let bid = cs;
+    // G1: an include of the main file's is identified by its blob (pcache.goose)
+    if r.depth0 == 1 { hc_top_bid = bid; }
     // write the blob
     hc_keyh = r.keyh;
     hc_path(bid, true);
@@ -2340,7 +2344,9 @@ fn hc_report() {
         format(o, "goosecc: header cache: ", st_lookups, " lookups, ", st_hits, " hits, ", st_misses, " misses; ",
             st_recorded, " recorded (", st_wbytes, " bytes written), ", st_small, " too small, ", st_bad, " not cacheable, ",
             st_corrupt, " corrupt, ", st_werr, " write errors, ", st_volatile, " volatile; replay ", tm_replay / 1000, " us (read ", tm_read / 1000,
-            ", check ", tm_check / 1000, ", append ", tm_append / 1000, ", commit ", tm_commit / 1000, "), saving ", tm_save / 1000, " us\n");
+            ", check ", tm_check / 1000, ", append ", tm_append / 1000, ", commit ", tm_commit / 1000, "), saving ", tm_save / 1000, " us");
+        if !mode_E { pt_report(o); }
+        o.push('\n');
     }
     if hc_on && opt_time {
         var q: u8[>..] = [];

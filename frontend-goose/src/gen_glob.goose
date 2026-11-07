@@ -301,6 +301,21 @@ recursive fn is_const_object(q: u32) -> bool {
 // Emits the definition of variable global g (symbol s).
 fn emit_var(g: u32) {
     let s = glob_gen[g].sym;
+    // G1: the context of the evaluator's reads of const variables
+    let fs = syms[s].flags & SF_FILESCOPE != 0;
+    let c0 = cv_ctx;
+    let l0 = cv_ctx_late;
+    if fs {
+        cv_ctx = sym_gen[s].decl;
+        cv_ctx_late = is_internal_sym(s) && !sym_has_attr(s, AM_USED);
+    }
+    emit_var0(g);
+    cv_ctx = c0;
+    cv_ctx_late = l0;
+}
+
+fn emit_var0(g: u32) {
+    let s = glob_gen[g].sym;
     // -g: the events of a file-scope definition (gen_dwarf.goose)
     let top = opt_debug && !ev_on && syms[s].flags & SF_FILESCOPE != 0 && syms[s].flags & SF_COMPLIT == 0;
     var e0: u32 = 0;
@@ -326,7 +341,7 @@ fn emit_var1(g: u32) {
     var f = link_flags(s, true) | GF_DEFINED;
     if syms[s].flags & SF_THREAD != 0 { f = f | GF_TLS; }
     let common = init == 0 && opt_common && syms[s].flags & SF_TENTATIVE != 0 && !is_internal_sym(s) && syms[s].flags & SF_THREAD == 0 &&
-        sym_section(s) == 0 && !sym_has_attr(s, AM_WEAK) && syms[s].flags & SF_WEAK == 0 && !sym_has_attr(s, AM_NOCOMMON);
+        sym_section(s) < 0 && !sym_has_attr(s, AM_WEAK) && syms[s].flags & SF_WEAK == 0 && !sym_has_attr(s, AM_NOCOMMON);
     m_globals[g].kind = G_VAR;
     m_globals[g].size = size as! u32;
     m_globals[g].align = var_align(s, q) as! u32;
@@ -336,8 +351,8 @@ fn emit_var1(g: u32) {
     }
     if is_const_object(q) && init != 0 { f = f | GF_CONST; }
     let sec = sym_section(s);
-    if sec != 0 {
-        let nm = strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len];
+    if sec >= 0 {
+        let nm = strbytes[sec..sec + sym_attrs[syms[s].attr].sec_len as i64];
         let bss = starts_with(nm, ".bss") || starts_with(nm, ".tbss") || starts_with(nm, ".sbss");
         var sf: u32 = if f & GF_CONST != 0 { 0 } else { SF_WRITE };
         if f & GF_TLS != 0 { sf = sf | SF_TLS; }
@@ -394,6 +409,10 @@ fn emit_var_data(g: u32, s: i64, q: u32, init: u32, size: i64) {
     let at = m_data.len;
     data_grow(size);
     m_globals[g].data = at as! u32;
+    // G1: a variable without an initializer in a named section that is
+    // not a .bss one (a tentative definition with `section`, as in
+    // noinit-attribute.c) is zeros in that section, as clang emits it
+    if init == 0 { return; }
     let r0 = m_drelocs.len;
     sinit(g, at, 0, q, init);
     sort_relocs(r0);
@@ -414,10 +433,12 @@ fn sort_relocs(r0: i64) {
     }
 }
 
-fn sym_section(s: i64) -> u32 {
+// The offset of a symbol's section name in strbytes, -1 without one (G1:
+// the name may be the translation unit's first string, at offset 0).
+fn sym_section(s: i64) -> i64 {
     let a = syms[s].attr;
-    if a == 0 || sym_attrs[a].sec_len == 0 { return 0; }
-    return sym_attrs[a].sec_off;
+    if a == 0 || sym_attrs[a].sec_len == 0 { return -1; }
+    return sym_attrs[a].sec_off as i64;
 }
 
 // Is the initializer all zero bytes (no relocations)?
@@ -763,6 +784,17 @@ recursive fn static_f80(n: u32) -> bool, F80 {
     }
     if k == N_ICAST || k == N_CAST {
         let op = nd.op as i64;
+        if op == CK_LVAL2RVAL && fold_cvars && is_real_float(nd.ty) {
+            // a const variable's value (G1: clang's evaluator reads it)
+            var init: u32 = 0;
+            if nkind(nd.a) == N_DECLREF { init = cvar_value_init(nodes[nd.a].a as i64); }
+            else if nkind(nd.a) == N_MEMBER || nkind(nd.a) == N_INDEX { let i2, w = cvar_member_init(nd.a); init = i2; }
+            if init == 0 { return false, z; }
+            cv_depth++;
+            let ok, x = static_f80(init);
+            cv_depth--;
+            return ok, x;
+        }
         if op == CK_INT2FLOAT || op == CK_FLOATCAST || op == CK_NOOP || op == CK_ATOMIC {
             let ok, x = static_f80(nd.a);
             if !ok { return false, z; }

@@ -44,6 +44,7 @@ let AM_CTOR = 8192;
 let AM_DTOR = 16384;
 let AM_NOCOMMON = 32768;
 let AM_COMMON = 65536;
+let AM_NODEBUG = 131072;       // G1: no debug information for the function
 
 struct Attrs {
     aligned: u32 = 0,
@@ -172,6 +173,8 @@ recursive fn parse_attributes(a: Attrs&) {
                     a.misc = a.misc | AM_MAY_ALIAS;
                 } else if name == "fallthrough" {
                     a.misc = a.misc | AM_FALLTHROUGH;
+                } else if name == "nodebug" {
+                    a.misc = a.misc | AM_NODEBUG;
                 } else if name == "section" {
                     if at(TK_L_PAREN) {
                         let o, l = attr_string_arg();
@@ -1137,7 +1140,11 @@ recursive fn parse_suffixes(base: u32, dbase: u32, d: Declr&, first: bool) -> u3
             if !is_integer(nty(r)) {
                 err_at(loc, str("size of array has non-integer type ", tname(nty(r))));
             } else {
-                let ok, v = fold_int(r);
+                var ok, v = fold_int(r);
+                if !ok && opt_gnu {
+                    // G1: what clang's evaluator folds (GNU extension)
+                    ok, v = fold_gnu(r);
+                }
                 if ok {
                     if v < 0 && is_signed(nty(r)) {
                         err_at(loc, "array has a negative size");
@@ -1463,7 +1470,17 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
         let s = new_sym(SK_FUNC, name, ty, loc);
         if dbg_types {
             dt_set_sym(s, if dq_canon(d.dty) == ty { d.dty } else { ty });
-            dt_note_proto(s, types[ty >> 4].flags & TF_NOPROTO == 0);
+            // G1: a block-scope declaration that is no longer visible is
+            // still the first declaration of the entity (clang's local
+            // extern declarations); fn_proto keeps its prototype by name
+            let lk = (name as u64) | 0x10000000000;
+            let first = fn_proto.get(lk);
+            let proto = types[ty >> 4].flags & TF_NOPROTO == 0;
+            if first { dt_note_proto(s, first == 1); }
+            else {
+                dt_note_proto(s, proto);
+                if scope_depth > 0 { fn_proto.insert(lk, if proto { 1 } else { 2 }); }
+            }
         }
         syms[s].sc = if sc == SC_STATIC { SC_STATIC } else if sc == SC_EXTERN { SC_EXTERN } else { SC_NONE };
         if scope_depth == 0 { syms[s].flags = SF_FILESCOPE; } else { syms[s].flags = SF_LOCALLINK; }
@@ -1619,6 +1636,8 @@ recursive fn parse_declaration(ctx: i64) {
             nscratch.push(node(N_TYPEDEF, 0, syms[s].ty, s, 0, 0, d.loc));
         } else {
             let dn = node(N_DECL, 0, syms[s].ty, s, init as i64, start_loc as i64, d.loc);
+            // G1: what clang's evaluator reads of a const variable
+            if init != 0 && syms[s].kind == SK_VAR { cv_define(s, dn, init); }
             if dbg_types {
                 dt_set_node(dn, dd.dty);
                 if ds.sc == SC_EXTERN { dt_note_extern(dn); }
@@ -2194,7 +2213,11 @@ fn pf_scan() {
 
 recursive fn parse_tu() {
     let mark = nscratch.len;
+    // G1: the parse cache replays the state after the leading includes
+    // (pcache.goose), or records it when the loop reaches their end
+    let replayed = pt_begin();
     while !at(TK_EOF) {
+        if pt_rec { pt_boundary(); }
         if at(TK_SEMI) { adv(); continue; }
         if at_kw(KW_ASM) {
             // file-scope asm("...");

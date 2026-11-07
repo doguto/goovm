@@ -920,6 +920,8 @@ fn pp_start(path: const u8[:]) -> bool {
     pp_set_lang();
     pbuf.clear();
     pbuf.append(path);
+    var mp: u8[>..] = [];
+    if env("GOOSECC_TEST_MAIN_PAD", mp) { for c in mp { if c >= '0' && c <= '9' { main_pad = main_pad * 10 + (c - '0') as i64; } } }
     let f = lookup_file();
     if f < 0 {
         write_stderr(str("goosecc: error: no such file or directory: '", path, "'\n"));
@@ -931,6 +933,8 @@ fn pp_start(path: const u8[:]) -> bool {
     let bstart = src.len;
     build_builtin_text();
     let bend = src.len;
+    pt_b0 = bstart;     // G1: the parse cache relocates offsets past the main file's text
+    pt_bend = bend;
     src.push(0);
     src.push(0);
     let bf = files.len;

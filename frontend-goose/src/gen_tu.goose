@@ -43,6 +43,16 @@ fn lower_tu(main_file: const u8[:]) -> bool {
     dbg_init(main_file);
     ensure_sym_tables();
     ensure_sym_gen();
+    // G1: from here on the constant evaluator reads const variables, as
+    // clang's does in CodeGen (sema.goose, fold_cvars)
+    fold_cvars = true;
+    cv_grow();
+    if !opt_no_builtin {
+        let sl = intern("strlen");
+        let mc = intern("memchr");
+        if !gmap.contains(gk(GM_NOBUILTIN, sl)) { fold_lib_strlen = sl as! u32; }
+        if !gmap.contains(gk(GM_NOBUILTIN, mc)) { fold_lib_memchr = mc as! u32; }
+    }
     let tu = nodes[tu_node];
     let cnt = tu.c as i64;
     // pass 1: definitions and initializers
@@ -58,6 +68,10 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             let s = nd.a as i64;
             if syms[s].kind == SK_VAR {
                 if nd.b != 0 { sym_gen[s].init = nd.b; sym_gen[s].decl = it; }
+                if nd.b != 0 && cv_eligible(s) {
+                    cvar_init[s] = nd.b;
+                    cvar_decl[s] = it;
+                }
             }
         }
     }
@@ -109,9 +123,19 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             else if syms[ts].kind == SK_VAR && syms[ts].flags & (SF_DEFINED | SF_TENTATIVE) != 0 { var_global(ts); }
         }
     }
-    // emit, following references
+    // emit, following references (and lower the functions only expanded
+    // in place, for their debug records: gen_call.goose, inline_ref)
     var wi = 0;
-    while wi < work.len {
+    var ii = 0;
+    while wi < work.len || ii < inl_work.len {
+        if wi >= work.len {
+            let F = inl_work[ii];
+            ii++;
+            let fg = sym_gen[F].glob;
+            if fg != NONE && glob_gen[fg].state != 0 { continue; }
+            gen_function_dropped(syms[F].def as! u32);
+            continue;
+        }
         let g = work[wi];
         wi++;
         ensure_glob_tables();

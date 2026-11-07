@@ -283,6 +283,33 @@ B4 で、`goosecc` に前処理の結果を残す永続キャッシュを入れ�
   - シンボリックリンクの付け替え、ディレクトリの移動
   - 8並列の書き込み、壊したり切り詰めたりしたキャッシュファイル、上限を超えたときの削除
 
+### 3.6 `goosecc` の起動と構文解析のキャッシュ（G1）
+
+G1 では、B4 の後に残った3つの費用を削った。設計は `frontend-goose/DESIGN.md` §12、ランタイムのパッチは `frontend-goose/runtime-patches/README.md` にある。
+
+- **プロセスの起動と終了：** Goose ランタイムは、伸びるグローバル配列1つごとにデータスタック領域を1つ予約する（`mmap` 257 MB と、ガード部分の `mprotect`）。`goosecc` には420個あり、1行のファイルのコンパイル1.19 ms のうち約0.57 ms がこの予約と終了時の解放だった。言語の側からは制御できないので、生成された C に埋め込まれたランタイムに `build.sh` がパッチを当てる。全領域を1回の予約の中の枠にし、枠は最初に触れたときに SIGSEGV ハンドラが `mprotect` で有効にする。ほぼ毎回使う146領域は先頭に詰め、起動時に有効にする。1行のファイルは0.65 ms になった。
+- **ヘッダの宣言の構文解析と型検査：** ファイル先頭の `#include` の並びを読み終えた時点の構文解析器の状態（型、シンボル、構文木、文字列など29個の表と辞書）を、開始時点からの差分として保存し、同じ並びで始まる次のコンパイルで再生する。キーは、インクルードごとのヘッダキャッシュの blob ID（なければトークンとテキストのチェックサム）、オプション、組み込みの定義、`goosecc` のビルド ID。ソース上の位置はメインファイルの長さの差だけずらす。
+- **再生の結果は同一：** `cache_check.py` の比較に構文解析器の全状態のチェックサムを加えたうえで、全コーパスで出力と状態が一致した。メインファイルを水増しして全ての位置をずらす `pcache_check.py` でも一致した。
+
+**コンパイル時間**（`tests/bench_hcache.py -n 3`。CTMark の C ファイル316本を1本ずつ単独で実行し、3回のうちの最良値。ミリ秒。マシンは別の作業と共用で、負荷平均1.6〜3。G1 前と G1 を続けて計測）
+
+| プログラム | ファイル数 | G1 前・なし | G1 前・温 | なし | 空 | 温 | TinyCC | clang `-O0` |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 7zip | 32 | 96 | 87 | 79 | 100 | 70 | 83 | 852 |
+| ClamAV | 98 | 452 | 400 | 417 | 622 | 364 | 460 | 3,486 |
+| SPASS | 51 | 297 | 229 | 291 | 400 | 208 | 320 | 2,723 |
+| consumer-typeset | 51 | 249 | 205 | 230 | 302 | 185 | 250 | 2,158 |
+| lencod | 55 | 301 | 250 | 270 | 384 | 214 | 293 | 2,499 |
+| mafft | 27 | 159 | 116 | 143 | 209 | 103 | 172 | 1,284 |
+| sqlite3 | 2 | 41 | 41 | 49 | 48 | 44 | 29 | 451 |
+| **合計** | 316 | 1,596 | 1,328 | **1,479** | 2,067 | **1,188** | 1,607 | 13,453 |
+
+- 温まったキャッシュで TinyCC の1.35倍、clang の11.3倍速い。キャッシュなしでも TinyCC より速い（1.48秒と1.61秒）。どちらも G1 の目標を満たす。
+- 静かなマシンでの G1 途中の計測（`qbench.py`）：温まったキャッシュの合計は1,275 ms → ランタイムのパッチで1,147 ms → 構文解析のキャッシュで1,102 ms（構文解析と型検査は218 ms → 153 ms）。TinyCC は1,563 ms。
+- **sqlite3.c は TinyCC に届かない：** キャッシュなしで34.0 ms（G1 前は37.5 ms。9回の最良値）、TinyCC は24.5 ms。25万行のほぼ全部が自分のコードで、キャッシュは効かない。実行命令数は約2.8億（TinyCC は約2.1億）で、その4分の1が前処理のマクロ展開と字句解析。ここを縮めるのが次の課題になる。
+- **clang の `-O0` のコード生成に合わせた：** const 変数の読み出しの畳み込み（`DW_AT_const_value`）、アドレスの差、`strlen`/`memchr`、`__builtin_constant_p`、NRVO、`always_inline` かつ `nodebug` の関数（組み込み関数）のインライン展開。DWARF が clang と同一のファイルは2,231本から2,268本（両方がコンパイルできる2,289本のうち）に、違うものは44本から9本になった。
+- 生データと検証の記録は `bench/results/g1-2026-11-07/`。
+
 ---
 
 ## 4. Goose で書いて分かったこと
@@ -312,15 +339,15 @@ B4 で、`goosecc` に前処理の結果を残す永続キャッシュを入れ�
 - **木を作る再帰（B5）：** DIE の構築は本質的に再帰で、`recursive fn` が13個増えた。再帰をまたいで配列を持ち越せない規則のため、型の部品はグローバル変数のスタックに積んだ。スコープの木をたどる処理は明示的なスタックで書き直したが、その版に唯一の無限ループのバグが入った。
 - **型変換の優先順位（B5）：** `x as i64 & FLAG` が構文エラーになり、範囲 `a as i64..b as i64` は「variable mode (..) applies only to ADT type names」という的外れなメッセージになる。
 
-Goose の作者への改善提案（領域の一括予約、clz を使った実行時の除算、`extern fn` の複数戻り値、境界のずれた u64 の読み込みなど）は、`frontend-goose/NOTES.md` §10 にある。B4 で分かったことは同じく §11、B5 は §12 にある。
+Goose の作者への改善提案（領域の一括予約、clz を使った実行時の除算、`extern fn` の複数戻り値、境界のずれた u64 の読み込みなど）は、`frontend-goose/NOTES.md` §10 にある。B4 で分かったことは同じく §11、B5 は §12、G1（ランタイムへのパッチ、C へ渡せない伸びる配列など）は §13 にある。
 
 ---
 
 ## 5. 次の候補
 
 1. ~~**浮動小数点を多く使うコードの質**~~：C1 で済んだ（§3.3）。
-2. **`goosecc` の起動と構文解析の短縮：** B4 のヘッダキャッシュ（§3.5）で前処理は半分近くになった。残りの大部分は、プロセスの起動（ランタイムの領域の一括予約が要る）と、ヘッダの宣言の構文解析である。宣言のキャッシュは、前処理と同じ監査をすれば作れる。
-3. **`goosecc` の生成コードを clang に寄せる：** B5 で DWARF の変数と型は clang と同じになった（§2.2）。残る差は、const 変数の畳み込みや `always_inline` のインライン展開といった、コード生成の違いから来る。gdb での行の止まり方の差も同じである。
+2. ~~**`goosecc` の起動と構文解析の短縮**~~：G1 で済んだ（§3.6）。残るのは sqlite3.c のような、自分のコードが大半のファイルである。前処理のマクロ展開と字句解析（実行命令の4分の1）を縮めないと、TinyCC には届かない。
+3. **`goosecc` の生成コードを clang に寄せる：** G1 で const 変数の畳み込み、`strlen` などの畳み込み、NRVO、組み込み関数のインライン展開を clang と同じにした（§3.6）。残るのは、デバッグ情報を持つ `always_inline` 関数のインライン展開（`DW_TAG_inlined_subroutine` と抽象サブプログラムが要る。`tools/goovm-llc/gir_dwarf.cpp` に移植元がある）と、gdb での行の止まり方の差である。
 4. **C++ フロントエンドの Goose 化：** C++ のビルドを速くするには、ここしかない。ただし規模は桁違いに大きい。
 5. **最適化パス（`-O1` 相当）の Goose 化：** リリースビルド向け。
 6. **AArch64 バックエンド。**
@@ -347,6 +374,9 @@ tests/dwarf_diff.py --corpus torture,unit,regress,bench,ctmark --verify -j 2 -q 
     --goosecc frontend-goose/build/goosecc --json dwarf.json      # B5：DWARF を clang -O0 -g と比較
 tests/gdb_oracle.py --goosecc frontend-goose/build/goosecc --corpus c,sample,ctmark -j 2   # B5：gdb で比較
 tests/bench_goosecc.py --goosecc frontend-goose/build/goosecc --g -n 3   # B5：-g の時間
+frontend-goose/tests/pcache_check.py --goosecc frontend-goose/build/goosecc -j 2   # G1：構文解析のキャッシュの再生（位置をずらして）
+frontend-goose/tests/cmp_bins.py --load ref.json --goosecc frontend-goose/build/goosecc   # G1：2つのビルドの出力の比較
+RUNTIME_PATCHES=0 frontend-goose/build.sh /tmp/plain     # G1：ランタイムのパッチなしのビルド
 bench/e2e/compilers.py <CTMark O0 の compile_commands.json> --goovm-cc build/tools/goovm-cc/goovm-cc \
     --goosecc frontend-goose/build/goosecc --runs 3 [--g]
 ```
