@@ -768,6 +768,21 @@ fn rg_def_start(j: u32) {
     rg_pin |= bit(r);
     if bit(r) & GP_CALLEE != 0 { r_cs_used |= bit(r); }
 }
+// After the lowering of instruction j that defines pinned value j: a
+// lowering that wrote the value to its home (legacy lowerings of vectors,
+// odd-sized results) leaves it to be loaded into its register.
+fn rg_def_end(j: u32) {
+    let r: u32 = rg_reg[j];
+    if vi[j].reg == r as! u8 || M.insts[f_first_inst + j].op == GIR_PHI { return; }
+    ra_load_from(r, ra_home(j), vtype(j));
+    let occ = r_val[r];
+    if occ < RV_TEMP && occ != j { vi[occ].reg = NOREG; }
+    r_val[r] = j;
+    vi[j].reg = r as! u8;
+    r_free &= ~bit(r);
+    r_temp &= ~bit(r);
+    rg_pin |= bit(r);
+}
 // End of instruction: the pinned values whose live range ends at an
 // instruction up to the current one free their register.
 fn rg_kills() {

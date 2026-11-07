@@ -46,7 +46,7 @@ fn always_addr(p0: u32) -> bool {
 
 fn licm() -> bool {
     if o_pinned { return false; }
-    build_cfg();
+    ensure_cfg();
     // 1. preheaders
     lc_hdr.clear();
     for h in rpo {
@@ -69,7 +69,7 @@ fn licm() -> bool {
     for h in lc_hdr {
         if licm_preheader(h) { made = true; }
     }
-    if made { build_cfg(); }
+    if made { ensure_cfg(); }
     // 2. hoisting, inner loops (later headers in RPO) first
     var moved = false;
     lc_hdr.clear();

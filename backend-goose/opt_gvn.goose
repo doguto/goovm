@@ -59,17 +59,17 @@ fn gv_alias() {
         while i != NIL {
             let I = o_ins[i];
             let op: u32 = I.op;
-            vslots(i);
-            for s in vs {
+            each_slot(i) { s =>
                 let v = res(vget(i, s));
-                if !is_inst(v) || gv_base[v] == NIL { continue; }
-                var ok = false;
-                if op == GIR_LOAD && s == 0 { ok = true; }
-                else if op == GIR_STORE && s == 1 { ok = true; }
-                else if op == GIR_GEP && s == 0 { ok = true; }
-                else if (op == GIR_MEMCPY || op == GIR_MEMSET) && s < 2 { ok = true; }
-                if !ok { gv_agen[gv_base[v]] = NIL; }
-            }
+                if is_inst(v) && gv_base[v] != NIL {
+                    var ok = false;
+                    if op == GIR_LOAD && s == 0 { ok = true; }
+                    else if op == GIR_STORE && s == 1 { ok = true; }
+                    else if op == GIR_GEP && s == 0 { ok = true; }
+                    else if (op == GIR_MEMCPY || op == GIR_MEMSET) && s < 2 { ok = true; }
+                    if !ok { gv_agen[gv_base[v]] = NIL; }
+                }
+            };
             i = o_nxt[i];
         }
     }
@@ -152,7 +152,8 @@ fn gv_ab(i: u32) -> u32, u32 {
     let I = o_ins[i];
     let m: u32 = OP_VAL[I.op];
     let a = if m & OV_A != 0 { res(I.a) } else { I.a };
-    let b = if m & OV_B != 0 { res(I.b) } else { I.b };
+    var b = if m & OV_B != 0 { res(I.b) } else { I.b };
+    if I.op == GIR_GEP { b = 0; }   // (the run: compared word by word)
     if commutes(I.op) && b < a { return b, a; }
     return a, b;
 }
@@ -198,7 +199,7 @@ fn gv_equal(i: u32, j: u32) -> bool {
     return c1 == c2;
 }
 fn gv_grow() {
-    var n: i64 = 1024;
+    var n: i64 = 64;
     while n < 2 * o_ins.len { n *= 2; }
     gv_tab.clear();
     gv_tab.resize(n, 0);

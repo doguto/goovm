@@ -57,6 +57,8 @@ var b_fl: u8[>..] = [];          // BF_*
 let BF_DEAD: u8 = 1;
 let BF_LP: u8 = 2;               // landing pad (starts with LANDINGPAD; no PHIs allowed)
 
+var o_cfg_ok = false;            // the CFG analyses (opt_cfg.goose) describe the current CFG
+var o_fwd_dirty = false;         // some o_fwd was set since the last resolve_all
 var o_fi: u32 = 0;               // funcs index of the function being optimized
 var o_f: Func;                   // its record (input)
 var o_pinned = false;            // its blocks are named elsewhere (block addresses): no CFG changes
@@ -114,6 +116,9 @@ fn otype(v: u32) -> u32 {
 // A slot names one value operand of an instruction: 0, 1, 2 = field a, b,
 // c; SLOT_RUN | k = o_ops[k].
 let SLOT_RUN: u32 = 0x80000000;
+let SLOT_A: u32 = 0;
+let SLOT_B: u32 = 1;
+let SLOT_C: u32 = 2;
 var vs: u32[>..] = [];
 
 // The value-operand slots of instruction i, into vs.
@@ -141,15 +146,30 @@ fn vset(i: u32, s: u32, v: u32) {
     else if s == 1 { o_ins[i].b = v; }
     else { o_ins[i].c = v; }
 }
-// Rewrites every operand of every live instruction to its resolved value.
+// The value-operand slots of instruction i: F(slot) for each (no array).
+fn each_slot<F>(i: u32) {
+    let I = o_ins[i];
+    let m: u32 = if I.op < GIR_NOPS { OP_VAL[I.op] } else { 7 };
+    if m & OV_A != 0 { F(SLOT_A); }
+    if m & OV_B != 0 { F(SLOT_B); }
+    if m & OV_C != 0 { F(SLOT_C); }
+    if m >= OV_GEP {
+        if m & OV_GEP != 0 { for k in 0..I.c { F(SLOT_RUN | (I.b + 2 + 2 * k)); } }
+        else { for k in 0..I.c { F(SLOT_RUN | (I.b + 2 * k)); } }
+    }
+}
+// Rewrites every operand of every live instruction to its resolved value
+// (nothing to do unless a value was replaced since the last time).
 fn resolve_all() {
-    for i in 0..o_ins.len {
-        if o_blk[i] == NIL { continue; }
-        vslots(i as! u32);
-        for s in vs {
-            let v = vget(i as! u32, s);
-            if gir_kind(v) == GIR_V_INST && o_fwd[v] != NIL { vset(i as! u32, s, res(v)); }
-        }
+    if !o_fwd_dirty { return; }
+    o_fwd_dirty = false;
+    for i0 in 0..o_ins.len {
+        if o_blk[i0] == NIL { continue; }
+        let i: u32 = i0 as! u32;
+        each_slot(i) { s =>
+            let v = vget(i, s);
+            if gir_kind(v) == GIR_V_INST && o_fwd[v] != NIL { vset(i, s, res(v)); }
+        };
     }
 }
 
@@ -165,6 +185,7 @@ fn new_inst(I: Inst) -> u32 {
     return id;
 }
 fn new_block() -> u32 {
+    o_cfg_ok = false;
     let b: u32 = b_first.len as! u32;
     b_first.push(NIL);
     b_last.push(NIL);
@@ -214,7 +235,10 @@ fn unlink(i: u32) {
 }
 // Replaces instruction i by value v everywhere and deletes it.
 fn replace(i: u32, v: u32) {
-    if v != i { o_fwd[i] = v; }
+    if v != i {
+        o_fwd[i] = v;
+        o_fwd_dirty = true;
+    }
     unlink(i);
 }
 // The first instruction of b that is not a PHI (NIL: none).
@@ -575,6 +599,8 @@ fn oir_reset() {
     b_last.clear();
     b_lnext.clear();
     b_fl.clear();
+    o_cfg_ok = false;
+    o_fwd_dirty = false;
 }
 
 // ------------------------------------------------------------ debug info
@@ -699,7 +725,7 @@ fn opt_off(name: const u8[:]) -> bool {
 
 // One round of the scalar passes.
 fn opt_round() {
-    build_cfg();
+    ensure_cfg();
     if !opt_off("fold") {
         simplify();
         simplify_phis();
@@ -723,8 +749,8 @@ fn opt_function(fi: u32) {
     amap_on = false;
     oir_load(M.insts, M.blocks, o_f, true);
     if !opt_off("m2r") {
-        build_cfg();
-        if remove_unreachable() { build_cfg(); }
+        ensure_cfg();
+        if remove_unreachable() { ensure_cfg(); }
         build_uses();
         if !opt_off("sroa") && sroa() {
             resolve_all();
@@ -733,13 +759,13 @@ fn opt_function(fi: u32) {
         if mem2reg() { simplify_phis(); }
     }
     opt_round();
-    if !opt_off("inline") {
-        build_cfg();
+    if !opt_off("inline") && inl_any_call() {
+        ensure_cfg();
         build_loops();
         if inline_calls() {
             resolve_all();
-            build_cfg();
-            if remove_unreachable() { build_cfg(); }
+            ensure_cfg();
+            if remove_unreachable() { ensure_cfg(); }
             opt_round();
             resolve_all();
             build_uses();
@@ -754,7 +780,7 @@ fn opt_function(fi: u32) {
     opt_round();
     if !opt_off("licm") && licm() { opt_round(); }
     if !opt_off("rotate") {
-        build_cfg();
+        ensure_cfg();
         rotate_layout();
     }
     inl_record();

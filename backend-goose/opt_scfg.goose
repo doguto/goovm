@@ -58,6 +58,7 @@ fn fold_branches() -> bool {
     return any;
 }
 fn to_br(t: u32, target: u32) {
+    o_cfg_ok = false;
     o_ins[t].op = GIR_BR as! u8;
     o_ins[t].a = target;
     o_ins[t].b = 0;
@@ -84,6 +85,7 @@ fn merge_blocks() -> bool {
                 i = nx;
             }
             unlink(t);
+            o_cfg_ok = false;
             // move s's instructions to the end of b
             i = b_first[s];
             while i != NIL {
@@ -171,6 +173,7 @@ fn redirect(p: u32, e: u32, tg: u32) -> bool {
         }
     }
     if n == 0 { return false; }
+    o_cfg_ok = false;
     // n entries for p in each PHI of tg (e's value)
     i = b_first[tg];
     while i != NIL && o_ins[i].op == GIR_PHI {
@@ -193,22 +196,22 @@ fn redirect(p: u32, e: u32, tg: u32) -> bool {
 fn simplify_cfg() -> bool {
     var any = false;
     for round in 4 {
-        build_cfg();
+        ensure_cfg();
         var ch = false;
         if fold_branches() { ch = true; }
         if ch {
-            build_cfg();
+            ensure_cfg();
             remove_unreachable();
-            build_cfg();
+            ensure_cfg();
         }
         if !o_pinned {
             if merge_blocks() {
                 ch = true;
-                build_cfg();
+                ensure_cfg();
             }
             if forward_empty() {
                 ch = true;
-                build_cfg();
+                ensure_cfg();
                 remove_unreachable();
             }
         }

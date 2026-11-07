@@ -571,6 +571,7 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_ISFPCLASS => lower_isfpclass_a(I, j),
             _ => ud2(),
         }
+        if rg_on && vi[j].st & ST_PIN != 0 { rg_def_end(j); }
         ra_end_inst();
         return;
     }
@@ -581,6 +582,7 @@ fn gen_inst(gi: u32, cur: u32) {
     ra_tierb_begin(k == K_ALL);
     gen_inst_b(I, j);
     ra_tierb_end();
+    if rg_on && vi[j].st & ST_PIN != 0 { rg_def_end(j); }
     ra_end_inst();
 }
 
@@ -834,7 +836,7 @@ fn gen_function(fi: u32) {
     ra_prepass(insts, blocks);
     if dbg_on { dbg_keep_homes(fi); }
     rg_on = false;
-    if opt_on { rg_alloc(insts, blocks); }
+    if opt_on && !opt_off("ra") { rg_alloc(insts, blocks); }
     f_share = f.flags & (FN_SJLJ | FN_RETURNS_TWICE) == 0;
     var ncs = pp_ncs;
     if ncs > 5 { ncs = 5; }
@@ -969,6 +971,10 @@ fn gen_functions() {
 
 // ------------------------------------------------------------------ entry
 
+// Time the middle-end took in the last call (ns; 0 at -O0).
+var opt_ns: i64 = 0;
+export fn gir_last_opt_ns() -> i64 { return opt_ns; }
+
 // Empty additive tables for modules made without them (goosecc).
 var no_ehs: Eh[>..] = [];
 var no_comdats: Comdat[>..] = [];
@@ -1013,7 +1019,12 @@ fn codegen() -> const u8[:] {
     // -O1: the middle-end makes new tables (opt.goose), which the code
     // generator then compiles
     opt_on = M.header.len != 0 && M.header[0].r0 >= 1;
-    if opt_on { opt_module(); }
+    opt_ns = 0;
+    if opt_on {
+        let t0 = clock_ns();
+        opt_module();
+        opt_ns = clock_ns() - t0;
+    }
     code.clear();
     mcode.clear();
     rela_code.clear();

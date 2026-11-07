@@ -208,8 +208,12 @@ int main(int argc, char **argv) {
     }
     if (timing) {
         long long tot = us(t0, clk::now());
+        long long opt = 0;
+#ifdef GOOVM_CC_WITH_GOOSE
+        if (backend == "goose") opt = goovm_last_opt_us();
+#endif
         std::fprintf(stderr, "goovm-cc-time: backend=%s frontend_us=%lld backend_us=%lld export_us=%lld codegen_us=%lld "
-                     "write_us=%lld total_us=%lld\n", backend.c_str(), fe, be, ex, cg, wr, tot);
+                     "write_us=%lld total_us=%lld opt_us=%lld\n", backend.c_str(), fe, be, ex, cg, wr, tot, opt);
     }
     return rc;
 }

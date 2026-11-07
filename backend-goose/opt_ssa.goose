@@ -15,13 +15,13 @@ fn build_uses() {
     let n = o_ins.len;
     u_cnt.clear();
     u_cnt.resize(n + 1, 0);
-    for i in 0..n {
-        if o_blk[i] == NIL { continue; }
-        vslots(i as! u32);
-        for s in vs {
-            let v = vget(i as! u32, s);
+    for i0 in 0..n {
+        if o_blk[i0] == NIL { continue; }
+        let i: u32 = i0 as! u32;
+        each_slot(i) { s =>
+            let v = vget(i, s);
             if gir_kind(v) == GIR_V_INST { u_cnt[v]++; }
-        }
+        };
     }
     u_start.clear();
     var acc: u32 = 0;
@@ -33,16 +33,16 @@ fn build_uses() {
     u_start.push(acc);
     u_list.clear();
     u_list.resize(acc, 0);
-    for i in 0..n {
-        if o_blk[i] == NIL { continue; }
-        vslots(i as! u32);
-        for s in vs {
-            let v = vget(i as! u32, s);
+    for i0 in 0..n {
+        if o_blk[i0] == NIL { continue; }
+        let i: u32 = i0 as! u32;
+        each_slot(i) { s =>
+            let v = vget(i, s);
             if gir_kind(v) == GIR_V_INST {
-                u_list[u_start[v] + u_cnt[v]] = i as! u32;
+                u_list[u_start[v] + u_cnt[v]] = i;
                 u_cnt[v]++;
             }
-        }
+        };
     }
 }
 inline fn nuses(i: u32) -> u32 { u_start[i + 1] - u_start[i] }
@@ -400,14 +400,13 @@ fn dce() -> bool {
     }
     while tmp_stack.len != 0 {
         let i = tmp_stack.pop();
-        vslots(i);
-        for s in vs {
+        each_slot(i) { s =>
             let v = vget(i, s);
             if gir_kind(v) == GIR_V_INST && dce_live[v] == 0 && o_blk[v] != NIL {
                 dce_live[v] = 1;
                 tmp_stack.push(v);
             }
-        }
+        };
     }
     var any = false;
     for i in 0..n {

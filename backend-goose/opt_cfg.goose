@@ -55,9 +55,13 @@ fn succs_into(b: u32, out: u32[>..]&) {
 }
 inline fn live_block(b: u32) -> bool { b_fl[b] & BF_DEAD == 0 }
 
-// Successor and predecessor lists, RPO, dominators, the dominator tree and
-// loop depths of the current OIR function.
+// The CFG analyses, if the CFG changed since they were made.
+fn ensure_cfg() { if !o_cfg_ok { build_cfg(); } }
+
+// Successor and predecessor lists, RPO, dominators and the dominator tree of
+// the current OIR function.
 fn build_cfg() {
+    o_cfg_ok = true;
     let nb: u32 = b_first.len as! u32;
     cfg_nb = nb;
     s_start.clear();
@@ -332,6 +336,7 @@ fn remove_unreachable() -> bool {
     for b in 0..cfg_nb {
         if !live_block(b) || rpo_num[b] != NIL { continue; }
         any = true;
+        o_cfg_ok = false;
         for k in s_start[b]..s_start[b + 1] {
             let s = s_list[k];
             if rpo_num[s] != NIL { phi_remove_pred(s, b); }

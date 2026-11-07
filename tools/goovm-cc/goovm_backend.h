@@ -13,6 +13,8 @@ class Module;
 // Starts the Goose runtime (goose_init); call once before compiling.
 void goovm_backend_init(int argc, char **argv);
 void goovm_backend_exit();
+// Time of the Goose middle-end in the last goovm_compile_module (0 at -O0).
+long long goovm_last_opt_us();
 
 // Exports `m` to GIR and compiles it with the Goose back-end into an ELF
 // object. Returns 0 on success, 2 if the module uses something GIR cannot

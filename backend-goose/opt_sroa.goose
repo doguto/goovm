@@ -60,6 +60,7 @@ fn sroa() -> bool {
             if sroa_one(i) {
                 any = true;
                 // (the use lists of the other allocas changed)
+                o_fwd_dirty = true;
                 resolve_all();
                 build_uses();
             }

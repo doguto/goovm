@@ -21,6 +21,7 @@ static_assert(sizeof(Die_g) == sizeof(GirDie), "Die layout");
 static_assert(sizeof(DAttr_g) == sizeof(GirDAttr), "DAttr layout");
 
 void goovm_backend_init(int argc, char **argv) { goose_init(argc, argv); }
+long long goovm_last_opt_us() { return (long long)(gir_last_opt_ns() / 1000); }
 void goovm_backend_exit() { goose_exit(); }
 
 int goovm_compile_module(llvm::Module &mod, std::vector<uint8_t> &obj, std::string &err,

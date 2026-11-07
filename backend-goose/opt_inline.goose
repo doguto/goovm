@@ -188,7 +188,19 @@ fn inline_calls() -> bool {
     return any;
 }
 
+// Whether the function has a direct call of a function that may be inlined.
+fn inl_any_call() -> bool {
+    if o_pinned { return false; }
+    for i in 0..o_ins.len {
+        if o_blk[i] == NIL || o_ins[i].op != GIR_CALL { continue; }
+        let c = callee_of(o_ins[i]);
+        if c != NIL && c != o_fi && fn_done[c] != 0 && fn_inl[c] != 0 { return true; }
+    }
+    return false;
+}
+
 fn inline_call(c: u32, cfi: u32) {
+    o_cfg_ok = false;
     let C = o_ins[c];
     let F2 = x_funcs[xb_f + cfi];
     let B = o_blk[c];

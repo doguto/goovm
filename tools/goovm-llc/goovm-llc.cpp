@@ -249,6 +249,10 @@ int main(int argc, char **argv) {
         }
     }
     auto t4 = clk::now();
+    double opt_us = 0;
+#ifdef GOOVM_WITH_GOOSE
+    if (backend == "goose" && !use_llvm) opt_us = (double)gir_last_opt_ns() / 1000.0;
+#endif
 
     if (time) {
         uint64_t llvm_insts = tables.n_llvm_insts;
@@ -258,18 +262,18 @@ int main(int argc, char **argv) {
                      "goovm-llc --backend=%s%s %s\n"
                      "  parse    %10.0f us\n"
                      "  export   %10.0f us\n"
-                     "  backend  %10.0f us\n"
+                     "  backend  %10.0f us (middle-end %.0f us)\n"
                      "  write    %10.0f us\n"
                      "  total    %10.0f us\n"
                      "  llvm instructions %llu, gir instructions %zu, functions %zu, object %zu bytes\n",
                      backend.c_str(), use_llvm && backend != "llvm" ? " (fallback)" : "", in.c_str(), us(t0, t1),
-                     us(t1, t2), us(t2, t3), us(t3, t4), us(t0, t4), (unsigned long long)llvm_insts,
+                     us(t1, t2), us(t2, t3), opt_us, us(t3, t4), us(t0, t4), (unsigned long long)llvm_insts,
                      tables.insts.size(), tables.funcs.size(), obj_len);
         std::fprintf(stderr,
                      "goovm-time: parse_us=%.0f export_us=%.0f backend_us=%.0f write_us=%.0f total_us=%.0f "
-                     "llvm_insts=%llu gir_insts=%zu\n",
+                     "llvm_insts=%llu gir_insts=%zu opt_us=%.0f\n",
                      us(t0, t1), us(t1, t2), us(t2, t3), us(t3, t4), us(t0, t4), (unsigned long long)llvm_insts,
-                     tables.insts.size());
+                     tables.insts.size(), opt_us);
     }
 #ifdef GOOVM_WITH_GOOSE
     goose_exit();

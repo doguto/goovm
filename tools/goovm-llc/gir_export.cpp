@@ -1880,7 +1880,10 @@ struct Exporter : GirDwarfHost {
         if (CB.isInlineAsm()) return inline_asm(CB);
         if (const auto *fn = dyn_cast<Function>(callee); fn && fn->isIntrinsic())
             return intrinsic(CB, fn->getIntrinsicID());
-        if (CB.getCallingConv() != CallingConv::C) fail("calling convention " + std::to_string(CB.getCallingConv()));
+        // fastcc (LLVM's optimizer gives it to internal functions) is compiled
+        // as the C convention, as the callee is: both sides are in the module
+        if (CB.getCallingConv() != CallingConv::C && CB.getCallingConv() != CallingConv::Fast)
+            fail("calling convention " + std::to_string(CB.getCallingConv()));
         if (CB.hasOperandBundles()) fail("operand bundle");
         if (CB.isMustTailCall()) fail("musttail call");
         FunctionType *FT = CB.getFunctionType();
@@ -2432,7 +2435,8 @@ struct Exporter : GirDwarfHost {
         F = &Fn;
         curI = nullptr;
         cur_dbg = 0;
-        if (Fn.getCallingConv() != CallingConv::C) fail("calling convention " + std::to_string(Fn.getCallingConv()));
+        if (Fn.getCallingConv() != CallingConv::C && Fn.getCallingConv() != CallingConv::Fast)
+            fail("calling convention " + std::to_string(Fn.getCallingConv()));
         if (Fn.hasPrefixData() || Fn.hasPrologueData()) fail("prefix/prologue data");
         if (Fn.hasGC()) fail("garbage collector");
         if (Fn.hasFnAttribute(Attribute::Naked)) fail("naked function");
