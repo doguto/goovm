@@ -752,6 +752,7 @@ fn opt_function(fi: u32) {
         }
     }
     opt_round();
+    if !opt_off("licm") && licm() { opt_round(); }
     inl_record();
     oir_store(fi);
 }

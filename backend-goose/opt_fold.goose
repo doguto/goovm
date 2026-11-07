@@ -498,6 +498,28 @@ fn simp_gep(i: u32) -> u32 {
         fold_changed = true;
     }
     if n == 0 && off == 0 { return base; }
+    // a scale an address mode cannot take (not 1, 2, 4, 8): the index times the
+    // scale as an instruction of its own (then common to the GEPs that share it)
+    for k in 0..n {
+        let sc = o_ops[s + 3 + 2 * k];
+        if sc == 1 || sc == 2 || sc == 4 || sc == 8 || sc == 0 { continue; }
+        var x = o_ops[s + 2 + 2 * k];
+        let xt = otype(x);
+        if !int_ty(xt) || bits_of(xt) > 64 { continue; }
+        if bits_of(xt) < 64 {
+            let e = new_inst(Inst { op: GIR_SEXT as! u8, sub: 0, flags: 0, ty: GIR_T_I64, aux: xt as! u16, a: x, b: 0, c: 0,
+                                    dbg: o_ins[i].dbg });
+            link_before(i, e);
+            x = e;
+        }
+        let lg = log2p(sc as u64);
+        var m: u32 = 0;
+        if lg != 0 { m = ins_new(i, GIR_SHL, GIR_T_I64, x, int_const(GIR_T_I64, lg as u64)); }
+        else { m = ins_new(i, GIR_MUL, GIR_T_I64, x, int_const(GIR_T_I64, sc as u64)); }
+        o_ops[s + 2 + 2 * k] = m;
+        o_ops[s + 3 + 2 * k] = 1;
+        fold_changed = true;
+    }
     // a GEP of a GEP: one GEP (the inner one's terms first)
     if is_inst(base) && o_ins[base].op == GIR_GEP {
         let B = o_ins[base];

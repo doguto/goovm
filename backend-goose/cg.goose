@@ -34,6 +34,7 @@ import opt_gvn;
 import rag;
 import opt_inline;
 import opt_sroa;
+import opt_licm;
 import opt_dump;
 
 var M: Module;

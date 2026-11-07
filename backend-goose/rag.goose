@@ -552,6 +552,9 @@ fn rg_assign() {
             rg_block_range(r, 1, 3);
         }
     }
+    // registers that arguments arrive in: other values take them last
+    var argm: u32 = 0;
+    for g in 0..ng { if rg_hint[g] != NOREG { argm |= bit(rg_hint[g]); } }
     // PHI partners: a PHI and its incoming values prefer each other's register
     rg_order.clear();
     for g in 0..ng { rg_order.push(g); }
@@ -578,7 +581,13 @@ fn rg_assign() {
         let h: u32 = rg_phi_hint(g);
         if h < 32 && cand & bit(h) != 0 && rg_free(h, g) { r = h; }
         if r == 32 {
-            var m = cand & pref;
+            var m = cand & pref & ~argm;
+            while m != 0 && r == 32 {
+                let x = ctz32(m);
+                m &= m - 1;
+                if rg_free(x, g) { r = x; }
+            }
+            m = cand & pref & argm;
             while m != 0 && r == 32 {
                 let x = ctz32(m);
                 m &= m - 1;
