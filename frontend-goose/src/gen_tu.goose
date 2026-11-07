@@ -128,6 +128,7 @@ fn lower_tu(main_file: const u8[:]) -> bool {
     emit_aliases();
     emit_structors();
     finish_undefined();
+    if n_errors == 0 { dbg_build(); }
     if f128_loc != NONE { err_at(f128_loc, "goosecc: __float128 is not supported (GIR has no fp128 type)"); }
     return n_errors == 0;
 }
@@ -252,8 +253,17 @@ fn emit_structors() {
     }
 }
 
-// The object file, from the back-end.
+// The object file, from the back-end; with -g also the DIE tables
+// (gen_dwarf.goose).
+var no_ehs: Eh[>..] = [];
+var no_comdats: Comdat[>..] = [];
+var no_gcomdat: u32[>..] = [];
 fn codegen() -> const u8[:] {
+    if opt_debug {
+        return gir_codegen_ex(m_header, m_types, m_funcs, m_blocks, m_insts, m_opnds, m_consts, m_globals, m_sections,
+            m_data, m_drelocs, m_strtab, m_dlocs, m_dscopes, m_dfiles, m_dstr, m_asms, no_ehs, no_comdats, no_gcomdat,
+            m_dies, m_dattrs);
+    }
     return gir_codegen(m_header, m_types, m_funcs, m_blocks, m_insts, m_opnds, m_consts, m_globals, m_sections,
         m_data, m_drelocs, m_strtab, m_dlocs, m_dscopes, m_dfiles, m_dstr, m_asms);
 }

@@ -1,8 +1,11 @@
 // goosecc B2: debug locations (-g). The GIR debug tables are filled as
 // tools/goovm-llc fills them from clang's DILocations: one compile unit, a
-// subprogram per function, a lexical block per nested compound statement,
-// files and strings; every instruction's `dbg` names (line, column, scope)
-// of the statement or expression it was lowered from.
+// subprogram per function, a lexical block per scope clang opens (a nested
+// compound statement, a for statement and its condition, the condition of
+// an if: CodeGen's LexicalScopes), files and strings; every instruction's
+// `dbg` names (line, column, scope) of the statement or expression it was
+// lowered from. B5: each scope also gets a record that the DWARF builder
+// (gen_dwarf.goose) uses to place the function's variables and labels.
 
 namespace gen;
 
@@ -12,13 +15,20 @@ import os;
 import .common;
 import .types;
 import .ast;
+import .ppexpr;
 
 var dfile_of: i32[>..] = [];               // frontend file -> dfiles index (-1 not yet)
 var dbg_cu: u32 = 0;
 var dbg_sp: u32 = 0;                       // the current subprogram
-// The stack of lexical scopes: the compound statement, its DScope (0 = not made yet).
-struct DbgScope { scope: u32, node: u32 }
+// The stack of lexical scopes: its DScope (0 = not made yet), where it
+// starts, its record in f_srecs.
+struct DbgScope { scope: u32, loc: u32, rec: u32 }
 var dbg_scopes: DbgScope[>..<] = [];
+// The scopes of the function being lowered, in the order they were opened:
+// the enclosing one (-1 for the function's own scope, record 0) and the
+// DScope it got (0: no location was ever in it).
+struct DScopeRec { parent: i32, dscope: u32 }
+var f_srecs: DScopeRec[>..<] = [];
 var last_line: u32 = 0;
 var last_col: u32 = 0;
 var last_scope: u32 = 0;
@@ -44,7 +54,10 @@ fn dbg_init(main_file: const u8[:]) {
     if !env("PWD", d) { d.append("."); }
     comp_dir.append(d);
     let f = dfile_for_name(main_file);
-    m_dscopes.push(DScope { kind: 1, parent: 0, file: f, line: dbg_lang, name: dstring("goosecc (goovm B2)"), extra: 0 });
+    // DW_AT_language as clang chooses it: C11 for C11 and later
+    let v = std_version();
+    dbg_lang = if v.len == 0 { 0x0001 } else if v == "199901L" { 0x000c } else { 0x001d };
+    m_dscopes.push(DScope { kind: 1, parent: 0, file: f, line: dbg_lang, name: dstring("goosecc (goovm B5)"), extra: 0 });
     dbg_cu = (m_dscopes.len - 1) as! u32;
 }
 
@@ -85,6 +98,8 @@ fn dbg_function_begin(s: i64, loc: u32) {
     }
     m_dscopes.push(DScope { kind: 2, parent: dbg_cu, file: file, line: line as! u32, name: dstring(ident_text(syms[s].name as i64)), extra: 0 });
     dbg_sp = (m_dscopes.len - 1) as! u32;
+    f_srecs.clear();
+    f_srecs.push(DScopeRec { parent: -1, dscope: dbg_sp });
 }
 
 fn dbg_function_end() -> u32 {
@@ -93,15 +108,31 @@ fn dbg_function_end() -> u32 {
     return dbg_sp;
 }
 
-fn dbg_scope_enter(n: u32) {
+fn dbg_scope_enter(n: u32) { dbg_scope_enter_at(nodes[n].loc); }
+
+// A scope that starts at loc.
+fn dbg_scope_enter_at(loc: u32) {
     if !opt_debug { return; }
     // the function body is the subprogram itself
-    dbg_scopes.push(DbgScope { scope: if dbg_scopes.len == 0 { dbg_sp } else { 0 }, node: n });
+    if dbg_scopes.len == 0 {
+        dbg_scopes.push(DbgScope { scope: dbg_sp, loc: loc, rec: 0 });
+        return;
+    }
+    let rec = f_srecs.len as! u32;
+    f_srecs.push(DScopeRec { parent: dbg_scopes[dbg_scopes.len - 1].rec as! i32, dscope: 0 });
+    dbg_scopes.push(DbgScope { scope: 0, loc: loc, rec: rec });
 }
 
 fn dbg_scope_leave() {
     if !opt_debug { return; }
-    dbg_scopes.pop();
+    let t = dbg_scopes.pop();
+    if t.rec != 0 { f_srecs[t.rec].dscope = t.scope; }
+}
+
+// The record of the innermost scope (where a declaration is).
+fn dbg_cur_rec() -> u32 {
+    if dbg_scopes.len == 0 { return 0; }
+    return dbg_scopes[dbg_scopes.len - 1].rec;
 }
 
 // The innermost lexical scope (made on first use).
@@ -114,8 +145,7 @@ fn dbg_cur_scope() -> u32 {
     var parent = dbg_sp;
     while i <= k {
         if dbg_scopes[i].scope == 0 {
-            let n = dbg_scopes[i].node;
-            let loc = expansion_loc(nodes[n].loc) as i64;
+            let loc = expansion_loc(dbg_scopes[i].loc) as i64;
             let f = file_of(loc);
             var line: i64 = 0;
             var col: i64 = 0;

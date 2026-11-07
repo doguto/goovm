@@ -83,20 +83,20 @@ def parse(text):
             continue
         if cur is None:
             continue
-        m = ATTR_RE.match(l)
-        if m and m.group(2).count("(") <= m.group(2).count(")") + 0:
-            cur.attrs.append((m.group(1), m.group(2)))
-            continue
         m = ATTR_OPEN_RE.match(l)
         if m:
-            # a multi-line value (location list, range list): up to the closing ')'
-            val = [m.group(2)]
-            depth = m.group(2).count("(") - m.group(2).count(")") + 1
-            while depth > 0 and i < len(lines):
+            # the value runs to the next attribute or DIE (location lists and
+            # range lists continue on lines of their own); a type name may
+            # hold unbalanced parentheses ("int (*[3])(int)")
+            val = [m.group(2).rstrip()]
+            while i < len(lines) and lines[i].strip() and not DIE_RE.match(lines[i]) and \
+                    not re.match(r"^\s+DW_AT_\w+\s+\(", lines[i]):
                 val.append(lines[i].strip())
-                depth += lines[i].count("(") - lines[i].count(")")
                 i += 1
-            cur.attrs.append((m.group(1), " ".join(val).rstrip(")")))
+            v = " ".join(val)
+            if v.endswith(")"):
+                v = v[:-1]
+            cur.attrs.append((m.group(1), v))
     return roots
 
 
@@ -115,7 +115,8 @@ def number(roots):
     return byoff, order
 
 
-REF_RE = re.compile(r'^0x([0-9a-f]+)(?: (".*"))?$')
+REF_RE = re.compile(r'^0x([0-9a-f]{8})(?: (".*"))?$')
+POSITIONS = False   # --positions: references as #N (the target's position in the tree)
 
 
 def norm_attr(at, val, byoff):
@@ -133,7 +134,16 @@ def norm_attr(at, val, byoff):
                     "DW_AT_specification", "DW_AT_import", "DW_AT_containing_type", "DW_AT_object_pointer",
                     "DW_AT_sibling", "DW_AT_data_location"):
         t = byoff.get(int(m.group(1), 16))
-        return "#%s %s" % (t.idx if t else "?", m.group(2) or "")
+        if t is None:
+            return "->?"
+        if POSITIONS:
+            return "#%s %s" % (t.idx, m.group(2) or "")
+        # by what the target is: its tag and name (llvm-dwarfdump's spelling
+        # of a type), so that one DIE more or less does not renumber the rest
+        nm = m.group(2)
+        if not nm:
+            nm = next((v for a, v in t.attrs if a == "DW_AT_name"), "")
+        return "->%s %s" % (t.tag[7:], nm)
     if at == "DW_AT_location" or at == "DW_AT_frame_base":
         if "loclist" in val:
             return "LOCLIST"
@@ -220,6 +230,7 @@ def main():
     ap.add_argument("-j", type=int, default=2)
     ap.add_argument("--show", type=int, default=40, help="lines of diff to print per file (0: none)")
     ap.add_argument("-U", type=int, default=1)
+    ap.add_argument("--positions", action="store_true", help="print references as the target's position")
     ap.add_argument("files", nargs="+")
     argv = sys.argv[1:]
     flags = []
@@ -227,6 +238,8 @@ def main():
         k = argv.index("--")
         argv, flags = argv[:k], argv[k + 1:]
     a = ap.parse_args(argv)
+    global POSITIONS
+    POSITIONS = a.positions
     if a.dump:
         for f in a.files:
             print("\n".join(dump(f)))

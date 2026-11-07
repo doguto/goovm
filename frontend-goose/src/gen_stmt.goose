@@ -14,6 +14,7 @@ import .types;
 import .ast;
 import .sema;
 import .parse;
+import .dtype;
 
 var f_global: u32 = 0;
 // The targets of break and continue: the block, and the cleanup depth there.
@@ -166,11 +167,13 @@ recursive fn gen_stmt(n: u32) {
     else if k != N_COMPOUND && k != N_CASE && k != N_DEFAULT && k != N_LABEL && k != N_NULL { set_loc(nd.loc); }
     if k == N_COMPOUND {
         push_cleanup_scope();
-        scope_enter(n);
+        // the declarations of a for statement are in its scope (-g)
+        let scoped = n != dbg_for_init;
+        if scoped { scope_enter(n); }
         for i in nd.c { gen_stmt(nlist[nd.v + i]); }
         // what follows the block (its cleanups, the branch out) is at the '}'
         if nd.b != 0 { set_loc(nd.b); }
-        scope_leave();
+        if scoped { scope_leave(); }
         pop_cleanup_scope(true);
         return;
     }
@@ -200,6 +203,7 @@ recursive fn gen_stmt(n: u32) {
     }
     if k == N_LABEL {
         gen_label(nd.a as i64);
+        if dbg_on() { dbg_label(nd.a as i64, label_block(nd.a as i64), nd.loc); }
         gen_stmt(nd.b);
         return;
     }
@@ -250,8 +254,17 @@ recursive fn is_vm_any(q: u32) -> bool {
 // Debug scopes per compound statement (lexical blocks).
 fn scope_enter(n: u32) { dbg_scope_enter(n); }
 fn scope_leave() { dbg_scope_leave(); }
+var dbg_for_init: u32 = 0;      // the declarations of the for statement being lowered (no scope of their own)
 
+// The scope clang opens for an if statement (its ConditionScope, from the
+// condition on).
 recursive fn gen_if(n: u32) {
+    if dbg_on() { dbg_scope_enter_at(begin_loc(nodes[n].a)); }
+    gen_if1(n);
+    if dbg_on() { dbg_scope_leave(); }
+}
+
+recursive fn gen_if1(n: u32) {
     let nd = nodes[n];
     let ok, cv = const_bool(nd.a);
     if ok {
@@ -336,15 +349,26 @@ recursive fn gen_do(n: u32) {
     start_block(end);
 }
 
+// With -g, the two scopes clang opens: ForScope (the declarations, and
+// everything up to the branch back) and ConditionScope (the condition, the
+// body and the increment).
 recursive fn gen_for(n: u32) {
     let nd = nodes[n];
     push_cleanup_scope();
-    if nd.a != 0 { gen_stmt(nd.a); }
+    let dbg = dbg_on();
+    if dbg { dbg_scope_enter_at(nd.loc); }
+    if nd.a != 0 {
+        let saved = dbg_for_init;
+        if dbg && nkind(nd.a) == N_COMPOUND { dbg_for_init = nd.a; }
+        gen_stmt(nd.a);
+        dbg_for_init = saved;
+    }
     let cond = new_block();
     let body = new_block();
     let inc = new_block();
     let end = new_block();
     start_block(cond);
+    if dbg { dbg_scope_enter_at(nd.loc); }
     set_loc(nd.loc);
     let lc = dbg_loopcond;
     dbg_loopcond = true;
@@ -359,8 +383,10 @@ recursive fn gen_for(n: u32) {
         set_loc(begin_loc(nd.c));
         ex_ignore(nd.c);
     }
+    if dbg { dbg_scope_leave(); }
     set_loc(nd.loc);
     if has_insert() { br(cond); }
+    if dbg { dbg_scope_leave(); }
     start_block(end);
     pop_cleanup_scope(true);
 }
@@ -379,6 +405,8 @@ recursive fn gen_switch(n: u32) {
         let cn = nlist[nd.v + i];
         let b = new_block();
         fmap.insert(fk(FM_CASE, cn), b);
+        // clang's EmitCaseStmt: a case value that is an enumerator
+        if dbg_on() { dbg_enumc(cn); }
         if nkind(cn) == N_DEFAULT { dflt = b; }
         else if nodes[cn].c != 0 {
             let lo = nodes[cn].v;
@@ -481,6 +509,7 @@ recursive fn gen_local_decl(n: u32) {
         if glob_gen[g].state != 2 {
             sym_gen[s].init = nd.b;
             emit_var(g);
+            dbg_static(s);
         }
         return;
     }
@@ -508,6 +537,7 @@ recursive fn gen_local_decl(n: u32) {
         if al < 16 { al = 16; }
         let p = emit(GIR_DYNALLOCA, GIR_T_PTR, 0, 0, 0, size, al as! u32, 0);
         sym_gen[s].addr = p;
+        dbg_vla(s, p, q);
         return;
     }
     if is_vm_any(q) { eval_vm_type(q); }
@@ -516,10 +546,14 @@ recursive fn gen_local_decl(n: u32) {
         p = alloca(type_size(q), local_align(s, q));
         sym_gen[s].addr = p;
     }
+    if sy.flags & SF_COMPLIT == 0 { dbg_local(s, p); }
     if nd.b != 0 {
         // the initialization is at the variable
         let saved = if dbg_on() { push_loc(nd.loc) } else { 0 };
+        let quiet = dbg_on() && is_aggregate(q) && is_const_init(nd.b, q);
+        if quiet { dbg_no_enum = true; }
         init_object(p, q, nd.b);
+        if quiet { dbg_no_enum = false; }
         if dbg_on() { pop_loc(saved); }
         if quals(q) & Q_CONST != 0 && is_pointer(q) {
             while sym_gen.len <= s { sym_gen.push(SymGen { addr: NONE, glob: NONE, init: 0, decl: 0, linit: 0 }); }
@@ -822,6 +856,7 @@ fn gen_function(fd: u32) {
     cleanups.clear();
     cleanup_marks.clear();
     dbg_function_begin(s, nd.loc);
+    dbg_fn_begin();
     last_loc = nd.loc;
     // GIR arguments: (type, ABI word) pairs
     let types_mark = m_types.len;
@@ -905,6 +940,10 @@ fn gen_function(fd: u32) {
             argi++;
         }
     }
+    for i in np {
+        let p = nlist[nd.v + i] as i64;
+        dbg_param(p, sym_gen[p].addr, (i + 1) as! u32);
+    }
     // variably modified parameter types (int a[n][m]: m is evaluated here)
     for i in np {
         let p = nlist[nd.v + i] as i64;
@@ -938,7 +977,8 @@ fn gen_function(fd: u32) {
     }
     flags = flags | (al << FN_ALIGN_SHIFT);
     let dbg = dbg_function_end();
-    fn_finish(g, flags, f_nargs, f_args_run, f_ret_ty, dbg);
+    let fi = fn_finish(g, flags, f_nargs, f_args_run, f_ret_ty, dbg);
+    dbg_fn_end(s, fi);
     f_sym = -1;
 }
 

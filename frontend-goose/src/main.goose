@@ -40,6 +40,7 @@ import .gen_call;
 import .gen_builtin;
 import .gen_asm;
 import .gen_debug;
+import .gen_dwarf;
 import .gen_tu;
 import .hcache;
 import cg from "../../backend-goose";

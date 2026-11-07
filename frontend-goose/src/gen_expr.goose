@@ -18,6 +18,7 @@ import .types;
 import .ast;
 import .sema;
 import .builtins;
+import .dtype;
 
 struct LV {
     addr: u32,      // the address (for a bit-field: of the record holding it)
@@ -178,7 +179,11 @@ recursive fn ex_lv1(n: u32) -> LV {
         }
         return lv_plain(gep(base, f.offset), nd.ty);
     }
-    if k == N_STRING { return lv_plain(gref(string_global(nd.a)), nd.ty); }
+    if k == N_STRING {
+        let g = string_global(nd.a);
+        dbg_string(n, g);
+        return lv_plain(gref(g), nd.ty);
+    }
     if k == N_COMPLIT { return lv_plain(ex_complit(n), nd.ty); }
     if k == N_SWIZZLE {
         var base: u32 = 0;
@@ -372,6 +377,9 @@ recursive fn ex_ignore(n: u32) {
 recursive fn ex_val(n: u32) -> u32 {
     if !dbg_on() { return ex_val1(n); }
     let saved = push_loc(visit_loc(n));
+    let k = nkind(n);
+    if k == N_INT { dbg_enumc(n); }
+    else if k == N_CAST { dev(EV_CAST, node_written(n), 0); }
     let v = ex_val1(n);
     pop_loc(saved);
     return v;
@@ -532,7 +540,11 @@ recursive fn ex_cast(n: u32) -> u32 {
         return lv_load(LV { addr: l.addr, fld: l.fld, vol: l.vol, q: nd.ty });
     }
     if ck == CK_ARRAY2PTR {
-        if nkind(a) == N_STRING { return gref(string_global(nodes[a].a)); }
+        if nkind(a) == N_STRING {
+            let g = string_global(nodes[a].a);
+            dbg_string(a, g);
+            return gref(g);
+        }
         return ex_lv(a).addr;
     }
     if ck == CK_FUNC2PTR || ck == CK_BUILTIN2PTR { return ex_lv(a).addr; }
@@ -1556,6 +1568,8 @@ recursive fn ex_stmtexpr(n: u32, dst: u32) -> u32 {
     let q = nd.ty;
     var res: u32 = NONE;
     push_cleanup_scope();
+    // the compound statement is a scope (clang's LexicalScope)
+    scope_enter(body);
     for i in cnt {
         let s = nlist[bn.v + i];
         if i == cnt - 1 && !is_void(q) {
@@ -1563,6 +1577,7 @@ recursive fn ex_stmtexpr(n: u32, dst: u32) -> u32 {
             var e = s;
             while nkind(e) == N_LABEL {
                 gen_label(nodes[e].a as i64);
+                if dbg_on() { dbg_label(nodes[e].a as i64, label_block(nodes[e].a as i64), nodes[e].loc); }
                 e = nodes[e].b;
             }
             if nkind(e) == N_EXPR {
@@ -1582,6 +1597,7 @@ recursive fn ex_stmtexpr(n: u32, dst: u32) -> u32 {
             gen_stmt(s);
         }
     }
+    scope_leave();
     pop_cleanup_scope(true);
     if res == NONE && vkind(q) == VK_SCALAR { return c_zero(vty(q)); }
     return res;

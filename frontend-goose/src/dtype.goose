@@ -302,7 +302,10 @@ fn dt_note_enumerators(e: i64, syms_: const u32[:]) {
     while enum_c0.len <= e { enum_c0.push(0); enum_cn.push(0); }
     enum_c0[e] = enum_csyms.len as! u32;
     enum_cn[e] = syms_.len as! u32;
-    for s in syms_ { enum_csyms.push(s); }
+    for s in syms_ {
+        enum_csyms.push(s);
+        enumc_enum.insert(s as u64, e as! u32);
+    }
 }
 
 fn dt_note_enumc(n: u32, s: i64) {
@@ -315,3 +318,42 @@ fn enumc_of(n: u32) -> i64 {
     if r { return r as i64; }
     return -1;
 }
+
+// File-scope declarations written with `extern` (not tentative definitions).
+var decl_extern = dictionary<u64, u32> {};
+fn dt_note_extern(n: u32) {
+    if !dbg_types { return; }
+    decl_extern.insert(n as u64, 1);
+}
+fn decl_is_extern(n: u32) -> bool {
+    let r = decl_extern.get(n as u64);
+    if r { return true; }
+    return false;
+}
+
+// The enum of each enumerator.
+var enumc_enum = dictionary<u64, u32> {};
+fn enumc_owner(s: i64) -> i64 {
+    let r = enumc_enum.get(s as u64);
+    if r { return r as i64; }
+    return -1;
+}
+
+// The record an unnamed struct, union or enum is declared in (clang puts
+// it in that record's DIE; a named one is in the enclosing function or the
+// unit, as C scopes tags).
+var rec_in_rec: i32[>..] = [];       // per record: the enclosing record (-1)
+var enum_in_rec: i32[>..] = [];      // per enum
+var cur_rec: i64 = -1;               // the record whose members are being parsed
+fn dt_note_record_in(r: i64) {
+    if !dbg_types || cur_rec < 0 { return; }
+    while rec_in_rec.len <= r { rec_in_rec.push(-1); }
+    rec_in_rec[r] = cur_rec as! i32;
+}
+fn dt_note_enum_in(e: i64) {
+    if !dbg_types || cur_rec < 0 { return; }
+    while enum_in_rec.len <= e { enum_in_rec.push(-1); }
+    enum_in_rec[e] = cur_rec as! i32;
+}
+fn record_in_record(r: i64) -> i64 { if r < rec_in_rec.len { rec_in_rec[r] as i64 } else { -1 } }
+fn enum_in_record(e: i64) -> i64 { if e < enum_in_rec.len { enum_in_rec[e] as i64 } else { -1 } }

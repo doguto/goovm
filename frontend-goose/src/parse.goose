@@ -660,6 +660,7 @@ recursive fn parse_record_spec(ds: DeclSpec&, is_union: bool) -> u32 {
         }
         if r < 0 {
             r = new_record(name, is_union, loc);
+            if name == 0 { dt_note_record_in(r); }
             s = new_sym(SK_TAG, name, records[r].ty << 4, loc);
             syms[s].v = records[r].ty as i64;
             if name != 0 { bind_sym(s, true); }
@@ -710,6 +711,8 @@ recursive fn parse_record_spec(ds: DeclSpec&, is_union: bool) -> u32 {
 recursive fn parse_record_body(r: i64) {
     expect(TK_L_BRACE, "'{'");
     let mark = fscratch.len;
+    let outer_rec = cur_rec;
+    cur_rec = r;
     while !at(TK_R_BRACE) && !at(TK_EOF) {
         if at(TK_SEMI) { adv(); continue; }
         if at_kw(KW_STATIC_ASSERT) { parse_static_assert(); continue; }
@@ -821,6 +824,7 @@ recursive fn parse_record_body(r: i64) {
             }
         }
     }
+    cur_rec = outer_rec;
     records[r].first = fields.len as! u32;
     records[r].count = n as! u32;
     if dbg_types {
@@ -860,6 +864,7 @@ recursive fn parse_enum_spec(ds: DeclSpec&) -> u32 {
             let ty = mk_tagged(TY_ENUM, e as! u32);
             enums.push(EnumRec { name: name, ty: ty, underlying: 0, complete: false, packed: false, rsv: 0, loc: loc, scope: scope_depth as! u32 });
             dt_note_enum(e, cur_func);
+            if name == 0 { dt_note_enum_in(e); }
             s = new_sym(SK_TAG, name, ty << 4, loc);
             syms[s].v = ty as i64;
             if name != 0 { bind_sym(s, true); }
@@ -1374,7 +1379,18 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
         if ds.align != 0 { ty = with_align(ty, ds.align); }
         let prev = lookup_ord(name);
         if prev >= 0 && syms[prev].scope as i64 == scope_depth {
-            if syms[prev].kind == SK_TYPEDEF && compatible(tcanon(syms[prev].ty), tcanon(ty)) { return prev; }
+            if syms[prev].kind == SK_TYPEDEF && compatible(tcanon(syms[prev].ty), tcanon(ty)) {
+                if !dbg_types { return prev; }
+                // -g: uses after this point name this declaration (in DWARF
+                // as in clang); the type stays the first one's
+                let s2 = new_sym(SK_TYPEDEF, name, syms[prev].ty, loc);
+                syms[s2].sc = SC_TYPEDEF;
+                syms[s2].flags = syms[prev].flags;
+                dt_set_sym(s2, if dq_canon(d.dty) == syms[prev].ty { d.dty } else { syms[prev].ty });
+                dt_note_typedef(s2, cur_func);
+                bind_sym(s2, false);
+                return s2;
+            }
             err_at(loc, str("typedef redefinition with different types (", tname(ty), " vs ", tname(syms[prev].ty), ")"));
         }
         let s = new_sym(SK_TYPEDEF, name, ty, loc);
@@ -1594,7 +1610,10 @@ recursive fn parse_declaration(ctx: i64) {
             nscratch.push(node(N_TYPEDEF, 0, syms[s].ty, s, 0, 0, d.loc));
         } else {
             let dn = node(N_DECL, 0, syms[s].ty, s, init as i64, start_loc as i64, d.loc);
-            if dbg_types { dt_set_node(dn, dd.dty); }
+            if dbg_types {
+                dt_set_node(dn, dd.dty);
+                if ds.sc == SC_EXTERN { dt_note_extern(dn); }
+            }
             nscratch.push(dn);
         }
         if !accept(TK_COMMA) { break; }
@@ -1984,6 +2003,13 @@ recursive fn parse_stmt() -> u32 {
         var hn: u32 = 0;
         if hi != 0 { hn = int_node(trunc_to(hv, st), st, loc); }
         let cn = node_v(N_CASE, 0, st, 0, if wide { convert(rv(e), st) as i64 } else { 0 }, hn as i64, loc, v);
+        if dbg_types && hi == 0 {
+            // -g: a case value that names an enumerator (clang's EmitCaseStmt)
+            var ce = e;
+            while nodes[ce].kind as i64 == N_ICAST { ce = nodes[ce].a; }
+            let es = enumc_of(ce);
+            if es >= 0 { dt_note_enumc(cn, es); }
+        }
         switch_cases.push(cn);
         let s = if at(TK_R_BRACE) { node(N_NULL, 0, 0, 0, 0, 0, loc) } else { parse_stmt() };
         nodes[cn].a = s;

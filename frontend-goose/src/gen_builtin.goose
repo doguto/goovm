@@ -953,6 +953,7 @@ fn ord_flags(o: i64) -> u32 {
 }
 
 fn atomic_order(n: u32) -> u32 {
+    if dbg_on() { dbg_enum_expr(n); }
     let ok, o = fold_int(n);
     if !ok { return ord_flags(5); }
     return ord_flags(o);
@@ -1292,16 +1293,19 @@ fn atomic_code(full: const u8[:]) -> i64, i64, bool {
     if starts_with(full, "__sync_") { name = full[7..]; }
     else if starts_with(full, "__atomic_") { name = full[9..]; }
     else if starts_with(full, "__c11_atomic_") { name = full[13..]; }
+    // the C11 forms take and return values (__atomic_load/store/exchange
+    // take pointers to them)
+    let c11 = starts_with(full, "__c11_atomic_");
     if name == "load_n" { return AT_LOAD_N, 0, false; }
-    if name == "load" { return AT_LOAD, 0, false; }
+    if name == "load" { return if c11 { AT_LOAD_N } else { AT_LOAD }, 0, false; }
     if name == "store_n" { return AT_STORE_N, 0, false; }
-    if name == "store" { return AT_STORE, 0, false; }
+    if name == "store" { return if c11 { AT_STORE_N } else { AT_STORE }, 0, false; }
     if name == "init" { return AT_INIT, 0, false; }
     if name == "clear" { return AT_CLEAR, 0, false; }
     if name == "lock_release" { return AT_LOCK_RELEASE, 0, false; }
     if name == "test_and_set" { return AT_TAS, 0, false; }
     if name == "exchange_n" { return AT_XCHG_N, 0, false; }
-    if name == "exchange" { return AT_XCHG, 0, false; }
+    if name == "exchange" { return if c11 { AT_XCHG_N } else { AT_XCHG }, 0, false; }
     if name == "lock_test_and_set" { return AT_LOCK_TAS, 0, false; }
     if name == "compare_exchange" { return AT_CAS, 1, false; }
     if name == "val_compare_and_swap" { return AT_CAS, 2, false; }
