@@ -24,6 +24,9 @@ var gv_gen: u32 = 0;            // current generation of escaping memory
 var gv_cnt: u32 = 0;            // generation counter (monotonic: a number is never reused)
 var gv_agen: u32[>..] = [];     // per alloca (instruction id): its own generation, NIL = escapes
 var gv_base: u32[>..] = [];     // per instruction: the alloca its address is based on, NIL
+var gv_sblk: u32[>..] = [];     // per alloca: the one block that writes it, NIL none, GV_MANY several
+var gv_cur: u32 = 0;            // the block being walked
+let GV_MANY: u32 = 0xFFFFFFFE;
 var gv_changed = false;
 
 // ------------------------------------------------------------ alias info
@@ -36,6 +39,8 @@ fn gv_alias() {
     gv_base.resize(n, NIL);
     gv_agen.clear();
     gv_agen.resize(n, NIL);
+    gv_sblk.clear();
+    gv_sblk.resize(n, NIL);
     // allocas and GEPs of them (operands are defined before use in RPO, except
     // through PHIs, which are not followed)
     for b in rpo {
@@ -68,6 +73,11 @@ fn gv_alias() {
                     else if op == GIR_GEP && s == 0 { ok = true; }
                     else if (op == GIR_MEMCPY || op == GIR_MEMSET) && s < 2 { ok = true; }
                     if !ok { gv_agen[gv_base[v]] = NIL; }
+                    // (the block that writes it)
+                    if op == GIR_STORE && s == 1 || (op == GIR_MEMCPY || op == GIR_MEMSET) && s == 0 {
+                        let a = gv_base[v];
+                        gv_sblk[a] = if gv_sblk[a] == NIL || gv_sblk[a] == b { b } else { GV_MANY };
+                    }
                 }
             };
             i = o_nxt[i];
@@ -94,10 +104,19 @@ fn gv_lput(h: u64, i: u32, p: u32, v: u32) {
     gv_lep[i] = if al { gv_ep } else { 0 };
 }
 // The value load/store entry e (id + 1) holds for address p now, or NIL.
+// A non-escaping alloca's entry also needs the epoch (no merge point since),
+// unless all writes of the alloca are in one block that dominates this one:
+// then no write happens between the entry (which is in a dominator, after
+// that block's writes, or its generation would differ) and here, because a
+// path from the writing block to here passes the entry's block again.
 fn gv_lget(e: u32, p: u32) -> u32 {
     if e == 0 { return NIL; }
     let g, al = gv_mgen(p);
-    if gv_lgen[e - 1] != g || al && gv_lep[e - 1] != gv_ep { return NIL; }
+    if gv_lgen[e - 1] != g { return NIL; }
+    if al && gv_lep[e - 1] != gv_ep {
+        let w = gv_sblk[gv_base[p]];
+        if w == NIL || w == GV_MANY || !dominates(w, gv_cur) { return NIL; }
+    }
     return gv_lval[e - 1];
 }
 fn gv_bump() -> u32 {
@@ -341,6 +360,7 @@ fn ds_read(p: u32) {
 
 fn gv_block(b: u32) {
     ds_n = 0;
+    gv_cur = b;
     var i = b_first[b];
     while i != NIL {
         let nx = o_nxt[i];
