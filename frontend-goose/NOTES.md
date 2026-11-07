@@ -456,8 +456,8 @@ the machine itself. What the Goose side of it was like:
 
 ## 11. Milestone B4: the header cache
 
-B4 added `hcache.goose` (2,400 lines with comments), 200 lines of hooks
-and changes in the preprocessor, and 450 lines of C in `goosecc_rt.h` (file system,
+B4 added `hcache.goose` (2,400 lines with comments), 230 lines of hooks
+and changes in the preprocessor, and 480 lines of C in `goosecc_rt.h` (file system,
 checksums, the mapped blob's accessors, token relocation). Most of the
 Goose type-checked at its first compile; the work went into the design
 (DESIGN.md, section 10) and into measuring. What the language and its
