@@ -43,7 +43,7 @@ var sys_start: i64 = 0;        // system directories from here
 // system answered: nothing else depends on its contents or its order, so
 // the header cache may skip or add entries (B4). Its keys are in their
 // own arena, pnames.
-struct PathEnt { off: u32, len: u32, hash: u32, file: i32 }
+struct PathEnt { off: u32, len: u32, hash: u32, file: i32, why: u32 }   // why: no file (goosecc_load_why)
 var pathents: PathEnt[>..] = [];
 var pathtab: u32[>..<] = [];
 var pathmask: i64 = 0;
@@ -155,7 +155,7 @@ fn note_dir(dl: i64) {
     let isdir = is_dir(pbuf[..dl]);
     let off = pnames.len as! u32;
     pnames.append(pbuf[..dl]);
-    pathents.push(PathEnt { off: off, len: dl as! u32, hash: h, file: if isdir { -3 } else { -2 } });
+    pathents.push(PathEnt { off: off, len: dl as! u32, hash: h, file: if isdir { -3 } else { -2 }, why: 0 });
     pathtab[p] = pathents.len as! u32;
 }
 
@@ -172,15 +172,19 @@ fn lookup_file() -> i64 {
     let e = pathtab[p];
     if e != 0 {
         let fe = pathents[e - 1].file as i64;
-        if rec_on { hk_path_hit(e - 1, fe, key, pbuf); }
+        if rec_on { hk_path_hit(e - 1, fe, key, pbuf, pathents[e - 1].why); }
         return fe;
     }
     let dl = pbuf_dir_len();
     var f: i64 = -1;
-    if dl == 0 || !dir_missing(dl) { f = load_file(pbuf); }
+    var why: u32 = 1;      // no such path (its directory is known not to exist)
+    if dl == 0 || !dir_missing(dl) {
+        f = load_file(pbuf);
+        if f < 0 { why = last_stat(6) as! u32; }
+    }
     let off = pnames.len as! u32;
     pnames.append(key);
-    pathents.push(PathEnt { off: off, len: key.len as! u32, hash: h, file: f as! i32 });
+    pathents.push(PathEnt { off: off, len: key.len as! u32, hash: h, file: f as! i32, why: why });
     pathtab[p] = pathents.len as! u32;
     if f >= 0 {
         files[f].path = name_add(key);
@@ -188,7 +192,7 @@ fn lookup_file() -> i64 {
     } else if dl > 0 {
         note_dir(dl);
     }
-    if rec_on { hk_path_miss(key, pbuf, f); }
+    if rec_on { hk_path_miss(key, pbuf, f, why); }
     return f;
 }
 
@@ -214,14 +218,14 @@ fn path_known(key: const u8[:], h: u32, pdir: i64) -> i64 {
 
 // Adds key to the path cache (the header cache's replay: what it verified
 // with the file system), unless it is there.
-fn path_add(key: const u8[:], f: i64) {
+fn path_add(key: const u8[:], f: i64, why: u32) {
     let h = hash_bytes(key);
     if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
     let p = path_slot(key, h, false);
     if pathtab[p] != 0 { return; }
     let off = pnames.len as! u32;
     pnames.append(key);
-    pathents.push(PathEnt { off: off, len: key.len as! u32, hash: h, file: f as! i32 });
+    pathents.push(PathEnt { off: off, len: key.len as! u32, hash: h, file: f as! i32, why: why });
     pathtab[p] = pathents.len as! u32;
 }
 
@@ -832,10 +836,9 @@ recursive fn do_include(t: Tok, k: i64) {
     }
     // B4: the header cache replays the whole include (the search, the file
     // and everything it includes) when what it depends on is unchanged;
-    // otherwise it records it. The includes of system headers are part of
-    // the include of a system header from the program's own files.
+    // otherwise it records it (hc_unit says which includes are units).
     var rec = false;
-    if hc_on && ctxs[cur_file_ctx].sys == 0 && !hc_would_skip(inc_name, angled, k) {
+    if hc_on && hc_unit(angled) && !hc_would_skip(inc_name, angled, k) {
         if hc_replay(inc_name, angled, k) { return; }
         rec = hc_rec_start(inc_name, angled, k);
     }

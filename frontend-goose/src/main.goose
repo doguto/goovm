@@ -386,6 +386,7 @@ fn main() {
         mode_E = true;
         out_to_file = out_len > 0 && !out_is_stdout();
         if !pp_start(opt_input()) { exit(1); }
+        if hc_on { hc_tu_check(); }
         pp_fill();
         after_pp();
         out.push('\n');
@@ -405,6 +406,7 @@ fn main() {
         opt_kw_gnu = opt_gnu;
         opt_c89 = v.len == 0;
         keywords_init();
+        if hc_on { hc_tu_check(); }
         pp_fill();
         after_pp();
         let t1 = clock_ns();

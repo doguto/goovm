@@ -30,8 +30,11 @@ import .ppexpr;
 import .print;
 import .sema;
 
-let HC_VERSION = 1;
+let HC_VERSION = 2;
 let HC_MAGIC_M = 0x4D484347;   // "GCHM", a manifest: the variants recorded under a key
+let HC_MAGIC_R = 0x52484347;   // "GCHR", a manifest's record: one variant
+let HC_MAGIC_V = 0x56484347;   // "GCHV", a manifest's record: the key is volatile
+let HC_VOLATILE = 16;          // a key with this many variants is volatile: no longer looked up or recorded
 let HC_MAGIC_B = 0x42484347;   // "GCHB", a blob: one variant's identifiers and effect
 let HC_MAX_VARIANTS = 48;
 let HC_MIN_SRC = 2048;          // smaller units (bytes of text and tokens) are not worth a file
@@ -81,7 +84,7 @@ struct Rec {
     so: u32, sl: u32, sys: u8,             // the unit's file context: spelling (names), system header
 }
 
-struct HMan { keyh: u64, off: u32, len: u32 }   // a manifest of this process (hcm), len 0: none
+struct HMan { keyh: u64, off: u32, len: u32, vol: bool }   // a manifest of this process (hcm), len 0: none
 struct LEnt { id: u32, flags: u32, off: u32, def: u32 }
 struct HDef { id: u32, m: i32 }
 struct HPo { kind: u32, f: i32, e: i32, key: u32, klen: u32, path: u32, plen: u32, nf: u32 }
@@ -100,6 +103,11 @@ let PO_NEW = 2;
 let PO_OLD = 3;
 
 var hc_enabled: bool = true;    // -fno-header-cache clears it
+var hc_quoted: i64 = 0;         // "..." includes are units: 1 all, 2 from the main file always (GOOSECC_CACHE_QUOTED)
+var hc_rebuild: bool = false;   // the translation unit was compiled before (its marker is in the cache)
+var hc_tu_off: u32 = 0;         // the marker's file name (hcb)
+var hc_tu_len: u32 = 0;
+var hc_volatile: i64 = 16;      // GOOSECC_CACHE_VOLATILE
 var hc_on: bool = false;        // enabled and a directory to use
 var hc_ready: bool = false;
 var hc_stats_opt: bool = false; // --cache-stats
@@ -151,6 +159,8 @@ var st_corrupt: i64 = 0;
 var st_wbytes: i64 = 0;
 var st_werr: i64 = 0;
 var st_skipped: i64 = 0;
+var st_volatile: i64 = 0;
+var hc_norec: bool = false;    // the include just looked up is not to be recorded (its key is volatile)
 var tm_replay: i64 = 0;    // ns in replays: all, reading, checking, appending, committing; in recordings' ends
 var tm_read: i64 = 0;
 var tm_check: i64 = 0;
@@ -169,6 +179,10 @@ extern fn csum_words(w: const u32[:]) -> u64 = "goosecc_csum";
 extern fn csum_bytes(s: const u8[:]) -> u64 = "goosecc_csum_bytes";
 extern fn read_words(path: const u8[:], out: u32[>..]&) -> i64 = "goosecc_read_words";
 extern fn write_words(path: const u8[:], w: const u32[:]) -> i64 = "goosecc_write_words";
+extern fn append_words(path: const u8[:], w: const u32[:]) -> i64 = "goosecc_append_words";
+extern fn csum3(a: const u32[:], s: const u8[:], b: const u32[:]) -> u64 = "goosecc_csum3";
+extern fn write3(path: const u8[:], a: const u32[:], s: const u8[:], b: const u32[:]) -> i64 = "goosecc_write3";
+extern fn create_words(path: const u8[:], w: const u32[:]) -> i64 = "goosecc_create_words";
 extern fn stat_path(path: const u8[:]) -> i64 = "goosecc_stat";
 extern fn unlink_path(path: const u8[:]) = "goosecc_unlink";
 extern fn evict_dir(dir: const u8[:], limit: i64) -> i64 = "goosecc_evict";
@@ -205,6 +219,10 @@ fn hc_init() {
         if i < z.len && (z[i] == 'g' || z[i] == 'G') { v = v * 1073741824; }
         if v > 0 { hc_limit = v; }
     }
+    var q: u8[>..] = [];
+    if env("GOOSECC_CACHE_QUOTED", q) && q.len == 1 { hc_quoted = (q[0] - 48) as i64; }
+    var qv: u8[>..] = [];
+    if env("GOOSECC_CACHE_VOLATILE", qv) && qv.len > 0 { hc_volatile = 0; for c in qv { hc_volatile = hc_volatile * 10 + (c - 48) as i64; } }
     hc_on = true;
 }
 
@@ -272,6 +290,45 @@ fn hc_key(name: const u8[:], angled: bool, k: i64) {
         }
     }
     hc_keyh = csum_bytes(hck);
+}
+
+// Whether an #include from the current file is a unit: an #include of a
+// system header (<...>) from a file of the program's own, and from the
+// second compile of a translation unit on, also the main file's "..."
+// includes. Includes in system headers are part of the unit around them.
+// A project's own headers seldom repeat their context from one file to
+// the next (what was included before them differs), so recording them is
+// worth it only where the same file is compiled again.
+fn hc_unit(angled: bool) -> bool {
+    if ctxs[cur_file_ctx].sys != 0 { return false; }
+    if angled || hc_quoted == 1 { return true; }
+    return cur_file_ctx == 0 && (hc_rebuild || hc_quoted == 2);
+}
+
+// The marker of the translation unit (its main file's spelling and the
+// configuration): whether it was compiled before; recorded after its
+// first compile.
+fn hc_tu_check() {
+    if !hc_prepare() { return; }
+    hck.clear();
+    hck.append(hcb[hc_cfg_off..hc_cfg_off + hc_cfg_len]);
+    hck.push(2);
+    hck.append(names[base_file_name..base_file_name + base_file_name_len]);
+    let h = csum_bytes(hck);
+    hcp.clear();
+    hcp.append(hcb[hc_dir_off..hc_dir_off + hc_dir_len]);
+    hcp.push('/');
+    hexd(hcp, h, 16);
+    hcp.append(".t");
+    hc_tu_off = hcb.len as! u32;
+    hcb.append(hcp);
+    hc_tu_len = hcp.len as! u32;
+    hc_rebuild = stat_path(hcb[hc_tu_off..hc_tu_off + hc_tu_len]) == 1;
+}
+fn hc_tu_mark() {
+    if !hc_on || hc_rebuild || hc_tu_len == 0 { return; }
+    let empty: u32[>..] = [];
+    create_words(hcb[hc_tu_off..hc_tu_off + hc_tu_len], empty);
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +506,7 @@ fn hk_store_path(key: const u8[:], path: const u8[:]) -> u32, u32 {
 }
 
 // lookup_file found key in the path cache (entry e): file fe, or -1.
-fn hk_path_hit(e: i64, fe: i64, key: const u8[:], path: const u8[:]) {
+fn hk_path_hit(e: i64, fe: i64, key: const u8[:], path: const u8[:], why: u32) {
     var a: u32 = 0;
     var b: u32 = 0;
     var stored = false;
@@ -461,7 +518,7 @@ fn hk_path_hit(e: i64, fe: i64, key: const u8[:], path: const u8[:]) {
             stored = true;
         }
         if fe < 0 {
-            ev.push(Ev { rec: r as! u16, kind: EV_PNEG, flag: 0, a: a, b: b, c: 0, d: 0 });
+            ev.push(Ev { rec: r as! u16, kind: EV_PNEG, flag: why as! u8, a: a, b: b, c: 0, d: 0 });
         } else {
             ev.push(Ev { rec: r as! u16, kind: EV_POLD, flag: fstate(fe), a: a, b: b, c: fe as! u32, d: files[fe].grd as! u32 });
             if racy(fe) { recs[r].bad = recs[r].bad | HC_BAD_FILE; }
@@ -472,16 +529,17 @@ fn hk_path_hit(e: i64, fe: i64, key: const u8[:], path: const u8[:]) {
 
 // lookup_file did not have key: it loaded file f from the spelling path,
 // or there is none (-1).
-fn hk_path_miss(key: const u8[:], path: const u8[:], f: i64) {
+fn hk_path_miss(key: const u8[:], path: const u8[:], f: i64, why: u32) {
     let a, b = hk_store_path(key, path);
     var k: u8 = EV_PNEG;
     var fl: u32 = 0;
+    var wf: u8 = why as! u8;
     if f >= 0 {
         k = EV_PNEW;
         fl = f as! u32;
         if racy(f) { hk_bad(HC_BAD_FILE); }
     }
-    for r in recs.len { ev.push(Ev { rec: r as! u16, kind: k, flag: 0, a: a, b: b, c: fl, d: 0 }); }
+    for r in recs.len { ev.push(Ev { rec: r as! u16, kind: k, flag: wf, a: a, b: b, c: fl, d: 0 }); }
 }
 
 // A write of the state of file f (guard, once, system, its spelling).
@@ -518,8 +576,9 @@ fn wit_stat(p: const u8[:]) -> i64 {
     return wits.len - 1;
 }
 
-// path_add of the key spelled by the n bytes at word i of w.
-fn path_add_w(w: const u32[:], i: i64, n: i64, f: i64) {
+// path_add of the key spelled by the n bytes at word i of w (why: for no
+// file, why there is none).
+fn path_add_w(w: const u32[:], i: i64, n: i64, f: i64, why: u32) {
     if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
     let off = pnames.len;
     if words_to_bytes(pnames, w, i, n) == 0 { return; }
@@ -529,17 +588,17 @@ fn path_add_w(w: const u32[:], i: i64, n: i64, f: i64) {
         pnames.resize(off);
         return;
     }
-    pathents.push(PathEnt { off: off as! u32, len: n as! u32, hash: h, file: f as! i32 });
+    pathents.push(PathEnt { off: off as! u32, len: n as! u32, hash: h, file: f as! i32, why: why });
     pathtab[p] = pathents.len as! u32;
 }
 
-// The witness of path p, where no file was found (a recording's end): the
-// deepest existing ancestor, if it has not changed for 2 s (else -1, and
-// the replay stats p itself); -1 too when p exists but could not be read.
-fn witness(p: const u8[:]) -> i64 {
-    let pi = wit_stat(p);
-    let ps = wits[pi].state;
-    if ps != 0 && ps != 2 { return -1; }
+// The witness of path p, where no file was found (a recording's end; why:
+// lookup_file's reason, 1 no such path, 2 a directory): the deepest
+// existing ancestor directory, if it has not changed for 2 s; else -1, and
+// the replay stats p itself (and for any other reason, such as a file it
+// could not read).
+fn witness(p: const u8[:], why: i64) -> i64 {
+    if why != 1 && why != 2 { return -1; }
     var n = p.len;
     loop {
         while n > 0 && p[n - 1] != '/' { n--; }
@@ -628,8 +687,6 @@ fn hc_path(bid: u64, blob: bool) {
     hcp.clear();
     hcp.append(hcb[hc_dir_off..hc_dir_off + hc_dir_len]);
     hcp.push('/');
-    hexd(hcp, hc_keyh >> 56, 2);
-    hcp.push('/');
     hexd(hcp, hc_keyh, 16);
     if blob {
         hcp.push('-');
@@ -693,26 +750,59 @@ fn file_ok(w: const u32[:], magic: u32) -> bool {
     return (c & 0xFFFFFFFF) as! u32 == w[3] && (c >> 32) as! u32 == w[4];
 }
 
+// A manifest file is a header (magic, version, the key) followed by
+// records appended one per variant (magic, length, checksum, the variant:
+// its blob's id and its head). Appending is one write, which concurrent
+// appenders cannot interleave; a torn or damaged record ends the reading.
+// This process keeps each manifest it reads in hcm normalized: 5 words,
+// the key, the number of variants, each variant's length and words.
+
 // The manifest of the current key (an index into hman), read at its
 // first use in this process.
 fn man_get() -> i64 {
     for h, i in hman { if h.keyh == hc_keyh { return i; } }
     hc_path(0, false);
+    hcr.clear();
+    let n = read_words(hcp, hcr);
     let off = hcm.len;
-    let n = read_words(hcp, hcm);
     var len: i64 = 0;
-    if n > 0 {
-        var ok = file_ok(hcm[off..off + n], HC_MAGIC_M);
-        if !ok { st_corrupt++; unlink_path(hcp); }
-        if ok {
-            rp = 5;
-            rerr = false;
-            let ki, kn = rstr(hcm[off..off + n]);
-            ok = !rerr && str_is(hcm[off..off + n], ki, kn, hck);
+    var vol = false;
+    if n > 2 && hcr[0] == HC_MAGIC_M && hcr[1] == HC_VERSION {
+        rp = 2;
+        rerr = false;
+        let ki, kn = rstr(hcr);
+        if !rerr && str_is(hcr, ki, kn, hck) {
+            for i in 5 { hcm.push(0); }
+            wstr(hcm, hck);
+            let nvpos = hcm.len;
+            hcm.push(0);
+            var nv: u32 = 0;
+            while rp + 4 <= hcr.len && nv < 4 * HC_MAX_VARIANTS {
+                if hcr[rp] == HC_MAGIC_V && hcr[rp + 1] == 0 {
+                    vol = true;
+                    rp += 4;
+                    continue;
+                }
+                if hcr[rp] != HC_MAGIC_R { break; }
+                let vl = hcr[rp + 1] as i64;
+                if vl < 2 || vl > hcr.len - rp - 4 { break; }
+                let c = csum_words(hcr[rp + 4..rp + 4 + vl]);
+                if (c & 0xFFFFFFFF) as! u32 != hcr[rp + 2] || (c >> 32) as! u32 != hcr[rp + 3] { break; }
+                hcm.push(vl as! u32);
+                hcm.append(hcr[rp + 4..rp + 4 + vl]);
+                nv++;
+                rp += 4 + vl;
+            }
+            hcm[nvpos] = nv;
+            len = hcm.len - off;
+            if rp < hcr.len { st_corrupt++; }
+        } else if rerr {
+            st_corrupt++;
         }
-        if ok { len = n; } else { hcm.resize(off); }
+    } else if n > 0 {
+        st_corrupt++;
     }
-    hman.push(HMan { keyh: hc_keyh, off: off as! u32, len: len as! u32 });
+    hman.push(HMan { keyh: hc_keyh, off: off as! u32, len: len as! u32, vol: vol });
     return hman.len - 1;
 }
 
@@ -837,7 +927,7 @@ fn head_check(w: const u32[:]) -> bool {
         if wok && pn == 0 {
             // a normalized path whose witness has not changed: no file
             // there now, and none was loaded from it in this process
-            hpo.push(HPo { kind: kind, f: -1, e: -2, key: ki as! u32, klen: kn as! u32, path: pw as! u32, plen: pl as! u32, nf: 0 });
+            hpo.push(HPo { kind: kind, f: -1, e: -2, key: ki as! u32, klen: kn as! u32, path: pw as! u32, plen: pl as! u32, nf: 1 });
             continue;
         }
         let ko = hcs.len;
@@ -881,6 +971,7 @@ fn head_check(w: const u32[:]) -> bool {
         hcs.resize(ko);
         var fi: i64 = -1;
         if kind == PO_OLD { fi = r; }
+        if kind == PO_NEG && wix != 0xFFFFFFFF { nf = 1; }
         hpo.push(HPo { kind: kind, f: fi as! i32, e: e as! i32, key: ki as! u32, klen: kn as! u32, path: pw as! u32, plen: pl as! u32, nf: nf });
     }
     // the macros observed defined, with their definitions: the same words
@@ -946,10 +1037,16 @@ fn hc_replay(name: const u8[:], angled: bool, k: i64) -> bool {
 
 fn hc_replay1(name: const u8[:], angled: bool, k: i64) -> bool {
     hc_key(name, angled, k);
-    st_lookups++;
+    hc_norec = false;
     let tm0 = clock_ns();
     let mi = man_get();
     tm_man += clock_ns() - tm0;
+    if hman[mi].vol {
+        st_volatile++;
+        hc_norec = true;
+        return false;
+    }
+    st_lookups++;
     let mo = hman[mi].off as i64;
     let ml = hman[mi].len as i64;
     hr_mo = mo;
@@ -962,9 +1059,20 @@ fn hc_replay1(name: const u8[:], angled: bool, k: i64) -> bool {
     rerr = false;
     let ki, kn = rstr(hcm[mo..mo + ml]);
     let nv = r32(hcm[mo..mo + ml]) as i64;
+    // the variants' positions; the newest (last appended) is tried first
+    var vpos: i64[>..] = [];
     for vi in nv {
         let vlen = r32(hcm[mo..mo + ml]) as i64;
-        let vstart = rp;
+        if rerr || vlen > ml - rp { break; }
+        vpos.push(rp);
+        rp += vlen;
+    }
+    var vk = vpos.len - 1;
+    while vk >= 0 {
+        let vstart = vpos[vk];
+        vk--;
+        rp = vstart;
+        rerr = false;
         let bid = r64(hcm[mo..mo + ml]);
         if rerr { break; }
         let th0 = clock_ns();
@@ -976,8 +1084,6 @@ fn hc_replay1(name: const u8[:], angled: bool, k: i64) -> bool {
                 return true;
             }
         }
-        rp = vstart + vlen;
-        rerr = false;
     }
     st_misses++;
     return false;
@@ -1394,8 +1500,8 @@ fn blob_commit(i0: i64, n0: i64, f0: i64, m0: i64) {
     // the path cache, and the recordings' path observations
     for po in hpo {
         if !rec_on {
-            if po.kind == PO_NEG && po.e < 0 { path_add_w(hcm[hr_mo..hr_mo + hr_ml], po.key as i64, po.klen as i64, -1); }
-            if po.kind == PO_NEW { path_add_w(hcm[hr_mo..hr_mo + hr_ml], po.key as i64, po.klen as i64, f0 + (po.nf as i64)); }
+            if po.kind == PO_NEG && po.e < 0 { path_add_w(hcm[hr_mo..hr_mo + hr_ml], po.key as i64, po.klen as i64, -1, 3 - 2 * po.nf); }
+            if po.kind == PO_NEW { path_add_w(hcm[hr_mo..hr_mo + hr_ml], po.key as i64, po.klen as i64, f0 + (po.nf as i64), 0); }
             continue;
         }
         hcs.clear();
@@ -1419,19 +1525,19 @@ fn blob_commit(i0: i64, n0: i64, f0: i64, m0: i64) {
                         a, b = hk_store_path(key, path);
                         stored = true;
                     }
-                    ev.push(Ev { rec: r as! u16, kind: EV_PNEG, flag: 0, a: a, b: b, c: 0, d: 0 });
+                    ev.push(Ev { rec: r as! u16, kind: EV_PNEG, flag: (3 - 2 * po.nf) as! u8, a: a, b: b, c: 0, d: 0 });
                 }
             }
-            if pe < 0 { path_add(key, -1); }
+            if pe < 0 { path_add(key, -1, 3 - 2 * po.nf); }
         } else if po.kind == PO_NEW {
             let f = f0 + (po.nf as i64);
             if rec_on {
                 let a, b = hk_store_path(key, path);
                 for r in recs.len { ev.push(Ev { rec: r as! u16, kind: EV_PNEW, flag: 0, a: a, b: b, c: f as! u32, d: 0 }); }
             }
-            path_add(key, f);
+            path_add(key, f, 0);
         } else if rec_on {
-            hk_path_hit(po.e as i64, po.f as i64, key, path);
+            hk_path_hit(po.e as i64, po.f as i64, key, path, 0);
         }
     }
     // the changes to identifiers' macros, poisoning, files loaded before
@@ -1520,7 +1626,7 @@ fn blob_commit(i0: i64, n0: i64, f0: i64, m0: i64) {
 
 // Starts recording the include whose key hc_replay left in hck.
 fn hc_rec_start(name: const u8[:], angled: bool, k: i64) -> bool {
-    if !hc_ready || !hc_on { return false; }
+    if !hc_ready || !hc_on || hc_norec { return false; }
     if recs.len >= 60 {
         hk_bad(HC_BAD_NEST);
         return false;
@@ -1648,12 +1754,11 @@ fn cand_add(off: u32, kind: u32, x: u32, y: u32) {
 // A source offset of the unit's effect, for the blob: an offset in the
 // unit's text, or an anchor (an offset of text from before the unit,
 // which the replay finds through the candidates).
-fn frel(v: u32) -> u32 {
-    if v as i64 >= fr_src0 {
-        let d = (v as i64) - fr_src0;
-        if d >= 0x80000000 { fr_bad = true; return 0; }
-        return d as! u32;
-    }
+inline fn frel(v: u32) -> u32 {
+    if v as i64 >= fr_src0 { return ((v as i64) - fr_src0) as! u32; }
+    return frel_anchor(v);
+}
+fn frel_anchor(v: u32) -> u32 {
     let key = (2 << 40) | (v as u64);
     let g = hcd.get(key);
     if g { return g | 0x80000000; }
@@ -1674,11 +1779,11 @@ fn frel(v: u32) -> u32 {
     return a | 0x80000000;
 }
 
-fn wtok(o: u32[>..]&, t: Tok, idk: bool) {
-    o.push((t.kind as u32) | ((t.flags as u32) << 8) | ((t.aux as u32) << 16));
-    o.push(frel(t.spell));
-    if idk { o.push(lid(t.val)); } else { o.push(t.val); }
-    o.push(frel(t.xloc));
+inline fn wtok(t: Tok, idk: bool) {
+    hcw.push((t.kind as u32) | ((t.flags as u32) << 8) | ((t.aux as u32) << 16));
+    hcw.push(frel(t.spell));
+    if idk { hcw.push(lid(t.val)); } else { hcw.push(t.val); }
+    hcw.push(frel(t.xloc));
 }
 
 // Saves the recording r: the blob, then the manifest. False when the
@@ -1755,7 +1860,9 @@ fn rec_save(r: Rec) -> bool {
                 f = e.c as i64;
                 if f >= r.files0 as i64 { return false; }
             }
-            hpo.push(HPo { kind: kind, f: f as! i32, e: e.d as! i32, key: e.a, klen: kn, path: e.a + kn, plen: pn, nf: nf });
+            var ex = e.d as! i32;
+            if e.kind == EV_PNEG { ex = e.flag as i32; }
+            hpo.push(HPo { kind: kind, f: f as! i32, e: ex, key: e.a, klen: kn, path: e.a + kn, plen: pn, nf: nf });
             hpo[hpo.len - 1].nf = nf;
             if e.kind == EV_POLD { hpo[hpo.len - 1].nf = e.flag as u32; }
         }
@@ -1778,7 +1885,6 @@ fn rec_save(r: Rec) -> bool {
     // the effect (hcw)
     hcw.clear();
     let srcd = src[fr_src0..src.len];
-    wstr(hcw, srcd);
     let nb = r.names0 as i64;
     wstr(hcw, names[nb..names.len]);
     hcw.push((files.len - (r.files0 as i64)) as! u32);
@@ -1820,12 +1926,12 @@ fn rec_save(r: Rec) -> bool {
     hcw.push((mtoks.len - (r.mtoks0 as i64)) as! u32);
     for ti in (r.mtoks0 as i64)..mtoks.len {
         let t = mtoks[ti];
-        wtok(hcw, t, t.kind == TK_IDENT || t.kind == TK_PARAM);
+        wtok(t, t.kind == TK_IDENT || t.kind == TK_PARAM);
     }
     hcw.push((tu_toks.len - (r.toks0 as i64)) as! u32);
     for ti in (r.toks0 as i64)..tu_toks.len {
         let t = tu_toks[ti];
-        wtok(hcw, t, t.kind == TK_IDENT || t.kind as i64 >= TK_KW);
+        wtok(t, t.kind == TK_IDENT || t.kind as i64 >= TK_KW);
     }
     let ob = r.out0 as i64;
     wstr(hcw, out[ob..out.len]);
@@ -1967,22 +2073,25 @@ fn rec_save(r: Rec) -> bool {
             }
         }
     }
-    hcv.append(hcw);
+    // then the source text (the head ends with its length; the file has it
+    // right from src) and the rest
+    hcv.push(srcd.len as! u32);
+    let total = hcv.len + (srcd.len + 3) / 4 + hcw.len;
     hcv[0] = HC_MAGIC_B;
     hcv[1] = HC_VERSION;
-    hcv[2] = hcv.len as! u32;
-    let cs = csum_words(hcv[5..]);
+    hcv[2] = total as! u32;
+    let cs = csum3(hcv[5..hcv.len], srcd, hcw);
     hcv[3] = (cs & 0xFFFFFFFF) as! u32;
     hcv[4] = (cs >> 32) as! u32;
     let bid = cs;
     // write the blob
     hc_keyh = r.keyh;
     hc_path(bid, true);
-    if write_words(hcp, hcv) == 0 {
+    if write3(hcp, hcv, srcd, hcw) == 0 {
         st_werr++;
         return true;
     }
-    st_wbytes += hcv.len * 4;
+    st_wbytes += total * 4;
     // the variant's head (hcw): the path observations, the macros observed
     // defined, the rest
     hcw.clear();
@@ -1994,7 +2103,7 @@ fn rec_save(r: Rec) -> bool {
     for po, i in hpo {
         if po.kind != PO_NEG { continue; }
         var wi: i64 = -1;
-        if po.plen > 0 { wi = witness(hcb[po.path..po.path + po.plen]); } else { wi = witness(hcb[po.key..po.key + po.klen]); }
+        if po.plen > 0 { wi = witness(hcb[po.path..po.path + po.plen], po.e as i64); } else { wi = witness(hcb[po.key..po.key + po.klen], po.e as i64); }
         var x: i64 = -1;
         if wi >= 0 {
             for y, j in wl { if y == wi { x = j; } }
@@ -2076,71 +2185,129 @@ fn rec_save(r: Rec) -> bool {
     return true;
 }
 
-// Adds the variant in hcw to the manifest of r's key (the newest first),
-// in the file and in this process.
+// Appends the variant in hcw (its length, then its words) to the manifest
+// of r's key: in the file (created if there is none; rewritten with the
+// newest half when it has too many) and in this process's copy.
 fn man_add(r: Rec, bid: u64) {
     hc_keyh = r.keyh;
-    hc_path(0, false);
+    var mi: i64 = -1;
+    for h, i in hman { if h.keyh == r.keyh { mi = i; } }
+    // the variants this process knows (the same one again is not added)
     hcr.clear();
-    let n = read_words(hcp, hcr);
-    hcv.clear();
-    for i in 5 { hcv.push(0); }
-    wstr(hcv, hcb[r.key..r.key + r.key_len]);
-    let nvpos = hcv.len;
-    hcv.push(1);
-    hcv.append(hcw);
-    if n > 0 && file_ok(hcr, HC_MAGIC_M) {
+    var nv: i64 = 0;
+    if mi >= 0 && hman[mi].len > 0 {
+        let mo = hman[mi].off as i64;
+        hcr.append(hcm[mo..mo + (hman[mi].len as i64)]);
         rp = 5;
         rerr = false;
         let ki, kn = rstr(hcr);
-        if !rerr && str_is(hcr, ki, kn, hcb[r.key..r.key + r.key_len]) {
-            let nv = r32(hcr) as i64;
-            var kept: u32 = 1;
-            for vi in nv {
-                let vl = r32(hcr) as i64;
-                let vs = rp;
-                if vl < 2 || vl > hcr.len - vs { break; }
-                // the same variant again (heads differ even where blobs, which
-                // refer to the macros they observed only by anchors, are equal)
-                let same = vl == hcw.len - 1 && hcr[vs..vs + vl] == hcw[1..hcw.len];
-                if !same && kept < HC_MAX_VARIANTS {
-                    hcv.push(vl as! u32);
-                    hcv.append(hcr[vs..vs + vl]);
-                    kept++;
-                }
-                rp = vs + vl;
-            }
-            hcv[nvpos] = kept;
+        nv = r32(hcr) as i64;
+        for vi in nv {
+            let vl = r32(hcr) as i64;
+            let vs = rp;
+            if vl == hcw.len - 1 && vs + vl <= hcr.len && hcr[vs..vs + vl] == hcw[1..hcw.len] { return; }
+            rp = vs + vl;
         }
     }
-    hcv[0] = HC_MAGIC_M;
-    hcv[1] = HC_VERSION;
-    hcv[2] = hcv.len as! u32;
-    let cs = csum_words(hcv[5..]);
-    hcv[3] = (cs & 0xFFFFFFFF) as! u32;
-    hcv[4] = (cs >> 32) as! u32;
-    if write_words(hcp, hcv) == 0 {
+    let vbase = 5 + 1 + ((r.key_len as i64) + 3) / 4 + 1;   // where hcr's variants start
+    hc_path(0, false);
+    // the record
+    hcv.clear();
+    hcv.push(HC_MAGIC_R);
+    hcv.push((hcw.len - 1) as! u32);
+    let c = csum_words(hcw[1..hcw.len]);
+    hcv.push((c & 0xFFFFFFFF) as! u32);
+    hcv.push((c >> 32) as! u32);
+    hcv.append(hcw[1..hcw.len]);
+    var keep0 = vbase;      // the old variants that stay in this process's copy
+    var res: i64 = 0;
+    if nv + 1 > HC_MAX_VARIANTS {
+        // a new file: the newest half of the variants and this one
+        var skip = nv - HC_MAX_VARIANTS / 2;
+        rp = vbase;
+        while skip > 0 {
+            rp += 1 + (hcr[rp] as i64);
+            skip--;
+        }
+        keep0 = rp;
+        hcx.clear();
+        hcx.push(HC_MAGIC_M);
+        hcx.push(HC_VERSION);
+        wstr(hcx, hcb[r.key..r.key + r.key_len]);
+        while rp < hcr.len {
+            let vl = hcr[rp] as i64;
+            hcx.push(HC_MAGIC_R);
+            hcx.push(vl as! u32);
+            let vc = csum_words(hcr[rp + 1..rp + 1 + vl]);
+            hcx.push((vc & 0xFFFFFFFF) as! u32);
+            hcx.push((vc >> 32) as! u32);
+            hcx.append(hcr[rp + 1..rp + 1 + vl]);
+            rp += 1 + vl;
+        }
+        hcx.append(hcv);
+        res = write_words(hcp, hcx);
+    } else {
+        res = append_words(hcp, hcv);
+        if res == 2 {
+            // no manifest yet: the header and the record in one write
+            hcx.clear();
+            hcx.push(HC_MAGIC_M);
+            hcx.push(HC_VERSION);
+            wstr(hcx, hcb[r.key..r.key + r.key_len]);
+            hcx.append(hcv);
+            res = create_words(hcp, hcx);
+            if res == 2 { res = append_words(hcp, hcv); }
+        }
+    }
+    if res != 1 {
         st_werr++;
         return;
     }
     st_wbytes += hcv.len * 4;
-    // this process sees it too
+    var vol = false;
+    if nv + 1 >= hc_volatile {
+        // too many contexts: the key is not worth looking up any more (its
+        // includes are units of their own)
+        hcv.clear();
+        hcv.push(HC_MAGIC_V);
+        hcv.push(0);
+        hcv.push(0);
+        hcv.push(0);
+        if append_words(hcp, hcv) == 1 { vol = true; }
+    }
+    // this process's copy
     let off = hcm.len;
-    hcm.append(hcv);
-    for h, i in hman {
-        if h.keyh == r.keyh {
-            hman[i].off = off as! u32;
-            hman[i].len = hcv.len as! u32;
-            return;
+    for i in 5 { hcm.push(0); }
+    wstr(hcm, hcb[r.key..r.key + r.key_len]);
+    let nvpos = hcm.len;
+    hcm.push(0);
+    var cnt: u32 = 0;
+    if hcr.len > 0 {
+        rp = keep0;
+        while rp < hcr.len {
+            let vl = hcr[rp] as i64;
+            hcm.append(hcr[rp..rp + 1 + vl]);
+            cnt++;
+            rp += 1 + vl;
         }
     }
-    hman.push(HMan { keyh: r.keyh, off: off as! u32, len: hcv.len as! u32 });
+    hcm.append(hcw);
+    cnt++;
+    hcm[nvpos] = cnt;
+    if mi >= 0 {
+        hman[mi].off = off as! u32;
+        hman[mi].len = (hcm.len - off) as! u32;
+        hman[mi].vol = vol;
+    } else {
+        hman.push(HMan { keyh: r.keyh, off: off as! u32, len: (hcm.len - off) as! u32, vol: vol });
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Reports.
 
 fn hc_report() {
+    hc_tu_mark();
     if !hc_stats_opt { return; }
     var o: u8[>..] = [];
     if !hc_on {
@@ -2148,7 +2315,7 @@ fn hc_report() {
     } else {
         format(o, "goosecc: header cache: ", st_lookups, " lookups, ", st_hits, " hits, ", st_misses, " misses; ",
             st_recorded, " recorded (", st_wbytes, " bytes written), ", st_small, " too small, ", st_bad, " not cacheable, ",
-            st_corrupt, " corrupt, ", st_werr, " write errors; replay ", tm_replay / 1000, " us (read ", tm_read / 1000,
+            st_corrupt, " corrupt, ", st_werr, " write errors, ", st_volatile, " volatile; replay ", tm_replay / 1000, " us (read ", tm_read / 1000,
             ", check ", tm_check / 1000, ", append ", tm_append / 1000, ", commit ", tm_commit / 1000, "), saving ", tm_save / 1000, " us\n");
     }
     if hc_on && opt_time {

@@ -34,7 +34,9 @@ class T:
 
     def run(self, args, cache=True, cwd=None, env_extra=None, obj=None):
         """goosecc args (with -E or -c), with or without the cache: (status, stdout, stderr, object, stats)"""
-        env = dict(os.environ, SOURCE_DATE_EPOCH="1700000000", TZ="UTC", GOOSECC_CACHE=self.cache)
+        # "..." includes are units at every compile here (the default makes
+        # them units from a translation unit's second compile on: t_policy)
+        env = dict(os.environ, SOURCE_DATE_EPOCH="1700000000", TZ="UTC", GOOSECC_CACHE=self.cache, GOOSECC_CACHE_QUOTED="1")
         if env_extra:
             env.update(env_extra)
         obj = obj or self.path("out.o")
@@ -362,7 +364,20 @@ def t_corrupt(a):
     return t.done()
 
 
-TESTS = [t_edit_same_size, t_racy, t_macros, t_order, t_include_next, t_counter, t_states, t_symlink, t_relative,
+def t_policy(a):
+    """The default units: <...> includes from the program's files; "..." includes of the main file from its second compile on."""
+    t = T(a, "policy")
+    t.write("p.h", "#include <stdio.h>\nint p_h;\n" + BIG)
+    c = t.write("a.c", '#include "p.h"\n#include <stdlib.h>\nint main(void) { return 0; }\n')
+    age()
+    q = {"GOOSECC_CACHE_QUOTED": ""}
+    t.same(["-c", c], "first compile: the <...> includes", env_extra=q, expect={"lookups": 2, "recorded": 2})
+    t.same(["-c", c], "second compile: also \"p.h\" (its <stdio.h> replayed inside)", env_extra=q, expect={"lookups": 3, "hits": 2, "recorded": 1})
+    t.same(["-c", c], "third compile", env_extra=q, expect={"lookups": 2, "hits": 2, "recorded": 0})
+    return t.done()
+
+
+TESTS = [t_policy, t_edit_same_size, t_racy, t_macros, t_order, t_include_next, t_counter, t_states, t_symlink, t_relative,
          t_pragmas, t_time, t_deleted, t_concurrent, t_corrupt]
 
 

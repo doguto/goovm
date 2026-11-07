@@ -9,14 +9,16 @@ goosecc runs
   off     -fno-header-cache
   cold    with an empty cache of the file's own (-c and -E each record
           into it; the other compile modes then read what -c recorded)
-  warm    the same again, with that cache filled
+  warm    the same again, with that cache filled (a second compile also
+          records the main file's "..." includes)
+  warm2   once more: it must record nothing
   shared  with one cache for the whole run, filled by every file before
           (in -j parallel workers, which also write the same entries
           concurrently)
 
 and every run's output file, standard output, standard error (with
 --pp-state-hash=v: a checksum of the whole preprocessor state, array by
-array) and exit status must be those of `off`. The `warm` runs must also
+array) and exit status must be those of `off`. The `warm2` runs must also
 record nothing new (--cache-stats): every include worth an entry was
 replayed.
 
@@ -72,8 +74,8 @@ def check(a, path, flags, tmp):
     for mode in order:
         ref, _ = run(a.goosecc, mode, flags, path, out, None, env0)
         res["runs"] += 1
-        for kind in ("cold", "warm", "shared"):
-            if kind == "cold" and mode not in ("c", "E"):
+        for kind in ("cold", "warm", "warm2", "shared"):
+            if kind in ("cold", "warm") and mode not in ("c", "E"):
                 continue
             cache = own if kind != "shared" else a.shared
             got, st = run(a.goosecc, mode, flags, path, out, cache, env0)
@@ -81,7 +83,7 @@ def check(a, path, flags, tmp):
             if st:
                 res["lookups"] += st[0]
                 res["hits"] += st[1]
-                if kind == "warm" and st[3] > 0:
+                if kind == "warm2" and st[3] > 0:
                     res["warm_miss"] += 1
             if got != ref:
                 what = [n for n, x, y in zip(("status", "stdout", "stderr", "output"), got, ref) if x != y]
@@ -139,7 +141,7 @@ def main():
         print(f"| {c} | {b[0]} | {b[1]} | {b[2]} | {b[3]} | {b[4]} |")
         T = [x + y for x, y in zip(T, b)]
     print(f"| **total** | {T[0]} | {T[1]} | {T[2]} | {T[3]} | {T[4]} |")
-    print(f"warm runs that recorded: {warm_miss}; failures: {len(fails)}")
+    print(f"warm2 runs that recorded: {warm_miss}; failures: {len(fails)}")
     if not a.keep:
         shutil.rmtree(tmp, ignore_errors=True)
     else:

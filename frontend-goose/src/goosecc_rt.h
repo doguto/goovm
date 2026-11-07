@@ -142,18 +142,26 @@ static int goosecc_cpath(sl_u8 path, char *p, size_t cap) {
  * 1 on success; 0 when there is no such file or it cannot be read, with
  * out unchanged. A read that cannot store (EFAULT: past the data stack's
  * reservation) goes through a buffer, so the overflow is the runtime's. */
-/* B4: the file's stat is kept for its identity (goosecc_last_stat). */
+/* B4: the file's stat is kept for its identity, and why a file could not
+ * be read (goosecc_last_stat). */
 static struct stat goosecc_st;
+static int goosecc_load_why;   /* 0 read, 1 no such path, 2 a directory, 3 another reason */
 int64_t goosecc_read_file(sl_u8 path, gs_rref out) {
     char p[4096];
+    goosecc_load_why = 1;
     if (!goosecc_cpath(path, p, sizeof p)) return 0;
     int fd = open(p, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
+    if (fd < 0) {
+        goosecc_load_why = (errno == ENOENT || errno == ENOTDIR || errno == ENAMETOOLONG || errno == ELOOP) ? 1 : 3;
+        return 0;
+    }
     struct stat st;
     if (fstat(fd, &st) != 0 || S_ISDIR(st.st_mode)) {
+        goosecc_load_why = S_ISDIR(st.st_mode) ? 2 : 3;
         close(fd);
         return 0;
     }
+    goosecc_load_why = 3;
     goosecc_st = st;
     int64_t len0 = out.hdr->len;
     uint8_t *top0 = out.stk->top;
@@ -328,7 +336,8 @@ gen_F80_g3 goosecc_f80_to_i128(gen_F80_g3 x, int64_t is_signed) {
 
 /* Field k of the last stat (goosecc_read_file's fstat or goosecc_stat's
  * stat): 0 device, 1 inode, 2 size, 3 mtime and 4 ctime in nanoseconds
- * since the epoch, 5 whether it is a regular file. */
+ * since the epoch, 5 whether it is a regular file, 6 why goosecc_read_file
+ * failed last (1 no such path, 2 a directory, 3 another reason). */
 int64_t goosecc_last_stat(int64_t k) {
     switch (k) {
     case 0: return (int64_t)goosecc_st.st_dev;
@@ -336,6 +345,7 @@ int64_t goosecc_last_stat(int64_t k) {
     case 2: return (int64_t)goosecc_st.st_size;
     case 3: return (int64_t)goosecc_st.st_mtim.tv_sec * 1000000000 + goosecc_st.st_mtim.tv_nsec;
     case 4: return (int64_t)goosecc_st.st_ctim.tv_sec * 1000000000 + goosecc_st.st_ctim.tv_nsec;
+    case 6: return goosecc_load_why;
     default: return S_ISREG(goosecc_st.st_mode) ? 1 : 0;
     }
 }
@@ -581,71 +591,170 @@ int64_t goosecc_write_words(sl_u8 path, sl_u32 w) {
     return 1;
 }
 
+static int64_t goosecc_write_all(int fd, const uint8_t *d, int64_t left) {
+    while (left > 0) {
+        ssize_t n = write(fd, d, (size_t)left);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return 0;
+        d += n;
+        left -= n;
+    }
+    return 1;
+}
+/* Appends the words w to the file at path in one write (O_APPEND: other
+ * appenders cannot interleave with it): 1, 2 when there is no such file,
+ * 0 on another error. */
+int64_t goosecc_append_words(sl_u8 path, sl_u32 w) {
+    char p[4096];
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    int fd = open(p, O_WRONLY | O_APPEND | O_CLOEXEC);
+    if (fd < 0) return errno == ENOENT ? 2 : 0;
+    int64_t ok = goosecc_write_all(fd, (const uint8_t *)w.data, w.len * 4);
+    if (close(fd) != 0) ok = 0;
+    return ok;
+}
+/* Creates the file at path with the words w (O_EXCL), creating missing
+ * directories: 1, 2 when it exists, 0 on another error. */
+int64_t goosecc_create_words(sl_u8 path, sl_u32 w) {
+    char p[4096];
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    int fd = open(p, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (fd < 0 && errno == ENOENT) {
+        goosecc_mkdirs(p);
+        fd = open(p, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    }
+    if (fd < 0) return errno == EEXIST ? 2 : 0;
+    int64_t ok = goosecc_write_all(fd, (const uint8_t *)w.data, w.len * 4);
+    if (close(fd) != 0) ok = 0;
+    return ok;
+}
+
+/* A blob is written in three pieces without copying them together: the
+ * head's words, the source text (bytes, padded to whole words with
+ * zeros) and the rest's words. goosecc_csum3 is goosecc_csum of the words
+ * of the three in a row (from the head's word 5), goosecc_write3 writes
+ * them as goosecc_write_words does. */
+typedef struct { uint64_t a, b, c, d; int64_t i; uint8_t buf[32]; int nb; } goosecc_cs;
+static void goosecc_cs_chunk(goosecc_cs *st, const uint8_t *q) {
+    const uint64_t K = 0xff51afd7ed558ccdull;
+    uint64_t x0, x1, x2, x3;
+    memcpy(&x0, q, 8); memcpy(&x1, q + 8, 8); memcpy(&x2, q + 16, 8); memcpy(&x3, q + 24, 8);
+    st->a = (st->a ^ x0) * K; st->b = (st->b ^ x1) * K; st->c = (st->c ^ x2) * K; st->d = (st->d ^ x3) * K;
+    st->i += 8;
+}
+/* Feeds n bytes (a whole number of words, except at the very end). */
+static void goosecc_cs_feed(goosecc_cs *st, const uint8_t *p, int64_t n) {
+    while (n > 0 && st->nb > 0) {
+        st->buf[st->nb++] = *p++;
+        n--;
+        if (st->nb == 32) { goosecc_cs_chunk(st, st->buf); st->nb = 0; }
+    }
+    while (n >= 32) { goosecc_cs_chunk(st, p); p += 32; n -= 32; }
+    while (n > 0) { st->buf[st->nb++] = *p++; n--; }
+}
+static uint64_t goosecc_cs_end(goosecc_cs *st) {
+    const uint64_t K = 0xff51afd7ed558ccdull;
+    while (st->nb % 4) st->buf[st->nb++] = 0;
+    int64_t n = st->i + st->nb / 4;
+    uint64_t a = st->a;
+    for (int k = 0; k < st->nb / 4; k++) {
+        uint32_t w;
+        memcpy(&w, st->buf + 4 * k, 4);
+        a = (a ^ w ^ ((uint64_t)(st->i + k) << 32)) * K;
+    }
+    uint64_t h = a ^ (st->b * 0x9e3779b97f4a7c15ull) ^ (st->c * 0xc2b2ae3d27d4eb4full) ^ (st->d * 0x165667b19e3779f9ull) ^ (uint64_t)n;
+    h ^= h >> 33; h *= K; h ^= h >> 29; h *= 0xc4ceb9fe1a85ec53ull; h ^= h >> 32;
+    return h;
+}
+uint64_t goosecc_csum3(sl_u32 a, sl_u8 s, sl_u32 b) {
+    goosecc_cs st = { 0x9e3779b97f4a7c15ull, 0xc2b2ae3d27d4eb4full, 0x165667b19e3779f9ull, 0x27d4eb2f165667c5ull, 0, {0}, 0 };
+    static const uint8_t zero[4];
+    goosecc_cs_feed(&st, (const uint8_t *)a.data, a.len * 4);
+    goosecc_cs_feed(&st, s.data, s.len);
+    goosecc_cs_feed(&st, zero, (4 - s.len % 4) % 4);
+    goosecc_cs_feed(&st, (const uint8_t *)b.data, b.len * 4);
+    return goosecc_cs_end(&st);
+}
+int64_t goosecc_write3(sl_u8 path, sl_u32 a, sl_u8 s, sl_u32 b) {
+    char p[4096], t[4200];
+    static unsigned long seq3;
+    static const uint8_t zero[4];
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    snprintf(t, sizeof t, "%s.%d.%lx.%lx.tmp", p, (int)getpid(), (unsigned long)ts.tv_nsec, ++seq3);
+    int fd = open(t, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (fd < 0 && errno == ENOENT) {
+        goosecc_mkdirs(t);
+        fd = open(t, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    }
+    if (fd < 0) return 0;
+    int64_t ok = goosecc_write_all(fd, (const uint8_t *)a.data, a.len * 4) && goosecc_write_all(fd, s.data, s.len) &&
+                 goosecc_write_all(fd, zero, (4 - s.len % 4) % 4) && goosecc_write_all(fd, (const uint8_t *)b.data, b.len * 4);
+    if (close(fd) != 0) ok = 0;
+    if (!ok || rename(t, p) != 0) {
+        unlink(t);
+        return 0;
+    }
+    return 1;
+}
+
 /* Deletes a file of the cache (a corrupt one). */
 void goosecc_unlink(sl_u8 path) {
     char p[4096];
     if (goosecc_cpath(path, p, sizeof p)) unlink(p);
 }
 
-/* Eviction: when the files under dir (one level of subdirectories) take
- * more than limit bytes, the oldest (by modification time) are deleted
+/* Eviction: when the files in dir take more than limit bytes, the oldest
+ * (by modification time: a manifest's is its last append) are deleted
  * until they take at most 3/4 of it. Temporary files older than an hour
  * (left by a killed compiler) are deleted as well. Returns the bytes that
  * remain. */
-struct goosecc_ent { int64_t mtime; int64_t size; char name[64]; char sub[16]; };
+struct goosecc_ent { int64_t mtime; int64_t size; char name[64]; };
 static int goosecc_ent_cmp(const void *a, const void *b) {
     const struct goosecc_ent *x = a, *y = b;
     return x->mtime < y->mtime ? -1 : x->mtime > y->mtime;
 }
 int64_t goosecc_evict(sl_u8 dir, int64_t limit) {
-    char p[4096], q[4300];
+    char p[4096];
     if (!goosecc_cpath(dir, p, sizeof p)) return -1;
-    DIR *top = opendir(p);
-    if (!top) return -1;
+    DIR *d = opendir(p);
+    if (!d) return -1;
     struct goosecc_ent *v = 0;
     size_t n = 0, cap = 0;
     int64_t total = 0;
     struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);
-    struct dirent *de;
-    while ((de = readdir(top)) != 0) {
-        if (de->d_name[0] == '.' || strlen(de->d_name) >= 16) continue;
-        snprintf(q, sizeof q, "%s/%s", p, de->d_name);
-        DIR *sub = opendir(q);
-        if (!sub) continue;
-        struct dirent *fe;
-        while ((fe = readdir(sub)) != 0) {
-            if (fe->d_name[0] == '.' || strlen(fe->d_name) >= 64) continue;
-            char f[4400];
-            snprintf(f, sizeof f, "%s/%s", q, fe->d_name);
-            struct stat st;
-            if (stat(f, &st) != 0 || !S_ISREG(st.st_mode)) continue;
-            size_t ln = strlen(fe->d_name);
-            if (ln > 4 && strcmp(fe->d_name + ln - 4, ".tmp") == 0) {
-                if (now.tv_sec - st.st_mtim.tv_sec > 3600) unlink(f);
-                continue;
-            }
-            if (n == cap) {
-                cap = cap ? cap * 2 : 1024;
-                struct goosecc_ent *nv = realloc(v, cap * sizeof *v);
-                if (!nv) break;
-                v = nv;
-            }
-            v[n].mtime = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
-            v[n].size = (int64_t)st.st_blocks * 512;
-            strcpy(v[n].name, fe->d_name);
-            strcpy(v[n].sub, de->d_name);
-            total += v[n].size;
-            n++;
+    struct dirent *fe;
+    while ((fe = readdir(d)) != 0) {
+        if (fe->d_name[0] == '.' || strlen(fe->d_name) >= 64) continue;
+        char f[4200];
+        snprintf(f, sizeof f, "%s/%s", p, fe->d_name);
+        struct stat st;
+        if (stat(f, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        size_t ln = strlen(fe->d_name);
+        if (ln > 4 && strcmp(fe->d_name + ln - 4, ".tmp") == 0) {
+            if (now.tv_sec - st.st_mtim.tv_sec > 3600) unlink(f);
+            continue;
         }
-        closedir(sub);
+        if (n == cap) {
+            cap = cap ? cap * 2 : 1024;
+            struct goosecc_ent *nv = realloc(v, cap * sizeof *v);
+            if (!nv) break;
+            v = nv;
+        }
+        v[n].mtime = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
+        v[n].size = (int64_t)st.st_blocks * 512;
+        strcpy(v[n].name, fe->d_name);
+        total += v[n].size;
+        n++;
     }
-    closedir(top);
+    closedir(d);
     if (total > limit && n > 0) {
         qsort(v, n, sizeof *v, goosecc_ent_cmp);
         for (size_t i = 0; i < n && total > limit / 4 * 3; i++) {
-            char f[4400];
-            snprintf(f, sizeof f, "%s/%s/%s", p, v[i].sub, v[i].name);
+            char f[4200];
+            snprintf(f, sizeof f, "%s/%s", p, v[i].name);
             if (unlink(f) == 0) total -= v[i].size;
         }
     }
