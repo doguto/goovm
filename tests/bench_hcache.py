@@ -91,14 +91,18 @@ def main():
     variants = ["off", "cold", "warm"] + (["tcc"] if have_tcc else []) + ([] if a.no_clang else ["clang"])
     per = defaultdict(lambda: defaultdict(float))
     files = []
+    # each variant overwrites an object of its own, as a rebuild does: on
+    # ext4, truncating the file clang has just renamed into place often
+    # costs a few tenths of a millisecond more (its delayed allocation),
+    # which would go to whichever variant follows clang
+    o = {v: os.path.join(tmp, f"{v}.o") for v in ("off", "cold", "warm", "tcc", "clang")}
     for k, (prog, f, d, cc, rest) in enumerate(ents):
-        gcmd = [g] + rest + ["-o", obj]
         cmds = {
-            "off": ([g, "-fno-header-cache"] + rest + ["-o", obj], env_off),
-            "cold": (gcmd, env_cold),
-            "warm": (gcmd, env_warm),
-            "tcc": ([a.tcc] + [x for x in rest if x.startswith(("-D", "-I", "-U", "-w", "-c"))] + [f, "-o", obj], env),
-            "clang": (["clang-20"] + rest + ["-o", obj], env),
+            "off": ([g, "-fno-header-cache"] + rest + ["-o", o["off"]], env_off),
+            "cold": ([g] + rest + ["-o", o["cold"]], env_cold),
+            "warm": ([g] + rest + ["-o", o["warm"]], env_warm),
+            "tcc": ([a.tcc] + [x for x in rest if x.startswith(("-D", "-I", "-U", "-w", "-c"))] + [f, "-o", o["tcc"]], env),
+            "clang": (["clang-20"] + rest + ["-o", o["clang"]], env),
         }
         run(cmds["warm"][0], d, env_warm)   # fill the warm cache
         best = {v: 1e9 for v in variants}
