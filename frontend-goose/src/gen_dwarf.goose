@@ -511,7 +511,7 @@ fn sim_run() {
             if nd.b != 0 {
                 if !is_internal_sym(s) || sym_has_attr(s, AM_USED) { sim_emit(e | 0x80000000); }
                 else { sim_defer(e | 0x80000000); }
-            } else if syms[s].flags & SF_DEFINED == 0 {
+            } else if syms[s].flags & SF_DEFINED == 0 && !decl_is_extern(it) {
                 var have = false;
                 for x in tent { if x == e { have = true; } }
                 if !have { tent.push(e); }
@@ -892,7 +892,7 @@ fn index_decls() {
         let cur = def_decl(s);
         if nd.b != 0 { defdecl.insert(s as u64, it); continue; }
         if cur != 0 && nodes[cur].b != 0 { continue; }
-        if syms[s].sc == SC_EXTERN && it != 0 {
+        if decl_is_extern(it) {
             // an extern declaration is not a tentative definition
             if cur == 0 { defdecl.insert(s as u64, it); }
             continue;
@@ -1006,12 +1006,9 @@ fn add_ref(d: u32, at: u32, t: u32) { wattr(d, at, DWF_ref4, t as u64, 0); }
 // location, as clang's getPresumedLoc).
 fn add_source_line(d: u32, loc: u32) {
     if loc == 0 { return; }
-    let xl = expansion_loc(loc) as i64;
-    let f = file_of(xl);
-    if f < 0 { return; }
-    let l, c = line_col(f, xl);
-    if l == 0 { return; }
-    wattr(d, DWA_decl_file, GDF_FILE, dfile(f) as u64, 0);
+    let file, l, c = dloc_of(loc);
+    if file == 0 || l <= 0 { return; }
+    wattr(d, DWA_decl_file, GDF_FILE, file as u64, 0);
     add_uint(d, DWA_decl_line, l as! u64);
 }
 fn add_source_line_cur(d: u32, loc: u32) { add_source_line(d, if loc != 0 { loc } else { cur_line_loc }); }
@@ -1173,7 +1170,10 @@ recursive fn construct_record(d: u32, r: i64) {
                 add_uint(md, DWA_bit_size, f.width as! u64);
                 add_uint(md, DWA_data_bit_offset, f.bitpos as! u64);
             } else {
-                if f.attr_align != 0 { wattr(md, DWA_alignment, DWF_udata, f.attr_align as u64, 0); }
+                // clang's createFieldType: the member's aligned attribute,
+                // else its type's required alignment
+                let al: u64 = if f.attr_align != 0 { f.attr_align as u64 } else { align_required(f.ty) };
+                if al != 0 { wattr(md, DWA_alignment, DWF_udata, al, 0); }
                 add_uint(md, DWA_data_member_location, f.offset as! u64);
             }
         }
@@ -1208,6 +1208,29 @@ recursive fn construct_enum(d: u32, e: i64) {
     } else {
         add_flag(d, DWA_declaration);
     }
+}
+
+// clang's getTypeAlignIfRequired: the alignment of a type whose alignment
+// is required (a typedef or record with an aligned attribute, an array of
+// such), or of a record declared under #pragma pack; else 0.
+fn align_required(q: u32) -> u64 {
+    var t = types[q >> 4];
+    if (t.flags as i64) & TF_ALIGNED != 0 { return t.align as u64; }
+    let k = t.kind as i64;
+    if k == TY_STRUCT || k == TY_UNION {
+        let R = records[t.extra];
+        if R.attr_align != 0 || R.pack != 0 { return R.align as u64; }
+        return 0;
+    }
+    if k == TY_ARRAY {
+        let e = types[t.base >> 4];
+        if (e.flags as i64) & TF_ALIGNED != 0 { return e.align as u64; }
+        if e.kind as i64 == TY_STRUCT || e.kind as i64 == TY_UNION {
+            let R = records[e.extra];
+            if R.attr_align != 0 { return R.align as u64; }
+        }
+    }
+    return 0;
 }
 
 // The subprogram DIE of function symbol s (made on first use, in the unit).
@@ -1323,7 +1346,10 @@ var ent_die: u32[>..] = [];
 // all concrete entities in creation order (finishEntityDefinitions)
 var ents_all: u32[>..] = [];
 
-recursive fn lscope(ds: u32) -> i32 {
+recursive fn lscope(ds0: u32) -> i32 {
+    // lexical block files are their blocks (getNonLexicalBlockFileScope)
+    var ds = ds0;
+    while ds != 0 && m_dscopes[ds].kind == 4 { ds = m_dscopes[ds].parent; }
     while lsc_of.len < m_dscopes.len { lsc_of.push(0); }
     if lsc_of[ds] != 0 { return (lsc_of[ds] - 1) as! i32; }
     var parent: i32 = -1;
@@ -1573,6 +1599,8 @@ fn dbg_build() {
     index_decls();
     while dvar_die.len < m_dvars.len { dvar_die.push(NONE); }
     sim_run();
+    // LLVM makes the unit only when something is in it
+    if o_globs.len == 0 && o_enums.len == 0 && o_retained.len == 0 && o_imports.len == 0 && m_dfns.len == 0 { return; }
     // beginModule: the unit
     cu_die = wd_new(DWT_compile_unit, NONE);
     let C = m_dscopes[dbg_cu];

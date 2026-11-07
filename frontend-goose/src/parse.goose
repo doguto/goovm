@@ -1423,6 +1423,11 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
         if prev >= 0 && (syms[prev].kind == SK_FUNC || syms[prev].kind == SK_BUILTIN) &&
            (syms[prev].scope as i64 == scope_depth || syms[prev].flags & SF_FILESCOPE != 0 || syms[prev].sc == SC_EXTERN) {
             let pt = syms[prev].ty;
+            // -g: DW_AT_prototyped is the first declaration's (clang's
+            // getCanonicalDecl()->hasPrototype(); an implicit one has none)
+            if dbg_types && !fn_proto_known(prev) {
+                dt_note_proto(prev, syms[prev].flags & SF_IMPLICIT == 0 && types[pt >> 4].flags & TF_NOPROTO == 0);
+            }
             if syms[prev].flags & SF_IMPLICIT != 0 {
                 syms[prev].ty = ty;
                 syms[prev].flags = syms[prev].flags & ~SF_IMPLICIT;
@@ -1455,7 +1460,10 @@ fn declare(d: Declr&, ds: DeclSpec&, a: Attrs&, ctx: i64) -> i64 {
             err_at(loc, str("redefinition of '", ident_text(name as i64), "' as different kind of symbol"));
         }
         let s = new_sym(SK_FUNC, name, ty, loc);
-        if dbg_types { dt_set_sym(s, if dq_canon(d.dty) == ty { d.dty } else { ty }); }
+        if dbg_types {
+            dt_set_sym(s, if dq_canon(d.dty) == ty { d.dty } else { ty });
+            dt_note_proto(s, types[ty >> 4].flags & TF_NOPROTO == 0);
+        }
         syms[s].sc = if sc == SC_STATIC { SC_STATIC } else if sc == SC_EXTERN { SC_EXTERN } else { SC_NONE };
         if scope_depth == 0 { syms[s].flags = SF_FILESCOPE; } else { syms[s].flags = SF_LOCALLINK; }
         if ds.is_inline { syms[s].flags = syms[s].flags | SF_INLINE; }
@@ -1674,7 +1682,10 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
                         let dty = d_after(pd.dty, pd.ty, ty);
                         let ty0 = ty;
                         if is_array(ty) { ty = mk_ptr(tbase(ty)); } else if is_func(ty) { ty = mk_ptr(ty); }
-                        if dbg_types { dt_set_sym(p, d_adjust_param(dty, ty0, ty)); }
+                        if dbg_types {
+                            dt_set_sym(p, d_adjust_param(dty, ty0, ty));
+                            syms[p].loc = pd.loc;
+                        }
                         syms[p].ty = ty;
                         syms[p].flags = syms[p].flags | SF_KR;
                         if pds.sc == SC_REGISTER { syms[p].sc = SC_REGISTER; }
@@ -1697,7 +1708,6 @@ recursive fn parse_function_def(d: Declr&, ds: DeclSpec&, a: Attrs&) {
         }
     }
     let s = declare(dd, ds, a, CTX_FILESCOPE);
-    if dbg_types && syms[s].kind == SK_FUNC { dt_note_proto(s, types[syms[s].ty >> 4].flags & TF_NOPROTO == 0); }
     if d.kr && syms[s].kind == SK_FUNC {
         // clang: references to a function whose latest declaration is a
         // definition without a prototype have the type without prototype;

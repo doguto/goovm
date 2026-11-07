@@ -291,6 +291,12 @@ fn dt_note_proto(s: i64, proto: bool) {
     fn_proto.insert(s as u64, if proto { 1 } else { 2 });
 }
 
+fn fn_proto_known(s: i64) -> bool {
+    let r = fn_proto.get(s as u64);
+    if r { return true; }
+    return false;
+}
+
 fn func_prototyped(s: i64) -> bool {
     let r = fn_proto.get(s as u64);
     if r { return r == 1; }

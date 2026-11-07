@@ -379,7 +379,7 @@ recursive fn ex_val(n: u32) -> u32 {
     let saved = push_loc(visit_loc(n));
     let k = nkind(n);
     if k == N_INT { dbg_enumc(n); }
-    else if k == N_CAST { dev(EV_CAST, node_written(n), 0); }
+    else if k == N_CAST && !dbg_no_enum { dev(EV_CAST, node_written(n), 0); }
     let v = ex_val1(n);
     pop_loc(saved);
     return v;
@@ -549,7 +549,14 @@ recursive fn ex_cast(n: u32) -> u32 {
     }
     if ck == CK_FUNC2PTR || ck == CK_BUILTIN2PTR { return ex_lv(a).addr; }
     if ck == CK_NULL2PTR {
-        if nkind(a) != N_INT && has_side_effects(a) { ex_ignore(a); }
+        if nkind(a) != N_INT && has_side_effects(a) {
+            // clang does not visit the operand of a null pointer conversion
+            // (its casts and enumerators make no debug types)
+            let q0 = dbg_no_enum;
+            dbg_no_enum = true;
+            ex_ignore(a);
+            dbg_no_enum = q0;
+        }
         return c_null();
     }
     if ck == CK_TOVOID { ex_ignore(a); return NONE; }
