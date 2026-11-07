@@ -7,11 +7,12 @@ without `-g`, and the same IR after `opt -passes=mem2reg`. It is written in
 Goose and called from `goovm-llc` and `goovm-cc` (C++) and from `goosecc`
 (Goose) through two `export fn`s (`gir_codegen`, `gir_codegen_ex`).
 
-Milestone C1 brought floating-point-heavy C++ to the speed of clang -O0's
-code (Bullet 1.71x -> 0.97x, tramp3d-v4 1.18x -> 1.01x): small aggregates
-returned in registers no longer go through memory in ways that miss
-store-to-load forwarding, `is.fpclass` has fast paths, and the epilogue
-avoids `leave` (§14).
+Milestone C1 brought floating-point-heavy code to the speed of clang -O0's
+(§14; `NOTES.md` §11): small aggregates returned in registers no longer go
+through memory in ways that miss store-to-load forwarding, conversions break
+their false dependency on the destination, a GEP's base pointer is loaded in
+program order, `is.fpclass` has fast paths, and the epilogue is LLVM's
+`add rsp, n` instead of `leave`.
 
 Milestone A3 added what a debugger, an unwinder and a C++ program need:
 `.eh_frame` for every function with CFI exact at every instruction (§10),
@@ -202,8 +203,9 @@ rsp             16-byte aligned; dynamic allocas and call areas below
 
 Leaf functions (no calls, no dynamic stack, no inline asm) whose frame
 fits in the red zone have no `sub rsp`; frameless functions end with
-`pop rbp; ret`, others with `mov rsp, rbp; pop rbp; ret` or `lea rsp,
-[rbp-8n]; pop ...; pop rbp; ret` (never `leave`, §14).
+`pop rbp; ret`, others with `add rsp, n; pop ...; pop rbp; ret` as LLVM's
+(`mov rsp, rbp` / `lea rsp, [rbp-8k]` instead of the `add` when the body
+moves rsp; never `leave`, §14).
 
 ## 5. Deferred loads and addresses
 
@@ -540,9 +542,30 @@ unsigned: finite `b < inf`, infinite `b == inf`, normal `b - minnorm < inf -
 minnorm`, zero `b == 0`, subnormal `b - 1 < minnorm - 1` (inf and minnorm
 shifted likewise). Other masks and f80 keep the legacy lowering.
 
-**Epilogue.** Functions with a frame end with `mov rsp, rbp; pop rbp; ret`,
-not `leave; ret`: on the Sapphire Rapids host of the measurements, `leave`
+**False dependencies.** `cvtsi2sd/ss`, `cvtss2sd`, `cvtsd2ss` and
+`sqrtsd/ss` write only the low lanes of their destination and so wait for
+its previous value. The destination is zeroed first (`xorps x, x`, a
+dependency-breaking idiom) unless it is the operand itself; otherwise a
+conversion into a register that last held a loop-carried sum serializes
+the iterations (spectral-norm: `cvtsi2sd %eax, %xmm0` in a function called
+from an `addsd` loop over xmm0). LLVM breaks these dependencies only at -O1
+and above (BreakFalseDeps); its -O0 code avoids them or not by its register
+choice.
+
+**Load order.** A load deferred to a later user (§5) executes after the
+loads in between. For the base pointer of a GEP that is not the next
+instruction this reorders `a[i]` into "index, then pointer", which runs
+about 20% slower in linpack's daxpy loop than the program order (the loops
+are otherwise identical; measured in isolation at equal alignment) and
+saves nothing, because a GEP's base is a register: such loads are emitted at
+their position (`late_gep_base`).
+
+**Epilogue.** Functions with a frame end as LLVM's do, `add rsp, n; pop
+...; pop rbp; ret`, with `mov rsp, rbp` / `lea rsp, [rbp-8k]` only when the
+body moves rsp. On the Sapphire Rapids host of the measurements `leave`
 makes each return about 5 cycles slower in a chain of small calls (four
 nested calls of a 16-byte frame: 0.93 s per 10^8 chains with `leave`, 0.48 s
-with `mov rsp, rbp; pop rbp`, `add rsp, n; pop rbp` or `lea rsp, [rbp-8];
-pop rbx; pop rbp`). LLVM never emits `leave` on x86-64.
+with any of the other forms), and in deep recursion the `mov`/`lea` forms
+are as slow as `leave` (fibo 1.14x clang -O0 with them, 0.94x with `add`).
+The frame size is known when the epilogue is emitted (after the body);
+`emit_prologue` asserts that it has not changed.
