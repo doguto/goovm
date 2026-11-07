@@ -1,0 +1,4 @@
+ 16:59:26 up 34 min,  0 user,  load average: 1.63, 2.49, 2.10
+4
+model name	: Intel(R) Xeon(R) Processor @ 2.10GHz
+a3bf569 Merge C1: FP-heavy code at clang -O0 speed
