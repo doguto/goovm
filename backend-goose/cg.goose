@@ -226,7 +226,23 @@ fn lower_condbr(I: Inst, cur: u32, next: u32) {
         flags_comb = 0;
     }
     flags_id = RV_NONE;
-    if has_phi(I.b) || has_phi(I.c) {
+    let pb = has_phi(I.b);
+    let pc = has_phi(I.c);
+    if pb != pc {
+        // PHI moves on one edge only: branch straight to the other successor
+        // and do the moves on the fall-through path (a loop's back edge then
+        // costs one taken jump, not two)
+        phi_scratch();
+        if pc {
+            jcc_flags(true, I.b);
+            phi_moves(cur, I.c);
+            if I.c != next { jmp_block(I.c); }
+        } else {
+            jcc_flags(false, I.c);
+            phi_moves(cur, I.b);
+            if I.b != next { jmp_block(I.b); }
+        }
+    } else if pb {
         phi_scratch();
         let p, q = jcc_flags_fwd(false);
         phi_moves(cur, I.b);
