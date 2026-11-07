@@ -192,6 +192,153 @@ fn redirect(p: u32, e: u32, tg: u32) -> bool {
     return true;
 }
 
+// If-conversion of small triangles and diamonds (LLVM's
+// SpeculativelyExecuteBB and FoldTwoEntryPHINode): `condbr c, T, J` where T
+// is only reached from here, computes a few cheap values and branches to J
+// (or `condbr c, T, F` with T and F both such blocks branching to J) becomes
+// the hoisted instructions and one select per PHI of J whose incoming values
+// differ, and the branch goes straight to J. Only integer and pointer PHIs
+// (their select is a cmov); a branch that is hard to predict then costs
+// nothing. (build_cfg first.)
+let SPEC_MAX: u32 = 4;          // speculated instructions per conversion
+let SEL_MAX: u32 = 2;           // selects per conversion
+fn spec_op(I: Inst) -> bool {
+    let op: u32 = I.op;
+    if !(op >= GIR_ADD && op <= GIR_MUL || op >= GIR_AND && op <= GIR_BITCAST || op == GIR_GEP) { return false; }
+    return int_ty(I.ty) && bits_of(I.ty) <= 64;
+}
+// The number of instructions block b (only reached from a) would speculate,
+// or NIL if it cannot be.
+fn spec_block(b: u32, a: u32) -> u32 {
+    if b == a || b == 0 || b_fl[b] & (BF_LP | BF_DEAD) != 0 { return NIL; }
+    if p_start[b + 1] - p_start[b] != 1 || p_list[p_start[b]] != a { return NIL; }
+    let t = b_last[b];
+    if t == NIL || o_ins[t].op != GIR_BR { return NIL; }
+    var n: u32 = 0;
+    var i = b_first[b];
+    while i != t {
+        if !spec_op(o_ins[i]) { return NIL; }
+        n++;
+        if n > SPEC_MAX { return NIL; }
+        i = o_nxt[i];
+    }
+    return n;
+}
+// Moves block b's instructions but its terminator before instruction at.
+fn spec_hoist(b: u32, at: u32) {
+    let t = b_last[b];
+    var i = b_first[b];
+    while i != t {
+        let nx = o_nxt[i];
+        unlink(i);
+        link_before(at, i);
+        i = nx;
+    }
+}
+// Whether an instruction of block b (if on) but its terminator uses value v.
+fn spec_uses(b: u32, on: bool, v: u32) -> bool {
+    if !on { return false; }
+    let t = b_last[b];
+    var i = b_first[b];
+    var u = false;
+    while i != t {
+        each_slot(i) { s =>
+            if res(vget(i, s)) == v { u = true; }
+        };
+        i = o_nxt[i];
+    }
+    return u;
+}
+// In PHI i, the entries from p1 and p2 become one entry (v, a).
+fn phi_merge2(i: u32, p1: u32, p2: u32, v: u32, a: u32) {
+    let I = o_ins[i];
+    var n: u32 = 0;
+    var done = false;
+    for k in 0..I.c {
+        let p = o_ops[I.b + 2 * k + 1];
+        if p == p1 || p == p2 {
+            if done { continue; }
+            done = true;
+            o_ops[I.b + 2 * n] = v;
+            o_ops[I.b + 2 * n + 1] = a;
+        } else {
+            o_ops[I.b + 2 * n] = o_ops[I.b + 2 * k];
+            o_ops[I.b + 2 * n + 1] = p;
+        }
+        n++;
+    }
+    o_ins[i].c = n;
+}
+fn fold_selects() -> bool {
+    var any = false;
+    for a in rpo {
+        let t = b_last[a];
+        if t == NIL || o_ins[t].op != GIR_CONDBR || block_invoke(a) != NIL { continue; }
+        let x = o_ins[t].b;
+        let y = o_ins[t].c;
+        if x == y { continue; }
+        let nx = spec_block(x, a);
+        let ny = spec_block(y, a);
+        var J: u32 = NIL;
+        var px = a;     // J's predecessor on the true side
+        var py = a;
+        if nx != NIL && o_ins[b_last[x]].a == y {
+            J = y;
+            px = x;
+        } else if ny != NIL && o_ins[b_last[y]].a == x {
+            J = x;
+            py = y;
+        } else if nx != NIL && ny != NIL && o_ins[b_last[x]].a == o_ins[b_last[y]].a && nx + ny <= SPEC_MAX {
+            J = o_ins[b_last[x]].a;
+            px = x;
+            py = y;
+        }
+        if J == NIL || J == a || J == x && px == x || J == y && py == y || b_fl[J] & BF_LP != 0 { continue; }
+        // J's PHIs: one entry from each side; the differing ones become selects
+        var ns: u32 = 0;
+        var ok = true;
+        var i = b_first[J];
+        while i != NIL && o_ins[i].op == GIR_PHI {
+            let vx = phi_in(i, px);
+            let vy = phi_in(i, py);
+            if vx == NIL || vy == NIL { ok = false; break; }
+            if res(vx) != res(vy) {
+                if !int_ty(o_ins[i].ty) || bits_of(o_ins[i].ty) > 64 { ok = false; break; }
+                ns++;
+            }
+            i = o_nxt[i];
+        }
+        if !ok || ns > SEL_MAX { continue; }
+        // (before the compare that feeds the branch when it is right there,
+        // so that the compare sets the flags for the select)
+        let c = res(o_ins[t].a);
+        var at = t;
+        if is_inst(c) && o_nxt[c] == t && o_ins[c].op == GIR_ICMP && !spec_uses(x, px != a, c) && !spec_uses(y, py != a, c) {
+            at = c;
+        }
+        if px != a { spec_hoist(x, at); }
+        if py != a { spec_hoist(y, at); }
+        i = b_first[J];
+        while i != NIL && o_ins[i].op == GIR_PHI {
+            let vx = res(phi_in(i, px));
+            let vy = res(phi_in(i, py));
+            var v = vx;
+            if vx != vy {
+                v = new_inst(Inst { op: GIR_SELECT as! u8, sub: 0, flags: 0, ty: o_ins[i].ty, aux: 0, a: c, b: vx,
+                                    c: vy, dbg: o_ins[t].dbg });
+                link_before(t, v);
+            }
+            phi_merge2(i, px, py, v, a);
+            i = o_nxt[i];
+        }
+        // (the speculated blocks are unreachable now: remove_unreachable
+        // deletes them; their PHI entries in J are gone already)
+        to_br(t, J);
+        any = true;
+    }
+    return any;
+}
+
 // The whole simplification, until nothing changes (at most a few rounds).
 fn simplify_cfg() -> bool {
     var any = false;
@@ -216,6 +363,12 @@ fn simplify_cfg() -> bool {
             }
             ensure_cfg();
             if thread_phis() {
+                ch = true;
+                ensure_cfg();
+                remove_unreachable();
+            }
+            ensure_cfg();
+            if !opt_off("select") && fold_selects() {
                 ch = true;
                 ensure_cfg();
                 remove_unreachable();
