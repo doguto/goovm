@@ -21,6 +21,11 @@ and comdats, DWARF 5 debug information (two new files, `eh.goose` and
 `dwarf.goose`), with the bugs the tests and the gdb oracle found, the pain
 points and the measurements.
 
+Section 11 is milestone **C1**: floating-point-heavy code at the speed of
+clang -O0's (Bullet 1.69x -> 0.97x, tramp3d-v4 1.19x -> 1.02x): the causes
+found with their measured shares, the fixes, what was tried and dropped, the
+results and the pain points.
+
 v0 page contents:
 
 - the structure of the port;
@@ -886,8 +891,6 @@ comdat export in `gir_export.cpp`, module-asm symbol scanning in
    (`lv_first`/`lv_attr`, the group members of the ELF writer).
 ### Results
 
-### Results
-
 Correctness runs shared the 4-core VM with another agent's test runs; the
 timings were taken later on a quiet machine (load average 1).
 
@@ -1024,4 +1027,239 @@ tests/gdb_oracle.py --goovm $G -j3                            # clang -O0 -g vs 
 tests/gdb_oracle.py --goovm $G --unwind -j2                   # single-step unwinding check
 frontend-goose/build.sh /tmp/gcc && tests/run.py --goosecc /tmp/gcc/goosecc
 bench/backend/time_backend.py --goovm <A2 build> --goovm $G -n 11 $S/work/inputs-final/{gen-20000,spass,typeset}.bc
+```
+
+## 11. Milestone C1: floating-point-heavy code
+
+After A3, C programs and integer C++ ran at 0.95x to 1.05x clang -O0's
+time, but Bullet (C++ physics, float) took 1.73x and tramp3d-v4 (C++
+templates, double) 1.22x (`bench/results/final-2026-11-07/runtime-ctmark.md`).
+C1 found the causes, none of them in the FP arithmetic itself (goovm's
+`addss`/`ucomisd`/`cvtsi2sd` code was already as good as FastISel's), and
+fixed them in the allocator-aware lowerings, the call lowering and the
+epilogue (DESIGN.md §14). A screening of all 141 SingleSource benchmarks
+found two more FP causes (false dependencies, load order).
+
+### Method
+
+`perf record -e cpu-clock` (software events; the VM has no hardware
+counters) of the clang -O0 and the goovm build, compared per function, then
+the hottest functions' code side by side (`llvm-objdump -d`), `valgrind
+--tool=callgrind` instruction counts on a reduced tramp3d-v4 input, and
+microbenchmarks in assembly for the hypotheses that the code alone could
+not decide (epilogue forms, load orders). Shares were measured with builds
+that add the fixes one at a time, timed in interleaved rounds (best of 3
+per build, clang's build in the same rounds): the host's speed changes by
+up to 25% within an hour (other VMs on the machine), and some effects grow
+with it. tramp3d-v4's clang build took 13.3 s at one time and 16.1 s an
+hour later, and goovm's ratio was 1.04x in the fast state and 1.18x in the
+slow one (the 1.22x of the A3 report was measured in such a state).
+
+### Causes and their shares
+
+| # | cause | where | effect of the fix (goovm / clang -O0) |
+|---|---|---|---|
+| 1 | extractvalue of a returned `{<2 x float>, <2 x float>}` (Bullet's `btVector3`) copied the field lane by lane (4-byte moves) into its home; the 8-byte load of that home then missed store-to-load forwarding, twice per vector returned | Bullet | 1.694x -> 1.166x: 76% of the gap |
+| 2 | the round trip of such a call result through memory (return registers stored to the aggregate's home, each field loaded, stored again to the temporary) | Bullet | 1.166x -> 1.072x: 13.5% |
+| 3 | `load {<2 x float>, <2 x float>}, ptr %retval; ret` copied the aggregate into a home and loaded the return registers from it | Bullet | 1.072x -> 1.003x: 10% |
+| 4 | a 16-byte inline memcpy with one `movups` load of a temporary that two 8-byte stores had just written (copy assignment after a call): forwarding missed | Bullet | 0.996x -> 0.962x |
+| 5 | `leave` in the epilogue: about 5 cycles more per return in chains of small calls on this Sapphire Rapids host; functions byte-identical to clang's but for `leave` took 2x to 3.5x its time | tramp3d-v4 | 1.184x -> 1.013x: 95% of the gap |
+| 6 | `mov rsp, rbp` / `lea rsp, [rbp-8k]` before the pops (the first replacement of `leave`) are as slow as `leave` in deep recursion; LLVM's `add rsp, n` is not | fibo, ackermann, recursive, Towers, oopack | 1.14x -> 0.94x, 1.13x -> 1.02x, 1.10x -> 1.03x, 1.11x -> 1.00x, 1.07x -> 0.96x (tramp3d-v4 1.03x -> 1.05x) |
+| 7 | `cvtsi2sd`, `cvtss2sd`, `cvtsd2ss`, `sqrtsd` write only the low lanes of their destination and wait for its old value: in spectral-norm `cvtsi2sd %eax, %xmm0` waited for the caller's previous `addsd` into xmm0, serializing the `divsd` chain across calls | spectral-norm, fp-convert | 1.61x -> 0.52x, 1.52x -> 0.74x |
+| 8 | a pointer load deferred to its GEP ran after the index load (`a[i]`: index, then pointer), about 20% slower in linpack's daxpy loop than the program order | Linpack | 1.15x -> 0.95x |
+| 9 | `llvm.is.fpclass` (std::isnan) computed the whole FP class (2.9x clang's instructions in `std::isnan`) | tramp3d-v4 | not measurable (0.01% of its instructions) |
+
+Not causes: the FP arithmetic, compares (ucomis with its parity handling),
+int/FP and float/double conversions apart from 7, fneg/fabs (masks), libm
+calls (the same calls as clang's), xmm spills at calls (as in LLVM -O0,
+there are no callee-saved xmm registers), constant pools, the use of
+callee-saved registers (a build without them ran tramp3d-v4 and fibo at the
+same speed), the `mov rax, r11` before indirect calls, the operand order
+of compares.
+
+What is left: tramp3d-v4 runs at 1.01x to 1.07x depending on the host's
+state and goovm executes 2.3% fewer instructions than clang (callgrind). Its
+hottest remaining functions are byte-identical to clang's, only placed at
+other addresses, and take 1.7x the samples while other identical functions
+take 0.6x: code placement. clang's own build moves by the same amount with
+`-falign-functions=64` (0.944x of its default build). Shootout/methcall
+(C, 1.21x) is the same case and was 1.23x before C1.
+
+### Fixes
+
+1. **Call results defined in their return registers** (`ret_parts_fuse`,
+   abi.goose): when every use of an aggregate call result is an extractvalue
+   in its block that reads exactly one return-register part, the call gives
+   each extractvalue its value in that register (xmm0/xmm1, rax/rdx) and the
+   extractvalues emit nothing (`K_DONE`). The pre-pass counts extractvalue
+   uses per value in the spare byte of `VInfo` (now `nev`).
+2. **Allocator-aware extractvalue** of register-class fields: a load at the
+   field's width from the aggregate's memory (`lower_extractvalue_a`).
+3. **Deferred aggregate loads** into a `ret` or an extractvalue
+   (`agg_load_pend`, cg.goose).
+4. **Small memcpys in general-register moves**, 8/4/2/1 bytes, up to 32
+   bytes, as FastISel's `TryEmitSmallMemcpy`.
+5. **LLVM's epilogue** `add rsp, n; pop ...; pop rbp; ret` (`mov`/`lea rsp`
+   only when the body moves rsp); `emit_prologue` asserts that the frame
+   the epilogue assumed is unchanged.
+6. **`xorps x, x` before partial-write conversions and sqrt** into a
+   register that is not their operand.
+7. **A GEP's base pointer is not deferred** when the GEP is not the next
+   instruction (`late_gep_base`).
+8. **is.fpclass fast paths** for the masks of `isnan`, `isfinite`,
+   `isinf`, `isnormal`, zero and subnormal tests (`lower_isfpclass_a`).
+9. A conditional branch with PHI moves on one edge only branches straight
+   to the other successor (one taken jump per loop back edge instead of
+   two); no measurable effect on these programs.
+
+Tried and removed: constant-index GEPs of static allocas as frame addresses
+like the allocas (marked in the pre-pass, offsets fixed up after the frame
+layout; `movq %xmm1, -0x34(%rbp)` instead of `leaq -0x34(%rbp), %rax; movq
+%xmm1, (%rax)`). It shrank Bullet's `.text` by 0.6% but made no measurable
+run-time difference, and the extra pre-pass work cost 4% of the back-end's
+time on gen-20000 (1.058x the A3 back-end with it, 1.021x without). An
+indirect call through the callee's own register instead of r11 and a
+different operand order of `cmp` (the register operand loaded first, as
+clang does) made no difference either.
+
+### New tests
+
+`tests/ll/agg_returns` (hand-written IR with a C driver: the shapes the
+fusion accepts and rejects: fields in reverse order, a call between the call
+and its extractvalues, the same field twice, extractvalues in other blocks,
+a whole-aggregate use, a legacy-lowered instruction in between, integer and
+mixed parts with narrow integers, values that live across calls; aggregate
+loads returned from a frame temporary, through a pointer and with a store in
+between; extractvalue from loads, insertvalue chains, constants and of an i1
+field), `tests/ll/frame_geps` (GEPs of allocas: chains, negative offsets,
+PHIs, pointer compares, over-aligned and dynamic bases), `tests/cxx/03_fp_structs.cpp`
+(a btVector3-like class, std::complex, pairs, mixed structs, as clang lowers
+them), `tests/c/50_fp_classify.c` (special values of float and double
+through every classification macro, NaN with every predicate as value,
+branch and select, -0.0), `tests/c/51_fp_convert.c` (conversions at the
+limits of every width, float/double rounding, overflow and underflow, mixed
+arithmetic). `tests/run.py` runs `tests/ll/<name>/` programs: the IR files go
+through `opt` (verify or mem2reg) instead of clang; the reference build
+compiles them with clang -O0.
+
+### Results
+
+Raw data and the share measurements: `bench/results/c1-2026-11-07/`.
+
+**CTMark** (`tests/suite.py --corpus ctmark,ctmark-cxx --variants O0,cc -j 1
+--time-run 3`, best of 3, seconds; the A3 back-end, commit c96510d, measured
+an hour before in the same session):
+
+| program | clang -O0 | goovm C1 | C1 / clang | goovm-cc C1 | cc / clang | A3 / clang |
+|---|---:|---:|---:|---:|---:|---:|
+| sqlite3 | 3.651 | 3.698 | 1.01 | 3.676 | 1.01 | 1.03 |
+| SPASS | 13.414 | 13.324 | 0.99 | 13.289 | 0.99 | 1.03 |
+| ClamAV | 0.164 | 0.163 | 0.99 | 0.161 | 0.98 | 0.97 |
+| lencod | 9.275 | 9.112 | 0.98 | 9.136 | 0.98 | 1.01 |
+| mafft | 32.351 | 31.308 | 0.97 | 31.113 | 0.96 | 0.96 |
+| consumer-typeset | 0.134 | 0.128 | 0.95 | 0.128 | 0.95 | 0.94 |
+| 7zip | 12.296 | 11.751 | 0.96 | 11.900 | 0.97 | 0.98 |
+| Bullet | 16.587 | 16.071 | **0.97** | 16.119 | **0.97** | 1.69 |
+| kimwitu++ | 0.024 | 0.023 | 0.95 | 0.022 | 0.92 | 0.98 |
+| tramp3d-v4 | 16.949 | 17.327 | **1.02** | 17.178 | **1.01** | 1.19 |
+| geometric mean (clang >= 50 ms) | | | 0.983 | | 0.981 | 1.070 |
+
+tramp3d-v4 measured 1.01x to 1.07x over the day's runs of the same build
+(placement, see above).
+
+**FP-heavy SingleSource benchmarks** (interleaved best of 3, run time /
+clang -O0):
+
+| benchmark | A3 | C1 |
+|---|---:|---:|
+| BenchmarkGame/spectral-norm | 1.63 | 0.53 |
+| BenchmarkGame/n-body | 0.97 | 0.99 |
+| Linpack/linpack-pc | 1.14 | 0.98 |
+| Misc/fp-convert | 1.53 | 0.77 |
+| Misc/flops (all modules) | 0.93 | 0.44 |
+| Misc/flops-1 / -2 / -3 | 1.11 / 0.81 / 0.97 | 1.07 / 0.81 / 0.96 |
+| Misc/flops-4 / -5 / -6 / -7 / -8 | 0.97 / 0.74 / 1.00 / 1.01 / 0.96 | 0.17 / 0.23 / 0.25 / 0.26 / 0.23 |
+| Misc/mandel, mandel-2 | 1.10, 1.13 | 0.63, 1.00 |
+| Misc/matmul_f64_4x4 | 0.98 | 0.86 |
+| Misc/perlin | 0.99 | 0.86 |
+| Misc-C++/Large/ray | 1.14 | 0.96 |
+| CoyoteBench/fftbench | 1.40 | 0.91 |
+| SmallPT | 1.06 | 0.99 |
+
+With the build before the removal of the frame-address GEPs (no run-time
+difference), also: Polybench gemm 0.95 -> 0.94, cholesky 1.01 -> 0.99,
+fdtd-2d 1.02 -> 0.99, jacobi-2d 1.03 -> 0.99, seidel-2d 1.01 -> 1.00,
+floyd-warshall 1.00 -> 1.00; Misc fbench 1.01 -> 0.99, ffbench 0.97 -> 0.98,
+oourafft 1.01 -> 0.99, whetstone 0.99 -> 0.99; CoyoteBench almabench 0.99 ->
+0.97, huffbench 1.01 -> 1.02; Stanford FloatMM 1.04 -> 1.01;
+partialsums 1.05 -> 1.05; sphereflake 1.03 -> 0.99. The flops-4..8 and
+spectral-norm results beat clang -O0 because its code has the same false
+dependencies (cause 7), avoided or not by its register choice.
+
+**bench/codequal** (`PER_KERNEL=1 bench/codequal/run.sh DIR 5 2`): 1.03x ->
+0.99x llc -O0's time; `.text` 2,725 -> 2,786 bytes (1.08x llc's; `add rsp,
+n` is 4 bytes where `leave` was 1, and the `xorps` before conversions).
+
+**Compile speed** (`bench/backend/time_backend.py -n 11`, best of 11, ms):
+
+| input | A3 back-end | C1 back-end | C1 / A3 |
+|---|---:|---:|---:|
+| gen-20000.bc | 223.3 | 228.0 | 1.021 |
+| spass.bc | 12.0 | 12.2 | 1.017 |
+| tramp3d-v4 | 26.7 | 27.3 | 1.022 |
+
+(The exporter is unchanged.) An interleaved best of 31 on gen-20000 gives
+1.021x; with the frame-address GEPs it was 1.058x, which is why they were
+removed.
+
+**Correctness** (final build, commit 6690a17): `tests/suite.py --variants
+O0,g,mem2reg,cc,cc-g --verify-dwarf` over all corpora (two runs of `-j 1`
+side by side: the C corpora in 5,583 s, CTMark and the C++ corpora in
+4,066 s): 1,921 tests, 1,915 that pass with plain clang -O0, no failure, no
+unsupported input, no fallback in any variant; `llvm-dwarfdump --verify`
+passed on all 5,266 objects of the `g` and `cc-g` variants.
+`tests/run.py`: 116/116 (57 programs: 51 in `c/`, 3 in `cxx/`, the mixed
+program with its four variants, 2 in `ll/`). goosecc, built from the tree
+with `frontend-goose/build.sh` (no change in `frontend-goose/`): `tests/run.py
+--goosecc` 102/102, `tests/suite_goosecc.py --corpus ctmark --variants O0,g`
+6/6 in both variants. `tests/gdb_oracle.py --corpus c`: 48 of 51 transcripts match clang -O0 -g
+(723 stops); the three others (`40_varargs_fp`: the `va_end` line, `41_misc`:
+the VLA's location list and label differences, as in §10, and the new
+`50_fp_classify`: stepping out of a `switch` that returns) differ in the same
+blocks with the A3 back-end. `--unwind --corpus c`: 51/51 programs, 443,090
+instructions single-stepped, no mismatch (the new epilogue's `add rsp, n`
+and pops included).
+
+### Goose pain points
+
+1. **A cast of an untyped constant to the field's type is "redundant"**:
+   `vi[e].kind = K_DONE as! u8;` (a `let K_DONE = 5;` stored into a `u8`
+   field) gives `warning: redundant `as! u8`: K_DONE is 5, which fits u8
+   here`. Helpful once known: the named constants are untyped literals.
+2. **The `u32` against `i64` comparison is implicit, the cast is noise**:
+   `sc as i64 > lim` with `sc: u32` gives `warning: redundant `as i64`: a u32
+   converts to i64 implicitly here`, while the same comparison against a
+   `u64` is an error (§8, pain point 2): which mixes are implicit still has
+   to be learned case by case.
+3. **The loop index of `for x, i in xs` is `i64`**, so the part number in
+   `ret_parts_fuse` needs `q as! u32` before it can index a bit mask (§5,
+   pain point 7, still there).
+Not Goose: this session's sandbox refuses shell commands with loops,
+`awk` or computed program names, so every per-file step became a small
+script in the scratch directory.
+
+### Rebuild and reproduce (C1)
+
+```bash
+S=/tmp/claude-0/-home-user-goovm/593b2907-8413-508c-8bdb-c68ef6e66f6e/scratchpad   # this session's scratch
+GOOSE=$S/work/goose-build/goose GOOSE_STDLIB=$S/src/goose/stdlib JOBS=2 backend-goose/build.sh build
+G=build/tools/goovm-llc/goovm-llc; C=build/tools/goovm-cc/goovm-cc
+tests/run.py --goovm $G -j2                                   # C, C++, mixed and IR programs
+tests/suite.py --goovm $G --cc $C --variants O0,g,mem2reg,cc,cc-g --verify-dwarf -j2 --report suite.md
+tests/suite.py --goovm $G --cc $C --corpus ctmark,ctmark-cxx --variants O0,cc -j 1 --time-run 3 --report rt.md
+PER_KERNEL=1 GOOVM=$G TPDE=$S/work/a2/tpde-llc bash bench/codequal/run.sh /tmp/cq 5 2
+python3 bench/backend/time_backend.py --goovm <A3 build> --goovm $G -n 11 \
+    $S/work/inputs-final/{gen-20000,spass}.bc <tramp3d-v4 -O0 bitcode>
+frontend-goose/build.sh /tmp/gcc && tests/run.py --goosecc /tmp/gcc/goosecc -j2
+# profiles and microbenchmarks of this milestone: $S/work/c1/{prof.sh,cmp.py,dis.py,tround.py,tsuite.py,tbe.py,t/}
 ```

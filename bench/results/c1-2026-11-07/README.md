@@ -15,6 +15,7 @@ directory of the session (`.../scratchpad/work/c1`).
 | `screening-singlesource.md` | all 141 SingleSource benchmarks with an intermediate C1 build (after the epilogue fix, before the false-dependency and load-order fixes), best of 1: the screening that found causes 7 and 8 |
 | `epilogue-forms.md` | `mov rsp, rbp` / `lea rsp, [rbp-8k]` epilogues (column O0) against LLVM's `add rsp, n` (column E), interleaved best of 3 |
 | `codequal-before-c1.md`, `codequal.md` | `bench/codequal/run.sh DIR 5 2` with `PER_KERNEL=1`, A3 and C1 back-ends |
+| `suite-c-corpora.md`, `suite-ctmark-cxx-corpora.md` | the correctness run of the final build: all corpora, variants O0, g, mem2reg, cc, cc-g, `--verify-dwarf` |
 | `compile-speed.md` | `bench/backend/time_backend.py -n 11` and an interleaved best of 31 of the back-end phase |
 
 ## Shares of Bullet's gap (builds adding the fixes one at a time)

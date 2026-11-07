@@ -1,0 +1,71 @@
+c/01_int_widths                                         same  stops= 12 469 lines
+c/02_shifts                                             same  stops= 13 564 lines
+c/03_divrem                                             same  stops= 20 577 lines
+c/04_compare                                            same  stops=  9 238 lines
+c/05_loops                                              same  stops= 16 706 lines
+c/06_recursion                                          same  stops= 18 352 lines
+c/07_arrays                                             same  stops= 12 429 lines
+c/08_structs                                            same  stops= 10 338 lines
+c/09_pointers                                           same  stops=  9 510 lines
+c/10_strings                                            same  stops=  8 191 lines
+c/11_switch                                             same  stops= 29 606 lines
+c/12_globals                                            same  stops=  9 146 lines
+c/13_funcptr                                            same  stops= 26 811 lines
+c/14_varargs                                            same  stops=  8 413 lines
+c/15_memops                                             same  stops=  8 330 lines
+c/16_manyargs                                           same  stops= 10 186 lines
+c/17_char_short                                         same  stops= 13 463 lines
+c/18_logic                                              same  stops= 10 635 lines
+c/19_bitops                                             same  stops=  9 232 lines
+c/20_hash_rng                                           same  stops= 17 373 lines
+c/21_sort                                               same  stops= 32 798 lines
+c/22_lists_trees                                        same  stops= 17 368 lines
+c/23_matrix                                             same  stops= 17 377 lines
+c/24_sieve_numbers                                      same  stops= 16 393 lines
+c/25_bigint                                             same  stops= 19 423 lines
+c/26_expr_parser                                        same  stops= 19 392 lines
+c/27_abs_minmax                                         same  stops=  7 153 lines
+c/28_unions_bitfields                                   same  stops=  5 105 lines
+c/29_exit_code                                          same  stops=  5 87 lines
+c/30_abi_narrow                                         same  stops= 11 292 lines
+c/31_struct_byvalue                                     same  stops=  8 248 lines
+c/32_phi_patterns                                       same  stops= 16 363 lines
+c/33_linkage                                            same  stops=  3 49 lines
+c/34_volatile_mixed                                     same  stops=  6 273 lines
+c/35_callbacks_stack                                    same  stops= 11 243 lines
+c/36_inline_asm                                         same  stops=  6 108 lines
+c/37_float                                              same  stops= 11 332 lines
+c/38_aggregates                                         same  stops=  8 181 lines
+c/39_int128                                             same  stops= 10 217 lines
+c/40_varargs_fp                                         diff  stops= 12 6 differing blocks
+  replace: clang ['#0  sum (n=9) at 40_varargs_fp.c:27']
+          goovm ['#0  sum (n=9) at 40_varargs_fp.c:28']
+  delete: clang ['ap = {{gp_offset = 48, fp_offset = 160, overflow_arg_area = , reg_save_area = }}', 'aq = {{gp_offset = 8, fp_offset = 48, overflow_arg_area = , reg_save_area = }}', 's = 23.6875', 'first = -1515870811']
+          goovm []
+  insert: clang []
+          goovm ['--- next', '#0  main () at 40_varargs_fp.c:43', '43\t    say("%d %s %.3f %Lg %c %ld %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f\\n", 1, "two", 3.0, 4.0L, \'5\', 6L, 7.0,', 'p = {x = 1.5, y = 4}']
+c/41_misc                                               diff  stops= 12 9 differing blocks
+  replace: clang ['a = <optimized out>']
+          goovm ['a =']
+  replace: clang ['off = {11, 24}']
+          goovm ['off = {14, 31}']
+  replace: clang ['off = {11, 24}']
+          goovm ['off = {14, 31}']
+c/42_vectors                                            same  stops=  7 257 lines
+c/43_atomics                                            same  stops=  8 208 lines
+c/44_frames                                             same  stops= 15 3329 lines
+c/45_ra_widths                                          same  stops=  8 381 lines
+c/46_ra_pressure                                        same  stops= 16 684 lines
+c/47_ra_control                                         same  stops= 27 544 lines
+c/48_ra_special                                         same  stops= 16 349 lines
+c/49_switch_tables                                      same  stops= 40 779 lines
+c/50_fp_classify                                        diff  stops= 49 21 differing blocks
+  replace: clang ['#0  main () at 50_fp_classify.c:113']
+          goovm ['#0  kind (k=2) at 50_fp_classify.c:52', '#1  main () at 50_fp_classify.c:113']
+  replace: clang ['#0  kind (k=2) at 50_fp_classify.c:52']
+          goovm ['#0  kind (k=2) at 50_fp_classify.c:60']
+  replace: clang ['#0  kind (k=2) at 50_fp_classify.c:55', '55\t    case FP_ZERO: return "zero";']
+          goovm ['#0  fvalue (x=0) at 50_fp_classify.c:67', '67\t    return isnan(x) + 2 * isinf(x) + 4 * isfinite(x) + 8 * isnormal(x) + 16 * !!signbit(x)']
+c/51_fp_convert                                         same  stops= 20 1422 lines
+
+48/51 transcripts match (723 stops)
