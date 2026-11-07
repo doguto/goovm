@@ -14,7 +14,8 @@ file.c -o file.o` produces objects that link with clang-20's and glibc.
   values, the SysV calling convention, globals, static data and
   relocations, builtins, inline assembly, debug locations).
 - [NOTES.md](NOTES.md): what writing it in Goose was like (errors, workarounds),
-  and in section 10 what B3's speed work met in the language and runtime.
+  in section 10 what B3's speed work met in the language and runtime, and
+  in section 11 what B4's header cache did.
 
 Status (milestone B3):
 
@@ -98,6 +99,34 @@ goosecc: preprocess 19718 us, parse+sema 16713 us, lowering 10615 us, back-end 7
 The target is x86-64 Linux (SysV ABI, ELF, glibc) with clang-20's system
 include directories. Errors go to stderr as `file:line:col: error: ...`,
 and the exit status is 1 if there were any.
+
+### The header cache (B4)
+
+goosecc keeps the preprocessing of headers in a persistent cache and
+replays it when nothing it depends on has changed; the outputs are
+byte-identical with the cache cold, warm or disabled (DESIGN.md, section
+10, has the design and the argument).
+
+| option / variable | what |
+|---|---|
+| `-fno-header-cache` | neither read nor write the cache for this compile (`-fheader-cache`: the default) |
+| `GOOSECC_CACHE=dir` | the cache directory (default `~/.cache/goosecc`; `off`, `none`, `0` or empty: no cache) |
+| `GOOSECC_CACHE_SIZE=n` | its size limit, with K, M or G (default 2G); the oldest files are deleted beyond it |
+| `GOOSECC_CACHE_QUOTED=1` | every `"..."` include of the program's files is cached at every compile (the default caches `<...>` includes from the program's files, and the main file's `"..."` includes from its second compile on) |
+| `--cache-stats` | print the lookups, hits, misses, recordings, bytes written, rejected entries, and where a replay's time went |
+| `--pp-state-hash`, `--pp-state-hash=v` | print a checksum of the preprocessor's whole state (with `=v`, per array): what `tests/cache_check.py` compares |
+
+```
+$ goosecc -c --cache-stats libclamav_table.c ...
+goosecc: header cache: 6 lookups, 6 hits, 0 misses; 0 recorded (0 bytes written), 0 too small, 0 not cacheable, 0 corrupt, 0 write errors, 0 volatile; replay 711 us (read 116, check 77, append 222, commit 70), saving 0 us
+```
+
+Headers changed less than 2 seconds before a compile are not recorded
+(their stat cannot be trusted yet); units that print a diagnostic or
+expand `__DATE__`/`__TIME__` never are. The cache tolerates concurrent
+compiles (files are renamed into place, manifests appended to), corrupt
+or truncated files (checksums; they are ignored or deleted) and files of
+other builds of goosecc (never read).
 
 ## Tests
 
