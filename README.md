@@ -18,6 +18,15 @@ LLVM のコンパイル速度を、新しい言語 [Goose](https://github.com/aa
 - [検証結果：フェーズ0〜2（2026-11-06）](docs/research/2026-11-06-results.md)
 - [Goose で作ったコンパイラの実装結果（2026-11-07）](docs/research/2026-11-07-goose-compilers.md)
 
+## マイルストーン B5：goosecc のデバッグ情報
+
+`goosecc -g` が、clang-20 `-O0 -g` と同じ DWARF 5 を出すようになりました。行テーブルに加えて、変数、引数、型、スコープ、ラベル、大域変数（関数内の static 変数を含む）、文字列リテラルです。型はビットフィールド、VLA、列挙型、関数ポインタ、ベクトル、複素数、`_Atomic`、typedef（書かれたとおりの名前）を含めてすべて出します。DIE は goosecc 自身の AST と型から作り、GIR の `dies`/`dattrs` 表でバックエンドに渡します。バックエンド、GIR、`tools/` は変えていません。設計は [`frontend-goose/DESIGN.md`](frontend-goose/DESIGN.md) の §11、記録は [`frontend-goose/NOTES.md`](frontend-goose/NOTES.md) の12節です。
+
+- **clang との突き合わせ**（`tests/dwarf_diff.py`）：コーパスの C ファイル2,357本のうち、両方がコンパイルできる2,288本で、正規化した `llvm-dwarfdump --debug-info` が2,231本（97.5%）で clang と同一でした。さらに13本は、フレーム上の位置の書き方だけが違います。残る44本の差は、すべて生成コードの違いから来ます（clang が const 変数の読み出しを畳み込む、`always_inline` を `-O0` でもインライン展開する、など）。CTMark の C ファイルでは、両方がコンパイルできる324本のうち316本が同一です。goosecc の `-g` オブジェクト2,288個は、すべて `llvm-dwarfdump --verify` を通ります。
+- **gdb での比較**（`tests/gdb_oracle.py --goosecc`）：GDB_SUMMARY_JA
+- **速さ**：BENCH_SUMMARY_JA
+- **回帰なし**：REGRESSION_SUMMARY_JA
+
 ## 現在の状態（マイルストーン A3）
 
 A3 で、Goose 版バックエンドの出力がデバッガと例外処理で使えるようになり、C++ もコンパイルできるようになりました。設計は [`backend-goose/DESIGN.md`](backend-goose/DESIGN.md) の §9〜§12、記録は [`backend-goose/NOTES.md`](backend-goose/NOTES.md) の10節です。

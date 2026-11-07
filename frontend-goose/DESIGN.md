@@ -1209,9 +1209,22 @@ clang's visits, not goosecc's code:
   of an object) and goosecc's lowering does not fold is lowered as
   before, but neither it nor the arm that cannot run records anything
   (`dbg_dead`), as clang emits neither;
-- a function referenced through a type without prototype first gets a
-  variadic `llvm::Function`, which its definition replaces at the end of
-  the module (module order, 11.3);
+- a `switch` whose condition clang folds emits only the statements that
+  run, when clang's `FindCaseStatementsForValue` can collect them (from
+  the case to a `break` at its level, nothing skipped that they may
+  need): `sw_fold` is a port of it, and the condition, the case labels
+  and the other statements record nothing;
+- after an `if` whose arms both end in a jump, clang deletes the empty
+  end block and has no insertion point, so it emits nothing up to the
+  next label (`EmitStmt`); goosecc lowers those statements into a block
+  without predecessors, quietly (`dbg_noins`);
+- `int + pointer`, which the AST holds pointer first, records its
+  operands' events in clang's (source) order;
+- a function referenced through a declaration without prototype first
+  gets a variadic `llvm::Function`, which its definition replaces at the
+  end of the module (module order, 11.3); a reference after a K&R
+  definition has a type without prototype (C99 DR 316) but its
+  declaration's type has one, so it does not;
 - the blocks the entry does not reach make no scopes and their labels are
   dropped (LLVM's `UnreachableBlockElim` runs at -O0).
 
@@ -1242,8 +1255,9 @@ subprogram, or the enclosing record of an unnamed member). Per function,
 `function_dies` builds LLVM's LexicalScopes from the instructions' debug
 locations (a scope per location's scope, enclosing scopes first, in
 first-use order; `#line` file changes are transparent lexical block
-files), puts the variables (the frame-indexed ones first, parameters by
-argument number) and labels in their scopes, and flattens scopes without
+files), puts the variables (the frame-indexed ones first, as LLVM's
+`MachineFunction` table holds them: allocas and byval parameters;
+parameters by argument number) and labels in their scopes, and flattens scopes without
 variables, as `DwarfCompileUnit::createScopeChildrenDIE` does. Most
 attribute values are added at the end, as LLVM's
 `finishSubprogramDefinitions` and `finishEntityDefinitions` add them,
@@ -1288,6 +1302,9 @@ differently, not from the debug information:
   an array bound that is an address difference;
 - **clang makes a constant-sized array where goosecc makes a VLA** (a
   `const int` bound);
+- a static function that only code clang leaves out (11.2) refers to is
+  still emitted by goosecc, and gets its subprogram at the end of the
+  unit; clang emits neither (no corpus file has one);
 - **locations**: a variable that clang returns in place (NRVO) or a VLA
   has a location list in clang (`DW_OP_breg`), a frame location in
   goosecc; clang drops the variable of an empty struct returned in place;
