@@ -696,6 +696,7 @@ fn lower_cast_a(I: Inst, j: u32) {
         let okm, m = ra_mem_opnd(I.a, 0);
         let xd = if okm { ra_xdef(j) } else { 0 };
         if okm {
+            xorps_rr(xd, xd);   // (cvt* writes the low lanes only: no dependency on xd's old value)
             if op == GIR_FPEXT { cvtss2sd_m(xd, m); } else { cvtsd2ss_m(xd, m); }
             ra_xset(j, xd);
             return;
@@ -703,6 +704,7 @@ fn lower_cast_a(I: Inst, j: u32) {
         let xs = ra_xmm(I.a);
         var x = ra_xreuse(I.a);
         if x == 32 { x = ra_xdef(j); }
+        if x != xs && op != GIR_BITCAST { xorps_rr(x, x); }
         if op == GIR_FPEXT { cvtss2sd(x, xs); } else if op == GIR_FPTRUNC { cvtsd2ss(x, xs); } else if x != xs { movaps_rr(x, xs); }
         ra_xset(j, x);
         return;
@@ -727,8 +729,10 @@ fn lower_cast_a(I: Inst, j: u32) {
         if sb == 32 && sgn || sb == 64 && sgn {
             let okm, m = ra_mem_opnd(I.a, sb / 8);
             let xd = ra_xdef(j);
+            let rs: u32 = if okm { 32 } else { ra_gpr(I.a, false) };
+            xorps_rr(xd, xd);
             if okm { cvtsi2s_m(dbl, wq(sb), xd, m); }
-            else { cvtsi2s(dbl, wq(sb), xd, ra_gpr(I.a, false)); }
+            else { cvtsi2s(dbl, wq(sb), xd, rs); }
             ra_xset(j, xd);
             return;
         }
@@ -738,6 +742,7 @@ fn lower_cast_a(I: Inst, j: u32) {
             let t = ra_temp();
             if sgn { sign_ext_into(t, rs, sb); } else { mov_rr64(t, rs); }
             let xd = ra_xdef(j);
+            xorps_rr(xd, xd);
             cvtsi2s(dbl, 1, xd, t);
             ra_xset(j, xd);
             return;
@@ -747,6 +752,7 @@ fn lower_cast_a(I: Inst, j: u32) {
         let t = ra_temp();
         let t2 = ra_temp();
         let xd = ra_xdef(j);
+        xorps_rr(xd, xd);
         test_rr64(rs, rs);
         let neg = jcc_fwd8(CC_S);
         cvtsi2s(dbl, 1, xd, rs);
@@ -1253,6 +1259,7 @@ fn lower_funary_a(I: Inst, j: u32) {
         let okm, m = ra_mem_opnd(I.a, 0);
         let xd = if okm { ra_xdef(j) } else { 32 };
         if okm {
+            xorps_rr(xd, xd);
             sse_arith_m(0x51, dbl, xd, m);
             ra_xset(j, xd);
             return;
@@ -1260,6 +1267,7 @@ fn lower_funary_a(I: Inst, j: u32) {
         let xs = ra_xmm(I.a);
         var x = ra_xreuse(I.a);
         if x == 32 { x = ra_xdef(j); }
+        if x != xs { xorps_rr(x, x); }
         sse_arith(0x51, dbl, x, xs);
         ra_xset(j, x);
         return;
