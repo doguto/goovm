@@ -133,7 +133,7 @@ byte-identical with the cache cold, warm or disabled (DESIGN.md, section
 | option / variable | what |
 |---|---|
 | `-fno-header-cache` | neither read nor write the cache for this compile (`-fheader-cache`: the default) |
-| `GOOSECC_CACHE=dir` | the cache directory (default `~/.cache/goosecc`; `off`, `none`, `0` or empty: no cache) |
+| `GOOSECC_CACHE=dir` | the cache directory (default `~/.cache/goosecc`; `off`, `none`, `0` or empty: no cache; a relative path is taken from each compile's working directory) |
 | `GOOSECC_CACHE_SIZE=n` | its size limit, with K, M or G (default 2G); the least recently used files are deleted beyond it |
 | `GOOSECC_CACHE_QUOTED=1` | every `"..."` include of the program's files is cached at every compile (the default caches `<...>` includes from the program's files, and the main file's `"..."` includes from its second compile on) |
 | `--cache-stats` | print the lookups, hits, misses, recordings, bytes written, rejected entries, and where a replay's time went |
@@ -331,19 +331,21 @@ status as the run without the cache:
 
 | corpus | files | identical | runs | lookups | hits | lookups, every `"..."` a unit | hits |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| torture | 1708 | 1708 | 32452 | 4730 | 3739 | 4934 | 3819 |
+| torture | 1708 | 1708 | 32452 | 4730 | 3736 | 4934 | 3820 |
 | unit | 182 | 182 | 3458 | 4109 | 3175 | 4088 | 3078 |
 | regress | 37 | 37 | 703 | 700 | 586 | 700 | 586 |
 | bench | 102 | 102 | 1938 | 5810 | 3592 | 6064 | 3604 |
-| ctmark | 328 | 328 | 6232 | 34129 | 21820 | 36435 | 20134 |
-| **total** | 2357 | 2357 | 44783 | 49478 | 32912 | 52221 | 31221 |
+| ctmark | 328 | 328 | 6232 | 34124 | 21818 | 36438 | 20134 |
+| **total** | 2357 | 2357 | 44783 | 49473 | 32907 | 52224 | 31222 |
 
 The last two columns are a second run with `GOOSECC_CACHE_QUOTED=1`
 (also 2,357 of 2,357 identical). In both, no warm2 run recorded
-anything.
+anything. (The shared runs' counts vary slightly from one run to the
+next: the parallel workers fill the shared cache in another order.)
 
 With one cache filled by `-E` and `-fsyntax-only` compiles of every file
-(359 MB), the front-end oracles give what they gave in B3: `cmp_E.py`
+(358 MB; about three quarters of those compiles' lookups hit), the
+front-end oracles give what they gave in B3: `cmp_E.py`
 2,357 of 2,357 token streams identical to clang's, `cmp_syntax.py` no
 false error and every clang error found, `layout_check.py` 2,289 files
 and 834,000 assertions without a mismatch, `cmp_ast.py` 2,289 files and
