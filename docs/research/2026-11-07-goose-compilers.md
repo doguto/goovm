@@ -14,7 +14,7 @@
 |---|---|---|
 | **Goose 製バックエンド** (`backend-goose/`) | 次をすべて扱う。clang `-O0` が C/C++ から出す LLVM IR、レジスタ割り当て、DWARF 5、`.eh_frame`、C++ の例外、comdat | Goose 約9,700行 |
 | **`goovm-cc`** (`tools/goovm-cc/`) | clang のフロントエンドを同じプロセス内で動かし、IR を Goose 製バックエンドへ直接渡す。`clang -c` の代わりにそのまま使える | C++ 約5,300行（LLVM IR から GIR への変換と DWARF の構築を含む） |
-| **`goosecc`** (`frontend-goose/`) | LLVM を一切使わない C コンパイラ。前処理・構文解析・型検査・GIR 生成を Goose で書き、同じプロセスで Goose 製バックエンドを呼ぶ | Goose 約20,400行（手書き）＋約6,100行（生成） |
+| **`goosecc`** (`frontend-goose/`) | LLVM を一切使わない C コンパイラ。前処理・構文解析・型検査・GIR 生成を Goose で書き、同じプロセスで Goose 製バックエンドを呼ぶ | Goose 約23,000行（手書き。B5 の DWARF を含む）＋約6,100行（生成） |
 
 **正しさ：** 次の4つが、どれも clang と同じ結果になった。
 

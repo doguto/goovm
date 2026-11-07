@@ -324,7 +324,36 @@ the reasons of DESIGN.md 11.6:
 | an empty struct or a returned (NRVO) variable: clang drops it or gives it a location list | 3 |
 | clang makes a constant array where goosecc makes a VLA (`const int` bound) | 2 |
 
-**gdb.** GDB_RESULTS
+**gdb.** `tests/gdb_oracle.py --goosecc --corpus c,sample,ctmark -j 2`:
+79 C programs (the 49 of `tests/c`, 24 llvm-test-suite programs, the six
+CTMark C programs with their inputs), 1,458 stops, at each `bt`, `info
+args`, `info locals`, `ptype` and `print` of every argument and local
+(`print *` of struct pointers), two `next` and a `step`:
+
+| | programs | identical transcripts |
+|---|---:|---:|
+| `tests/c` | 49 | 31 |
+| sample | 24 | 12 |
+| CTMark | 6 | 2 |
+| **total** | 79 | **45** |
+
+The transcripts that differ do so where the two builds stop at different
+places, not in what gdb shows of the program's data: aligning the stops
+by position (function, file and line), 6,859 of clang's 7,242 stops have
+a goosecc stop at the same place, and there the `ptype` of every variable
+both list is the same (6,789 of 6,790; the exception is the `const
+int`-sized array that goosecc makes a VLA, 11.6) and so are 7,508 of
+7,588 printed values (the others are uninitialized stack or heap
+contents, which the two frame layouts leave different, or a `next` that
+ends on another instruction of the same line). 32 of the 34 differing
+transcripts have stops at different positions: the line table, which B5
+did not change (the line rows of the `-g` objects are B4's, checked
+below), differs from clang's where the code does, e.g. goosecc gives the
+branch out of a `then` block the line of its `}`, which makes one more
+stop for `next`; and once one stop differs, the rest of the session
+follows another path. The other two differ in a string read past its
+end from an uninitialized buffer, and in the variable of an empty struct
+that clang drops (NRVO).
 
 **Cost.** BENCH_RESULTS
 

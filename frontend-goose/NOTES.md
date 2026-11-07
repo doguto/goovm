@@ -558,11 +558,12 @@ section 1 again.
 
 ## 12. Milestone B5: debug information
 
-B5 added `gen_dwarf.goose` (1,900 lines with comments: the recording,
+B5 added `gen_dwarf.goose` (1,850 lines with comments: the recording,
 the replay of clang's emission order, the metadata and DIE builder),
-`dtype.goose` (650 lines: written types, side tables, the printer of
-`__PRETTY_FUNCTION__`), about 400 lines of hooks in the parser and the
-lowering, and `tests/dwarf_diff.py`. The work was mostly finding out what
+`dtype.goose` (610 lines: written types, side tables, the printer of
+`__PRETTY_FUNCTION__`), about 800 lines in the parser and the lowering
+(hooks, scopes, the port of clang's folded-switch analysis), and
+`tests/dwarf_diff.py`. The work was mostly finding out what
 clang and LLVM do (DESIGN.md, section 11); the language was in the way
 less than in B2. What it was like:
 
