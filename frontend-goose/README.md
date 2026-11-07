@@ -149,7 +149,10 @@ Headers changed less than 2 seconds before a compile are not recorded
 expand `__DATE__`/`__TIME__` never are. The cache tolerates concurrent
 compiles (files are renamed into place, manifests appended to), corrupt
 or truncated files (checksums; they are ignored or deleted) and files of
-other builds of goosecc (never read).
+other builds of goosecc (never read). The checksums guard against
+damage, not against tampering: whoever can write to the cache directory
+can change what goosecc compiles, so it should be private (as
+`~/.cache/goosecc` is).
 
 ## Tests
 
