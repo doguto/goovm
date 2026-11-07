@@ -14,9 +14,33 @@ file.c -o file.o` produces objects that link with clang-20's and glibc.
   values, the SysV calling convention, globals, static data and
   relocations, builtins, inline assembly, debug locations).
 - [NOTES.md](NOTES.md): what writing it in Goose was like (errors, workarounds),
-  and in section 10 what B3's speed work met in the language and runtime.
+  in section 10 what B3's speed work met in the language and runtime, and
+  in section 11 what B4's header cache did.
 
-Status (milestone B3):
+Status (milestone B4):
+
+- goosecc keeps the preprocessing of headers in a persistent cache
+  (`src/hcache.goose`; DESIGN.md, section 10) and replays it exactly:
+  with the cache cold, warm or disabled, `-E`, the diagnostics, the AST
+  dump, the layout check and the objects (with and without `-g`) are
+  byte-identical over the 2,357 corpus files (44,783 runs,
+  `tests/cache_check.py`) and in 17 adversarial situations
+  (`tests/cache_adversarial.py`); the oracles and the compiler test suite
+  pass with a warm cache.
+- Over CTMark's 316 C files, a warm cache takes `goosecc -c` from 1.93 s
+  to 1.56 s, 1.22 times faster than tcc (1.90 s; faster on 277 of the
+  316 files) and 10.6 times faster than `clang-20 -O0 -c` (16.5 s).
+  Preprocessing goes from 900 to 518 ms. A first build with an empty
+  cache already takes 1.75 s, since later files replay what earlier ones
+  recorded; the cache then holds 116 MB.
+- The target of 1.5 times tcc is not reached: what remains is the
+  program's own code (parsing 279 ms, lowering and the back-end 136 ms
+  each), the process (1.5 ms per file: start-up, the runtime's data
+  stack regions, exit: 471 ms) and the replays themselves. On
+  sqlite3.c, whose own code is most of it, tcc stays ahead (45.5 ms
+  against 32.0 ms).
+
+Status at milestone B3:
 
 - `goosecc -c` is faster than TinyCC over the 284 C files of CTMark:
   1.74 s against tcc's 1.88 s (0.92 times its time; faster on 252 of the
@@ -99,7 +123,69 @@ The target is x86-64 Linux (SysV ABI, ELF, glibc) with clang-20's system
 include directories. Errors go to stderr as `file:line:col: error: ...`,
 and the exit status is 1 if there were any.
 
+### The header cache (B4)
+
+goosecc keeps the preprocessing of headers in a persistent cache and
+replays it when nothing it depends on has changed; the outputs are
+byte-identical with the cache cold, warm or disabled (DESIGN.md, section
+10, has the design and the argument).
+
+| option / variable | what |
+|---|---|
+| `-fno-header-cache` | neither read nor write the cache for this compile (`-fheader-cache`: the default) |
+| `GOOSECC_CACHE=dir` | the cache directory (default `~/.cache/goosecc`; `off`, `none`, `0` or empty: no cache; a relative path is taken from each compile's working directory) |
+| `GOOSECC_CACHE_SIZE=n` | its size limit, with K, M or G (default 2G); the least recently used files are deleted beyond it |
+| `GOOSECC_CACHE_QUOTED=1` | every `"..."` include of the program's files is cached at every compile (the default caches `<...>` includes from the program's files, and the main file's `"..."` includes from its second compile on) |
+| `--cache-stats` | print the lookups, hits, misses, recordings, bytes written, rejected entries, and where a replay's time went |
+| `--pp-state-hash`, `--pp-state-hash=v` | print a checksum of the preprocessor's whole state (with `=v`, per array): what `tests/cache_check.py` compares |
+
+```
+$ goosecc -c --cache-stats libclamav_table.c ...
+goosecc: header cache: 6 lookups, 6 hits, 0 misses; 0 recorded (0 bytes written), 0 too small, 0 not cacheable, 0 corrupt, 0 write errors, 0 volatile; replay 711 us (read 116, check 77, append 222, commit 70), saving 0 us
+```
+
+Headers changed less than 2 seconds before a compile are not recorded
+(their stat cannot be trusted yet); units that print a diagnostic or
+expand `__DATE__`/`__TIME__` never are. The cache tolerates concurrent
+compiles (files are renamed into place, manifests appended to), corrupt
+or truncated files (checksums; they are ignored or deleted) and files of
+other builds of goosecc (never read). The checksums guard against
+damage, not against tampering: whoever can write to the cache directory
+can change what goosecc compiles, so it should be private (as
+`~/.cache/goosecc` is).
+
 ## Tests
+
+### Header cache tests (B4)
+
+```bash
+cd frontend-goose
+tests/cache_check.py --corpus torture,unit,regress,bench,ctmark -j 2     # outputs off / cold / warm / warm2 / shared identical
+GOOSECC_CACHE_QUOTED=1 tests/cache_check.py -j 2                        # the same with every "..." include a unit
+tests/cache_adversarial.py                                              # 17 situations where a replay could go wrong
+../tests/bench_hcache.py <CTMark compile_commands.json> --goosecc build/goosecc -n 5 --build --md bench.md
+```
+
+- `cache_check.py` compiles every corpus file in five modes (`-E`,
+  `--dump-ast`, `--layout-check`, `-c`, `-c -g`) with the cache disabled,
+  cold (an empty cache of the file's own), warm (the same cache again),
+  warm2 (once more: it must record nothing) and shared (one cache for the
+  whole run, written by the parallel workers at once); the output file,
+  standard output, standard error with `--pp-state-hash=v` and the exit
+  status of every run must be those of the run without the cache.
+- `cache_adversarial.py` builds small trees of headers and checks, in
+  each, that every compile with the cache gives what the same compile
+  gives without it, and that the cache hits or misses as it should: a
+  header edited keeping its size and mtime, a header edited within the
+  racy window, different `-D`/`-U` and macro states, include order,
+  `#include_next`, `__COUNTER__`, `#pragma once`/`push_macro`/`pack`/
+  `poison`/`system_header`, `__DATE__`/`__TIME__`, a symlinked and a
+  moved directory, relative includes from another directory, a deleted
+  or newly shadowing header, eight concurrent writers, corrupted and
+  truncated cache files, eviction (by last use), and the default policy.
+- With a cache in `GOOSECC_CACHE`, the oracles below and
+  `tests/suite_goosecc.py` and `tests/run.py` run with it warm; README's
+  results say what they gave.
 
 ### Compiler tests (B2)
 
@@ -174,6 +260,103 @@ The tables of clang-20 facts are generated, and the generators are kept:
 `tools/gen_builtins.py` (builtin function types).
 
 ## Results
+
+### Header cache (B4)
+
+**Speed.** `tests/bench_hcache.py -n 5 --build` at the commit that adds
+these results: the 316 C files of CTMark (B3's 284 and 7zip's 32), with
+the suite's flags, each compile run alone and single-threaded, the
+variants interleaved file by file, best of 5 wall-clock times. `off` is
+`-fno-header-cache`; `cold` a compile with an empty cache (it records
+the `<...>` includes); `warm` a compile with the cache that earlier
+compiles filled (one cache for the whole run, so the later files of a
+program also find the variants the earlier ones recorded). tcc is
+Ubuntu's 0.9.27. The load average was 0.9 to 1.4 (another agent's test
+runs). The raw data, per file: `../bench/results/b4-2026-11-07/hcache.{md,json}`.
+
+| program | files | goosecc off | cold | warm | tcc -c | clang-20 -O0 -c | warm: speed-up over off | over tcc |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 7zip | 32 | 110 ms | 127 ms | 98 ms | 96 ms | 1056 ms | 1.12x | 0.98x |
+| ClamAV | 98 | 538 ms | 742 ms | 461 ms | 533 ms | 4287 ms | 1.17x | 1.16x |
+| SPASS | 51 | 368 ms | 458 ms | 273 ms | 380 ms | 3332 ms | 1.35x | 1.39x |
+| consumer-typeset | 51 | 302 ms | 354 ms | 241 ms | 302 ms | 2618 ms | 1.25x | 1.25x |
+| lencod | 55 | 360 ms | 453 ms | 291 ms | 346 ms | 3017 ms | 1.23x | 1.19x |
+| mafft | 27 | 198 ms | 253 ms | 141 ms | 210 ms | 1618 ms | 1.41x | 1.49x |
+| sqlite3 | 2 | 54 ms | 57 ms | 52 ms | 38 ms | 594 ms | 1.04x | 0.74x |
+| **total** | 316 | 1931 ms | 2444 ms | **1558 ms** | 1904 ms | 16522 ms | **1.24x** | **1.22x** |
+
+(Speed-up: how many times faster warm is.) Without 7zip, B3's 284
+files: off 1821 ms, warm 1460 ms, tcc 1808 ms, clang 15466 ms. Per file,
+warm is a median 1.21 times faster than tcc (0.70 to 1.97; faster on 277
+files) and 1.23 times faster than off (0.94 to 1.58), and a cold compile
+takes a median 1.27 times off's time (at most 1.57: recording costs 2-3
+times preprocessing the headers).
+
+Builds of all 316 files in order, one run each: without the cache
+1.93 s; with one cache that starts empty, the first build 1.75 s (later
+files replay what earlier ones recorded), the second 1.75 s (the main
+files' `"..."` includes recorded too), the third 1.51 s. The cache then
+holds 1,105 files, 116 MB.
+
+goosecc's phases (`--time`, one run per file, sums in ms):
+
+| variant | preprocess | parse + sema | lowering | back-end | write | in phases | the rest of the wall time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| off | 900 | 274 | 139 | 137 | 19 | 1468 | 463 |
+| cold | 1422 | 268 | 132 | 134 | 16 | 1972 | |
+| warm | 518 | 279 | 136 | 136 | 18 | 1087 | 471 |
+
+sqlite3.c alone (ms): off 46.5, warm 45.5, tcc 32.0, clang 526.6; warm:
+preprocessing 13.8 (off 14.8), parsing 12.5, lowering 9.4, the back-end
+9.2, writing 0.2. Its 250,000 lines are its own: the cache saves only
+its few system headers.
+
+Where the warm time goes: the rest of the wall time, 1.5 ms per file, is
+the process (exec, the Goose runtime's set-up of its 314 data stack
+regions, the options, exit; the predefined macros are in "preprocess";
+an empty file compiles in 1.35 ms, as fast as tcc); then parsing and type checking the headers' declarations again,
+which the cache does not save (DESIGN.md, 10.7); of the 518 ms of
+preprocessing, about 300 ms are replays (reading manifests, checking
+heads with a stat per file, the blob's checksum, copying the effects
+into the arrays) and the rest the main files' own text. Reaching 1.5
+times tcc would take about 300 ms off these 1,558: all the replays, or
+the start-up and the parsing of the headers together.
+
+**Exactness.** `tests/cache_check.py` over the 2,357 corpus files, at
+`-j 2`: per file 19 runs (`-c` and `-E` off, cold, warm, warm2 and
+shared; `--dump-ast`, `--layout-check` and `-c -g` off, warm2 from the
+cache `-c` filled, and shared), every one with the same output, standard
+output, standard error (with the preprocessor's state checksum) and exit
+status as the run without the cache:
+
+| corpus | files | identical | runs | lookups | hits | lookups, every `"..."` a unit | hits |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| torture | 1708 | 1708 | 32452 | 4730 | 3736 | 4934 | 3820 |
+| unit | 182 | 182 | 3458 | 4109 | 3175 | 4088 | 3078 |
+| regress | 37 | 37 | 703 | 700 | 586 | 700 | 586 |
+| bench | 102 | 102 | 1938 | 5810 | 3592 | 6064 | 3604 |
+| ctmark | 328 | 328 | 6232 | 34124 | 21818 | 36438 | 20134 |
+| **total** | 2357 | 2357 | 44783 | 49473 | 32907 | 52224 | 31222 |
+
+The last two columns are a second run with `GOOSECC_CACHE_QUOTED=1`
+(also 2,357 of 2,357 identical). In both, no warm2 run recorded
+anything. (The shared runs' counts vary slightly from one run to the
+next: the parallel workers fill the shared cache in another order.)
+
+With one cache filled by `-E` and `-fsyntax-only` compiles of every file
+(358 MB; about three quarters of those compiles' lookups hit), the
+front-end oracles give what they gave in B3: `cmp_E.py`
+2,357 of 2,357 token streams identical to clang's, `cmp_syntax.py` no
+false error and every clang error found, `layout_check.py` 2,289 files
+and 834,000 assertions without a mismatch, `cmp_ast.py` 2,289 files and
+41,357 functions without a difference. With one cache for the whole
+compiler test suite: `tests/run.py` 98 of 98 (cold, then warm), and
+`tests/suite_goosecc.py` (all corpora, `O0` and `g`) twice, the second
+time with everything recorded by the first: 1,804 tests, 3,608 runs,
+no failure, each time.
+
+`tests/cache_adversarial.py`: 17 of 17 (the situations listed under
+Tests).
 
 ### Speed (B3)
 

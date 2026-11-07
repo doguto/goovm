@@ -142,16 +142,27 @@ static int goosecc_cpath(sl_u8 path, char *p, size_t cap) {
  * 1 on success; 0 when there is no such file or it cannot be read, with
  * out unchanged. A read that cannot store (EFAULT: past the data stack's
  * reservation) goes through a buffer, so the overflow is the runtime's. */
+/* B4: the file's stat is kept for its identity, and why a file could not
+ * be read (goosecc_last_stat). */
+static struct stat goosecc_st;
+static int goosecc_load_why;   /* 0 read, 1 no such path, 2 a directory, 3 another reason */
 int64_t goosecc_read_file(sl_u8 path, gs_rref out) {
     char p[4096];
+    goosecc_load_why = 1;
     if (!goosecc_cpath(path, p, sizeof p)) return 0;
     int fd = open(p, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return 0;
+    if (fd < 0) {
+        goosecc_load_why = (errno == ENOENT || errno == ENOTDIR || errno == ENAMETOOLONG || errno == ELOOP) ? 1 : 3;
+        return 0;
+    }
     struct stat st;
     if (fstat(fd, &st) != 0 || S_ISDIR(st.st_mode)) {
+        goosecc_load_why = S_ISDIR(st.st_mode) ? 2 : 3;
         close(fd);
         return 0;
     }
+    goosecc_load_why = 3;
+    goosecc_st = st;
     int64_t len0 = out.hdr->len;
     uint8_t *top0 = out.stk->top;
     int reg = S_ISREG(st.st_mode), ok = 1, direct = 1;
@@ -314,3 +325,466 @@ gen_F80_g3 goosecc_f80_to_i128(gen_F80_g3 x, int64_t is_signed) {
     else { unsigned __int128 v = (unsigned __int128)d; r.lo_g = (uint64_t)v; r.hi_g = (uint64_t)(v >> 64); }
     return r;
 }
+
+/* B4: the persistent header cache (hcache.goose). The cache's files are
+ * arrays of 32-bit little-endian words; Goose builds and parses them as
+ * u32 arrays, and these helpers move them to and from the file system. */
+#include <dirent.h>
+#include <stddef.h>
+#include <time.h>
+#include <stdio.h>
+
+/* Field k of the last stat (goosecc_read_file's fstat or goosecc_stat's
+ * stat): 0 device, 1 inode, 2 size, 3 mtime and 4 ctime in nanoseconds
+ * since the epoch, 5 whether it is a regular file, 6 why goosecc_read_file
+ * failed last (1 no such path, 2 a directory, 3 another reason). */
+int64_t goosecc_last_stat(int64_t k) {
+    switch (k) {
+    case 0: return (int64_t)goosecc_st.st_dev;
+    case 1: return (int64_t)goosecc_st.st_ino;
+    case 2: return (int64_t)goosecc_st.st_size;
+    case 3: return (int64_t)goosecc_st.st_mtim.tv_sec * 1000000000 + goosecc_st.st_mtim.tv_nsec;
+    case 4: return (int64_t)goosecc_st.st_ctim.tv_sec * 1000000000 + goosecc_st.st_ctim.tv_nsec;
+    case 6: return goosecc_load_why;
+    default: return S_ISREG(goosecc_st.st_mode) ? 1 : 0;
+    }
+}
+
+/* stat(path), what goosecc_read_file would make of it: 0 when it cannot
+ * be opened (no such file, a component that is not a directory, no
+ * permission to search: stat fails wherever open would), 1 a regular file,
+ * 2 a directory (which goosecc_read_file refuses), 3 another kind, -1 a
+ * transient error. The fields go to goosecc_last_stat. */
+int64_t goosecc_stat(sl_u8 path) {
+    char p[4096];
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    if (stat(p, &goosecc_st) != 0) return (errno == ENOMEM || errno == EIO || errno == EINTR) ? -1 : 0;
+    if (S_ISREG(goosecc_st.st_mode)) return 1;
+    if (S_ISDIR(goosecc_st.st_mode)) return 2;
+    return 3;
+}
+
+/* A 64-bit checksum of the words w: four multiply-xor lanes (each step a
+ * bijection of the lane, so any change of one word changes the lane),
+ * then mixed. */
+uint64_t goosecc_csum(sl_u32 w) {
+    const uint64_t K = 0xff51afd7ed558ccdull;
+    const uint32_t *p = w.data;
+    int64_t n = w.len, i = 0;
+    uint64_t a = 0x9e3779b97f4a7c15ull, b = 0xc2b2ae3d27d4eb4full, c = 0x165667b19e3779f9ull, d = 0x27d4eb2f165667c5ull;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t x0, x1, x2, x3;
+        memcpy(&x0, p + i, 8); memcpy(&x1, p + i + 2, 8); memcpy(&x2, p + i + 4, 8); memcpy(&x3, p + i + 6, 8);
+        a = (a ^ x0) * K; b = (b ^ x1) * K; c = (c ^ x2) * K; d = (d ^ x3) * K;
+    }
+    for (; i < n; i++) a = (a ^ p[i] ^ ((uint64_t)i << 32)) * K;
+    uint64_t h = a ^ (b * 0x9e3779b97f4a7c15ull) ^ (c * 0xc2b2ae3d27d4eb4full) ^ (d * 0x165667b19e3779f9ull) ^ (uint64_t)n;
+    h ^= h >> 33; h *= K; h ^= h >> 29; h *= 0xc4ceb9fe1a85ec53ull; h ^= h >> 32;
+    return h;
+}
+uint64_t goosecc_csum_bytes(sl_u8 s) {
+    const uint64_t K = 0xff51afd7ed558ccdull;
+    uint64_t h = 0x9e3779b97f4a7c15ull ^ (uint64_t)s.len, x;
+    int64_t i = 0;
+    for (; i + 8 <= s.len; i += 8) { memcpy(&x, s.data + i, 8); h = (h ^ x) * K; h ^= h >> 29; }
+    for (; i < s.len; i++) h = (h ^ s.data[i]) * K;
+    h ^= h >> 33; h *= K; h ^= h >> 29;
+    return h;
+}
+
+/* Appends the bytes s to the word array out, zero-padded to whole words. */
+void goosecc_bytes_to_words(gs_rref out, sl_u8 s) {
+    int64_t nw = (s.len + 3) / 4;
+    if (nw == 0) return;
+    uint8_t *top = out.stk->top;
+    memset(top + (nw * 4 - 4), 0, 4);
+    memcpy(top, s.data, (size_t)s.len);
+    out.stk->top += nw * 4;
+    out.hdr->len += nw;
+}
+/* Appends n bytes from the word array w, starting at word i, to out: 1, or
+ * 0 if they are not all in w. */
+int64_t goosecc_words_to_bytes(gs_rref out, sl_u32 w, int64_t i, int64_t n) {
+    if (i < 0 || n < 0 || i > w.len || n > (w.len - i) * 4) return 0;
+    if (n > 8192) goosecc_prefault(out, n);
+    memcpy(out.stk->top, (const uint8_t *)(w.data + i), (size_t)n);
+    out.stk->top += n;
+    out.hdr->len += n;
+    return 1;
+}
+/* Whether the n bytes at word i of w are s. */
+int64_t goosecc_words_eq(sl_u32 w, int64_t i, sl_u8 s) {
+    if (i < 0 || i > w.len || s.len > (w.len - i) * 4) return 0;
+    return memcmp((const uint8_t *)(w.data + i), s.data, (size_t)s.len) == 0;
+}
+/* The hash_bytes (goosecc_hash) of the n bytes at word i of w. */
+uint32_t goosecc_words_hash(sl_u32 w, int64_t i, int64_t n) {
+    if (i < 0 || n < 0 || i > w.len || n > (w.len - i) * 4) return 0;
+    return goosecc_hash_mem((const uint8_t *)(w.data + i), n);
+}
+
+/* A cache file being used (a manifest read, a blob mapped) whose last use
+ * (the later of its modification and access times) is more than an hour
+ * old gets both set to now: the eviction deletes the least recently used
+ * files first, and access times alone are seldom kept (relatime updates
+ * one at the first read after a write and then once a day; noatime
+ * never). At most one system call per file and hour. */
+static void goosecc_touch_used(int fd, const struct stat *st) {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    time_t last = st->st_mtim.tv_sec > st->st_atim.tv_sec ? st->st_mtim.tv_sec : st->st_atim.tv_sec;
+    if (now.tv_sec - last > 3600) futimens(fd, 0);
+}
+
+/* Appends the file at path to the word array out (its size must be a
+ * multiple of 4): the number of words, or -1. */
+int64_t goosecc_read_words(sl_u8 path, gs_rref out) {
+    char p[4096];
+    if (!goosecc_cpath(path, p, sizeof p)) return -1;
+    int fd = open(p, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size % 4 != 0 || st.st_size > ((int64_t)1 << 30)) {
+        close(fd);
+        return -1;
+    }
+    goosecc_touch_used(fd, &st);
+    int64_t size = st.st_size, total = 0;
+    if (size > 8192) goosecc_prefault(out, size);
+    while (total < size) {
+        ssize_t n = read(fd, out.stk->top + total, (size_t)(size - total));
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        total += n;
+    }
+    close(fd);
+    if (total != size) return -1;
+    out.stk->top += size;
+    out.hdr->len += size / 4;
+    return size / 4;
+}
+
+/* A blob being replayed is mapped, not read: reading it into a fresh array
+ * costs a page fault per 4 KB, a private read-only mapping of the page
+ * cache costs one per 64 KB (fault-around). Goose reads its words through
+ * goosecc_mw, which the C compiler inlines into the loops; the caller
+ * checks the index against goosecc_map's length first. */
+static const uint32_t *goosecc_map_p = 0;
+static size_t goosecc_map_bytes = 0;
+int64_t goosecc_map(sl_u8 path) {
+    char p[4096];
+    if (goosecc_map_p) {
+        munmap((void *)goosecc_map_p, goosecc_map_bytes);
+        goosecc_map_p = 0;
+        goosecc_map_bytes = 0;
+    }
+    if (!goosecc_cpath(path, p, sizeof p)) return -1;
+    int fd = open(p, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size % 4 != 0 || st.st_size < 32 || st.st_size > ((int64_t)1 << 30)) {
+        close(fd);
+        return -1;
+    }
+    goosecc_touch_used(fd, &st);
+    void *m = mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
+    close(fd);
+    if (m == MAP_FAILED) return -1;
+    goosecc_map_p = m;
+    goosecc_map_bytes = (size_t)st.st_size;
+    return st.st_size / 4;
+}
+__attribute__((always_inline)) inline uint32_t goosecc_mw(int64_t i) { return goosecc_map_p[i]; }
+uint64_t goosecc_mcsum(int64_t from, int64_t to) {
+    sl_u32 w;
+    w.data = (gs_u32 *)(goosecc_map_p + from);
+    w.len = to - from;
+    return goosecc_csum(w);
+}
+/* Appends the n bytes at word i of the mapping to out (the caller checked
+ * that they are in it). */
+void goosecc_mcopy(gs_rref out, int64_t i, int64_t n) {
+    if (n <= 0) return;
+    if (n > 8192) goosecc_prefault(out, n);
+    memcpy(out.stk->top, (const uint8_t *)(goosecc_map_p + i), (size_t)n);
+    out.stk->top += n;
+    out.hdr->len += n;
+}
+int64_t goosecc_meq(int64_t i, sl_u8 s) {
+    return memcmp((const uint8_t *)(goosecc_map_p + i), s.data, (size_t)s.len) == 0;
+}
+
+/* Appends the n tokens at word i of the mapping (4 words each: kind |
+ * flags << 8 | aux << 16, spelling, value, expansion location) to out,
+ * relocated as hcache.goose's rl and lm do: a source offset below 2^31 is
+ * in the unit's text (s0 plus it, at most srclen), others index anchors;
+ * the value of an identifier token (kind 2, 8 (a parameter) or >= kwmin)
+ * indexes ids. 1, or 0 when a value is out of range (out then has some of
+ * them: the caller takes them back). */
+_Static_assert(sizeof(Tok_g) == 16 && offsetof(Tok_g, spell_g) == 4 && offsetof(Tok_g, val_g) == 8 &&
+               offsetof(Tok_g, xloc_g) == 12, "hcache: the layout of Tok");
+int64_t goosecc_reloc_toks(gs_rref out, int64_t i, int64_t n, sl_u32 ids, sl_u32 anchors, int64_t s0, int64_t srclen, int64_t kwmin) {
+    if (n <= 0) return 1;
+    if (n * 16 > 8192) goosecc_prefault(out, n * 16);
+    const uint32_t *w = goosecc_map_p + i;
+    Tok_g *o = (Tok_g *)out.stk->top;
+    int64_t k;
+    for (k = 0; k < n; k++, w += 4) {
+        uint32_t a = w[0], kind = a & 255, sp = w[1], v = w[2], xl = w[3];
+        if (sp < 0x80000000u) {
+            if (sp > srclen) break;
+            sp = (uint32_t)(s0 + sp);
+        } else {
+            if ((int64_t)(sp & 0x7fffffffu) >= anchors.len) break;
+            sp = anchors.data[sp & 0x7fffffffu];
+        }
+        if (xl < 0x80000000u) {
+            if (xl > srclen) break;
+            xl = (uint32_t)(s0 + xl);
+        } else {
+            if ((int64_t)(xl & 0x7fffffffu) >= anchors.len) break;
+            xl = anchors.data[xl & 0x7fffffffu];
+        }
+        if (kind == 2 || kind == 8 || (int64_t)kind >= kwmin) {
+            if ((int64_t)v >= ids.len) break;
+            v = ids.data[v];
+        }
+        o[k].kind_g = (uint8_t)kind;
+        o[k].flags_g = (uint8_t)(a >> 8);
+        o[k].aux_g = (uint16_t)(a >> 16);
+        o[k].spell_g = sp;
+        o[k].val_g = v;
+        o[k].xloc_g = xl;
+    }
+    out.stk->top += k * 16;
+    out.hdr->len += k;
+    return k == n;
+}
+
+/* Creates the missing directories of the path p (its last component is a
+ * file); errors are left to the open that follows. */
+static void goosecc_mkdirs(char *p) {
+    for (char *s = p + 1; *s; s++) {
+        if (*s != '/') continue;
+        *s = 0;
+        mkdir(p, 0777);
+        *s = '/';
+    }
+}
+/* Writes the words w to path atomically: a new file beside it (named by
+ * the process and the time), renamed over path, so that a reader sees
+ * the old file or the whole new one. Missing directories are created.
+ * 1 on success. */
+int64_t goosecc_write_words(sl_u8 path, sl_u32 w) {
+    char p[4096], t[4200];
+    static unsigned long seq;
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    snprintf(t, sizeof t, "%s.%d.%lx.%lx.tmp", p, (int)getpid(), (unsigned long)ts.tv_nsec, ++seq);
+    int fd = open(t, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (fd < 0 && errno == ENOENT) {
+        goosecc_mkdirs(t);
+        fd = open(t, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    }
+    if (fd < 0) return 0;
+    const uint8_t *d = (const uint8_t *)w.data;
+    int64_t left = w.len * 4;
+    int ok = 1;
+    while (left > 0) {
+        ssize_t n = write(fd, d, (size_t)left);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { ok = 0; break; }
+        d += n;
+        left -= n;
+    }
+    if (close(fd) != 0) ok = 0;
+    if (!ok || rename(t, p) != 0) {
+        unlink(t);
+        return 0;
+    }
+    return 1;
+}
+
+static int64_t goosecc_write_all(int fd, const uint8_t *d, int64_t left) {
+    while (left > 0) {
+        ssize_t n = write(fd, d, (size_t)left);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return 0;
+        d += n;
+        left -= n;
+    }
+    return 1;
+}
+/* Appends the words w to the file at path in one write (O_APPEND: other
+ * appenders cannot interleave with it): 1, 2 when there is no such file,
+ * 0 on another error. */
+int64_t goosecc_append_words(sl_u8 path, sl_u32 w) {
+    char p[4096];
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    int fd = open(p, O_WRONLY | O_APPEND | O_CLOEXEC);
+    if (fd < 0) return errno == ENOENT ? 2 : 0;
+    int64_t ok = goosecc_write_all(fd, (const uint8_t *)w.data, w.len * 4);
+    if (close(fd) != 0) ok = 0;
+    return ok;
+}
+/* Creates the file at path with the words w (O_EXCL), creating missing
+ * directories: 1, 2 when it exists, 0 on another error. */
+int64_t goosecc_create_words(sl_u8 path, sl_u32 w) {
+    char p[4096];
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    int fd = open(p, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (fd < 0 && errno == ENOENT) {
+        goosecc_mkdirs(p);
+        fd = open(p, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    }
+    if (fd < 0) return errno == EEXIST ? 2 : 0;
+    int64_t ok = goosecc_write_all(fd, (const uint8_t *)w.data, w.len * 4);
+    if (close(fd) != 0) ok = 0;
+    return ok;
+}
+
+/* A blob is written in three pieces without copying them together: the
+ * head's words, the source text (bytes, padded to whole words with
+ * zeros) and the rest's words. goosecc_csum3 is goosecc_csum of the words
+ * of the three in a row (from the head's word 5), goosecc_write3 writes
+ * them as goosecc_write_words does. */
+typedef struct { uint64_t a, b, c, d; int64_t i; uint8_t buf[32]; int nb; } goosecc_cs;
+static void goosecc_cs_chunk(goosecc_cs *st, const uint8_t *q) {
+    const uint64_t K = 0xff51afd7ed558ccdull;
+    uint64_t x0, x1, x2, x3;
+    memcpy(&x0, q, 8); memcpy(&x1, q + 8, 8); memcpy(&x2, q + 16, 8); memcpy(&x3, q + 24, 8);
+    st->a = (st->a ^ x0) * K; st->b = (st->b ^ x1) * K; st->c = (st->c ^ x2) * K; st->d = (st->d ^ x3) * K;
+    st->i += 8;
+}
+/* Feeds n bytes (a whole number of words, except at the very end). */
+static void goosecc_cs_feed(goosecc_cs *st, const uint8_t *p, int64_t n) {
+    while (n > 0 && st->nb > 0) {
+        st->buf[st->nb++] = *p++;
+        n--;
+        if (st->nb == 32) { goosecc_cs_chunk(st, st->buf); st->nb = 0; }
+    }
+    while (n >= 32) { goosecc_cs_chunk(st, p); p += 32; n -= 32; }
+    while (n > 0) { st->buf[st->nb++] = *p++; n--; }
+}
+static uint64_t goosecc_cs_end(goosecc_cs *st) {
+    const uint64_t K = 0xff51afd7ed558ccdull;
+    while (st->nb % 4) st->buf[st->nb++] = 0;
+    int64_t n = st->i + st->nb / 4;
+    uint64_t a = st->a;
+    for (int k = 0; k < st->nb / 4; k++) {
+        uint32_t w;
+        memcpy(&w, st->buf + 4 * k, 4);
+        a = (a ^ w ^ ((uint64_t)(st->i + k) << 32)) * K;
+    }
+    uint64_t h = a ^ (st->b * 0x9e3779b97f4a7c15ull) ^ (st->c * 0xc2b2ae3d27d4eb4full) ^ (st->d * 0x165667b19e3779f9ull) ^ (uint64_t)n;
+    h ^= h >> 33; h *= K; h ^= h >> 29; h *= 0xc4ceb9fe1a85ec53ull; h ^= h >> 32;
+    return h;
+}
+uint64_t goosecc_csum3(sl_u32 a, sl_u8 s, sl_u32 b) {
+    goosecc_cs st = { 0x9e3779b97f4a7c15ull, 0xc2b2ae3d27d4eb4full, 0x165667b19e3779f9ull, 0x27d4eb2f165667c5ull, 0, {0}, 0 };
+    static const uint8_t zero[4];
+    goosecc_cs_feed(&st, (const uint8_t *)a.data, a.len * 4);
+    goosecc_cs_feed(&st, s.data, s.len);
+    goosecc_cs_feed(&st, zero, (4 - s.len % 4) % 4);
+    goosecc_cs_feed(&st, (const uint8_t *)b.data, b.len * 4);
+    return goosecc_cs_end(&st);
+}
+int64_t goosecc_write3(sl_u8 path, sl_u32 a, sl_u8 s, sl_u32 b) {
+    char p[4096], t[4200];
+    static unsigned long seq3;
+    static const uint8_t zero[4];
+    if (!goosecc_cpath(path, p, sizeof p)) return 0;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    snprintf(t, sizeof t, "%s.%d.%lx.%lx.tmp", p, (int)getpid(), (unsigned long)ts.tv_nsec, ++seq3);
+    int fd = open(t, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (fd < 0 && errno == ENOENT) {
+        goosecc_mkdirs(t);
+        fd = open(t, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    }
+    if (fd < 0) return 0;
+    int64_t ok = goosecc_write_all(fd, (const uint8_t *)a.data, a.len * 4) && goosecc_write_all(fd, s.data, s.len) &&
+                 goosecc_write_all(fd, zero, (4 - s.len % 4) % 4) && goosecc_write_all(fd, (const uint8_t *)b.data, b.len * 4);
+    if (close(fd) != 0) ok = 0;
+    if (!ok || rename(t, p) != 0) {
+        unlink(t);
+        return 0;
+    }
+    return 1;
+}
+
+/* Deletes a file of the cache (a corrupt one). */
+void goosecc_unlink(sl_u8 path) {
+    char p[4096];
+    if (goosecc_cpath(path, p, sizeof p)) unlink(p);
+}
+
+/* Eviction: when the files in dir take more than limit bytes, the least
+ * recently used are deleted until they take at most 3/4 of it. A file's
+ * last use is the later of its modification and access times (written,
+ * appended to, or touched by goosecc_touch_used when it was used more
+ * than an hour after its last use). Temporary files older than an hour
+ * (left by a killed compiler) are deleted as well. Returns the bytes that
+ * remain. */
+struct goosecc_ent { int64_t mtime; int64_t size; char name[64]; };
+static int goosecc_ent_cmp(const void *a, const void *b) {
+    const struct goosecc_ent *x = a, *y = b;
+    return x->mtime < y->mtime ? -1 : x->mtime > y->mtime;
+}
+int64_t goosecc_evict(sl_u8 dir, int64_t limit) {
+    char p[4096];
+    if (!goosecc_cpath(dir, p, sizeof p)) return -1;
+    DIR *d = opendir(p);
+    if (!d) return -1;
+    struct goosecc_ent *v = 0;
+    size_t n = 0, cap = 0;
+    int64_t total = 0;
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    struct dirent *fe;
+    while ((fe = readdir(d)) != 0) {
+        if (fe->d_name[0] == '.' || strlen(fe->d_name) >= 64) continue;
+        char f[4200];
+        snprintf(f, sizeof f, "%s/%s", p, fe->d_name);
+        struct stat st;
+        if (stat(f, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        size_t ln = strlen(fe->d_name);
+        if (ln > 4 && strcmp(fe->d_name + ln - 4, ".tmp") == 0) {
+            if (now.tv_sec - st.st_mtim.tv_sec > 3600) unlink(f);
+            continue;
+        }
+        if (n == cap) {
+            cap = cap ? cap * 2 : 1024;
+            struct goosecc_ent *nv = realloc(v, cap * sizeof *v);
+            if (!nv) break;
+            v = nv;
+        }
+        int64_t mt = (int64_t)st.st_mtim.tv_sec * 1000000000 + st.st_mtim.tv_nsec;
+        int64_t at = (int64_t)st.st_atim.tv_sec * 1000000000 + st.st_atim.tv_nsec;
+        v[n].mtime = at > mt ? at : mt;
+        v[n].size = (int64_t)st.st_blocks * 512;
+        strcpy(v[n].name, fe->d_name);
+        total += v[n].size;
+        n++;
+    }
+    closedir(d);
+    if (total > limit && n > 0) {
+        qsort(v, n, sizeof *v, goosecc_ent_cmp);
+        for (size_t i = 0; i < n && total > limit / 4 * 3; i++) {
+            char f[4200];
+            snprintf(f, sizeof f, "%s/%s", p, v[i].name);
+            if (unlink(f) == 0) total -= v[i].size;
+        }
+    }
+    free(v);
+    return total;
+}
+
+/* The identity of this build of goosecc (build.sh passes a hash of the
+ * generated C), part of the cache's configuration key. */
+#ifndef GOOSECC_BUILD_ID
+#define GOOSECC_BUILD_ID 0
+#endif
+uint64_t goosecc_build_id(void) { return (uint64_t)GOOSECC_BUILD_ID; }
+int64_t goosecc_pid(void) { return (int64_t)getpid(); }

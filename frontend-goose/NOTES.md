@@ -2,8 +2,8 @@
 
 goosecc is about 17,600 lines of Goose without comments and blank lines
 (compiler commit 335fddc, runtime d22ae129d92b): the front end of milestone
-B1 (sections 1-8), the lowering to GIR of B2 (section 9) and the speed
-work of B3 (section 10), plus the
+B1 (sections 1-8), the lowering to GIR of B2 (section 9), the speed
+work of B3 (section 10) and the header cache of B4 (section 11), plus the
 Goose back-end imported as a package. It is compiled with `goose
 --standalone` to one 5.1 MB C file and then with `clang-20 -O2`
 (2 s and 18 s). This page records what was
@@ -454,3 +454,103 @@ the machine itself. What the Goose side of it was like:
    and word-wise hashing could stay in Goose.
 8. **Casts and binary operators after `match` / `if` expressions.**
 
+## 11. Milestone B4: the header cache
+
+B4 added `hcache.goose` (2,400 lines with comments), 230 lines of hooks
+and changes in the preprocessor, and 480 lines of C in `goosecc_rt.h` (file system,
+checksums, the mapped blob's accessors, token relocation). Most of the
+Goose type-checked at its first compile; the work went into the design
+(DESIGN.md, section 10) and into measuring. What the language and its
+runtime were like for it:
+
+### The evaluation order of an index
+
+The only bug that reached a run:
+
+```
+goose runtime error: index 0 out of bounds (length 0) (src/hcache.goose:501)
+    let ps = wits[wit_stat(p)].state;
+```
+
+`wit_stat` appends to `wits` and returns the new entry's index; the
+array's length is read *before* the index expression is evaluated, so
+the check sees the old length. A ten-line program shows it
+(`let x = w[grow()];` with `grow` pushing to `w`). The bounds check
+turned it into an exact message instead of a wrong read, but the
+reading order is not what the source suggests; `let i = wit_stat(p);
+let ps = wits[i].state;` is the fix.
+
+### Slices do not cross `extern fn`
+
+A blob is mapped rather than read into a fresh array (a page fault per
+4 KB of a new array cost 0.2 ms per compile). Goose cannot look at the
+mapping as a slice:
+
+```
+t2.goose:4: error: extern fn mapped cannot return const u32[:]: nested references and slices do not cross
+```
+
+so Goose reads it a word at a time through `extern fn mw(i: i64) ->
+u32`, which clang inlines into the loops (the generated C and
+`goosecc_rt.h` are one translation unit), and the reading code checks
+every index against the mapping's length itself (`m32`, `mstr`): the
+bounds checks that Goose would have done for a slice, written by hand.
+The token arrays, the hottest part, are relocated by a C loop writing
+`Tok` records straight into the arrays (`goosecc_reloc_toks`), which
+depends on the packed layout of spec C.2; a `_Static_assert` on the
+generated `Tok_g` guards it.
+
+### State that hooks must reach
+
+The recording hooks are called from inside the preprocessor's recursive
+cycle (`pp_lex` and the directive handlers), where no function may own
+growable data across a call into the cycle (section 1), and a struct
+cannot hold several growable arrays (section 10). So every recording's
+state is global: one array of events for all the nested recordings,
+each event tagged with its recording's depth, compacted when a recording
+ends (`rec_pop`); per identifier and per file the serials of the
+recordings that have seen them, in arrays beside `idents` and in
+`FileRec`. The discipline is the one of section 1, and as there nothing
+checks it.
+
+### Every global array is a region
+
+The cache needs about twenty buffers of its own (the event list, the
+recording stack, the manifests read, the blob being written, maps,
+scratch strings), and each global array is a reserved region set up at
+every start: the regions went from 291 to 314, about 30 µs of every run,
+whether the cache is used or not. Merging them would mean putting
+unrelated buffers in one array with offsets, the aliasing hazards of
+section 1 again.
+
+### Other notes
+
+- `dictionary.get` returns an optional that an `if` unwraps in its body;
+  the postfix `!` some languages use is a parse error (`expected ';' in
+  assignment statement, found '!'`).
+- `a.append(a[0..2])`, appending a slice of an array to itself, is
+  accepted and works (a data stack never moves), which the
+  specification does not say; the cache avoids it.
+- A push through a `u32[>..]&` parameter stores the data stack's top
+  and the length back at every element (backend-goose/NOTES.md, 5.6):
+  the serialization of tokens, which took the output array as a
+  parameter, now pushes to the global directly.
+- Measuring the cache meant measuring the machine: the cost of a page
+  fault (1.2 µs) against a page-cache mapping (36 µs per MB), of a stat
+  (0.4 µs), of creating a file on `ext4` (inode allocation was a quarter
+  of a cold compile), of `madvise(MADV_NOHUGEPAGE)` per region (0.27 ms
+  per run, dropped in `build.sh`: section 10's wish 2, done from outside
+  the runtime by a header forced in first that undefines the macro the
+  runtime tests).
+
+### What went well
+
+- `--pp-state-hash=v` (a checksum of each array the later phases read)
+  made exactness a number to compare: the first replay produced the same
+  state as preprocessing on the first try, and every later change was
+  checked against all 2,357 corpus files in a minute.
+- Flat arrays of small structs with integer references are easy to
+  serialize and relocate: an effect is a few array suffixes plus base
+  offsets.
+- Whole-program compilation made the hooks free when no recording is
+  active: a test of a global bool next to a load the code does anyway.

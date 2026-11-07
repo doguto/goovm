@@ -213,6 +213,7 @@ recursive fn pe_unary(ev: bool) -> i64, bool {
                 pe_error("macro name must be an identifier");
                 return 0, false;
             }
+            if rec_on { hk_mtest(n.val); }
             let d = idents[n.val].macro >= 0;
             if paren {
                 let c = pp_lex_unexpanded();
@@ -631,7 +632,11 @@ recursive fn expand_builtin(name: Tok, b: i64) -> i64 {
         let ci = cur_file_ctx;
         var so = ctxs[ci].pspell as i64;
         var se = so + ctxs[ci].pspell_len;
-        if b == B_BASE_FILE { so = base_file_name as i64; se = so + base_file_name_len; }
+        if b == B_BASE_FILE {
+            if rec_on { hk_basefile(); }
+            so = base_file_name as i64;
+            se = so + base_file_name_len;
+        }
         if b == B_FILE_NAME {
             var j = se;
             while j > so && names[j - 1] != '/' { j--; }
@@ -643,15 +648,18 @@ recursive fn expand_builtin(name: Tok, b: i64) -> i64 {
         return 2;
     }
     if b == B_COUNTER {
+        if rec_on { hk_counter(); }
         builtin_result = number_token(counter_value, like);
         counter_value++;
         return 2;
     }
     if b == B_INCLUDE_LEVEL {
+        if rec_on { hk_depth(); }
         builtin_result = number_token(include_depth() - 1, like);
         return 2;
     }
     if b == B_DATE || b == B_TIME || b == B_TIMESTAMP {
+        if rec_on { hk_bad(HC_BAD_TIME); }
         let y, mo, d, h, mi, s, wd = civil(build_time());
         bt.clear();
         bt.push('"');
@@ -926,7 +934,8 @@ fn pp_start(path: const u8[:]) -> bool {
     src.push(0);
     src.push(0);
     let bf = files.len;
-    files.push(FileRec { path: name_add("<built-in>"), path_len: 10, start: bstart as! u32, end: bend as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0, sp_off: 0, sp_len: 0 });
+    files.push(FileRec { path: name_add("<built-in>"), path_len: 10, start: bstart as! u32, end: bend as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0, sp_off: 0, sp_len: 0,
+        dev: 0, ino: 0, fsize: 0, mtime: 0, ctime: 0, rt: 0, rw: 0 });
     let save = mode_E;
     mode_E = false;
     push_file(f, path, -1, false);

@@ -25,10 +25,30 @@ LDFLAGS="${LDFLAGS--static}"
 GOOSE_FLAGS="${GOOSE_FLAGS---stack-reserve 256M}"
 mkdir -p "$OUT"
 "$GOOSE" --standalone ${GOOSE_FLAGS} --include "$HERE/src/goosecc_rt.h" -o "$OUT/goosecc.c" "$HERE/src/main.goose"
+# The header cache (B4) keys its entries by this build's identity: a hash
+# of the generated C, so that a rebuilt compiler never reads entries
+# written by another one.
+BUILD_ID="0x$(cat "$OUT/goosecc.c" "$HERE/src/goosecc_rt.h" | sha1sum | cut -c1-16)ull"
+CFLAGS="$CFLAGS -DGOOSECC_BUILD_ID=$BUILD_ID"
 # musl: a static glibc executable spends 0.5-0.7 ms of every run in glibc's
 # start-up, mostly probing the caches with cpuid (init_cacheinfo), which
 # traps to the hypervisor in a virtual machine; musl's start-up does not.
 # Same C code, same outputs; the static glibc build is LIBC=glibc.
+# Each of the ~200 data stack regions gets madvise(MADV_NOHUGEPAGE) from
+# the runtime at start-up, so that a region holding a few bytes does not
+# take a transparent huge page. Unless the kernel's THP mode is "always",
+# no region would get one anyway, and the advice only costs a system call
+# and a VMA split per region: 0.27 ms of every run (B4, NOTES.md 11). The
+# runtime tests the macro, so a header forced in first, which includes
+# <sys/mman.h> and undefines it, drops the advice. THP=keep keeps it.
+THP="${THP:-auto}"
+if [ "$THP" = auto ]; then
+    if grep -q '\[always\]' /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null; then THP=keep; else THP=drop; fi
+fi
+if [ "$THP" = drop ]; then
+    printf '#include <sys/mman.h>\n#undef MADV_NOHUGEPAGE\n' > "$OUT/no_nohugepage.h"
+    CFLAGS="$CFLAGS -include $OUT/no_nohugepage.h"
+fi
 MUSL="${MUSL:-/usr/lib/x86_64-linux-musl}"
 LIBC="${LIBC:-auto}"
 if [ "$LIBC" = auto ]; then

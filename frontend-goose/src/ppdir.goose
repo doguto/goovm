@@ -38,10 +38,16 @@ var quote_dirs_end: i64 = 0;   // dirs[0..quote_dirs_end] are -iquote
 var angle_start: i64 = 0;      // <...> starts here (-I)
 var sys_start: i64 = 0;        // system directories from here
 
-struct PathEnt { off: u32, len: u32, hash: u32, file: i32 }
+// The path cache: what was found at each path looked up (a file, or -1),
+// and which directories do not exist. It only remembers what the file
+// system answered: nothing else depends on its contents or its order, so
+// the header cache may skip or add entries (B4). Its keys are in their
+// own arena, pnames.
+struct PathEnt { off: u32, len: u32, hash: u32, file: i32, why: u32 }   // why: no file (goosecc_load_why)
 var pathents: PathEnt[>..] = [];
 var pathtab: u32[>..<] = [];
 var pathmask: i64 = 0;
+var pnames: u8[>..] = [];
 var pbuf: u8[>..] = [];        // path being built
 
 fn path_grow() {
@@ -100,7 +106,7 @@ fn path_slot(key: const u8[:], h: u32, dir: bool) -> i64 {
         let e = pathtab[p];
         if e == 0 { return p; }
         let pe = pathents[e - 1];
-        if pe.hash == h && pe.len == key.len && (pe.file <= -2) == dir && names[pe.off..pe.off + pe.len] == key { return p; }
+        if pe.hash == h && pe.len == key.len && (pe.file <= -2) == dir && pnames[pe.off..pe.off + pe.len] == key { return p; }
         p = (p + 1) & pathmask;
     }
 }
@@ -147,8 +153,9 @@ fn note_dir(dl: i64) {
     let p = path_slot(pbuf[..dl], h, true);
     if pathtab[p] != 0 { return; }
     let isdir = is_dir(pbuf[..dl]);
-    let off = name_add(pbuf[..dl]);
-    pathents.push(PathEnt { off: off, len: dl as! u32, hash: h, file: if isdir { -3 } else { -2 } });
+    let off = pnames.len as! u32;
+    pnames.append(pbuf[..dl]);
+    pathents.push(PathEnt { off: off, len: dl as! u32, hash: h, file: if isdir { -3 } else { -2 }, why: 0 });
     pathtab[p] = pathents.len as! u32;
 }
 
@@ -163,20 +170,63 @@ fn lookup_file() -> i64 {
     if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
     let p = path_slot(key, h, false);
     let e = pathtab[p];
-    if e != 0 { return pathents[e - 1].file as i64; }
+    if e != 0 {
+        let fe = pathents[e - 1].file as i64;
+        if rec_on { hk_path_hit(e - 1, fe, key, pbuf, pathents[e - 1].why); }
+        return fe;
+    }
     let dl = pbuf_dir_len();
     var f: i64 = -1;
-    if dl == 0 || !dir_missing(dl) { f = load_file(pbuf); }
-    let off = name_add(key);
-    pathents.push(PathEnt { off: off, len: key.len as! u32, hash: h, file: f as! i32 });
+    var why: u32 = 1;      // no such path (its directory is known not to exist)
+    if dl == 0 || !dir_missing(dl) {
+        f = load_file(pbuf);
+        if f < 0 { why = last_stat(6) as! u32; }
+    }
+    let off = pnames.len as! u32;
+    pnames.append(key);
+    pathents.push(PathEnt { off: off, len: key.len as! u32, hash: h, file: f as! i32, why: why });
     pathtab[p] = pathents.len as! u32;
     if f >= 0 {
-        files[f].path = off;
+        files[f].path = name_add(key);
         files[f].path_len = key.len as! u32;
     } else if dl > 0 {
         note_dir(dl);
     }
+    if rec_on { hk_path_miss(key, pbuf, f, why); }
     return f;
+}
+
+// The path cache's entry for the normalized path key (h its hash): the
+// file (>= 0), -1 for no file, -2 when key is not in the cache, -3 when
+// it is not but its directory (key[..pdir], pdir > 0) is known not to
+// exist. The entry's index goes to path_known_e (-1 for none).
+var path_known_e: i64 = -1;
+fn path_known(key: const u8[:], h: u32, pdir: i64) -> i64 {
+    path_known_e = -1;
+    if pathtab.len == 0 { return -2; }
+    let e = pathtab[path_slot(key, h, false)];
+    if e != 0 {
+        path_known_e = (e - 1) as i64;
+        return pathents[e - 1].file as i64;
+    }
+    if pdir > 0 {
+        let d = pathtab[path_slot(key[..pdir], hash_bytes(key[..pdir]), true)];
+        if d != 0 && pathents[d - 1].file == -2 { return -3; }
+    }
+    return -2;
+}
+
+// Adds key to the path cache (the header cache's replay: what it verified
+// with the file system), unless it is there.
+fn path_add(key: const u8[:], f: i64, why: u32) {
+    let h = hash_bytes(key);
+    if (pathents.len + 1) * 2 > pathtab.len { path_grow(); }
+    let p = path_slot(key, h, false);
+    if pathtab[p] != 0 { return; }
+    let off = pnames.len as! u32;
+    pnames.append(key);
+    pathents.push(PathEnt { off: off, len: key.len as! u32, hash: h, file: f as! i32, why: why });
+    pathtab[p] = pathents.len as! u32;
 }
 
 fn load_file(path: const u8[:]) -> i64 {
@@ -196,9 +246,15 @@ fn load_file(path: const u8[:]) -> i64 {
     src.push(0);
     src.push(0);
     let f = files.len;
-    files.push(FileRec { path: 0, path_len: 0, start: s as! u32, end: e as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0, sp_off: 0, sp_len: 0 });
+    files.push(FileRec { path: 0, path_len: 0, start: s as! u32, end: e as! u32, grd: -1, once: false, system: false, lines_first: -1, lines_count: 0, sp_off: 0, sp_len: 0,
+        dev: last_stat(0) as! u64, ino: last_stat(1) as! u64, fsize: last_stat(2) as! u64, mtime: last_stat(3), ctime: last_stat(4),
+        rt: 0, rw: 0 });
+    if last_stat(5) == 0 { files[f].fsize = 0xFFFFFFFFFFFFFFFF; }   // not a regular file: never cached
     return f;
 }
+
+// Field k of the stat of the file goosecc_read_file read last (goosecc_rt.h).
+extern fn last_stat(k: i64) -> i64 = "goosecc_last_stat";
 
 fn trigraph_char(c: u8) -> u8 {
     return match c {
@@ -308,6 +364,7 @@ fn push_file(f: i64, spell: const u8[:], dir_idx: i64, sys: bool) {
     let so = name_add(spell);
     let sl = spell.len as! u32;
     if files[f].sp_len == 0 {
+        if rec_on { hk_fwrite(f); }
         files[f].sp_off = so;
         files[f].sp_len = sl;
     }
@@ -320,6 +377,7 @@ fn push_file(f: i64, spell: const u8[:], dir_idx: i64, sys: bool) {
         dir_idx: dir_idx as! i32, line_delta: 0, mi_state: MI_START, mi_macro: -1,
     });
     restore_lexer(ctxs.len - 1);
+    if rec_on { hk_push(); }
     if mode_E { pr_file_enter(so, sl, s != 0); }
 }
 
@@ -337,19 +395,31 @@ fn end_of_file() -> bool {
         error_at(conds[conds.len - 1].loc as i64, "unterminated conditional directive");
         conds.resize(c.cond_base as i64);
     }
-    if c.mi_state == MI_AFTER && c.mi_macro >= 0 { files[c.file].grd = c.mi_macro; }
+    if c.mi_state == MI_AFTER && c.mi_macro >= 0 {
+        if rec_on { hk_fwrite(c.file as i64); }
+        files[c.file].grd = c.mi_macro;
+    }
     if ci == 0 { return false; }
     ctxs.pop();
     // The includer is the file context below.
     var j = ctxs.len - 1;
     while ctxs[j].kind != CTX_FILE { j--; }
     restore_lexer(j);
+    // the end of a header the cache is recording (B4)
+    if rec_on && recs[recs.len - 1].ctxd as i64 == ctxs.len + 1 { hc_unit_end(); }
+    back_in_includer();
+    return true;
+}
+
+// The end of an included file, back in the includer (whose lexer state is
+// restored): the next token starts a line; -E writes the line marker.
+fn back_in_includer() {
     lx_flags = F_BOL;
     if mode_E {
+        let j = cur_file_ctx;
         let line, col = line_col(lx_file, lx_pos);
         pr_file_return(line + 1 + ctxs[j].line_delta, ctxs[j].pspell, ctxs[j].pspell_len, ctxs[j].sys != 0);
     }
-    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,6 +519,7 @@ recursive fn do_if(t: Tok, k: i64, ms: u8) {
     } else {
         let n = dir_ident();
         if n.kind == TK_IDENT {
+            if rec_on { hk_mtest(n.val); }
             let defined = idents[n.val].macro >= 0;
             val = if k == PK_IFDEF { defined } else { !defined };
             if k == PK_IFNDEF && !defined { grdm = n.val as i64; }
@@ -587,6 +658,7 @@ recursive fn skip_block() {
                     } else {
                         let n = dir_ident();
                         if n.kind == TK_IDENT {
+                            if rec_on { hk_mtest(n.val); }
                             let defined = idents[n.val].macro >= 0;
                             v = if k == PK_ELIFDEF { defined } else { !defined };
                         }
@@ -697,12 +769,14 @@ fn do_define() {
     let m = macros.len;
     macros.push(Macro { name: n.val, first: first as! u32, count: count as! u32, nparams: params.len as! u16,
         flags: flags, builtin: 0, enabled: true, loc: n.xloc });
+    if rec_on { hk_mwrite(n.val); }
     idents[n.val].macro = m as! i32;
 }
 
 fn do_undef() {
     let n = dir_ident();
     if n.kind != TK_IDENT { return; }
+    if rec_on { hk_mwrite(n.val); }
     idents[n.val].macro = -1;
     finish_directive();
 }
@@ -760,18 +834,38 @@ recursive fn do_include(t: Tok, k: i64) {
         error_at(t.xloc as i64, "#include nested too deeply");
         return;
     }
+    // B4: the header cache replays the whole include (the search, the file
+    // and everything it includes) when what it depends on is unchanged;
+    // otherwise it records it (hc_unit says which includes are units).
+    var rec = false;
+    if hc_on && hc_unit(angled) && !hc_would_skip(inc_name, angled, k) {
+        if hc_replay(inc_name, angled, k) { return; }
+        rec = hc_rec_start(inc_name, angled, k);
+    }
     let f = find_include(inc_name, angled, k == PK_INCLUDE_NEXT);
     if f < 0 {
         error_at(ht.xloc as i64, str("'", inc_name, "' file not found"));
         fatal("compilation terminated");
         return;
     }
-    if files[f].once { return; }
+    if files[f].once {
+        if rec { hc_rec_drop(); }
+        return;
+    }
     let g = files[f].grd as i64;
-    if g >= 0 && idents[g].macro >= 0 { return; }
+    if g >= 0 {
+        if rec_on { hk_mtest(g as! u32); }
+        if idents[g].macro >= 0 {
+            if rec { hc_rec_drop(); }
+            return;
+        }
+    }
     if k == PK_IMPORT {
         // #import: include at most once
-        if files[f].sp_len != 0 { return; }
+        if files[f].sp_len != 0 {
+            if rec { hc_rec_drop(); }
+            return;
+        }
     }
     let sys = found_dir >= sys_start || (ctxs[cur_file_ctx].sys != 0 && found_dir < 0);
     // pbuf holds the spelling of the path that was found
@@ -779,6 +873,7 @@ recursive fn do_include(t: Tok, k: i64) {
     inc_name.clear();
     inc_name.append(pbuf);
     push_file(f, inc_name, dirx, sys);
+    if rec { hc_rec_entered(); }
 }
 
 // ---------------------------------------------------------------------------
@@ -956,7 +1051,10 @@ recursive fn do_pragma(t: Tok, from_op: bool) {
     if ptoks.len == 0 { if mode_E { pr_directive_line("#pragma"); } return; }
     var print = true;
     if ptok_is(0, "once") {
-        if cur_file_ctx > 0 { files[lx_file].once = true; }
+        if cur_file_ctx > 0 {
+            if rec_on { hk_fwrite(lx_file); }
+            files[lx_file].once = true;
+        }
         print = false;
     } else if ptok_is(0, "push_macro") || ptok_is(0, "pop_macro") {
         print = false;
@@ -965,12 +1063,14 @@ recursive fn do_pragma(t: Tok, from_op: bool) {
             string_body(ptoks[2], dir_text);
             let id = intern(dir_text);
             if ptok_is(0, "push_macro") {
+                if rec_on { hk_mread(id); }
                 push_stack.push(id as! i32);
                 push_stack.push(idents[id].macro);
             } else {
                 var j = push_stack.len - 2;
                 while j >= 0 && push_stack[j] != (id as! i32) { j -= 2; }
                 if j >= 0 {
+                    if rec_on { hk_pop_macro(id, j); }
                     idents[id].macro = push_stack[j + 1];
                     // remove the entry
                     var q = j;
@@ -985,6 +1085,7 @@ recursive fn do_pragma(t: Tok, from_op: bool) {
     } else if (ptok_is(0, "GCC") || ptok_is(0, "clang")) && ptok_is(1, "system_header") {
         print = false;
         if cur_file_ctx > 0 {
+            if rec_on { hk_fwrite(lx_file); }
             files[lx_file].system = true;
             ctxs[cur_file_ctx].sys = F_SYSHDR;
             lx_sys = F_SYSHDR;
@@ -992,7 +1093,10 @@ recursive fn do_pragma(t: Tok, from_op: bool) {
     } else if ptok_is(0, "GCC") && ptok_is(1, "poison") {
         print = false;
         for j in 2..ptoks.len {
-            if ptoks[j].kind == TK_IDENT { idents[ptoks[j].val].flags = idents[ptoks[j].val].flags | ID_POISONED; }
+            if ptoks[j].kind == TK_IDENT {
+                if rec_on { hk_poison(ptoks[j].val); }
+                idents[ptoks[j].val].flags = idents[ptoks[j].val].flags | ID_POISONED;
+            }
         }
     } else if ptok_is(0, "GCC") && ptok_is(1, "dependency") {
         print = false;
@@ -1022,8 +1126,10 @@ recursive fn do_pragma(t: Tok, from_op: bool) {
     } else if ptok_is(0, "GCC") && ptok_is(1, "error") {
         error_at(t.xloc as i64, "#pragma GCC error");
     } else if ptok_is(0, "pack") {
+        if rec_on { hk_pack(); }
         do_pack();
     } else if ptok_is(0, "ms_struct") {
+        if rec_on { hk_pack(); }
         var v: u32 = 0;
         if ptok_is(1, "on") { v = 1; }
         if tu_annot {
