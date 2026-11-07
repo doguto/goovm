@@ -780,9 +780,10 @@ fn man_get() -> i64 {
             var nv: u32 = 0;
             while rp + 4 <= hcr.len && nv < 4 * HC_MAX_VARIANTS {
                 if hcr[rp] == HC_MAGIC_V && hcr[rp + 1] == 0 {
+                    // volatile: nothing else in it matters
                     vol = true;
-                    rp += 4;
-                    continue;
+                    rp = hcr.len;
+                    break;
                 }
                 if hcr[rp] != HC_MAGIC_R { break; }
                 let vl = hcr[rp + 1] as i64;
@@ -2271,13 +2272,28 @@ fn man_add(r: Rec, bid: u64) {
     var vol = false;
     if nv + 1 >= hc_volatile {
         // too many contexts: the key is not worth looking up any more (its
-        // includes are units of their own)
-        hcv.clear();
-        hcv.push(HC_MAGIC_V);
-        hcv.push(0);
-        hcv.push(0);
-        hcv.push(0);
-        if append_words(hcp, hcv) == 1 { vol = true; }
+        // includes are units of their own). The manifest is replaced by one
+        // that says so and nothing else, which every later compile reads
+        // instead of all the variants (a record appended by a writer that
+        // read the old manifest only follows the volatile record).
+        hcx.clear();
+        hcx.push(HC_MAGIC_M);
+        hcx.push(HC_VERSION);
+        wstr(hcx, hcb[r.key..r.key + r.key_len]);
+        hcx.push(HC_MAGIC_V);
+        hcx.push(0);
+        hcx.push(0);
+        hcx.push(0);
+        if write_words(hcp, hcx) == 1 {
+            vol = true;
+        } else {
+            hcv.clear();
+            hcv.push(HC_MAGIC_V);
+            hcv.push(0);
+            hcv.push(0);
+            hcv.push(0);
+            if append_words(hcp, hcv) == 1 { vol = true; }
+        }
     }
     // this process's copy
     let off = hcm.len;
