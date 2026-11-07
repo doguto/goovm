@@ -19,7 +19,53 @@ file.c -o file.o` produces objects that link with clang-20's and glibc.
   section 11 what B4's header cache did, and in section 12 B5's debug
   information.
 
-Status (milestone B5):
+Status (milestone G1; DESIGN.md, section 12; measurements in
+[`../bench/results/g1-2026-11-07/`](../bench/results/g1-2026-11-07/)):
+
+- **Start-up.** A compile of a one-line file takes 0.65 ms (1.19 ms
+  before; measured on a quiet machine, `exec` and exit included). Half of
+  the old time was the Goose runtime mapping 420 data stacks one by one;
+  `build.sh` now patches the runtime embedded in the generated C so that
+  they are slots of one reservation, enabled on first touch, with the 146
+  regions every compile uses packed and enabled at start-up
+  ([runtime-patches/README.md](runtime-patches/README.md), with a
+  proposal for the Goose authors).
+- **Parse cache.** The parser's state after a file's leading `#include`s
+  is saved next to the header cache and replayed by later compiles that
+  start with the same includes (src/pcache.goose). Over CTMark,
+  parse+sema with a warm cache went from 218 to 153 ms.
+- **Speed** (CTMark's 316 C files, best of 3, the machine shared with
+  another job): warm cache 1.19 s, **1.35 times faster than tcc** (1.61 s)
+  and 11.3 times faster than `clang-20 -O0` (13.5 s); without the cache
+  1.48 s, faster than tcc. Before G1, in the same run: 1.33 s warm, 1.60 s
+  without the cache. **sqlite3.c** alone stays slower than tcc: 34 ms
+  without the cache (best of 9) against tcc's 24.5 ms; it is nearly all
+  its own code, which no cache helps.
+- **clang's -O0 code generation**: reads of `const` objects folded (with
+  `DW_AT_const_value` DIEs), address differences, `strlen`/`memchr`,
+  `__builtin_constant_p`, GNU-mode array bounds, NRVO, `nodebug`
+  functions, and the in-place expansion of `always_inline` `nodebug`
+  functions (the x86 intrinsics). `tests/dwarf_diff.py`: 2,268 of the
+  2,289 files both compile have clang's DWARF (2,232 before), 12 differ
+  only in a frame-location form, 9 differ (44 before: 8 are `always_inline`
+  functions with debug information, which goosecc still calls); CTMark: 323
+  of 324 identical. gdb: 46 of B5's 79 programs give identical sessions
+  (45 before).
+- **Exactness.** With the parse cache, `cache_check.py` (2,357 files,
+  44,783 runs, now comparing the whole parser state too), `pcache_check.py`
+  (replays into a padded main file: 9,428 runs, 2,960 replays) and the 17
+  adversarial tests pass; the compiler suite (1,804 tests, `-O0` and
+  `-g`), `tests/run.py --goosecc` (108/108) and the four front-end oracles
+  pass. Against the build before G1, `-E` is unchanged everywhere; the AST
+  dump and the layout check differ in 3 files (GNU-mode array bounds that
+  clang folds); 113 objects differ, every one from an intended change
+  (`checks/attrib.txt` attributes each to its step: `noinit` 1, const
+  folding 74, `strlen`/NRVO/`__builtin_constant_p`/pointer reads 34, the
+  inlining of intrinsics 4).
+- `noinit` compiles (clang-20 ignores it on x86-64); `tests/c/52` and `53`
+  are new.
+
+Status at milestone B5:
 
 - `goosecc -g` writes the DWARF 5 of `clang-20 -O0 -g`: variables,
   parameters, types (bit-fields, VLAs, enums, function pointers, vectors,
@@ -166,6 +212,13 @@ $ goosecc -c --cache-stats libclamav_table.c ...
 goosecc: header cache: 6 lookups, 6 hits, 0 misses; 0 recorded (0 bytes written), 0 too small, 0 not cacheable, 0 corrupt, 0 write errors, 0 volatile; replay 711 us (read 116, check 77, append 222, commit 70), saving 0 us
 ```
 
+The same directory holds the **parse cache** (G1; DESIGN.md, section
+12.2): the parser's state after a file's leading `#include`s, replayed
+by later compiles that start with the same includes (the same headers,
+options and defines). It is on and off with the header cache;
+`--cache-stats` reports its lookups, hits and where a replay's time went
+(`; parse cache: 1 lookups, 1 hits, 0 recorded, ...`).
+
 Headers changed less than 2 seconds before a compile are not recorded
 (their stat cannot be trusted yet); units that print a diagnostic or
 expand `__DATE__`/`__TIME__` never are. The cache tolerates concurrent
@@ -177,6 +230,28 @@ can change what goosecc compiles, so it should be private (as
 `~/.cache/goosecc` is).
 
 ## Tests
+
+### Parse cache and object tests (G1)
+
+```bash
+frontend-goose/tests/cache_check.py --goosecc frontend-goose/build/goosecc -j 2    # outputs and the whole parser state, cache off/cold/warm/shared
+frontend-goose/tests/pcache_check.py --goosecc frontend-goose/build/goosecc -j 2   # replays into a padded main file (every offset moves)
+frontend-goose/tests/cmp_bins.py --ref old/goosecc --save ref.json                  # record a build's outputs (checksums)
+frontend-goose/tests/cmp_bins.py --load ref.json --goosecc frontend-goose/build/goosecc --list diff.json
+```
+
+- `cache_check.py` (B4's) now compares the parser's state too:
+  `--pp-state-hash` hashes every parser table after parsing, so a replay
+  that left one word different in any table fails.
+- `pcache_check.py` records each file's parse cache entry, then compiles
+  the file again with `GOOSECC_TEST_MAIN_PAD=777` (the main file read with
+  777 bytes of blank lines in front, which moves every source offset of
+  the main file and everything after it) from the entry and without the
+  cache: `-c`, `-c -g`, `--dump-ast` and `--layout-check` must be identical.
+- `cmp_bins.py` compares two goosecc builds over the corpus (`-E`, the AST
+  dump, the layout check, the objects with and without `-g`), from a saved
+  record of the reference's checksums, and lists what differs with the ELF
+  sections that differ.
 
 ### Debug information tests (B5)
 
@@ -311,6 +386,66 @@ The tables of clang-20 facts are generated, and the generators are kept:
 `tools/gen_builtins.py` (builtin function types).
 
 ## Results
+
+### Start-up, parse cache, clang's folding (G1)
+
+**Compile time.** `tests/bench_hcache.py <CTMark compile_commands.json>
+-n 3` (each file alone, single-threaded, the variants interleaved file
+by file; best of 3; milliseconds; the machine was shared with another
+job, load average 1.6-3). Before G1 (66ea246) and G1, run back to back:
+
+| program | files | off (before) | warm (before) | off | cold | warm | tcc | clang `-O0` | warm/tcc |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 7zip | 32 | 96 | 87 | 79 | 100 | 70 | 83 | 852 | 1.18x |
+| ClamAV | 98 | 452 | 400 | 417 | 622 | 364 | 460 | 3,486 | 1.27x |
+| SPASS | 51 | 297 | 229 | 291 | 400 | 208 | 320 | 2,723 | 1.54x |
+| consumer-typeset | 51 | 249 | 205 | 230 | 302 | 185 | 250 | 2,158 | 1.35x |
+| lencod | 55 | 301 | 250 | 270 | 384 | 214 | 293 | 2,499 | 1.37x |
+| mafft | 27 | 159 | 116 | 143 | 209 | 103 | 172 | 1,284 | 1.67x |
+| sqlite3 | 2 | 41 | 41 | 49 | 48 | 44 | 29 | 451 | 0.67x |
+| **total** | 316 | 1,596 | 1,328 | **1,479** | 2,067 | **1,188** | 1,607 | 13,453 | **1.35x** |
+
+- Warm, goosecc is 1.35 times faster than tcc and 11.3 times faster than
+  clang; without the cache it is faster than tcc too (1.48 s against
+  1.61 s).
+- sqlite3.c alone (`sq.py`, best of 9, without the cache): 37.5 ms before
+  G1, 34.0 ms with it (preprocess 10.1, parse+sema 8.3, lowering 7.4,
+  back-end 6.4); tcc takes 24.5 ms. The row above is noisier (one file,
+  best of 3 under load). The target "faster than tcc on sqlite3.c" is not
+  met: the file is a 250,000-line amalgamation whose own code is nearly
+  all of it, so neither cache helps, and goosecc executes about 280
+  million instructions on it against tcc's 210 million (callgrind; the
+  preprocessor's macro expansion and the lexer are a quarter of it).
+- On a quiet machine (earlier in G1, `qbench.py`): one-line file 1.19 →
+  0.65 ms; CTMark warm 1,275 ms → 1,147 ms with the runtime patch →
+  1,102 ms with the parse cache (parse+sema 218 → 153 ms); tcc 1,563 ms.
+- The runtime patch moves the cost of enabling a region from start-up to
+  its first touch, inside the phases: `--time`'s preprocessing phase
+  grows by about that much while the whole compile gets shorter.
+
+**DWARF against clang** (`tests/dwarf_diff.py --corpus
+torture,unit,regress,bench,ctmark --verify -j 2`):
+
+| corpus | files | identical | identical but for frame-location forms | differing | not compiled |
+|---|---:|---:|---:|---:|---:|
+| `torture` | 1708 | 1648 | 8 | 9 | 43 |
+| `unit` | 182 | 164 | 1 | 0 | 17 |
+| `regress` | 37 | 34 | 1 | 0 | 2 |
+| `bench` | 102 | 99 | 1 | 0 | 2 |
+| `ctmark` | 328 | 323 | 1 | 0 | 4 |
+| **total** | 2357 | **2268** (B5: 2231) | 12 | **9** (B5: 44) | 68 |
+
+The 9: eight torture tests with `always_inline` functions that have
+debug information (clang inlines them and describes the expansions with
+`DW_TAG_inlined_subroutine`s; goosecc calls them: `20080424-1`,
+`20090113-3`, `pr33992`, `pr39228`, `pr63843`, `pr79043`, `stdarg-4`,
+`va-arg-pack-1`), and `920721-2` (a VLA's location list as the back-end
+writes it). `llvm-dwarfdump --verify` passes on all 2,289 objects.
+
+**gdb** (`tests/gdb_oracle.py --goosecc --corpus c,sample,ctmark -j 2`):
+49 of 84 sessions identical (1,556 stops); on B5's 79 programs 46 (B5:
+45: `2006-01-23-UnionInit` now matches), and 3 of the 5 new `tests/c`
+programs.
 
 ### Debug information (B5)
 

@@ -1,0 +1,6 @@
+
+torture  files  1708  clang-ok  1708  identical  1708  {}
+unit     files   182  clang-ok   182  identical   182  {}
+regress  files    37  clang-ok    37  identical    37  {}
+bench    files   102  clang-ok   102  identical   102  {}
+ctmark   files   328  clang-ok   328  identical   328  {}

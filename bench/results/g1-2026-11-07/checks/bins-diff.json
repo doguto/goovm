@@ -1,0 +1,1157 @@
+[
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20000227-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20000227-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20000314-2.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20000314-2.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20000402-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20000402-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20001026-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20001026-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010325-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010325-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010711-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010711-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010904-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010904-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010904-2.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20010904-2.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20030714-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20030714-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20031215-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20031215-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20080117-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/20080117-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/941015-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/941015-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/990106-2.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/990106-2.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/990628-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/990628-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/bcp-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/bcp-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtin-bitops-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtin-bitops-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtin-constant.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtin-constant.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/cbrt.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/cbrt.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/complex-4.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/complex-4.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/memchr-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/memchr-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/noinit-attribute.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/noinit-attribute.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr51877.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr51877.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr63209.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr63209.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr64006.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr64006.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr65956.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/pr65956.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/string-opt-5.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/string-opt-5.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/strlen-2.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/strlen-2.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/strlen-3.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/strlen-3.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/strlen-4.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/strlen-4.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/struct-ret-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/struct-ret-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/widechar-2.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/widechar-2.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/zero-struct-2.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/fprintf.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/fprintf.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/fputs.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/fputs.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/memchr.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/memchr.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/printf.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/printf.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/stpncpy-chk.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/stpncpy-chk.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strcat-chk.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strcat-chk.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strcat.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strcat.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strchr.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strchr.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strcspn.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strcspn.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strlen-3.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strlen-3.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strlen.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strlen.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncat-chk.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncat-chk.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncat.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncat.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncmp-2.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncmp-2.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncmp.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncmp.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncpy-chk.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncpy-chk.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncpy.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strncpy.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strrchr.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strrchr.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strspn.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strspn.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strstr-asm.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strstr-asm.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strstr.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/builtins/strstr.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/20010114-2.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/20010114-2.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/20030331-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/20030331-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-4.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-4.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-4f.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-4f.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-4l.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-4l.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-5.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-5.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-6.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-6.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-8.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-8.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-8f.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-8f.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-8l.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/fp-cmp-8l.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/hugeval.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/hugeval.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/pr38016.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/pr38016.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/unsafe-fp-assoc-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/unsafe-fp-assoc-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/unsafe-fp-assoc.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/gcc-c-torture/execute/ieee/unsafe-fp-assoc.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/2006-01-23-UnionInit.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/2020-01-06-coverage-007.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/2020-01-06-coverage-007.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/2020-01-06-coverage-009.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/2020-01-06-coverage-009.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/testcase-ExprConstant-1.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/testcase-ExprConstant-1.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/folding.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/folding.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/offset.c",
+  "mode": "layout",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/offset.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/offset.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/switch.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Integer/switch.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Vector/SSE/sse.expandfft.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Vector/SSE/sse.expandfft.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Vector/SSE/sse.isamax.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Vector/SSE/sse.isamax.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Vector/SSE/sse.shift.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Vector/SSE/sse.shift.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Vector/SSE/sse.stepfft.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/UnitTests/Vector/SSE/sse.stepfft.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/uint64_to_float.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Regression/C/uint64_to_float.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/BenchmarkGame/Large/fasta.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/BenchmarkGame/Large/fasta.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/CoyoteBench/almabench.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/CoyoteBench/almabench.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/CoyoteBench/huffbench.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/CoyoteBench/huffbench.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/CoyoteBench/lpbench.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/CoyoteBench/lpbench.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/McGill/misr.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/McGill/misr.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/Misc/evalloop.c",
+  "mode": "ast",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/Misc/evalloop.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/Misc/evalloop.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/Misc/lowercase.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/Misc/lowercase.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/Misc/matmul_f64_4x4.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/SingleSource/Benchmarks/Misc/matmul_f64_4x4.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/sqlite3/sqlite3.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/sqlite3/sqlite3.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_hashtab.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_hashtab.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_mbox.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_mbox.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_phishcheck.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_phishcheck.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_readdb.c",
+  "mode": "ast",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_readdb.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_readdb.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_regex_list.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_regex_list.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_rtf.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/libclamav_rtf.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_compress.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_compress.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_gzlib.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_gzlib.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_gzread.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_gzread.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_gzwrite.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_gzwrite.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_uncompr.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/ClamAV/zlib_uncompr.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/clause.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/clause.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/closure.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/closure.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/flags.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/flags.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/kbo.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/kbo.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/memory.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/memory.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/rules-red.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/rules-red.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/search.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/search.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/symbol.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/symbol.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/top.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/SPASS/top.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/JM/lencod/image.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/JM/lencod/image.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/JM/lencod/output.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/JM/lencod/output.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/JM/lencod/q_offsets.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/JM/lencod/q_offsets.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/JM/lencod/rc_quadratic.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/JM/lencod/rc_quadratic.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/mafft/mltaln9.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/mafft/mltaln9.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/C/Lzma2Enc.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/C/Lzma2Enc.c",
+  "mode": "g",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/C/LzmaEnc.c",
+  "mode": "c",
+  "what": ""
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/C/LzmaEnc.c",
+  "mode": "g",
+  "what": ""
+ }
+]

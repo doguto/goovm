@@ -1,0 +1,290 @@
+c/01_int_widths                                         same  stops= 12 757 lines
+c/02_shifts                                             same  stops= 13 840 lines
+c/03_divrem                                             same  stops= 20 793 lines
+c/04_compare                                            same  stops=  9 318 lines
+c/05_loops                                              diff  stops= 16 7 differing blocks
+  replace: clang ['#0  main () at 05_loops.c:21', '21\t            for (int m = j; m < i; m += 5) tri += (i ^ j) + m;', 'j = 1']
+          goovm ['#0  main () at 05_loops.c:19', '19\t    for (int i = 0; i < 50; i++)']
+  replace: clang ['#0  main () at 05_loops.c:19']
+          goovm ['#0  main () at 05_loops.c:20']
+  replace: clang ['#0  main () at 05_loops.c:20']
+          goovm ['#0  main () at 05_loops.c:21']
+c/06_recursion                                          diff  stops= 18 40 differing blocks
+  delete: clang ['#0  ack (m=0, n=1) at 06_recursion.c:9', '#1  ack (m=1, n=0) at 06_recursion.c:7', '#2  ack (m=1, n=1) at 06_recursion.c:8', '#3  ack (m=2, n=0) at 06_recursion.c:7']
+          goovm []
+  replace: clang ['print s: $9 = "\\245\\245\\245\\245\\245"']
+          goovm ['print s: $7 = "\\245\\245\\245\\245\\245"']
+  replace: clang ['=== stop 7']
+          goovm ['=== stop 6']
+c/07_arrays                                             same  stops= 12 627 lines
+c/08_structs                                            same  stops= 10 794 lines
+c/09_pointers                                           same  stops=  9 762 lines
+c/10_strings                                            diff  stops=  8 3 differing blocks
+  replace: clang ['#0  my_strcpy (d=\'¥\' <repeats N times>, s="hello, world") at 10_strings.c:7']
+          goovm ['#0  my_strcpy (d=\'¥\' <repeats N times>, "STACK", s="hello, world") at 10_strings.c:7']
+  replace: clang ['#0  my_strcpy (d=\'¥\' <repeats N times>, s="ello, world") at 10_strings.c:7']
+          goovm ['#0  my_strcpy (d=\'¥\' <repeats N times>, "STACK", s="ello, world") at 10_strings.c:7']
+  replace: clang ['#0  my_strcpy (d=\'¥\' <repeats N times>, s="llo, world") at 10_strings.c:7']
+          goovm ['#0  my_strcpy (d=\'¥\' <repeats N times>, "STACK", s="llo, world") at 10_strings.c:7']
+c/11_switch                                             diff  stops= 29 101 differing blocks
+  replace: clang ['#0  name (d=-1) at 11_switch.c:12']
+          goovm ['warning: 32\t.printf.c: No such file or directory', '#0  __printf (format="%s ") at .printf.c:32']
+  replace: clang ['#0  name (d=0) at 11_switch.c:12', '12\t}']
+          goovm ['#0  name (d=1) at 11_switch.c:5', '5\t    switch (d) {']
+  replace: clang ['warning: 32\t.printf.c: No such file or directory', '#0  __printf (format="%s ") at .printf.c:32']
+          goovm ['#0  name (d=1) at 11_switch.c:6']
+c/12_globals                                            same  stops=  9 150 lines
+c/13_funcptr                                            diff  stops= 26 57 differing blocks
+  replace: clang ['warning: 255\t..memmove-vec-unaligned-erms.S: No such file or directory', '#0  __memcpy_avx512_unaligned_erms () at ..memmove-vec-unaligned-erms.S:255', '#1  main () at 13_funcptr.c:39']
+          goovm ['#0  main () at 13_funcptr.c:40']
+  replace: clang ['#0  main () at 13_funcptr.c:40']
+          goovm ['#0  main () at 13_funcptr.c:41']
+  delete: clang ['a = {12, 9, 7, 5, 4, 0, -3, -8}', 'key = 7', 'hit =', 'hs = {{name = "inc", fn = <h_inc>}, {name = "neg", fn = <h_neg>}, {name = "sq", fn = <h_sq>}}']
+          goovm []
+c/14_varargs                                            same  stops=  8 605 lines
+c/15_memops                                             diff  stops=  8 9 differing blocks
+  replace: clang ['warning: 255\t..memmove-vec-unaligned-erms.S: No such file or directory', '#0  __memcpy_avx512_unaligned_erms () at ..memmove-vec-unaligned-erms.S:255', '#1  main () at 15_memops.c:15']
+          goovm ['#0  main () at 15_memops.c:16']
+  replace: clang ['#0  main () at 15_memops.c:16']
+          goovm ['#0  main () at 15_memops.c:17']
+  delete: clang ['#0  main () at 15_memops.c:17', '17\t    int zero[50] = {0};                llvm.memset', 'b = {a = {1, 2, 3, 0 <repeats 16 times>, 99}, tail = "tail\\000\\000\\000\\000\\000\\000\\000\\000"}', 'c = {a = {1, 2, 3, 0 <repeats 16 times>, 99}, tail = "tail\\000\\000\\000\\000\\000\\000\\000\\000"}']
+          goovm []
+c/16_manyargs                                           same  stops= 10 256 lines
+c/17_char_short                                         same  stops= 13 673 lines
+c/18_logic                                              same  stops= 10 875 lines
+c/19_bitops                                             same  stops=  9 314 lines
+c/20_hash_rng                                           same  stops= 17 491 lines
+c/21_sort                                               diff  stops= 32 57 differing blocks
+  replace: clang ['#0  check (a=) at 21_sort.c:54']
+          goovm ['warning: 32\t.printf.c: No such file or directory', '#0  __printf (format="sort%d %u %d %d\\n") at .printf.c:32']
+  delete: clang ['#0  check (a=) at 21_sort.c:54', '#1  main () at 21_sort.c:66', 'a =', 'h = 858605664']
+          goovm []
+  replace: clang ['61\t        for (int i = 0; i < N; i++) a[i] = src[i];']
+          goovm ['No arguments.']
+c/22_lists_trees                                        same  stops= 17 642 lines
+c/23_matrix                                             diff  stops= 17 48 differing blocks
+  replace: clang ['#0  mul (a=, b=, c=) at 23_matrix.c:13']
+          goovm ['#0  mul (a=, b=, c=) at 23_matrix.c:9']
+  replace: clang ['i = 0']
+          goovm ['i = 1']
+  replace: clang ['print i: $35 = 0']
+          goovm ['print i: $35 = 1']
+c/24_sieve_numbers                                      same  stops= 16 539 lines
+c/25_bigint                                             same  stops= 19 762 lines
+c/26_expr_parser                                        diff  stops= 19 60 differing blocks
+  replace: clang ['#0  term () at 26_expr_parser.c:19']
+          goovm ['#0  term () at 26_expr_parser.c:18']
+  insert: clang []
+          goovm ['v = 1', 'ptype v: type = long', 'print v: $3 = 1', '--- next']
+  delete: clang ['ptype op: type = char', "print op: $3 = -91 '\\245'", 'ptype r: type = long', 'print r: $4 = -6510615555426900571']
+          goovm []
+c/27_abs_minmax                                         same  stops=  7 205 lines
+c/28_unions_bitfields                                   same  stops=  5 212 lines
+c/29_exit_code                                          same  stops=  5 101 lines
+c/30_abi_narrow                                         same  stops= 11 346 lines
+c/31_struct_byvalue                                     same  stops=  8 518 lines
+c/32_phi_patterns                                       same  stops= 16 513 lines
+c/33_linkage                                            same  stops=  3 49 lines
+c/34_volatile_mixed                                     same  stops=  6 439 lines
+c/35_callbacks_stack                                    same  stops= 11 341 lines
+c/36_inline_asm                                         diff  stops=  6 6 differing blocks
+  replace: clang ['#0  main () at 36_inline_asm.c:49']
+          goovm ['#0  main () at 36_inline_asm.c:50']
+  replace: clang ['#0  main () at 36_inline_asm.c:50']
+          goovm ['#0  add (a=40, b=2) at 36_inline_asm.c:7', '#1  main () at 36_inline_asm.c:50', 'a = 40', 'b = 2']
+  replace: clang ['print m: $3 = 42']
+          goovm ['print m: $13 = 42']
+c/37_float                                              diff  stops= 11 6 differing blocks
+  insert: clang []
+          goovm ['#0  main () at 37_float.c:36', '36\t    printf("%llu %lld %.17Lg %.17Lg\\n", (unsigned long long)(long double)1.8e19, (long long)(-3.9L),', 'x = 0.33333333333333331', 'y = 20000000000']
+  replace: clang ['--- next']
+          goovm ['--- step']
+  delete: clang ['36\t    printf("%llu %lld %.17Lg %.17Lg\\n", (unsigned long long)(long double)1.8e19, (long long)(-3.9L),', 'x = 0.33333333333333331', 'y = 20000000000', 'f = 0.333333343']
+          goovm []
+c/38_aggregates                                         diff  stops=  8 1 differing blocks
+  replace: clang ['warning: 32\t.printf.c: No such file or directory', '#0  __printf (format="%g %g %g %g %Lg %Lg\\n") at .printf.c:32']
+          goovm ['warning: 23\t./creal_template.c: No such file or directory', '#0  __creal (z=<optimized out>) at ./creal_template.c:23']
+c/39_int128                                             diff  stops= 10 2 differing blocks
+  replace: clang ['#0  sw (x=5) at 39_int128.c:20', '20\t}']
+          goovm ['#0  sw (x=1267650600228229401496703205376) at 39_int128.c:13', '13\t    switch (x) {']
+  replace: clang ['#0  sw (x=1267650600228229401496703205376) at 39_int128.c:13']
+          goovm ['#0  sw (x=1267650600228229401496703205376) at 39_int128.c:16']
+c/40_varargs_fp                                         diff  stops= 12 7 differing blocks
+  replace: clang ['#0  sum (n=9) at 40_varargs_fp.c:27']
+          goovm ['#0  sum (n=9) at 40_varargs_fp.c:28']
+  delete: clang ['#0  sum (n=9) at 40_varargs_fp.c:28', '28\t    int first = va_arg(aq, int);', 'ap = {{gp_offset = 48, fp_offset = 160, overflow_arg_area = , reg_save_area = }}', 'aq = {{gp_offset = 8, fp_offset = 48, overflow_arg_area = , reg_save_area = }}']
+          goovm []
+  insert: clang []
+          goovm ['--- next', '#0  main () at 40_varargs_fp.c:43', '43\t    say("%d %s %.3f %Lg %c %ld %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f\\n", 1, "two", 3.0, 4.0L, \'5\', 6L, 7.0,', 'p = {x = 1.5, y = 4}']
+c/41_misc                                               diff  stops= 12 16 differing blocks
+  replace: clang ['a = <optimized out>']
+          goovm ['a =']
+  replace: clang ['off = {11, 24}']
+          goovm ['off = {11, 25}']
+  replace: clang ['off = {11, 24}']
+          goovm ['off = {11, 25}']
+c/42_vectors                                            same  stops=  7 391 lines
+c/43_atomics                                            same  stops=  8 288 lines
+c/44_frames                                             diff  stops= 15 47 differing blocks
+  delete: clang ['#0  big (depth=0, seed=3279663021) at 44_frames.c:22', '#1  big (depth=1, seed=2062738233) at 44_frames.c:21', '#2  big (depth=2, seed=547771853) at 44_frames.c:21', '#3  big (depth=3, seed=3503597882) at 44_frames.c:21']
+          goovm []
+  replace: clang ['=== stop 7']
+          goovm ['=== stop 6']
+  replace: clang ['print a: $17 = 5']
+          goovm ['print a: $13 = 5']
+c/45_ra_widths                                          same  stops=  8 551 lines
+c/46_ra_pressure                                        same  stops= 16 964 lines
+c/47_ra_control                                         diff  stops= 27 7 differing blocks
+  replace: clang ['#0  sw64 (k=4294967296) at 47_ra_control.c:36', '36\t}']
+          goovm ['#0  sw64 (k=-4294967296) at 47_ra_control.c:30', '30\t    switch (k) {']
+  replace: clang ['#0  sw64 (k=-4294967296) at 47_ra_control.c:30']
+          goovm ['#0  sw64 (k=-4294967296) at 47_ra_control.c:32']
+  replace: clang ['#0  sw64 (k=-4294967296) at 47_ra_control.c:36']
+          goovm ['#0  sw64 (k=7) at 47_ra_control.c:30']
+c/48_ra_special                                         same  stops= 16 488 lines
+c/49_switch_tables                                      diff  stops= 40 134 differing blocks
+  replace: clang ["#0  shared (c=90 'Z') at 49_switch_tables.c:30", '30\t}']
+          goovm ["#0  shared (c=91 '[') at 49_switch_tables.c:23", '23\t    switch (c) {']
+  replace: clang ["#0  shared (c=91 '[') at 49_switch_tables.c:23"]
+          goovm ["#0  shared (c=91 '[') at 49_switch_tables.c:28"]
+  replace: clang ["#0  shared (c=92 '\\\\') at 49_switch_tables.c:30", '30\t}']
+          goovm ["#0  shared (c=93 ']') at 49_switch_tables.c:23", '23\t    switch (c) {']
+c/50_fp_classify                                        diff  stops= 49 101 differing blocks
+  replace: clang ['warning: 255\t..memmove-vec-unaligned-erms.S: No such file or directory', '#0  __memcpy_avx512_unaligned_erms () at ..memmove-vec-unaligned-erms.S:255', '#1  init () at 50_fp_classify.c:21']
+          goovm ['#0  init () at 50_fp_classify.c:24', '#1  main () at 50_fp_classify.c:108']
+  replace: clang ['#0  kind (k=2) at 50_fp_classify.c:60', '60\t}', 'No locals.']
+          goovm ['#0  main () at 50_fp_classify.c:113', '113\t               dvalue(d), dsub(d), dzero(d), fclass(f), kind(fpclassify(f)), fvalue(f), fsub(f));', 'd = 0', 'f = 0']
+  replace: clang ['#0  main () at 50_fp_classify.c:113']
+          goovm ['#0  dvalue (x=0) at 50_fp_classify.c:63', '#1  main () at 50_fp_classify.c:113']
+c/51_fp_convert                                         same  stops= 20 1842 lines
+c/52_noinit_sections                                    same  stops=  4 68 lines
+c/53_always_inline                                      same  stops=  6 454 lines
+c/60_vm_arrays                                          diff  stops= 19 125 differing blocks
+  delete: clang ['__vla_expr0 = 11936128518282651045']
+          goovm []
+  replace: clang ['c = <optimized out>']
+          goovm ['c =']
+  delete: clang ['__vla_expr0 = 1']
+          goovm []
+sample/Benchmarks/Stanford/Bubblesort                   same  stops= 22 534 lines
+sample/Benchmarks/Stanford/Queens                       same  stops= 23 909 lines
+sample/Benchmarks/Stanford/Towers                       diff  stops= 27 98 differing blocks
+  replace: clang ['#0  Push (i=13, s=1) at Towers.c:154']
+          goovm ['#0  Push (i=13, s=1) at Towers.c:153']
+  insert: clang []
+          goovm ['#0  Push (i=13, s=1) at Towers.c:154', '#1  Init (s=1, n=14) at Towers.c:166', '#2  Towers () at Towers.c:204', '#3  main () at Towers.c:216']
+  insert: clang []
+          goovm ['136\t\tint temp = 0;  /* force init of temp WR*/', 'temp = -1515870811', '--- step', '#0  Getelement () at Towers.c:137']
+sample/Benchmarks/Stanford/Treesort                     diff  stops= 33 55 differing blocks
+  replace: clang ['#0  Insert (n=-15239, t=) at Treesort.c:156']
+          goovm ['#0  Insert (n=-15239, t=) at Treesort.c:152']
+  replace: clang ['#0  Insert (n=-15986, t=) at Treesort.c:150']
+          goovm ['#0  Insert (n=-15239, t=) at Treesort.c:156']
+  replace: clang ['n = -15986']
+          goovm ['n = -15239']
+sample/Benchmarks/Stanford/Perm                         same  stops= 20 470 lines
+sample/Benchmarks/Stanford/Puzzle                       diff  stops= 39 31 differing blocks
+  delete: clang ['#0  Fit (i=0, j=73) at Puzzle.c:133', '133\t}', 'k = 12', '--- next']
+          goovm []
+  insert: clang []
+          goovm ['--- next', '#0  Place (i=0, j=73) at Puzzle.c:138', '138\t\tpiececount[class[i]] = piececount[class[i]] - 1;', 'k = 12']
+  replace: clang ['#0  Place (i=0, j=73) at Puzzle.c:138']
+          goovm ['#0  Place (i=0, j=73) at Puzzle.c:139']
+sample/Benchmarks/Shootout/ackermann                    diff  stops=  5 5 differing blocks
+  delete: clang ['#0  Ack (M=0, N=1) at ackermann.c:14', '#1  Ack (M=1, N=0) at ackermann.c:12', '#2  Ack (M=1, N=1) at ackermann.c:13', '#3  Ack (M=2, N=0) at ackermann.c:12']
+          goovm []
+  replace: clang ['print argc: $10 = 1']
+          goovm ['print argc: $8 = 1']
+  replace: clang ['print argv: $11 = (char **)']
+          goovm ['print argv: $9 = (char **)']
+sample/Benchmarks/Shootout/lists                        diff  stops= 58 193 differing blocks
+  delete: clang ['#0  list_equal (x=, y=) at lists.c:73', '#1  test_lists () at lists.c:152', '#2  main (argc=1, argv=) at lists.c:227', 'x =']
+          goovm []
+  replace: clang ['22\tinline int list_empty(DLL *head) { return(list_length(head) == 0); }', 'No locals.', '--- step', '#0  list_length (head=) at lists.c:21']
+          goovm ['#1  test_lists () at lists.c:156']
+  replace: clang ['next =']
+          goovm ['No locals.']
+sample/Benchmarks/Shootout/matrix                       same  stops= 26 1052 lines
+sample/Benchmarks/Shootout/objinst                      same  stops= 20 569 lines
+sample/Benchmarks/Shootout/sieve                        same  stops= 15 632 lines
+sample/Benchmarks/Shootout/hash                         same  stops=  8 400 lines
+sample/Benchmarks/McGill/queens                         same  stops= 20 782 lines
+sample/Benchmarks/McGill/exptree                        diff  stops= 37 135 differing blocks
+  insert: clang []
+          goovm ['#0  recSearch (searchDepth=0, usedMask=0) at exptree.c:290', '290\t\t\t\t     ( 1 << operand2 );', 'working1 = 32', 'working2 = 13']
+  replace: clang ['--- next']
+          goovm ['--- step']
+  delete: clang ['288\t\t\t    newMask = usedMask |', 'working1 = 32', 'working2 = 13', 'temp = -1515870811']
+          goovm []
+sample/Benchmarks/Misc/evalloop                         diff  stops= 31 148 differing blocks
+  replace: clang ['cmds = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1515870811 <repeats 2038 times>}']
+          goovm ['cmds = {0, 0, 0, 0, 0, 0, -1515870811 <repeats 2042 times>}']
+  replace: clang ['print cmds: $2 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1515870811 <repeats 2038 times>}', '--- next', '#0  main () at evalloop.c:108', '108\t  int cmds[BUFSIZE];']
+          goovm ['print cmds: $2 = {0, 0, 0, 0, 0, 0, -1515870811 <repeats 2042 times>}']
+  replace: clang ['i = -1515870811']
+          goovm ['i = 0']
+sample/Benchmarks/Misc/richards_benchmark               diff  stops= 61 26 differing blocks
+  replace: clang ['#0  schedule () at richards_benchmark.c:183']
+          goovm ['#0  schedule () at richards_benchmark.c:176']
+  replace: clang ['#0  schedule () at richards_benchmark.c:183']
+          goovm ['#0  schedule () at richards_benchmark.c:176']
+  replace: clang ['#0  handlerfn (pkt=) at richards_benchmark.c:322', '322\t}', 'No locals.']
+          goovm ['#0  schedule () at richards_benchmark.c:173', '173\t                tcb->t_v1 = v1;', 'pkt =', 'newtcb =']
+sample/Benchmarks/Misc/fbench                           diff  stops= 42 8 differing blocks
+  insert: clang []
+          goovm ['#0  main (argc=1, argv=) at fbench.c:774', '774\t        sprintf(outarr[1], "%15s   %21.11f  %14.11f",', 'i = 4', 'j = 4']
+  replace: clang ['--- next']
+          goovm ['--- step']
+  delete: clang ['774\t        sprintf(outarr[1], "%15s   %21.11f  %14.11f",', 'i = 4', 'j = 4', 'k = -1515870811']
+          goovm []
+sample/Benchmarks/Misc/perlin                           diff  stops= 27 3 differing blocks
+  delete: clang ['#0  main () at perlin.c:77', '77\t        sum += noise(x, y, z);', 'x = -11352.57', 'y = 25.258999999999112']
+          goovm []
+  insert: clang []
+          goovm ['--- next', '#0  main () at perlin.c:75', '75\t      for (z = -156.235; y < 23.2345; y += 2.45)', 'x = -11352.57']
+  replace: clang ['#0  main () at perlin.c:75']
+          goovm ['#0  main () at perlin.c:74']
+sample/UnitTests/2003-05-07-VarArgs                     diff  stops= 18 8 differing blocks
+  replace: clang ['warning: 158\t..memset-vec-unaligned-erms.S: No such file or directory', '#0  __memset_avx512_unaligned_erms () at ..memset-vec-unaligned-erms.S:158', '#1  main () at 2003-05-07-VarArgs.c:68']
+          goovm ['#0  main () at 2003-05-07-VarArgs.c:70']
+  replace: clang ['#0  test (fmt="ssiciiiiis") at 2003-05-07-VarArgs.c:25']
+          goovm ['#0  test (fmt="ssiciiiiis") at 2003-05-07-VarArgs.c:27']
+  replace: clang ['#0  test (fmt="ssiciiiiis") at 2003-05-07-VarArgs.c:27']
+          goovm ['#0  test (fmt="ssiciiiiis") at 2003-05-07-VarArgs.c:28']
+sample/UnitTests/2003-09-18-BitFieldTest                same  stops=  2 47 lines
+sample/UnitTests/2005-05-12-Int64ToFP                   same  stops=  5 108 lines
+sample/UnitTests/2006-01-23-UnionInit                   same  stops=  7 192 lines
+sample/UnitTests/2009-04-16-BitfieldInitialization      same  stops=  5 89 lines
+sample/UnitTests/2002-10-12-StructureArgs               same  stops=  2 63 lines
+ctmark/sqlite3                                          diff  stops= 58 22 differing blocks
+  replace: clang ['#0  sqlite3_realloc (pPrior=, nBytes=320) at sqlite3.c:10871', '10871\t}', 'nOld = -1515870811', 'p =']
+          goovm ['#0  sqlite3DbRealloc (db=, p=, n=320) at sqlite3.c:13511', '13511\t    if( !pNew ){', 'pNew =']
+  replace: clang ['#0  sqlite3DbRealloc (db=, p=, n=320) at sqlite3.c:13511']
+          goovm ['#0  sqlite3DbRealloc (db=, p=, n=320) at sqlite3.c:13514']
+  replace: clang ['#0  sqlite3_realloc (pPrior=, nBytes=1008) at sqlite3.c:10871', '10871\t}', 'nOld = -1515870811', 'p =']
+          goovm ['#0  sqlite3DbRealloc (db=, p=, n=1008) at sqlite3.c:13511', '13511\t    if( !pNew ){', 'pNew =']
+ctmark/SPASS                                            diff  stops= 80 303 differing blocks
+  replace: clang ['#0  clause_ImpliesFiniteDomain (Clause=) at clause.c:662', '662\t}', 'i = -1515870811', 'Term =']
+          goovm ['#0  ana_AnalyzeProblem (Search=, Clauses=) at analyze.c:163', '163\t    if (!ana_NONTRIVDOMAIN && clause_ImpliesNonTrivialDomain(Clause)) {', 'Clause =']
+  replace: clang ['#0  ana_AnalyzeProblem (Search=, Clauses=) at analyze.c:163', '#1  top_ProofSearch (Search=, ProblemClauses=, InputFlags=, UserPrecedence=, BoundApplied=) at top.c:871']
+          goovm ['#0  clause_ImpliesNonTrivialDomain (Clause=) at clause.c:671', '#1  ana_AnalyzeProblem (Search=, Clauses=) at analyze.c:163']
+  delete: clang ['#0  clause_ImpliesNonTrivialDomain (Clause=) at clause.c:671', '#1  ana_AnalyzeProblem (Search=, Clauses=) at analyze.c:163', '#2  top_ProofSearch (Search=, ProblemClauses=, InputFlags=, UserPrecedence=, BoundApplied=) at top.c:871', '#3  main (argc=2, argv=) at top.c:1461']
+          goovm []
+ctmark/ClamAV                                           diff  stops= 15 42 differing blocks
+  replace: clang ['infostruct = {st_dev = STACK, st_ino = 23, st_nlink = STACK, st_mode = 23, st_uid = 0, st_gid = 0, __pad0 = 0, st_rdev = STACK, st_size = 93824992565794, st_blksize = 0, st_blocks = 93824998376704, st_atim = {tv_sec = 16, tv_nsec = 93824998376704}, st_mtim = {tv_sec = STACK, tv_nsec = 93824992750462}, st_ctim = {tv_sec = 282578800148864, tv_nsec = 93824998376704}, __glibc_reserved = {68719458912, 0, 93824992970567}}']
+          goovm ['infostruct = {st_dev = 93824992985275, st_ino = 93824992985275, st_nlink = 93824992985700, st_mode = 1432404155, st_uid = 21845, st_gid = 1432404155, __pad0 = 21845, st_rdev = STACK, st_size = 23, st_blksize = 0, st_blocks = STACK, st_atim = {tv_sec = 93824992580765, tv_nsec = 93824998421760}, st_mtim = {tv_sec = 16, tv_nsec = STACK}, st_ctim = {tv_sec = 93824992778443, tv_nsec = 93824998421760}, __glibc_reserved = {65856794844, 0, 93824992974923}}']
+  replace: clang ['print infostruct: $26 = {st_dev = STACK, st_ino = 23, st_nlink = STACK, st_mode = 23, st_uid = 0, st_gid = 0, __pad0 = 0, st_rdev = STACK, st_size = 93824992565794, st_blksize = 0, st_blocks = 93824998376704, st_atim = {tv_sec = 16, tv_nsec = 93824998376704}, st_mtim = {tv_sec = STACK, tv_nsec = 93824992750462}, st_ctim = {tv_sec = 282578800148864, tv_nsec = 93824998376704}, __glibc_reserved = {68719458912, 0, 93824992970567}}']
+          goovm ['print infostruct: $26 = {st_dev = 93824992985275, st_ino = 93824992985275, st_nlink = 93824992985700, st_mode = 1432404155, st_uid = 21845, st_gid = 1432404155, __pad0 = 21845, st_rdev = STACK, st_size = 23, st_blksize = 0, st_blocks = STACK, st_atim = {tv_sec = 93824992580765, tv_nsec = 93824998421760}, st_mtim = {tv_sec = 16, tv_nsec = STACK}, st_ctim = {tv_sec = 93824992778443, tv_nsec = 93824998421760}, __glibc_reserved = {65856794844, 0, 93824992974923}}']
+  replace: clang ['#0  fileinfo (filename="inputs/clam.cab", i=2) at clamscan_others.c:74', '#1  scanmanager (opt=) at clamscan_manager.c:342']
+          goovm ['#0  scanmanager (opt=) at clamscan_manager.c:347', '#1  main (argc=23, argv=) at clamscan_clamscan.c:219']
+ctmark/lencod                                           same  stops=  7 393 lines
+ctmark/mafft                                            same  stops= 11 674 lines
+ctmark/consumer-typeset                                 diff  stops= 80 51 differing blocks
+  replace: clang ['#0  GetArg (argv=, argc=13, i=) at z01.c:186', '#1  main (argc=13, argv=) at z01.c:384']
+          goovm ['#0  main (argc=13, argv=) at z01.c:386']
+  replace: clang ['#0  GetArg (argv=, argc=13, i=) at z01.c:186', '#1  main (argc=13, argv=) at z01.c:347']
+          goovm ['#0  main (argc=13, argv=) at z01.c:349']
+  replace: clang ['#0  GetArg (argv=, argc=13, i=) at z01.c:186', '#1  main (argc=13, argv=) at z01.c:366']
+          goovm ['#0  main (argc=13, argv=) at z01.c:368']
+
+49/84 transcripts match (1556 stops)

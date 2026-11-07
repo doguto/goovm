@@ -1,0 +1,4 @@
+goosecc one.c 0.887 ms best, 1.149 mean
+tcc one.c     1.201 ms best, 1.480 mean
+/bin/true     0.713 ms best, 1.063 mean
+goosecc one.c 1.375 ms best, 1.773 mean

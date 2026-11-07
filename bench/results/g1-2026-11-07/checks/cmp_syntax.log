@@ -1,0 +1,6 @@
+
+torture  files  1708  clang-valid  1665  accepted  1665  false-errors    0  crashes   0  | clang-invalid   43 (goosecc rejects 43, misses 0)
+unit     files   182  clang-valid   165  accepted   165  false-errors    0  crashes   0  | clang-invalid   17 (goosecc rejects 17, misses 0)
+regress  files    37  clang-valid    35  accepted    35  false-errors    0  crashes   0  | clang-invalid    2 (goosecc rejects 2, misses 0)
+bench    files   102  clang-valid   100  accepted   100  false-errors    0  crashes   0  | clang-invalid    2 (goosecc rejects 2, misses 0)
+ctmark   files   328  clang-valid   324  accepted   324  false-errors    0  crashes   0  | clang-invalid    4 (goosecc rejects 4, misses 0)
