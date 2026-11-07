@@ -800,3 +800,200 @@ int64_t goosecc_evict(sl_u8 dir, int64_t limit) {
 #endif
 uint64_t goosecc_build_id(void) { return (uint64_t)GOOSECC_BUILD_ID; }
 int64_t goosecc_pid(void) { return (int64_t)getpid(); }
+
+/* G1: the parse cache (pcache.goose) saves and restores parser tables as
+ * raw records: n records of recsize bytes (Goose structs are packed, spec
+ * C.2), zero-padded to whole words in the cache file. Source offsets in
+ * them (u32 fields at byte offsets o1 and o2, and at koff in a record
+ * whose first byte is kval; -1: none) are relocated: 0 stays (no
+ * location); an offset in [b0, st1) (the built-in text and what the
+ * translation unit's leading includes added after it) moves by d1, one
+ * at or past spp (text the parser itself added: builtin type
+ * signatures) by d2. Recording checks that every offset is one of these
+ * (else the effect refers to the main file's text, or to text the main
+ * file added) and that identifiers (u32 at io, -1: none) are below imax. */
+static int64_t gpc_b0, gpc_st1, gpc_spp, gpc_d1, gpc_d2, gpc_imax;
+/* Per AST node kind (kval -2): bit f set when the u32 at byte 8 + 4 f (a, b,
+ * c, the low half of v) is a source offset (pcache.goose, pt_nodelocs). */
+static unsigned char goosecc_pc_nodemask[256];
+void goosecc_pc_nodeloc(int64_t kind, int64_t field) {
+    if (kind >= 0 && kind < 256 && field >= 0 && field < 4) goosecc_pc_nodemask[kind] |= (unsigned char)(1u << field);
+}
+void goosecc_pc_reloc(int64_t b0, int64_t st1, int64_t spp, int64_t d1, int64_t d2, int64_t imax) {
+    gpc_b0 = b0; gpc_st1 = st1; gpc_spp = spp; gpc_d1 = d1; gpc_d2 = d2; gpc_imax = imax;
+}
+static inline int goosecc_pc_off(uint8_t *f) {
+    uint32_t x;
+    memcpy(&x, f, 4);
+    if (x == 0) return 1;
+    if ((int64_t)x >= gpc_b0 && (int64_t)x < gpc_st1) x = (uint32_t)((int64_t)x + gpc_d1);
+    else if ((int64_t)x >= gpc_spp) x = (uint32_t)((int64_t)x + gpc_d2);
+    else return 0;
+    memcpy(f, &x, 4);
+    return 1;
+}
+static inline int goosecc_pc_rec(uint8_t *r, int64_t o1, int64_t o2, int64_t kval, int64_t koff, int64_t io) {
+    if (o1 >= 0 && !goosecc_pc_off(r + o1)) return 0;
+    if (o2 >= 0 && !goosecc_pc_off(r + o2)) return 0;
+    if (koff >= 0 && r[0] == (uint8_t)kval && !goosecc_pc_off(r + koff)) return 0;
+    if (kval == -2) {
+        /* AST nodes: the fields that hold source offsets for each kind */
+        unsigned m = goosecc_pc_nodemask[r[0]];
+        for (int f = 0; m; f++, m >>= 1)
+            if ((m & 1) && !goosecc_pc_off(r + 8 + 4 * f)) return 0;
+    }
+    if (io >= 0) {
+        uint32_t id;
+        memcpy(&id, r + io, 4);
+        if ((int64_t)id >= gpc_imax) return 0;
+    }
+    return 1;
+}
+/* Recording: appends records [from, from + n) of a to the words out,
+ * checked (with d1 = d2 = 0 nothing moves). 0, with nothing appended, if a
+ * check fails or the range is not in a; else 1. */
+int64_t goosecc_pc_put(gs_rref out, gs_rref a, int64_t from, int64_t n, int64_t recsize,
+                       int64_t o1, int64_t o2, int64_t kval, int64_t koff, int64_t io) {
+    if (from < 0 || n < 0 || from + n > a.hdr->len) return 0;
+    size_t nb = (size_t)(n * recsize), nw = (nb + 3) / 4;
+    uint8_t *dst = out.stk->top, *src = a.hdr->base + from * recsize;
+    if (nw) memset(dst + nw * 4 - 4, 0, 4);
+    memcpy(dst, src, nb);
+    if (o1 >= 0 || o2 >= 0 || koff >= 0 || io >= 0)
+        for (int64_t k = 0; k < n; k++)
+            if (!goosecc_pc_rec(dst + k * recsize, o1, o2, kval, koff, io)) return 0;
+    out.stk->top += nw * 4;
+    out.hdr->len += (int64_t)nw;
+    return 1;
+}
+/* Recording: for each record i < n of a whose bytes differ from the copy
+ * at words w[wi..] (put there by goosecc_pc_put at the start), appends i
+ * and the record (checked) to out. The number of records, -1 if a check
+ * fails. */
+int64_t goosecc_pc_diff(gs_rref out, gs_rref a, int64_t n, int64_t recsize, sl_u32 w, int64_t wi,
+                        int64_t o1, int64_t o2, int64_t kval, int64_t koff, int64_t io) {
+    if (n < 0 || n > a.hdr->len || wi < 0 || (size_t)(w.len - wi) * 4 < (size_t)(n * recsize)) return -1;
+    const uint8_t *old = (const uint8_t *)(w.data + wi);
+    int64_t cnt = 0;
+    size_t nw = ((size_t)recsize + 3) / 4;
+    for (int64_t i = 0; i < n; i++) {
+        const uint8_t *r = a.hdr->base + i * recsize;
+        if (memcmp(r, old + i * recsize, (size_t)recsize) == 0) continue;
+        uint8_t *dst = out.stk->top;
+        memcpy(dst, &i, 4);
+        memset(dst + 4 + nw * 4 - 4, 0, 4);
+        memcpy(dst + 4, r, (size_t)recsize);
+        if (!goosecc_pc_rec(dst + 4, o1, o2, kval, koff, io)) return -1;
+        out.stk->top += 4 + nw * 4;
+        out.hdr->len += 1 + (int64_t)nw;
+        cnt++;
+    }
+    return cnt;
+}
+/* Replay: appends n records from the mapping (goosecc_map) at word i to
+ * a, relocated. The words read, or -1 (past the mapping, an offset that
+ * cannot be relocated: a corrupt file), with nothing appended. */
+int64_t goosecc_pc_copy(gs_rref a, int64_t i, int64_t n, int64_t recsize,
+                        int64_t o1, int64_t o2, int64_t kval, int64_t koff) {
+    size_t nb = (size_t)(n * recsize), nw = (nb + 3) / 4, mw = goosecc_map_bytes / 4;
+    if (i < 0 || n < 0 || (size_t)i > mw || nw > mw - (size_t)i) return -1;
+    uint8_t *dst = a.stk->top;
+    if (nb > 8192) goosecc_prefault(a, (int64_t)nb);
+    else if (nb) goosecc_commit(dst);
+    memcpy(dst, (const uint8_t *)(goosecc_map_p + i), nb);
+    if (o1 >= 0 || o2 >= 0 || koff >= 0)
+        for (int64_t k = 0; k < n; k++)
+            if (!goosecc_pc_rec(dst + k * recsize, o1, o2, kval, koff, -1)) return -1;
+    a.stk->top += nb;
+    a.hdr->len += n;
+    return (int64_t)nw;
+}
+/* Replay: overwrites records [at, at + n) of a with the n records at word i
+ * of the mapping, relocated. The words read, or -1. */
+int64_t goosecc_pc_set(gs_rref a, int64_t at, int64_t i, int64_t n, int64_t recsize,
+                       int64_t o1, int64_t o2, int64_t kval, int64_t koff) {
+    size_t nb = (size_t)(n * recsize), nw = (nb + 3) / 4, mw = goosecc_map_bytes / 4;
+    if (i < 0 || n < 0 || at < 0 || at + n > a.hdr->len || (size_t)i > mw || nw > mw - (size_t)i) return -1;
+    uint8_t *dst = a.hdr->base + at * recsize;
+    uint8_t tmp[64];
+    for (int64_t k = 0; k < n; k++) {
+        if (recsize > 64) {
+            memcpy(dst + k * recsize, (const uint8_t *)(goosecc_map_p + i) + k * recsize, (size_t)recsize);
+            if (!goosecc_pc_rec(dst + k * recsize, o1, o2, kval, koff, -1)) return -1;
+            continue;
+        }
+        memcpy(tmp, (const uint8_t *)(goosecc_map_p + i) + k * recsize, (size_t)recsize);
+        if (!goosecc_pc_rec(tmp, o1, o2, kval, koff, -1)) return -1;
+        memcpy(dst + k * recsize, tmp, (size_t)recsize);
+    }
+    return (int64_t)nw;
+}
+/* The layouts pcache.goose relies on (its PT_* record sizes and offsets). */
+_Static_assert(sizeof(Type_g) == 40 && sizeof(Record_g) == 48 && offsetof(Record_g, loc_g) == 40 &&
+               sizeof(Field_g) == 40 && offsetof(Field_g, loc_g) == 36 && sizeof(EnumRec_g) == 24 &&
+               offsetof(EnumRec_g, loc_g) == 16 && sizeof(Node_g) == 32 && offsetof(Node_g, b_g) == 12 &&
+               offsetof(Node_g, loc_g) == 20 && sizeof(StrLit_g) == 12 && sizeof(Sym_g) == 46 &&
+               offsetof(Sym_g, name_g) == 6 && offsetof(Sym_g, loc_g) == 38 && sizeof(SymAttr_g) == 42 &&
+               sizeof(IdBind_g) == 12 && sizeof(DType_g) == 32 && sizeof(BuiltinEnt_g) == 6,
+               "pcache: the layouts of the parser's tables");
+/* The parse cache's chain: a checksum of tokens [from, to) of t (Tok_g),
+ * their source offsets relative to b0 (where the built-in text starts),
+ * or 0 when one of them is below b0, in the main file's text (the prefix
+ * is not cacheable). check: only that test (1 if it passes). */
+uint64_t goosecc_pc_toks(gs_rref t, int64_t from, int64_t to, int64_t b0, int64_t check) {
+    if (from < 0 || to > t.hdr->len || from > to) return 0;
+    const Tok_g *p = (const Tok_g *)t.hdr->base;
+    const uint64_t K = 0x9e3779b97f4a7c15ull;
+    uint64_t h = 0x243f6a8885a308d3ull ^ (uint64_t)(to - from);
+    for (int64_t i = from; i < to; i++) {
+        uint32_t s = p[i].spell_g, x = p[i].xloc_g;
+        if ((int64_t)s < b0 || (int64_t)x < b0) return 0;
+        if (check) continue;
+        uint64_t a = (uint64_t)p[i].kind_g | ((uint64_t)p[i].flags_g << 8) | ((uint64_t)p[i].aux_g << 16) |
+                     ((uint64_t)p[i].val_g << 32);
+        uint64_t b = (uint64_t)(uint32_t)((int64_t)s - b0) | ((uint64_t)(uint32_t)((int64_t)x - b0) << 32);
+        h = (h ^ a) * K;
+        h ^= h >> 29;
+        h = (h ^ b) * K;
+        h ^= h >> 31;
+    }
+    if (check) return 1;
+    return h ? h : 1;
+}
+/* The same for the limited arrays (their slices: 4-byte elements, nothing
+ * relocated): append [from, from + n), the (index, element) pairs of
+ * [0, n) that differ from the copy at w[wi..], overwrite [at, at + n). */
+static int64_t goosecc_pc_puts(gs_rref out, const uint32_t *d, int64_t len, int64_t from, int64_t n) {
+    if (from < 0 || n < 0 || from + n > len) return 0;
+    if (n) goosecc_commit(out.stk->top);
+    memcpy(out.stk->top, d + from, (size_t)n * 4);
+    out.stk->top += n * 4;
+    out.hdr->len += n;
+    return 1;
+}
+int64_t goosecc_pc_puts_u32(gs_rref out, sl_u32 a, int64_t from, int64_t n) { return goosecc_pc_puts(out, a.data, a.len, from, n); }
+int64_t goosecc_pc_puts_i32(gs_rref out, sl_i32 a, int64_t from, int64_t n) { return goosecc_pc_puts(out, (const uint32_t *)a.data, a.len, from, n); }
+static int64_t goosecc_pc_diffs(gs_rref out, const uint32_t *d, int64_t len, int64_t n, sl_u32 w, int64_t wi) {
+    if (n < 0 || n > len || wi < 0 || w.len - wi < n) return -1;
+    int64_t cnt = 0;
+    for (int64_t i = 0; i < n; i++) {
+        if (d[i] == w.data[wi + i]) continue;
+        uint32_t *o = (uint32_t *)out.stk->top;
+        o[0] = (uint32_t)i;
+        o[1] = d[i];
+        out.stk->top += 8;
+        out.hdr->len += 2;
+        cnt++;
+    }
+    return cnt;
+}
+int64_t goosecc_pc_diffs_u32(gs_rref out, sl_u32 a, int64_t n, sl_u32 w, int64_t wi) { return goosecc_pc_diffs(out, a.data, a.len, n, w, wi); }
+int64_t goosecc_pc_diffs_i32(gs_rref out, sl_i32 a, int64_t n, sl_u32 w, int64_t wi) { return goosecc_pc_diffs(out, (const uint32_t *)a.data, a.len, n, w, wi); }
+static int64_t goosecc_pc_fill(uint32_t *d, int64_t len, int64_t at, int64_t i, int64_t n) {
+    size_t mw = goosecc_map_bytes / 4;
+    if (at < 0 || n < 0 || at + n > len || i < 0 || (size_t)i > mw || (size_t)n > mw - (size_t)i) return -1;
+    memcpy(d + at, goosecc_map_p + i, (size_t)n * 4);
+    return n;
+}
+int64_t goosecc_pc_fill_u32(sl_u32 a, int64_t at, int64_t i, int64_t n) { return goosecc_pc_fill(a.data, a.len, at, i, n); }
+int64_t goosecc_pc_fill_i32(sl_i32 a, int64_t at, int64_t i, int64_t n) { return goosecc_pc_fill((uint32_t *)a.data, a.len, at, i, n); }

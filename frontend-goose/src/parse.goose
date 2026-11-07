@@ -2194,7 +2194,11 @@ fn pf_scan() {
 
 recursive fn parse_tu() {
     let mark = nscratch.len;
+    // G1: the parse cache replays the state after the leading includes
+    // (pcache.goose), or records it when the loop reaches their end
+    let replayed = pt_begin();
     while !at(TK_EOF) {
+        if pt_rec { pt_boundary(); }
         if at(TK_SEMI) { adv(); continue; }
         if at_kw(KW_ASM) {
             // file-scope asm("...");

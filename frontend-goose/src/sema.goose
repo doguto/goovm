@@ -138,6 +138,7 @@ var pc: i64 = 0;
 fn tk() -> i64 { tu_toks[pc].kind as i64 }
 fn tk_n(k: i64) -> i64 {
     let i = pc + k;
+    if pt_rec && i > pt_peek && i <= pt_eof { pt_peek = i; }
     if i < tu_toks.len { return tu_toks[i].kind as i64; }
     return TK_EOF;
 }

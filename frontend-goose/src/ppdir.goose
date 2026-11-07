@@ -229,6 +229,7 @@ fn path_add(key: const u8[:], f: i64, why: u32) {
     pathtab[p] = pathents.len as! u32;
 }
 
+var main_pad: i64 = 0;
 fn load_file(path: const u8[:]) -> i64 {
     let start = src.len;
     if read_source(path, src) == 0 { return -1; }
@@ -242,6 +243,14 @@ fn load_file(path: const u8[:]) -> i64 {
         s = src.len;
         src.append(trig_buf);
         e = src.len;
+    }
+    if main_pad > 0 {
+        // GOOSECC_TEST_MAIN_PAD (pp_start): the main file as if it ended
+        // with that many more spaces, which moves everything after its text
+        // (tests/pcache_check.py: the parse cache's relocation)
+        for i in main_pad { src.push(' '); }
+        e = src.len;
+        main_pad = 0;
     }
     src.push(0);
     src.push(0);
@@ -407,6 +416,8 @@ fn end_of_file() -> bool {
     restore_lexer(j);
     // the end of a header the cache is recording (B4)
     if rec_on && recs[recs.len - 1].ctxd as i64 == ctxs.len + 1 { hc_unit_end(); }
+    // the end of an include of the main file's (G1)
+    if j == 0 && pt_track { pt_inc_end(hc_top_bid); }
     back_in_includer();
     return true;
 }
@@ -834,12 +845,18 @@ recursive fn do_include(t: Tok, k: i64) {
         error_at(t.xloc as i64, "#include nested too deeply");
         return;
     }
+    // G1: the parse cache follows the main file's includes (pcache.goose)
+    let top = pt_track && cur_file_ctx == 0;
+    if top { pt_inc_begin(); }
     // B4: the header cache replays the whole include (the search, the file
     // and everything it includes) when what it depends on is unchanged;
     // otherwise it records it (hc_unit says which includes are units).
     var rec = false;
     if hc_on && hc_unit(angled) && !hc_would_skip(inc_name, angled, k) {
-        if hc_replay(inc_name, angled, k) { return; }
+        if hc_replay(inc_name, angled, k) {
+            if top { pt_inc_end(hc_replay_bid); }
+            return;
+        }
         rec = hc_rec_start(inc_name, angled, k);
     }
     let f = find_include(inc_name, angled, k == PK_INCLUDE_NEXT);
@@ -850,6 +867,7 @@ recursive fn do_include(t: Tok, k: i64) {
     }
     if files[f].once {
         if rec { hc_rec_drop(); }
+        if top { pt_inc_end(0); }
         return;
     }
     let g = files[f].grd as i64;
@@ -857,6 +875,7 @@ recursive fn do_include(t: Tok, k: i64) {
         if rec_on { hk_mtest(g as! u32); }
         if idents[g].macro >= 0 {
             if rec { hc_rec_drop(); }
+            if top { pt_inc_end(0); }
             return;
         }
     }
@@ -864,6 +883,7 @@ recursive fn do_include(t: Tok, k: i64) {
         // #import: include at most once
         if files[f].sp_len != 0 {
             if rec { hc_rec_drop(); }
+            if top { pt_inc_end(0); }
             return;
         }
     }

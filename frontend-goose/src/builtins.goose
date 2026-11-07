@@ -97,6 +97,7 @@ recursive fn builtin_type(b: i64) -> u32 {
     bentries[b].typed = true;
     let ts, te = builtin_text(b);
     let text = BUILTIN_TYPES[ts..te];
+    if pt_rec { pt_lex.push(b as! u32); }    // G1: the parse cache lexes it again on a replay
     let first = lex_string_tokens(text);
     let save = pc;
     pc = first;
