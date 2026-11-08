@@ -531,6 +531,7 @@ recursive fn is_dep(t: u32) -> bool {
     let k = kind_of(t);
     if k >= TY_TPARAM && k <= TY_DEPEXPR { return true; }
     if k == TY_PACKEXP { return true; }
+    if k == TY_ARRAY && types[t >> 4].n <= -2 { return true; }    // D2: a bound that is a template parameter
     if k == TY_POINTER || k == TY_LREF || k == TY_RREF || k == TY_ARRAY || k == TY_COMPLEX || k == TY_VECTOR {
         return is_dep(tbase(t));
     }

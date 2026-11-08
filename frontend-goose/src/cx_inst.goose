@@ -104,6 +104,15 @@ struct InstSave {
     uneval: i64,
     lenient0: i64,
     errs: i64,
+    what: i64,
+    supp: i64,
+    level: i64,
+    spec_t: i64,
+    spec_b: i32,
+    spec_res: i64,
+    spec_decl: bool,
+    body_now: bool,
+    def_target: i64,
 }
 
 fn inst_enter() -> InstSave {
@@ -111,7 +120,14 @@ fn inst_enter() -> InstSave {
         tdepth: tmpl_depth, ptmpl: pending_tmpl, pexpl: pending_explicit, pinst: pending_inst, extc: extern_c, nest: class_nest,
         func_cx: cur_func_cx, func: cur_func, this_t: this_type, ret_t: ret_type, ld: loop_depth, bd: break_depth,
         bfd: block_fn_depth, targd: targ_depth, pard: paren_depth, uneval: unevaluated, lenient0: lenient,
-        errs: diag_suppressed_errors + n_errors };
+        errs: diag_inst_errors, what: inst_what, supp: diag_suppress, level: diag_inst_level,
+        spec_t: inst_spec_tmpl, spec_b: inst_spec_binds, spec_res: inst_spec_result, spec_decl: inst_spec_decl,
+        body_now: inst_body_now, def_target: inst_def_target };
+    inst_spec_tmpl = -1;
+    inst_spec_result = -1;
+    inst_spec_decl = false;
+    inst_body_now = false;
+    inst_def_target = -1;
     push_scope();
     local_floor = scope_depth;
     vis_limit = VIS_PC;
@@ -134,13 +150,21 @@ fn inst_enter() -> InstSave {
     lenient = 0;
     gt_pos = -1;
     inst_depth++;
-    if !inst_reporting() { diag_suppress++; }
+    diag_suppress = if inst_reporting() { 0 } else { 1 };
+    diag_inst_level = diag_suppress;
     return st;
 }
 
 // Restores the state; true when errors happened inside.
 fn inst_leave(st: InstSave) -> bool {
-    if !inst_reporting() { diag_suppress--; }
+    inst_spec_tmpl = st.spec_t;
+    inst_spec_binds = st.spec_b;
+    inst_spec_result = st.spec_res;
+    inst_spec_decl = st.spec_decl;
+    inst_body_now = st.body_now;
+    inst_def_target = st.def_target;
+    diag_suppress = st.supp;
+    diag_inst_level = st.level;
     inst_depth--;
     pop_scope();
     cur_scope = st.scope;
@@ -166,10 +190,19 @@ fn inst_leave(st: InstSave) -> bool {
     unevaluated = st.uneval;
     lenient = st.lenient0;
     restore(st.sv);
-    let bad = diag_suppressed_errors + n_errors != st.errs;
+    let bad = diag_inst_errors != st.errs;
     if bad { inst_errors++; }
+    if bad && inst_reporting() && st.what >= 0 {
+        var o: u8[>..] = [];
+        loc_prefix(o, tloc() as i64);
+        o.append("note: in instantiation of ");
+        o.append(ident_text(syms[st.what].name as i64));
+        o.append(" requested here\n");
+        write_stderr(o);
+    }
     return bad;
 }
+var inst_what: i64 = -1;    // the symbol being instantiated (notes)
 
 // ---------------------------------------------------------------------------
 // Class template specializations.
@@ -289,6 +322,7 @@ recursive fn inst_record(r: i64) {
     scopes[sc].tps = tparam_scope(src, pargs) as! i32;
     inst_pat.insert(r as u64, ((pat as u64) << 32) | (pargs as u64));
     let w = tmpl_class_key(src);
+    inst_what = cs;
     let st = inst_enter();
     cur_scope = sc;
     pc = class_head_end(src);
@@ -435,9 +469,11 @@ var ded_base: i64 = 0;
 var ded_depth: i64 = -1;
 var ded_n: i64 = 0;
 
-struct DedSave { base: i64, depth: i64, n: i64 }
+struct DedSave { base: i64, depth: i64, n: i64, t: i64 }
+var ded_t: i64 = -1;
 fn ded_begin(t: i64) -> DedSave {
-    let s = DedSave { base: ded_base, depth: ded_depth, n: ded_n };
+    let s = DedSave { base: ded_base, depth: ded_depth, n: ded_n, t: ded_t };
+    ded_t = t;
     ded_base = ded_args.len;
     ded_depth = tmpls[t].depth as i64;
     ded_n = tmpls[t].nparams as i64;
@@ -449,6 +485,7 @@ fn ded_end(s: DedSave) {
     ded_base = s.base;
     ded_depth = s.depth;
     ded_n = s.n;
+    ded_t = s.t;
 }
 
 // The bindings as a list (false if some parameter is not deduced).
@@ -536,6 +573,7 @@ fn ded_bind(idx: i64, a: TArg) -> bool {
     if idx >= ded_n { return false; }
     let cur = ded_args[ded_base + idx];
     if cur.kind == 0 { ded_args[ded_base + idx] = a; return true; }
+    if cur.rsv == 1 { return true; }       // given explicitly: not deduced
     return cur.kind == a.kind && cur.ty == a.ty && cur.v == a.v;
 }
 
@@ -664,6 +702,21 @@ recursive fn deduce_type(p: u32, a: u32) -> bool {
     if k == TY_ARRAY {
         let pn = types[p >> 4].n;
         let an = types[a >> 4].n;
+        if pn <= -2 {
+            // T[N]: the bound is a non-type parameter
+            let dn = -2 - pn;
+            if an < 0 { return false; }
+            if dn >> 16 == ded_depth {
+                let idx = dn & 0xFFFF;
+                var vt = t_ulong;
+                if ded_t >= 0 && idx < tmpls[ded_t].nparams as i64 {
+                    let pp = tps[tmpls[ded_t].params as i64 + idx];
+                    if pp.kind as i64 == TPK_VALUE && !is_opaque(pp.ty) { vt = unqual(nonref(pp.ty)); }
+                }
+                if !ded_bind(idx, TArg { kind: TA_VALUE as! u8, rsv: 0, rsv2: 0, ty: vt, v: trunc_to(an, vt) }) { return false; }
+            }
+            return deduce_type(tbase(p), tbase(a));
+        }
         if pn != an && pn >= 0 { return false; }
         return deduce_type(tbase(p), tbase(a));
     }
@@ -712,4 +765,193 @@ fn same_template(a: i64, b: i64) -> bool {
     if ra == rb { return true; }
     if ra < 0 || rb < 0 { return false; }
     return cxs[ra].tmpl >= 0 && cxs[ra].tmpl == cxs[rb].tmpl;
+}
+
+// ---------------------------------------------------------------------------
+// Member function bodies, on use.
+
+var inst_defs: u32[>..] = [];       // N_FUNCDEF / N_DECL items made by instantiation (top-level)
+var inst_defs_taken: i64 = 0;       // how many of them the translation unit already holds
+var friend_scope = dictionary<u64, u32> {};   // a friend function defined in an instantiated class -> that class scope
+
+// f is used (called, its address taken, ...): its body is to be instantiated.
+fn inst_use(f: i64) {
+    if f < 0 || f >= cxs.len || unevaluated > 0 { return; }
+    if inst_debug() { write_stderr(str("inst_use ", ident_text(syms[f].name as i64), " f=", f, " fl2=", cxs[f].flags2, "\n")); }
+    if cxs[f].flags & CF_CTOR != 0 { vtable_use(cxs[f].dscope as i64); }
+    if cxs[f].flags2 & (CF2_LAZY_BODY | CF2_QUEUED | CF2_INST_DONE) != CF2_LAZY_BODY { return; }
+    cxs[f].flags2 = cxs[f].flags2 | CF2_QUEUED;
+    inst_work.push(f as! u32);
+}
+
+// A constructor of class scope sc is used: its vtable will be, and with it
+// the virtual functions (C++ [temp.inst]p11, clang's MarkVTableUsed).
+var vtable_used = dictionary<u64, u32> {};
+fn vtable_use(sc: i64) {
+    if sc < 0 || scopes[sc].kind as i64 != CS_CLASS || scopes[sc].flags & SCF_INST == 0 { return; }
+    let r = scopes[sc].rec as i64;
+    if r < 0 || vtable_used.contains(r as u64) { return; }
+    vtable_used.insert(r as u64, 1);
+    let m = mem_range(r);
+    for j in m.count {
+        let s = cmem[m.first + j] as i64;
+        if cxs[s].flags & CF_VIRTUAL != 0 && cxs[s].flags2 & (CF2_LAZY_BODY | CF2_QUEUED | CF2_INST_DONE) == CF2_LAZY_BODY {
+            cxs[s].flags2 = cxs[s].flags2 | CF2_QUEUED;
+            inst_work.push(s as! u32);
+        }
+    }
+}
+
+// Instantiates the bodies of the used functions (each may use more).
+recursive fn inst_drain() {
+    while inst_work_done < inst_work.len {
+        let f = inst_work[inst_work_done] as i64;
+        inst_work_done++;
+        inst_body(f);
+    }
+}
+
+// Moves what a definition parsed during an instantiation pushed to
+// nscratch (from mark) to inst_defs.
+fn take_defs(mark: i64) {
+    for i in mark..nscratch.len { inst_defs.push(nscratch[i]); }
+    nscratch.resize(mark);
+}
+
+// The pattern's scope of an instantiated class scope sc (or of a class
+// nested in one), -1.
+recursive fn pattern_scope(sc: i64) -> i64 {
+    if sc < 0 || scopes[sc].kind as i64 != CS_CLASS { return -1; }
+    let r = scopes[sc].rec as i64;
+    if r < 0 { return -1; }
+    let g = inst_pat.get(r as u64);
+    if g {
+        let pat = (g >> 32) as i64;
+        let pr = tmpls[pat].pattern as i64;
+        if pr < 0 { return -1; }
+        return crecs[pr].scope as i64;
+    }
+    // a class nested in an instantiation: the same class of the enclosing pattern
+    let ps = pattern_scope(scopes[sc].parent as i64);
+    if ps < 0 { return -1; }
+    let cs = crecs[r].sym as i64;
+    if cs < 0 { return -1; }
+    var x = scope_find(ps, syms[cs].name);
+    while x >= 0 {
+        if syms[x].kind as i64 == SK_TAG && cxs[x].pos == cxs[cs].pos && is_record(syms[x].ty) {
+            return crecs[rec_of(syms[x].ty)].scope as i64;
+        }
+        x = cxs[x].nnext as i64;
+    }
+    return -1;
+}
+
+// The pattern's symbol of a member s of an instantiated class, -1.
+recursive fn pattern_member(s: i64) -> i64 {
+    if cxs[s].pat != -1 { return if cxs[s].pat >= 0 { cxs[s].pat as i64 } else { -1 }; }
+    cxs[s].pat = -2;
+    let ps = pattern_scope(cxs[s].dscope as i64);
+    if ps < 0 { return -1; }
+    var x = scope_find(ps, syms[s].name);
+    while x >= 0 {
+        if syms[x].kind == syms[s].kind && cxs[x].pos == cxs[s].pos { cxs[s].pat = x as! i32; return x; }
+        x = cxs[x].nnext as i64;
+    }
+    return -1;
+}
+
+// The arguments the class scope sc was instantiated with, for its
+// pattern's parameters (-1 when sc is not an instantiation).
+recursive fn inst_args_of(sc: i64) -> i64, i32 {
+    var x = sc;
+    while x >= 0 && scopes[x].kind as i64 == CS_CLASS {
+        let r = scopes[x].rec as i64;
+        if r >= 0 {
+            let g = inst_pat.get(r as u64);
+            if g { return (g >> 32) as i64, (g & 0xFFFFFFFF) as i32; }
+        }
+        x = scopes[x].parent as i64;
+    }
+    return -1, -1;
+}
+
+// Binds the parameters of header t to `binds` as block-scope names (and
+// those of the headers enclosing it to outer_binds, for a member of a
+// class template defined out of its class).
+fn bind_header(t: i64, binds: i32) {
+    let n = tmpls[t].nparams as i64;
+    let na = tl_count(binds as i64);
+    for i in n {
+        let p = tps[tmpls[t].params as i64 + i];
+        if p.name == 0 { continue; }
+        let s = bound_param_sym(p, i < na, if i < na { tl_arg(binds as i64, i) } else { TArg { kind: 0, rsv: 0, rsv2: 0, ty: 0, v: 0 } });
+        bind_sym(s, false);
+    }
+}
+
+// The body of a used function: instantiated (once).
+recursive fn inst_body(f: i64) {
+    if cxs[f].flags2 & CF2_INST_DONE != 0 { return; }
+    cxs[f].flags2 = cxs[f].flags2 | CF2_INST_DONE;
+    if inst_debug() { write_stderr(str("inst_body ", ident_text(syms[f].name as i64), " f=", f, " body=", cxs[f].body, " fl2=", cxs[f].flags2, "\n")); }
+    if inst_depth > 400 { return; }
+    if syms[f].kind as i64 == SK_VAR { inst_var_def(f); return; }
+    let mark = nscratch.len;
+    if cxs[f].body != 0 && cxs[f].flags & CF_HAS_BODY_LATER != 0 && cxs[f].flags2 & CF2_FSPEC == 0 {
+        // defined in its class
+        let fsg = friend_scope.get(f as u64);
+        let sc = if fsg { fsg as i64 } else { cxs[f].dscope as i64 };
+        inst_what = f;
+        let st = inst_enter();
+        parse_member_body(f, sc);
+        let bad = inst_leave(st);
+        if bad { cxs[f].flags2 = cxs[f].flags2 | CF2_DIRTY; }
+        take_defs(mark);
+        return;
+    }
+    if cxs[f].flags2 & CF2_FSPEC != 0 { inst_fspec_body(f); return; }
+    // defined out of its class: that definition parsed again for f
+    let p = pattern_member(f);
+    if p < 0 || cxs[p].odef < 0 { return; }
+    let hdr = cxs[p].odef as i64;
+    let pat, pargs = inst_args_of(cxs[f].dscope as i64);
+    if pat < 0 { return; }
+    inst_what = f;
+    let st = inst_enter();
+    bind_header(hdr, pargs);
+    cur_scope = tmpls[hdr].scope as i64;
+    pc = tmpls[hdr].t0 as i64;
+    inst_def_target = f;
+    parse_simple_decl(DC_NS);
+    inst_def_target = -1;
+    let bad = inst_leave(st);
+    if bad { cxs[f].flags2 = cxs[f].flags2 | CF2_DIRTY; }
+    take_defs(mark);
+}
+
+// A static data member of an instantiated class is used: its definition
+// out of the class (template<class T> int X<T>::n = 0;) is instantiated.
+fn inst_var_use(s: i64) {
+    if cxs[s].flags2 & (CF2_INST_DONE | CF2_QUEUED) != 0 { return; }
+    let sc = cxs[s].dscope as i64;
+    if sc < 0 || scopes[sc].flags & SCF_INST == 0 { return; }
+    cxs[s].flags2 = cxs[s].flags2 | CF2_QUEUED | CF2_LAZY_BODY;
+    inst_work.push(s as! u32);
+}
+
+recursive fn inst_var_def(s: i64) {
+    let p = pattern_member(s);
+    if p < 0 || cxs[p].odef < 0 { return; }
+    let hdr = cxs[p].odef as i64;
+    let pat, pargs = inst_args_of(cxs[s].dscope as i64);
+    if pat < 0 { return; }
+    let mark = nscratch.len;
+    let st = inst_enter();
+    bind_header(hdr, pargs);
+    cur_scope = tmpls[hdr].scope as i64;
+    pc = tmpls[hdr].t0 as i64;
+    parse_simple_decl(DC_NS);
+    let bad = inst_leave(st);
+    if bad { cxs[s].flags2 = cxs[s].flags2 | CF2_DIRTY; }
+    take_defs(mark);
 }

@@ -107,8 +107,23 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     var ft = d.ty;
     // a template?
     let tmpl = pending_tmpl;
+    if inst_spec_tmpl >= 0 {
+        // D2: a function template specialization's declaration
+        return make_fspec(d, ds, key, ft, ctor, is_member, loc);
+    }
     if tmpl >= 0 && (target >= 0 || target == -2) && !d.qn.qual {
         let fs = if target == -2 { enclosing_ns(cur_scope) } else { target };
+        let old = find_fn_template(fs, key, ft, tmpl);
+        if old >= 0 {
+            // D2: a redeclaration of a function template (its definition, maybe)
+            let ot = cxs[old].tmpl as i64;
+            merge_tmpl_defaults(ot, tmpl);
+            pending_tmpl = -1;
+            tmpls[tmpl].kind = TT_FUNC as! u8;
+            tmpls[tmpl].sym = old as! i32;
+            if at(TK_L_BRACE) || at(TK_COLON) || at_kw(KW_TRY) { tmpls[ot].def_t = tmpl as! i32; }
+            return tmpls[ot].pattern as i64;
+        }
         let ts = func_template_sym(key, fs, loc);
         let pf = csym(SK_FUNC, key, ft, loc);
         cxs[pf].flags = (CF_PATTERN | (if is_member { CF_MEMBER } else { 0 })) as! u32;
@@ -119,7 +134,26 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
         note_params(pf, d);
         return pf;
     }
+    if tmpl >= 0 && d.qn.qual && target >= 0 {
+        // D2: a member template defined out of its class
+        let old = find_fn_template(target, key, ft, tmpl);
+        if old >= 0 {
+            pending_tmpl = -1;
+            let ot = cxs[old].tmpl as i64;
+            tmpls[tmpl].kind = TT_FUNC as! u8;
+            tmpls[tmpl].sym = old as! i32;
+            if at(TK_L_BRACE) || at(TK_COLON) || at_kw(KW_TRY) { tmpls[ot].def_t = tmpl as! i32; }
+            return tmpls[ot].pattern as i64;
+        }
+    }
     if tmpl >= 0 { pending_tmpl = -1; }
+    if inst_def_target >= 0 {
+        // D2: the definition of an instantiated member (or specialization) parsed again
+        let s0 = inst_def_target;
+        inst_def_target = -1;
+        note_params(s0, d);
+        return s0;
+    }
     var s: i64 = -1;
     if target >= 0 {
         s = find_redecl(target, key, ft);
@@ -158,9 +192,43 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     if ctx == DC_FRIEND && cxs[s].flags & CF_MEMBER == 0 { cxs[s].flags = cxs[s].flags | CF_FRIEND; }
     if extern_c && !is_member && cxs[s].flags & CF_MEMBER == 0 { cxs[s].flags = cxs[s].flags | CF_EXTERN_C; }
     if dependent_ctx() || (target >= 0 && scopes[target].flags & SCF_PATTERN != 0) { cxs[s].flags = cxs[s].flags | CF_PATTERN; }
+    if target >= 0 && scopes[target].flags & SCF_INST != 0 && cxs[s].flags & CF_PATTERN == 0 && !d.qn.qual {
+        // D2: a member of an instantiation: defined in its class or out of it, instantiated on use
+        cxs[s].flags2 = cxs[s].flags2 | CF2_LAZY_BODY;
+    }
+    if tmpl >= 0 && d.qn.qual && target >= 0 && scopes[target].flags & SCF_PATTERN != 0 && (at(TK_L_BRACE) || at(TK_COLON) || at_kw(KW_TRY)) {
+        // D2: a member of a class template defined out of its class
+        cxs[s].odef = tmpl as! i32;
+    }
     record_attrs(s, a, 0);
     note_params(s, d);
     return s;
+}
+var inst_def_target: i64 = -1;  // D2: the function whose definition is being parsed again
+
+// D2: the function template named `name` in scope sc whose pattern has the
+// type ft and the template header of hdr's kinds, -1.
+fn find_fn_template(sc: i64, name: u32, ft: u32, hdr: i64) -> i64 {
+    var s = scope_find(sc, name);
+    while s >= 0 {
+        if syms[s].kind as i64 == SK_TEMPLATE && cxs[s].tmpl >= 0 && tmpls[cxs[s].tmpl].kind as i64 == TT_FUNC {
+            let t = cxs[s].tmpl as i64;
+            let pf = tmpls[t].pattern as i64;
+            if pf >= 0 && syms[pf].ty == ft && tmpls[t].nparams == tmpls[hdr].nparams && same_header(t, hdr) { return s; }
+        }
+        s = cxs[s].nnext as i64;
+    }
+    return -1;
+}
+
+fn same_header(a: i64, b: i64) -> bool {
+    for i in tmpls[a].nparams as i64 {
+        let x = tps[tmpls[a].params as i64 + i];
+        let y = tps[tmpls[b].params as i64 + i];
+        if x.kind != y.kind || x.pack != y.pack { return false; }
+        if x.kind as i64 == TPK_VALUE && unqual(x.ty) != unqual(y.ty) { return false; }
+    }
+    return true;
 }
 
 fn find_by_arity(sc: i64, name: u32, ft: u32) -> i64 {
@@ -263,6 +331,22 @@ fn declare_typedef(name: u32, ty: u32, loc: u32, ctx: i64) -> i64 {
 // its tokens kept (class members, templates).
 recursive fn function_body(s: i64, d: CD&, in_class: bool) {
     let b0 = pc;
+    if inst_spec_decl {
+        // D2: a specialization's declaration: the body is parsed when it is used
+        skip_fn_body();
+        return;
+    }
+    if inst_body_now {
+        // D2: an instantiated definition
+        inst_body_now = false;
+        syms[s].flags = syms[s].flags | SF_DEFINED;
+        let sv_scope0 = cur_scope;
+        if d.qn.qual && d.qn.scope >= 0 { cur_scope = d.qn.scope as i64; }
+        let n0 = parse_function_body(s, d.params, d.nparams);
+        cur_scope = sv_scope0;
+        if n0 != 0 { nscratch.push(n0); }
+        return;
+    }
     if in_class { cxs[s].flags = cxs[s].flags | CF_DEFINED_IN_CLASS; }
     let pattern = cxs[s].flags & CF_PATTERN != 0 || dependent_ctx() || (d.qn.qual && d.qn.dep != 0);
     if in_class || pattern {
@@ -274,6 +358,7 @@ recursive fn function_body(s: i64, d: CD&, in_class: bool) {
         if in_class && !pattern && cur_class >= 0 && scopes[cur_class].flags & SCF_INST != 0 {
             // D2: a member of an instantiation: its body is instantiated on use
             cxs[s].flags2 = cxs[s].flags2 | CF2_LAZY_BODY;
+            if cxs[s].dscope as i64 != cur_class { friend_scope.insert(s as u64, cur_class as u32); }
             return;
         }
         if in_class && !pattern && cur_class >= 0 {
@@ -606,6 +691,12 @@ recursive fn declare_var(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
             cxs[pv].flags = CF_PATTERN;
             tmpls[t].pattern = pv as! i32;
             return pv;
+        }
+        if d.qn.qual && d.qn.scope >= 0 && scopes[d.qn.scope].flags & SCF_PATTERN != 0 {
+            // D2: a static data member of a class template defined out of its class
+            var s1 = scope_find(d.qn.scope as i64, name);
+            while s1 >= 0 && syms[s1].kind as i64 != SK_VAR { s1 = cxs[s1].nnext as i64; }
+            if s1 >= 0 { cxs[s1].odef = pending_tmpl as! i32; }
         }
         pending_tmpl = -1;
     }
@@ -970,7 +1061,11 @@ recursive fn parse_tu_cxx() {
         parse_decl_cx(DC_NS);
         if pc == before { adv(); }
     }
+    // D2: the bodies of the used members of instantiations and specializations
+    inst_drain();
     for f in fdefs_extra { nscratch.push(f); }
+    for f in inst_defs { nscratch.push(f); }
+    inst_defs_taken = inst_defs.len;
     let count = nscratch.len - mark;
     let start = commit_list(mark);
     tu_node = node_v(N_TU, 0, 0, 0, 0, count, 0, start);

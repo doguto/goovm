@@ -18,7 +18,8 @@ Optional extra variants:
   --tpde PATH    also compile the O0 bitcode with tpde-llc and compare
   --goosecc PATH instead of the goovm-llc variants, compile the C programs with goosecc -c
                  (variants goosecc and goosecc-g, i.e. with -g); no LLVM involved; with it the
-                 programs of tests/cxx_d1/ (goosecc's C++ subset, milestone D1) run too
+                 programs of tests/cxx_d1/ and tests/cxx_d2/ (goosecc's C++ subset,
+                 milestones D1 and D2) run too
 
 usage: tests/run.py [--goovm PATH] [-j N] [--work DIR] [--keep] [filter ...]
 Exit status 0 iff every comparison passed.
@@ -190,9 +191,10 @@ def programs():
     for f in sorted(os.listdir(os.path.join(HERE, "cxx"))):
         if f.endswith(".cpp"):
             out.append(Prog("cxx/" + f[:-4], [os.path.join(HERE, "cxx", f)]))
-    for f in sorted(os.listdir(os.path.join(HERE, "cxx_d1"))):
-        if f.endswith(".cpp"):
-            out.append(Prog("cxx_d1/" + f[:-4], [os.path.join(HERE, "cxx_d1", f)]))
+    for sub in ("cxx_d1", "cxx_d2"):
+        for f in sorted(os.listdir(os.path.join(HERE, sub))):
+            if f.endswith(".cpp"):
+                out.append(Prog(sub + "/" + f[:-4], [os.path.join(HERE, sub, f)]))
     for kind in ("mixed", "ll"):
         md = os.path.join(HERE, kind)
         for d in sorted(os.listdir(md)):
@@ -228,10 +230,10 @@ def main():
         args.work = tmp
     progs = programs()
     if args.goosecc:
-        # goosecc compiles C, and the C++ of tests/cxx_d1
-        progs = [p for p in progs if (not p.cxx or p.name.startswith("cxx_d1/")) and not any(is_ll(s) for s in p.srcs)]
+        # goosecc compiles C, and the C++ of tests/cxx_d1 and tests/cxx_d2
+        progs = [p for p in progs if (not p.cxx or p.name.startswith(("cxx_d1/", "cxx_d2/"))) and not any(is_ll(s) for s in p.srcs)]
     else:
-        progs = [p for p in progs if not p.name.startswith("cxx_d1/")]
+        progs = [p for p in progs if not p.name.startswith(("cxx_d1/", "cxx_d2/"))]
     if args.filter:
         progs = [p for p in progs if any(f in p.name for f in args.filter)]
 

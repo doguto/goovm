@@ -488,6 +488,12 @@ recursive fn qual_component(qn: QN&, id: u32, args: i32, has_args: bool) {
         qual_from_type(qn, t);
         return;
     }
+    if has_args && cxs[s].flags & CF_INJECTED != 0 && cxs[s].tmpl >= 0 {
+        // X<args>:: through the injected-class-name of X's specialization
+        let t = specialization(tmpls[cxs[s].tmpl].sym as i64, args);
+        qual_from_type(qn, t);
+        return;
+    }
     qual_from_type(qn, syms[s].ty);
 }
 

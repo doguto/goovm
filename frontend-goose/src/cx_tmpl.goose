@@ -35,6 +35,7 @@ var pending_tmpl: i64 = -1;     // the template record the next declaration defi
 var pending_explicit: bool = false;  // template<> : an explicit specialization follows
 var pending_inst: bool = false;      // template X<..>; an explicit instantiation
 var last_tmpl_sym: i64 = -1;
+var hdr_outer_next: i64 = -1;   // D2: the header enclosing the next one (template<..> template<..>)
 var spec_map = dictionary<u64, u32> {};   // (template record << 32 | argument list) -> the explicit specialization's type
 
 // template-declaration, explicit specialization or explicit instantiation
@@ -70,12 +71,15 @@ recursive fn parse_template_decl(ctx: i64) {
     let t = tmpls.len;
     tmpls.push(Tmpl { kind: 0, depth: tmpl_depth as! u8, rsv: 0, sym: -1, params: first as! u32, nparams: count as! u32,
         scope: cur_scope as! i32, pos: tpos as! u32, t0: pc as! u32, t1: 0, pattern: -1, specs: -1, outer: -1,
-        spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: -1, pat_t: -1 });
+        spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: hdr_outer_next as! i32, pat_t: -1 });
+    hdr_outer_next = -1;
     let sv_pending = pending_tmpl;
     if at_kw(KW_TEMPLATE) {
         // template<...> template<...> ...: an out-of-line member template
         pending_tmpl = -1;
+        hdr_outer_next = t;
         parse_template_decl(ctx);
+        hdr_outer_next = -1;
     } else {
         pending_tmpl = t;
         parse_simple_decl_or_using(ctx);

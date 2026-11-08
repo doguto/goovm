@@ -801,7 +801,11 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
             let e = parse_cexpr_full();
             paren_depth = sp;
             let ty = nodes[e].ty;
-            if is_opaque(ty) { dep = true; }
+            if nodes[e].kind as i64 == N_CXX && nodes[e].op == 2 && nodes[e].flags & NF_PAREN == 0 {
+                // a non-type template parameter: a dependent bound
+                let dv = syms[nodes[e].a].v;
+                n = -2 - dv;
+            } else if is_opaque(ty) { dep = true; }
             else {
                 let ok, v = const_int(e);
                 if ok { n = v; } else { dep = true; }
@@ -814,7 +818,7 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         cx_attrs(a);
         let inner = parse_csuffixes(base, d, false);
         if vla != 0 && !is_opaque(inner) && cish(inner) { return mk_vla(inner, vla as i64); }
-        if dep || is_opaque(inner) {
+        if dep || (is_opaque(inner) && !is_dep(inner)) {
             // a dependent bound, one D1 does not evaluate, or a VLA (a GNU
             // extension the corpora do not use in C++): opaque
             return t_unknown;
@@ -859,9 +863,16 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         }
         var ret = base;
         if at(TK_ARROW) {
-            // a trailing return type (the specifiers said auto)
+            // a trailing return type (the specifiers said auto): the
+            // parameters are in scope
             adv();
+            push_scope();
+            for i in count {
+                let ps = nlist[start + i] as i64;
+                if syms[ps].name != 0 { bind_sym(ps, false); }
+            }
             ret = parse_type_id();
+            pop_scope();
         } else {
             ret = parse_csuffixes(base, d, false);
         }

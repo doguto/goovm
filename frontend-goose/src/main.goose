@@ -51,6 +51,7 @@ import .cx_decl;
 import .cx_class;
 import .cx_tmpl;
 import .cx_inst;
+import .cx_fspec;
 import .cx_decl2;
 import .cx_expr;
 import .cx_sema;

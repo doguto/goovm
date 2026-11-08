@@ -389,7 +389,7 @@ recursive fn mk_name_ref(qn: QN&, s0: i64, loc: u32) -> u32 {
     return opaque_node(loc);
 }
 
-fn note_static_member_use(s: i64) {}
+fn note_static_member_use(s: i64) { inst_var_use(s); }
 
 // The field index of member symbol s (SK_FIELD).
 fn field_index(s: i64) -> i64 {
