@@ -1,0 +1,10 @@
+... 200/423
+... 400/423
+| corpus | files | identical | runs | lookups | hits |
+|---|---:|---:|---:|---:|---:|
+| cxx-unit | 35 | 35 | 280 | 523 | 255 |
+| cxx-regress | 31 | 31 | 248 | 182 | 97 |
+| cxx-bench | 41 | 41 | 328 | 1302 | 549 |
+| cxx-ctmark | 316 | 316 | 2528 | 22428 | 10986 |
+| **total** | 423 | 423 | 3384 | 24435 | 11887 |
+warm2 runs that recorded: 408; failures: 0

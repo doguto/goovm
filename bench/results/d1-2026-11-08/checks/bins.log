@@ -1,0 +1,17 @@
+... 250/2357
+... 500/2357
+... 750/2357
+... 1000/2357
+... 1250/2357
+... 1500/2357
+... 1750/2357
+... 2000/2357
+... 2250/2357
+| corpus | E | ast | layout | c | g |
+|---|---:|---:|---:|---:|---:|
+| torture | 0/1708 differ | 0/1708 differ | 0/1708 differ | 0/1708 differ | 0/1708 differ |
+| unit | 0/182 differ | 0/182 differ | 0/182 differ | 0/182 differ | 0/182 differ |
+| regress | 0/37 differ | 0/37 differ | 0/37 differ | 0/37 differ | 0/37 differ |
+| bench | 0/102 differ | 0/102 differ | 0/102 differ | 0/102 differ | 0/102 differ |
+| ctmark | 0/328 differ | 0/328 differ | 0/328 differ | 0/328 differ | 0/328 differ |
+differences: 0

@@ -36,7 +36,7 @@ Status of the C++ front end (milestone D1; DESIGN.md, section 13):
   C++20 concepts in them are not parsed yet).
 - **Layout and mangling** are held to clang by two oracles over the same
   files: every size, alignment, offset and member type of every nameable
-  class (306,000 assertions) and the Itanium mangled name of every function
+  class (307,000 assertions) and the Itanium mangled name of every function
   and variable declared in a main file that D1 can name.
 - **Code generation** covers classes, member functions, virtual functions
   (vtables and typeinfo), constructors and destructors (at scope exit, for
@@ -464,6 +464,52 @@ The tables of clang-20 facts are generated, and the generators are kept:
 `tools/gen_builtins.py` (builtin function types).
 
 ## Results
+
+### C++ (D1)
+
+Measured on the final D1 build (records in
+[`../bench/results/d1-2026-11-08/`](../bench/results/d1-2026-11-08/)).
+
+**Front end** (the C++ corpora of "C++ tests" above; 423 files):
+
+| oracle | cxx-unit | cxx-regress | cxx-bench | cxx-ctmark | cxx-hdrs |
+|---|---:|---:|---:|---:|---:|
+| `cmp_E.py`: identical to `clang++-20 -E` | 35/35 | 31/31 | 41/41 | 316/316 | 647/647 |
+| `cmp_syntax.py`: accepted, no false error | 35/35 | 31/31 | 41/41 | 316/316 | 572/647 |
+| `layout_check.py`: files / assertions, 0 mismatches | 35 / 19,459 | 31 / 3,685 | 41 / 30,809 | 316 / 253,504 | |
+| `cmp_decls_cxx.py`: mangled names matched / missing, 0 wrong | 160 / 0 | 146 / 1 | 654 / 10 | 7,568 / 160 | |
+
+The 75 header files `cmp_syntax.py` counts as false errors are the
+`-std=gnu++20` runs of headers that use concepts (`requires`); under the
+other five standards every header is accepted. The missing declarations
+are members of class templates and function templates D1 does not
+instantiate. `cache_check.py --corpus cxx --modes E,layout`: 423/423
+identical with the header cache cold, warm and shared (3,384 runs).
+
+**Code generation.** `tests/run.py --goosecc`: the 8 programs of
+`tests/cxx_d1/` pass with and without `-g` (and the 54 C programs: 124/124).
+The SingleSource C++ tests through `goosecc -c` (`tests/suite_goosecc.py
+--corpus unittests-cxx,regression-cxx,benchmarks-cxx,ctmark-cxx --variants O0,g`):
+
+| corpus | tests | pass (O0 and -g) | wrong output | stopped by a D1 error |
+|---|---:|---:|---:|---:|
+| unittests-cxx | 35 | 11 | 0 | 24 |
+| regression-cxx | 31 | 14 | 0 | 17 |
+| benchmarks-cxx | 41 | 3 (oopack, SmallPT, mandel-text) | 0 | 38 |
+| ctmark-cxx | 4 | 0 | 0 | 4 |
+
+The errors are templates (iostream, `<random>`, the standard containers:
+most of the benchmarks and all of CTMark), exceptions (the `EH/` tests),
+temporaries with destructors (and classes with destructors passed by
+value), `typeid`, and lifetime-extended temporaries.
+
+**C is unchanged**: against the build before D1 (d77aa81),
+`cmp_bins.py` finds every `-E` output, AST dump, layout check and object
+(with and without `-g`) of the 2,357 C corpus files identical; the C
+oracles, the cache checks and `suite_goosecc.py` (1,804 tests, `-O0` and
+`-g`) pass as before.
+
+SPEED_SECTION
 
 ### Start-up, parse cache, clang's folding (G1)
 

@@ -1,0 +1,6 @@
+
+cxx-hdrs files   678  clang-ok   647  identical   647  {'clang-error': 31}
+cxx-unit files    35  clang-ok    35  identical    35  {}
+cxx-regress files    31  clang-ok    31  identical    31  {}
+cxx-bench files    41  clang-ok    41  identical    41  {}
+cxx-ctmark files   316  clang-ok   316  identical   316  {}
