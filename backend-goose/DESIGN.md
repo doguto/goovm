@@ -12,8 +12,8 @@ is 1 or more (`goovm-llc -O1`, `goovm-cc -O1`, `goosecc -O1`), a middle-end
 written in Goose optimizes the tables before code generation (§15:
 mem2reg and SROA, instruction simplification, dominator CSE with load
 forwarding, SimplifyCFG with jump threading and if-conversion, inlining,
-tail recursion elimination, loop rotation, LICM, induction variable
-widening, DCE), and the values that live across blocks get a
+tail recursion elimination, loop rotation, LICM with scalar promotion of
+globals, induction variable widening, DCE), and the values that live across blocks get a
 register for their whole live range from a global allocator (§16), with
 the -O0 block-local allocator working around them. At `opt_level` 0 none
 of it runs and the objects are byte-identical to the previous milestone's.
@@ -61,9 +61,9 @@ frequent instructions, which got allocator-aware lowerings (§6).
 | `opt_sroa.goose` | scalar replacement of aggregates |
 | `opt_fold.goose` | instruction simplification: folding, identities, strength reduction, division by constants, compares, casts, GEPs |
 | `opt_gvn.goose` | dominator CSE with load forwarding and local dead-store elimination |
-| `opt_scfg.goose` | SimplifyCFG: constant branches, block merging, empty-block forwarding, jump threading over PHIs |
-| `opt_inline.goose` | call graph, function order, inlining |
-| `opt_licm.goose` | preheaders, loop-invariant code motion, GEP splitting, layout loop rotation |
+| `opt_scfg.goose` | SimplifyCFG: constant branches, block merging, empty-block forwarding, jump threading over PHIs, if-conversion to selects |
+| `opt_inline.goose` | call graph, function order, inlining, tail recursion elimination |
+| `opt_licm.goose` | preheaders, loop-invariant code motion, GEP splitting, loop rotation, scalar promotion of globals, layout loop rotation |
 | `opt_iv.goose` | sign-extension distribution and induction-variable widening |
 | `opt_verify.goose`, `opt_dump.goose` | `GOOVM_OPT=verify` (SSA and CFG invariants after optimization) and `GOOVM_OPT=dump` (text dump of the optimized tables) |
 | `rag.goose` | **global register allocation** (E1, §16): liveness, live segments, clobbers, assignment, and the hooks the code generator calls |
@@ -642,6 +642,7 @@ inline_calls -> round; sroa; mem2reg; round      (if anything was inlined)
 rotate_loops -> mem2reg
 round
 licm -> indvars -> licm; round                   (if anything was hoisted)
+promote_globals -> mem2reg; round
 rotate_layout
 verify (GOOVM_OPT=verify); record the size for the inliner; store
 ```
@@ -747,6 +748,15 @@ verify (GOOVM_OPT=verify); record the size for the inliner; store
   twice paid one per entry). The header's values used outside it are
   repaired by demotion to an alloca stored in both copies, which mem2reg
   promotes again with the PHIs the new CFG needs. Inner loops first.
+- **promote_globals** (`opt_licm.goose`, LICM's scalar promotion where
+  LLVM needs GlobalsAA): an internal global whose address is never taken in
+  the module (only direct loads and stores; no data relocation, no other
+  operand) cannot be reached through a pointer, so in a loop without calls
+  and inline asm it is demoted to an alloca: loaded in the preheader,
+  stored back on a new block on every exit edge, and promoted by mem2reg.
+  Stores are added on the exits only when a store of the loop dominates
+  every exiting block (no store on a path that had none: the global may
+  belong to another thread then).
 - **rotate_layout**: a loop whose header tests and whose single latch
   branches back is laid out with the header after the latch, so an
   iteration takes one taken branch (the preheader jumps to the test once).
@@ -760,7 +770,7 @@ measured time per instruction.
 
 **Switches.** `GOOVM_OPT` holds a list of `-pass` names that switch passes
 off for bisecting (`-m2r`, `-sroa`, `-fold`, `-gvn`, `-cfg`, `-inline`,
-`-licm`, `-iv`, `-rotate`, `-lrot`, `-tre`, `-select`, `-ra` for the
+`-licm`, `-iv`, `-rotate`, `-lrot`, `-tre`, `-select`, `-gprom`, `-ra` for the
 global allocator, `-all`), plus
 `verify` (check the invariants after each function: every operand
 dominates its use, PHI entries match the predecessors, one terminator per

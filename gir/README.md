@@ -36,7 +36,7 @@ generated Goose struct against `gir.h`.
 | `globals` | `GirGlobal` | 40 | functions, variables and aliases: name, kind, flags, initializer, alignment, section |
 | `sections` | `GirSection` | 16 | explicitly named sections: name, flags, ELF type |
 | `data` | `u8` | 1 | initializer bytes, aggregate constants, assembled inline asm |
-| `drelocs` | `GirDataReloc` | 32 | relocations inside initializers (addresses, block addresses, label differences) |
+| `drelocs` | `GirDataReloc` | 32 | relocations inside initializers (addresses, block addresses, label differences, PC-relative offsets) |
 | `strtab` | `u8` | 1 | symbol and section names (a valid ELF string table) |
 | `asms` | `GirAsm` | 24 | inline-asm machine code and operand bindings |
 | `dlocs` | `GirDLoc` | 16 | DILocations: line, column, scope, inlined-at |
@@ -369,7 +369,7 @@ be empty or a new opcode or flag that older producers never emit.
 
 ### Additions in milestone E1 (backward compatible)
 
-The optimizing mode (`backend-goose/DESIGN.md` §15, §16) needs four
+The optimizing mode (`backend-goose/DESIGN.md` §15, §16) needs five
 additive changes; a producer that does not know them keeps getting -O0 code
 generation and byte-identical objects.
 
@@ -390,6 +390,16 @@ generation and byte-identical objects.
 4. **`fastcc`** is accepted on definitions and calls (LLVM's optimizers give
    it to internal functions; on x86-64 it is the C convention for the
    arguments the exporter supports).
+5. **Data relocation kind** `GIR_DR_PCREL32` (3): 4 bytes, the address of
+   `globals[target] + addend` minus the address of the field. LLVM -O2
+   turns switch lookup tables of pointers into relative tables (entries
+   `trunc (sub (ptrtoint X, ptrtoint table))`, read by
+   `llvm.load.relative`); the exporter writes each entry as a PCREL32 with
+   the addend X's offset plus the entry's offset, and lowers
+   `llvm.load.relative` to `p + sext(load i32 (p + off))`. The exporter also
+   lowers `llvm.usub.sat`/`llvm.uadd.sat` on scalars to a compare and a
+   select. (What it still rejects in LLVM -O2 IR is listed in
+   `backend-goose/NOTES.md` §12.)
 
 ## Debugging aid
 
