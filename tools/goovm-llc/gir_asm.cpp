@@ -32,20 +32,26 @@ namespace {
 
 // Assembles `text` into an ELF relocatable object in `buf`.
 bool assemble_object(const std::string &triple_str, const std::string &text, bool intel,
-                     SmallVectorImpl<char> &buf, std::string &err) {
+                     SmallVectorImpl<char> &buf, std::string &err, const std::string &features) {
     static bool inited = false;
     if (!inited) {
         InitializeNativeTarget();
         InitializeNativeTargetAsmParser();
+        // AArch64 (milestone F1)
+        LLVMInitializeAArch64TargetInfo();
+        LLVMInitializeAArch64TargetMC();
+        LLVMInitializeAArch64AsmParser();
         inited = true;
     }
     Triple triple(triple_str);
+    const bool a64 = triple.isAArch64();
     const Target *T = TargetRegistry::lookupTarget(triple_str, err);
     if (!T) return false;
     MCTargetOptions opts;
     std::unique_ptr<MCRegisterInfo> MRI(T->createMCRegInfo(triple_str));
     std::unique_ptr<MCAsmInfo> MAI(T->createMCAsmInfo(*MRI, triple_str, opts));
-    std::unique_ptr<MCSubtargetInfo> STI(T->createMCSubtargetInfo(triple_str, "x86-64", ""));
+    std::unique_ptr<MCSubtargetInfo> STI(T->createMCSubtargetInfo(triple_str, a64 ? "generic" : "x86-64",
+                                                                  a64 ? features : ""));
     std::unique_ptr<MCInstrInfo> MII(T->createMCInstrInfo());
     if (!MRI || !MAI || !STI || !MII) {
         err = "no MC support for " + triple_str;
@@ -74,7 +80,7 @@ bool assemble_object(const std::string &triple_str, const std::string &text, boo
     std::unique_ptr<MCAsmParser> Parser(createMCAsmParser(SrcMgr, Ctx, *Str, *MAI));
     std::unique_ptr<MCTargetAsmParser> TAP(T->createMCAsmParser(*STI, *Parser, *MII, opts));
     if (!TAP) {
-        err = "no x86 asm parser";
+        err = "no asm parser";
         return false;
     }
     Parser->setTargetParser(*TAP);
@@ -91,9 +97,9 @@ bool assemble_object(const std::string &triple_str, const std::string &text, boo
 }  // namespace
 
 bool gir_assemble(const std::string &triple_str, const std::string &text, bool intel, std::vector<uint8_t> &code,
-                  std::string &err) {
+                  std::string &err, const std::string &features) {
     SmallVector<char, 0> buf;
-    if (!assemble_object(triple_str, text, intel, buf, err)) return false;
+    if (!assemble_object(triple_str, text, intel, buf, err, features)) return false;
     auto obj = object::ObjectFile::createObjectFile(MemoryBufferRef(StringRef(buf.data(), buf.size()), "asm"));
     if (!obj) {
         err = toString(obj.takeError());
@@ -128,7 +134,7 @@ bool gir_assemble(const std::string &triple_str, const std::string &text, bool i
 bool gir_assemble_module(const std::string &triple_str, const std::string &text, std::vector<GirAsmSymbol> &syms,
                          std::string &err) {
     SmallVector<char, 0> buf;
-    if (!assemble_object(triple_str, text, false, buf, err)) return false;
+    if (!assemble_object(triple_str, text, false, buf, err, "")) return false;
     auto obj = object::ObjectFile::createObjectFile(MemoryBufferRef(StringRef(buf.data(), buf.size()), "asm"));
     if (!obj) {
         err = toString(obj.takeError());
