@@ -192,6 +192,10 @@ def two_builds(args):
     if not args.save:
         tools["new"] = (args.goovm, args.cc)
     saved = {}
+    if args.save and os.path.exists(args.save):
+        # resume an interrupted recording: the files already recorded are skipped
+        saved = json.load(open(args.save))
+        jobs = [j for j in jobs if j[0] not in saved]
     counts = {"same": 0, "differ": 0, "missing": 0}
     n = 0
     with cf.ThreadPoolExecutor(max_workers=args.j) as ex:
@@ -201,6 +205,9 @@ def two_builds(args):
                 print(f"... {n}/{len(jobs)}", flush=True)
             if args.save:
                 saved[label] = out["base"]
+                if n % 100 == 0:
+                    json.dump(saved, open(args.save + ".tmp", "w"), indent=0, sort_keys=True)
+                    os.replace(args.save + ".tmp", args.save)
                 continue
             base = out.get("base") or ref.get(label)
             new = out["new"]
