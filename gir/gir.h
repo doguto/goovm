@@ -433,10 +433,15 @@ typedef struct GirSection {
  *           globals[target] + addend (blockaddress)
  *   BLOCKDIFF32  4 bytes: (block `block` - block `block2`) of function
  *           globals[target] + addend, a link-time constant the back-end
- *           computes itself (&&l1 - &&l2 in an initializer) */
+ *           computes itself (&&l1 - &&l2 in an initializer)
+ *   PCREL32 4 bytes: address of globals[target] + addend - address of the
+ *           field (additive, E1: the relative lookup tables of LLVM -O2 IR,
+ *           whose entries are X - table: addend = X's offset + the field's
+ *           offset in the table) */
 #define GIR_DR_ABS64      0u
 #define GIR_DR_BLOCK      1u
 #define GIR_DR_BLOCKDIFF32 2u
+#define GIR_DR_PCREL32    3u
 typedef struct GirDataReloc {
     uint32_t owner;              /* index into globals (the variable) */
     uint32_t offset;             /* byte offset inside that variable */

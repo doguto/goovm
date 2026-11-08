@@ -293,6 +293,7 @@ let SF_NOBITS = 8;
 let DR_ABS64 = 0;
 let DR_BLOCK = 1;
 let DR_BLOCKDIFF32 = 2;
+let DR_PCREL32 = 3;      // (additive, E1)
 
 let MF_PIE = 1;
 

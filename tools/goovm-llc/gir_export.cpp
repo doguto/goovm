@@ -1332,6 +1332,23 @@ struct Exporter : GirDwarfHost {
             vmap[&CB] = cmp_select(p, a, b, a, b, t);
             return;
         }
+        case Intrinsic::usub_sat:
+        case Intrinsic::uadd_sat: {
+            // (E1, LLVM -O2 IR) usub.sat(a, b) = a > b ? a - b : 0;
+            // uadd.sat(a, b) = a + b < a ? ~0 : a + b
+            uint16_t t = ty(CB.getType());
+            if (cls(t) != GIR_C_INT) fail("saturating arithmetic on a vector or a wide integer");
+            uint32_t a = ref_multi(CB.getArgOperand(0));
+            uint32_t b = ref_multi(CB.getArgOperand(1));
+            if (id == Intrinsic::usub_sat) {
+                uint32_t d = emit(GIR_SUB, t, 0, 0, 0, a, b, 0, RB);
+                vmap[&CB] = cmp_select(GIR_UGT, a, b, d, cint(0, t), t);
+            } else {
+                uint32_t s = emit(GIR_ADD, t, 0, 0, 0, a, b, 0, RB);
+                vmap[&CB] = cmp_select(GIR_ULT, s, a, cint(~0ull, t), s, t);
+            }
+            return;
+        }
         case Intrinsic::ctlz:
         case Intrinsic::cttz: {
             uint16_t t = ty(CB.getType());
@@ -1447,6 +1464,20 @@ struct Exporter : GirDwarfHost {
         case Intrinsic::is_constant:
             vmap[&CB] = cint(isa<Constant>(CB.getArgOperand(0)) ? 1 : 0, GIR_T_I1);
             return;
+        case Intrinsic::load_relative: {
+            // (E1, LLVM -O2 IR: relative lookup tables) p + sext(load i32 (p + off))
+            if (ty(CB.getArgOperand(1)->getType()) != GIR_T_I64) fail("load.relative with a narrow offset");
+            uint32_t p = ref_multi(CB.getArgOperand(0));
+            uint32_t o = ref(CB.getArgOperand(1));
+            uint32_t pi = emit(GIR_PTRTOINT, GIR_T_I64, 0, 0, GIR_T_PTR, p, 0, 0, RA);
+            uint32_t e = emit(GIR_ADD, GIR_T_I64, 0, 0, 0, pi, o, 0, RB);
+            uint32_t ep = emit(GIR_INTTOPTR, GIR_T_PTR, 0, 0, GIR_T_I64, e, 0, 0, 0);
+            uint32_t l = emit(GIR_LOAD, GIR_T_I32, 0, 0, 0, ep, 0, 0, 0);
+            uint32_t x = emit(GIR_SEXT, GIR_T_I64, 0, 0, GIR_T_I32, l, 0, 0, 0);
+            uint32_t r = emit(GIR_ADD, GIR_T_I64, 0, 0, 0, pi, x, 0, 0);
+            vmap[&CB] = emit(GIR_INTTOPTR, GIR_T_PTR, 0, 0, GIR_T_I64, r, 0, 0, 0);
+            return;
+        }
         case Intrinsic::ptrmask: {
             uint16_t mt = ty(CB.getArgOperand(1)->getType());
             if (mt != GIR_T_I64) fail("ptrmask with a mask narrower than 64 bits");
@@ -2645,6 +2676,19 @@ struct Exporter : GirDwarfHost {
                         block_of(L->getOperand(0), fa, ba) && block_of(R->getOperand(0), fb, bb) && fa == fb) {
                         reloc(g, off, fa, GIR_DR_BLOCKDIFF32, 0, ba, bb);
                         return;
+                    }
+                    // trunc (sub (ptrtoint X, ptrtoint this variable)): a relative lookup
+                    // table entry (E1, LLVM -O2 IR), a PC-relative 32-bit reference
+                    if (L && R && L->getOpcode() == Instruction::PtrToInt && R->getOpcode() == Instruction::PtrToInt &&
+                        R->getOperand(0) == GV) {
+                        APInt xo(64, 0);
+                        const Value *xb = L->getOperand(0)->stripAndAccumulateConstantOffsets(DL, xo, true);
+                        const auto *xg = dyn_cast<GlobalValue>(xb);
+                        auto xi = xg ? gmap.find(xg) : gmap.end();
+                        if (xi != gmap.end() && !is_tls(xg)) {
+                            reloc(g, off, xi->second, GIR_DR_PCREL32, xo.getSExtValue() + (int64_t)off);
+                            return;
+                        }
                     }
                 }
             if (const auto *CE = dyn_cast<ConstantExpr>(p); CE && CE->getOpcode() == Instruction::PtrToInt)
