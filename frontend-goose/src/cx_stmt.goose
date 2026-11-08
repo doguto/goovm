@@ -622,8 +622,10 @@ recursive fn parse_try() -> u32 {
         expect(TK_R_PAREN, "')'");
         let h = parse_compound_cx();
         pop_scope();
+        if cg_on { nscratch.push(cg_catch(vs, ct, h, hloc, false)); continue; }
         nscratch.push(node(N_CATCH, 0, ct, vs, h as i64, 0, hloc));
     }
+    if cg_on { return cg_try(body, mark, loc); }
     let count = nscratch.len - mark;
     let start = commit_list(mark);
     return node_v(N_TRY, 0, 0, body as i64, 0, count, loc, start);
@@ -696,6 +698,9 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
     this_type = 0;
     let sv_cgthis = cg_this;
     cg_this = -1;
+    let sv_cgret = cg_ret;
+    cg_ret = -1;
+    if cg_on && pass_indirect(ret_type) { cg_ret = make_ret(s, ret_type, loc); }
     if member {
         let sc = cxs[s].dscope as i64;
         let ct = scope_class_type(sc);
@@ -709,10 +714,7 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
     let lmark = label_syms.len;
     block_fn_depth++;
     push_scope();
-    for i in nparams {
-        let p = nlist[params + i] as i64;
-        if syms[p].name != 0 { bind_sym(p, false); }
-    }
+    bind_params(params, nparams);
     var is_try = false;
     if at_kw(KW_TRY) { adv(); is_try = true; }
     var inits: u32 = 0;
@@ -720,13 +722,19 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
     var body: u32 = 0;
     if at(TK_L_BRACE) { body = parse_compound_cx(); }
     else { perr_expected("a function body"); }
+    var hmark: i64 = -1;
+    var tmark: i64 = -1;
     if is_try {
         let mark = nscratch.len;
+        tmark = mark;
+        let structor = cxs[s].flags & (CF_CTOR | CF_DTOR) != 0;
         while at_kw(KW_CATCH) {
             let hloc = tloc();
             adv();
             expect(TK_L_PAREN, "'('");
             push_scope();
+            var vs: i64 = 0;
+            var ct: u32 = 0;
             if accept(TK_ELLIPSIS) {} else {
                 var a = Attrs { .. };
                 var ds = CDS { .. };
@@ -735,16 +743,23 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
                 if base == 0 { base = t_int; }
                 var d = CD { .. };
                 parse_cdeclr(base, 2, d);
+                ct = d.ty;
                 if d.qn.name != 0 {
-                    let vs = csym(SK_VAR, d.qn.name, d.ty, d.loc);
+                    vs = csym(SK_VAR, d.qn.name, d.ty, d.loc);
+                    cxs[vs].dscope = cur_scope as! i32;
                     bind_sym(vs, false);
                 }
             }
             expect(TK_R_PAREN, "')'");
             let h = parse_compound_cx();
             pop_scope();
+            if cg_on { nscratch.push(cg_catch(vs, ct, h, hloc, structor)); continue; }
             nscratch.push(node(N_CATCH, 0, 0, 0, h as i64, 0, hloc));
         }
+        if cg_on { hmark = mark; }
+    }
+    if is_try && !cg_on {
+        let mark = tmark;
         let count = nscratch.len - mark;
         let start = commit_list(mark);
         let t = node_v(N_TRY, 0, 0, body as i64, 0, count, loc, start);
@@ -753,8 +768,9 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
         let bstart = commit_list(bm);
         body = node_v(N_COMPOUND, 0, 0, 0, 0, 1, loc, bstart);
     }
-    if cg_on && cg_this >= 0 && body != 0 { body = cg_wrap_body(s, body, inits, loc); }
+    if cg_on && (cg_this >= 0 || hmark >= 0) && body != 0 { body = cg_wrap_body_try(s, body, inits, loc, hmark); }
     cg_this = sv_cgthis;
+    cg_ret = sv_cgret;
     pop_scope();
     block_fn_depth--;
     for j in lmark..label_syms.len {

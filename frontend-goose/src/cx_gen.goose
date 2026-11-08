@@ -54,10 +54,15 @@ import .cx_sema;
 import .cx_over;
 import .cx_layout;
 import .cx_mangle;
+import .cx_gen_defs;
+import .cx_gen_link;
+import .cx_gen_eh;
+import .cx_gen_class;
 
 let CF_DTOR_DELETING = 2147483648;  // the deleting destructor (D0) of a class with a virtual destructor
 
 var cg_on: bool = false;        // C++ code generation: semantic actions build lowered C nodes
+var cg_base_variant = false;    // calls of constructors and destructors are of the base-object variant (C2/D2)
 var cg_this: i64 = -1;          // the `this` parameter of the member function being parsed
 var fn_this = dictionary<u64, u32> {};      // member function -> its `this` parameter symbol
 var id_this: u32 = 0;
@@ -112,13 +117,44 @@ recursive fn lower_ty(t: u32) -> u32 {
 }
 var abi_scratch: u32[>..<] = [];
 
-// The C type of function f: `this` first for a non-static member.
+// The C type of function f: `this` first for a non-static member; a class
+// passed by invisible reference is a pointer, a class returned by
+// invisible reference a pointer parameter (before `this`) that the
+// function returns (Itanium's sret).
 fn abi_type(f: i64) -> u32 {
     let g = abi_types.get(f as u64);
     if g { return g; }
     let ft = syms[f].ty;
     let lt = lower_ty(ft);
     var r = lt;
+    let fx = types[ft >> 4];
+    var indirect = pass_indirect(fx.base);
+    for i in fx.n { if pass_indirect(tparams[fx.extra + i]) { indirect = true; } }
+    if indirect {
+        let lf = types[lt >> 4];
+        let mark = abi_scratch.len;
+        var ret = lf.base;
+        if pass_indirect(fx.base) {
+            ret = mk_ptr(unqual(fx.base));
+            abi_scratch.push(ret);
+        }
+        if is_this_fn(f) {
+            let cls = scope_class_type(cxs[f].dscope as i64);
+            var q: i64 = 0;
+            if (types[ft >> 4].flags as i64) & TF_MCONST != 0 { q = Q_CONST; }
+            abi_scratch.push(mk_ptr(with_q(cls, q)));
+        }
+        for i in lf.n {
+            let p = tparams[lf.extra + i];
+            abi_scratch.push(if pass_indirect(p) { mk_ptr(unqual(p)) } else { p });
+        }
+        fn_scratch.clear();
+        for i in mark..abi_scratch.len { fn_scratch.push(abi_scratch[i]); }
+        abi_scratch.resize(mark);
+        r = qt(mk_type(TY_FUNC, (lf.flags as i64) & (TF_VARIADIC | TF_NORETURN), ret, 0, 0, 0) as i64, 0);
+        abi_types.insert(f as u64, r);
+        return r;
+    }
     if is_this_fn(f) {
         let lf = types[lt >> 4];
         let cls = scope_class_type(cxs[f].dscope as i64);
@@ -142,6 +178,7 @@ fn is_this_fn(f: i64) -> bool { syms[f].kind as i64 == SK_FUNC && cxs[f].flags &
 // Node helpers (C nodes).
 
 fn n_ref_fn(f: i64, loc: u32) -> u32 {
+    inst_use(f);
     let n = node(N_DECLREF, 0, abi_type(f), f, 0, 0, loc);
     nodes[n].flags = NF_LVALUE;
     syms[f].flags = syms[f].flags | SF_USED;
@@ -210,18 +247,47 @@ fn obj_addr_as(obj: u32, cls: u32, q: i64, loc: u32) -> u32 {
     return n_ptrcast(a, mk_ptr(with_q(unqual(cls), quals(nodes[o].ty) | q)), loc);
 }
 
-// A prvalue of class type as an object (a compound literal holding it).
-fn materialize(e: u32, loc: u32) -> u32 {
+// A prvalue of class type as an object: a compound literal for a
+// trivially copyable class, else a temporary destroyed at the end of the
+// full-expression (or of the block, when cg_extend is set: bound to a
+// reference variable).
+recursive fn materialize(e: u32, loc: u32) -> u32 {
     let t = unqual(nodes[e].ty);
+    if is_record(t) && !is_opaque(t) && !class_trivial_copy(rec_of(t)) { return xtemp_of(e, t, loc); }
     let s = csym(SK_VAR, 0, t, loc);
     syms[s].flags = SF_COMPLIT;
     let cl = node(N_COMPLIT, 0, t, e as i64, s, 0, loc);
     nodes[cl].flags = NF_LVALUE;
     return cl;
 }
+var cg_extend = false;
 
-// ---------------------------------------------------------------------------
-// Conversions for calls, initializations and returns.
+// A temporary of class t initialized from e (a class prvalue, or what
+// constructs one): N_XTEMP, an lvalue.
+recursive fn xtemp_of(e: u32, t: u32, loc: u32) -> u32 {
+    let s = csym(SK_VAR, intern("__tmp"), unqual(t), loc);
+    syms[s].flags = SF_COMPLIT;
+    syms[s].scope = 1;
+    let init = init_into(n_var(s, loc), e, loc);
+    if init == 0 { return opaque_node(loc); }
+    var d: i64 = -1;
+    if is_record(t) { let x = class_dtor(rec_of(t)); if x >= 0 { d = complete_sym(x); } }
+    let n = node(N_XTEMP, if cg_extend { XT_EXTENDED } else { 0 }, unqual(t), init as i64, s, if d >= 0 { d } else { 0 }, loc);
+    nodes[n].flags = NF_LVALUE;
+    if d >= 0 { n_xtemps++; }
+    return n;
+}
+
+// Is e a class prvalue built in place (by a constructor or a call
+// returning by invisible reference, or a conditional / comma of them)?
+fn is_class_prv(e: u32) -> bool {
+    let k = nodes[e].kind as i64;
+    if is_lvalue(e) { return false; }
+    if k == N_CTOR || k == N_XPRV { return true; }
+    if !is_record(nodes[e].ty) { return false; }
+    if k == N_COND || (k == N_BINARY && nodes[e].op as i64 == B_COMMA) || k == N_STMTEXPR { return true; }
+    return false;
+}
 
 // e converted to parameter type pt (C++ types; the result has the
 // lowered type), or an opaque node.
@@ -237,22 +303,67 @@ recursive fn conv_arg(e: u32, pt: u32, loc: u32) -> u32 {
                 if b != 0 { return n_ptrcast(n_addr(b, loc), lower_ty(mk_ptr(t)), loc); }
             }
         }
-        // a temporary (a const or rvalue reference; trivially destructible types)
+        // a temporary (const lvalue or rvalue references)
         if kind_of(pt) == TY_LREF && quals(t) & Q_CONST == 0 { return opaque_node(loc); }
-        if is_record(t) && class_nontrivial_dtor(rec_of(t)) { return opaque_node(loc); }
-        if is_record(t) && is_record(nodes[e].ty) && unqual(nodes[e].ty) == unqual(t) && nodes[e].kind as i64 != N_CTOR {
-            // a class prvalue (a call result) bound to the reference
-            return n_ptrcast(n_addr(materialize(e, loc), loc), lower_ty(mk_ptr(t)), loc);
+        if is_record(t) && !is_opaque(t) {
+            let ct = unqual(t);
+            var src = e;
+            if !(is_class_prv(e) && unqual(nodes[e].ty) == ct) { src = class_rv(e, ct, loc); }
+            if is_opq(src) { return src; }
+            if is_record(nodes[src].ty) && unqual(nodes[src].ty) != ct && is_lvalue(src) {
+                let b = derived_to_base_lv(src, ct, loc);
+                if b != 0 { return n_ptrcast(n_addr(b, loc), lower_ty(mk_ptr(t)), loc); }
+            }
+            let m = materialize(src, loc);
+            if is_opq(m) { return m; }
+            return n_ptrcast(n_addr(m, loc), lower_ty(mk_ptr(t)), loc);
         }
         let v = conv_value(e, unqual(t), loc);
         if is_opq(v) { return v; }
         return n_ptrcast(temp_addr(v, unqual(t), loc), lower_ty(mk_ptr(t)), loc);
     }
+    if pass_indirect(pt) {
+        // by invisible reference: a temporary the caller destroys at the end
+        // of the full-expression
+        let ct = unqual(pt);
+        var src = e;
+        if !(is_class_prv(e) && unqual(nodes[e].ty) == ct) { src = class_rv(e, ct, loc); }
+        if is_opq(src) { return src; }
+        let x = xtemp_of(src, ct, loc);
+        if is_opq(x) { return x; }
+        return n_addr(x, loc);
+    }
     return conv_value(e, unqual(pt), loc);
 }
 
+// e as a class prvalue of class t: itself (a construction or a call of t),
+// or a constructor call: a copy or move of an object of t (or of a class
+// derived from it: sliced), or a converting constructor.
+recursive fn class_rv(e: u32, t: u32, loc: u32) -> u32 {
+    let k = nodes[e].kind as i64;
+    if is_class_prv(e) && unqual(nodes[e].ty) == unqual(t) { return e; }
+    if k == N_INITBRACE {
+        if c_initializable(t) {
+            let bi = brace_init(t, e, loc);
+            if bi == 0 { return opaque_node(loc); }
+            return compound_value(bi, t, loc);
+        }
+        let c = node_v(N_CTOR, 0, unqual(t), 0, 0, nodes[e].c as i64, loc, nodes[e].v);
+        // list-initialization: an aggregate's (op 2), or a constructor's (op 1)
+        nodes[c].op = if is_record(t) && is_aggregate_class(rec_of(t)) { 2 } else { 1 };
+        return c;
+    }
+    let mark = nscratch.len;
+    nscratch.push(e);
+    let c = node(N_CTOR, 0, unqual(t), 0, 0, 1, loc);
+    let st = commit_list(mark);
+    nodes[c].v = st;
+    return c;
+}
+
 // A value of type t from e (a copy for a class: trivially copyable classes
-// only; constructor calls build into a statement expression).
+// are C values; others give a class prvalue, which init_into constructs
+// in place and anything else materializes).
 recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
     if is_opq(e) && nodes[e].kind as i64 != N_FUNCREF && nodes[e].kind as i64 != N_INITBRACE { return opaque_node(loc); }
     if nodes[e].kind as i64 == N_FUNCREF {
@@ -262,7 +373,8 @@ recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
     }
     if is_record(t) {
         let r = rec_of(t);
-        if !class_trivial_copy(r) { return opaque_node(loc); }
+        if is_opaque(t) { return opaque_node(loc); }
+        if !class_trivial_copy(r) { return class_rv(e, t, loc); }
         if nodes[e].kind as i64 == N_CTOR { return ctor_value(e, loc); }
         if nodes[e].kind as i64 == N_INITBRACE {
             let bi = brace_init(t, e, loc);
@@ -276,6 +388,11 @@ recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
         if is_record(nodes[e].ty) {
             let b = derived_to_base_lv(e, t, loc);
             if b != 0 && is_lvalue(b) { return rv(b); }
+            if b == 0 {
+                // a conversion function of the operand's class
+                let c = user_conv(e, t, loc);
+                if c != 0 { return conv_value(c, t, loc); }
+            }
             return opaque_node(loc);
         }
         // a converting constructor
@@ -380,6 +497,67 @@ recursive fn ctor_value(c: u32, loc: u32) -> u32 {
     nscratch.push(n_expr_stmt(v));
     let body = n_block(mark, loc);
     return node(N_STMTEXPR, 0, unqual(t), body as i64, 0, 0, loc);
+}
+
+// The construction of class object dst (an lvalue) from e (an expression
+// of its class, a constructor call, arguments in braces): an expression
+// (void), or 0 when D3 cannot.
+recursive fn init_into(dst: u32, e: u32, loc: u32) -> u32 {
+    let t = nodes[dst].ty;
+    let k = nodes[e].kind as i64;
+    if k == N_XPRV {
+        // the call constructs its result at dst
+        let ph = nodes[e].b;
+        let a = n_ptrcast(n_addr(dst, loc), nodes[ph].ty, loc);
+        nodes[ph] = nodes[a];
+        nodes[e].kind = N_NULL as! u8;      // used
+        return node(N_ICAST, CK_TOVOID, t_void, nodes[e].a as i64, 0, 0, loc);
+    }
+    if !is_lvalue(e) && is_record(nodes[e].ty) && k == N_COND && nodes[e].b != 0 {
+        let b = init_into(dst, nodes[e].b, loc);
+        let c = init_into(dst, nodes[e].c, loc);
+        if b == 0 || c == 0 { return 0; }
+        return node(N_COND, 0, t_void, nodes[e].a as i64, b as i64, c as i64, loc);
+    }
+    if !is_lvalue(e) && is_record(nodes[e].ty) && k == N_BINARY && nodes[e].op as i64 == B_COMMA {
+        let b = init_into(dst, nodes[e].b, loc);
+        if b == 0 { return 0; }
+        return node(N_BINARY, B_COMMA, t_void, nodes[e].a as i64, b as i64, 0, loc);
+    }
+    if k == N_INITBRACE && c_initializable(t) {
+        let bi = brace_init(t, e, loc);
+        if bi == 0 { return 0; }
+        return node(N_ASSIGN, 0, unqual(t), dst as i64, compound_value(bi, unqual(t), loc) as i64, 0, loc);
+    }
+    if is_record(t) && ((k == N_CTOR && nodes[e].op == 2) || (k == N_INITBRACE && is_aggregate_class(rec_of(t)))) {
+        return agg_init(dst, nodes[e].v, nodes[e].c as i64, loc);
+    }
+    let mark = nscratch.len;
+    if k == N_CTOR || k == N_INITBRACE { for i in nodes[e].c as i64 { nscratch.push(nlist[nodes[e].v + i]); } }
+    else { nscratch.push(e); }
+    let zero = (k == N_CTOR || k == N_INITBRACE) && nodes[e].c == 0 && is_record(t) && !has_user_ctor(rec_of(t));
+    let st = construct_at(dst, mark, loc);
+    if st == 0 { return 0; }
+    if zero {
+        // T(): value-initialization zeroes a class without a user-provided constructor
+        let m = nscratch.len;
+        nscratch.push(n_expr_stmt(node(N_ASSIGN, 0, unqual(t), dst as i64, node(N_ZEROINIT, 0, unqual(t), 0, 0, 0, loc) as i64, 0, loc)));
+        nscratch.push(st);
+        let b = n_block(m, loc);
+        return node(N_STMTEXPR, 0, t_void, b as i64, 0, 0, loc);
+    }
+    return stmt_expr(st, loc);
+}
+
+// Statement st as an expression (void).
+fn stmt_expr(st: u32, loc: u32) -> u32 {
+    let k = nodes[st].kind as i64;
+    if k == N_EXPR { return nodes[st].a; }
+    if k == N_NULL { return node(N_ICAST, CK_TOVOID, t_void, int_node(0, t_int, loc) as i64, 0, 0, loc); }
+    let m = nscratch.len;
+    nscratch.push(st);
+    let b = n_block(m, loc);
+    return node(N_STMTEXPR, 0, t_void, b as i64, 0, 0, loc);
 }
 
 fn compound_value(init: u32, t: u32, loc: u32) -> u32 {
@@ -487,7 +665,7 @@ recursive fn to_syninit(e: u32) -> u32 {
 // vtable when f is virtual.
 recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u32 {
     let ft = types[syms[f].ty >> 4];
-    if cxs[f].flags & (CF_DELETED | CF_PATTERN) != 0 || !by_value_ok(ft.base) { nscratch.resize(mark); return opaque_node(loc); }
+    if cxs[f].flags & (CF_DELETED | CF_PATTERN) != 0 || is_opaque(ft.base) { nscratch.resize(mark); return opaque_node(loc); }
     let nargs = nscratch.len - mark;
     // default arguments for the missing ones
     if nargs < ft.n {
@@ -504,6 +682,12 @@ recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u3
     let n = nscratch.len - mark;
     // the converted arguments go above, then replace the originals
     let cm = nscratch.len;
+    // a class returned by invisible reference: its destination first
+    var dst: u32 = 0;
+    if pass_indirect(ft.base) {
+        dst = node(N_XDST, 0, mk_ptr(unqual(ft.base)), 0, 0, 0, loc);
+        nscratch.push(dst);
+    }
     if is_this_fn(f) {
         if obj == 0 || !is_lvalue(obj) { nscratch.resize(mark); return opaque_node(loc); }
         let cls = scope_class_type(cxs[f].dscope as i64);
@@ -516,7 +700,7 @@ recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u3
         var c: u32 = 0;
         if i < ft.n {
             let pt = tparams[ft.extra + i];
-            if !by_value_ok(pt) { c = opaque_node(loc); } else { c = conv_arg(a, pt, loc); }
+            c = conv_arg(a, pt, loc);
         } else {
             // the variadic part: C's default promotions
             if is_opq(a) || !cish_node(a) { c = opaque_node(loc); }
@@ -532,14 +716,17 @@ recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u3
     nscratch.resize(mark + total);
     var call: u32 = 0;
     if virt && cxs[f].flags & CF_VIRTUAL != 0 && is_this_fn(f) {
-        let fp = vfunc_ptr(f, nscratch[mark], 0, loc);
+        let fp = vfunc_ptr(f, nscratch[mark + (if dst != 0 { 1 } else { 0 })], 0, loc);
         if fp == 0 { nscratch.resize(mark); return opaque_node(loc); }
         call = n_call_ptr(fp, mark, loc);
     } else {
-        call = n_call(f, mark, loc);
+        var cf = f;
+        if cxs[f].flags & (CF_CTOR | CF_DTOR) != 0 && !cg_base_variant { cf = complete_sym(f); }
+        call = n_call(cf, mark, loc);
     }
     // a member pointer result keeps its C++ type (lowered with the rest in cg_finish)
     if kind_of(ft.base) == TY_MEMPTR { nodes[call].ty = unqual(ft.base); }
+    if dst != 0 { return node(N_XPRV, 0, unqual(ft.base), call as i64, dst as i64, 0, loc); }
     return wrap_ref_result(call, ft.base);
 }
 
@@ -596,11 +783,12 @@ recursive fn cg_call(f: i64, obj0: u32, mark: i64, loc: u32, qualified: bool) ->
         obj = n_deref(cg_this_ref(loc), loc);
     }
     if !is_this_fn(f) { obj = 0; }
-    if obj != 0 && !is_lvalue(obj) && is_record(nodes[obj].ty) && class_trivial_copy(rec_of(nodes[obj].ty)) {
+    if obj != 0 && !is_lvalue(obj) && is_record(nodes[obj].ty) && !is_opaque(nodes[obj].ty) {
         var v = obj;
-        if nodes[v].kind as i64 == N_CTOR { v = ctor_value(v, loc); }
+        if class_trivial_copy(rec_of(nodes[obj].ty)) && nodes[v].kind as i64 == N_CTOR { v = ctor_value(v, loc); }
         if is_opq(v) { nscratch.resize(mark); return opaque_node(loc); }
         obj = materialize(v, loc);
+        if is_opq(obj) { nscratch.resize(mark); return opaque_node(loc); }
     }
     return lower_call(f, obj, mark, loc, !qualified);
 }
@@ -627,6 +815,8 @@ fn make_this(s: i64, cls_ptr: u32, loc: u32) -> i64 {
 // by the headers) with the arguments nscratch[mark..], or 0.
 var cg_builtins = dictionary<u64, u32> {};
 recursive fn cg_builtin_call(name: u32, mark: i64, loc: u32) -> u32 {
+    // evaluated at run time: not a constant evaluation
+    if ident_text(name as i64) == "__builtin_is_constant_evaluated" && nscratch.len == mark { return int_node(0, t_bool, loc); }
     let b = builtin_index(name);
     if b < 0 || is_library_name(ident_text(name as i64)) { return 0; }
     for i in mark..nscratch.len {
@@ -1043,6 +1233,21 @@ fn pick_ctor(r: i64, mark: i64) -> i64 {
     let cls = records[r].ty << 4;
     let sc = crecs[r].scope as i64;
     let s = scope_find(sc, id_ctor);
+    // a copy or a move of an object of the class (or of a derived class):
+    // a user-provided constructor, else the implicit one
+    if n == 1 && !is_opq(nscratch[mark]) && is_record(nodes[nscratch[mark]].ty) && nodes[nscratch[mark]].kind as i64 != N_CTOR &&
+       (unqual(nodes[nscratch[mark]].ty) == cls || base_offset(unqual(nodes[nscratch[mark]].ty), cls) >= 0) {
+        let a = nscratch[mark];
+        if s >= 0 {
+            let f = best_candidate(s, mark, true);
+            if f >= 0 && user_provided(f) && cxs[f].flags & CF_DELETED == 0 && first_param_ref(f, cls) != 0 { return f; }
+        }
+        let rvalue = !is_lvalue(a) || nodes[a].flags & NF_XVALUE != 0;
+        let c = copy_ctor_of(r, rvalue);
+        if c == -1 { return -3; }
+        if c == -2 { return -1; }
+        return c;
+    }
     // a copy with the implicit (trivial) copy constructor
     if n == 1 && is_record(nodes[nscratch[mark]].ty) && unqual(nodes[nscratch[mark]].ty) == cls && !is_opq(nscratch[mark]) &&
        nodes[nscratch[mark]].kind as i64 != N_CTOR && class_trivial_copy(r) { return -3; }
@@ -1086,11 +1291,28 @@ recursive fn construct_at(obj: u32, mark: i64, loc: u32) -> u32 {
         let a = nscratch[i];
         if is_opq(a) && nodes[a].kind as i64 != N_INITBRACE && nodes[a].kind as i64 != N_FUNCREF { nscratch.resize(mark); return 0; }
     }
+    if nscratch.len - mark == 1 {
+        let a0 = nscratch[mark];
+        if is_class_prv(a0) && unqual(nodes[a0].ty) == unqual(t) && !(nodes[a0].kind as i64 == N_CTOR && nodes[a0].c == 0 && class_trivial_copy(r)) {
+            // copy elision: the prvalue is constructed in place
+            nscratch.resize(mark);
+            let x = init_into(obj, a0, loc);
+            if x == 0 { return 0; }
+            return n_expr_stmt(x);
+        }
+    }
     let f = pick_ctor(r, mark);
     if f == -2 { nscratch.resize(mark); return n_null(loc); }
     if f == -3 {
-        let src = nscratch[mark];
+        var src = nscratch[mark];
         nscratch.resize(mark);
+        if is_record(nodes[src].ty) && unqual(nodes[src].ty) != unqual(t) {
+            if !is_lvalue(src) { src = materialize(src, loc); }
+            let b = derived_to_base_lv(src, unqual(t), loc);
+            if b == 0 { return 0; }
+            src = b;
+        }
+        if !is_lvalue(src) && !class_trivial_copy(r) { src = materialize(src, loc); }
         let a = node(N_ASSIGN, 0, unqual(t), obj as i64, (if is_lvalue(src) { rv(src) } else { src }) as i64, 0, loc);
         return n_expr_stmt(a);
     }
@@ -1247,9 +1469,14 @@ recursive fn ctor_prologue(r: i64, th: i64, inits: u32, loc: u32) -> bool {
             let obj = n_deref(rv(n_var(th, loc)), loc);
             let mark = nscratch.len;
             push_init_args(nodes[mi].b);
+            let sv = cg_base_variant;
+            cg_base_variant = true;
             let st = construct_at(obj, mark, loc);
+            cg_base_variant = sv;
             if st == 0 { return false; }
             stmt_buf.push(st);
+            let d = destroy_stmt(n_deref(rv(n_var(th, loc)), loc), loc);
+            if d != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT | XP_EHONLY, 0, d as i64, 0, 0, loc)); }
             return true;
         }
     }
@@ -1262,9 +1489,15 @@ recursive fn ctor_prologue(r: i64, th: i64, inits: u32, loc: u32) -> bool {
         if obj == 0 { return false; }
         let mark = nscratch.len;
         if mi != 0 { push_init_args(nodes[mi].b); }
+        let sv = cg_base_variant;
+        cg_base_variant = true;
         let st = construct_at(obj, mark, loc);
+        cg_base_variant = sv;
         if st == 0 { return false; }
         stmt_buf.push(st);
+        // destroyed if what follows throws
+        let ds = base_destroy(th, b.ty, loc);
+        if ds != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT | XP_EHONLY, 0, ds as i64, 0, 0, loc)); }
     }
     if cr.flags & CR_DYNAMIC != 0 {
         let vs = vptr_store(r, th, loc);
@@ -1294,6 +1527,7 @@ recursive fn ctor_prologue(r: i64, th: i64, inits: u32, loc: u32) -> bool {
                 let lp = arr_loop(lv, false, loc);
                 if lp == 0 { return false; }
                 stmt_buf.push(lp);
+                member_eh_cleanup(th, r, i, loc);
                 continue;
             }
             if args == 0 { continue; }
@@ -1327,6 +1561,7 @@ recursive fn ctor_prologue(r: i64, th: i64, inits: u32, loc: u32) -> bool {
             let st = construct_at(lv, mark, loc);
             if st == 0 { return false; }
             stmt_buf.push(st);
+            member_eh_cleanup(th, r, i, loc);
             continue;
         }
         if args == 0 { continue; }
@@ -1407,46 +1642,75 @@ recursive fn nsdmi_value(m: i64, sc: i64, th: i64) -> u32 {
     return e;
 }
 
-// The epilogue of a destructor of r: members in reverse order, then bases.
-recursive fn dtor_epilogue(r: i64, th: i64, loc: u32) -> bool {
-    let rec = records[r];
-    var i = (rec.first + rec.count) as i64 - 1;
-    while i >= rec.first as i64 {
-        let f = fields[i];
-        if f.name != 0 && is_record(f.ty) && !is_opaque(f.ty) {
-            let st = destroy_stmt(this_member(th, r, i, loc), loc);
-            if st != 0 { stmt_buf.push(st); }
-        } else if f.name != 0 && is_array(f.ty) {
-            let bt = base_elem_t(f.ty);
-            if is_record(bt) && !is_opaque(bt) && class_dtor(rec_of(bt)) >= 0 {
-                let lp = arr_loop(this_member(th, r, i, loc), true, loc);
-                if lp == 0 { return false; }
-                stmt_buf.push(lp);
-            }
+// The destruction of base class subobject bt of *this (the base-object
+// variant, D2), or 0.
+fn base_destroy(th: i64, bt: u32, loc: u32) -> u32 {
+    if !is_record(bt) || is_opaque(bt) || class_dtor(rec_of(bt)) < 0 { return 0; }
+    let obj = this_base(th, bt, loc);
+    if obj == 0 { return 0; }
+    let sv = cg_base_variant;
+    cg_base_variant = true;
+    let st = destroy_stmt(obj, loc);
+    cg_base_variant = sv;
+    return st;
+}
+
+// The destruction of member fi of *this (class r), or 0.
+fn member_destroy(th: i64, r: i64, fi: i64, loc: u32) -> u32 {
+    let f = fields[fi];
+    if f.name == 0 { return 0; }
+    if is_record(f.ty) && !is_opaque(f.ty) { return destroy_stmt(this_member(th, r, fi, loc), loc); }
+    if is_array(f.ty) {
+        let bt = base_elem_t(f.ty);
+        if is_record(bt) && !is_opaque(bt) && class_dtor(rec_of(bt)) >= 0 {
+            let lp = arr_loop(this_member(th, r, fi, loc), true, loc);
+            if lp == 0 { return mark_bad_stmt(loc); }
+            return lp;
         }
-        i--;
     }
+    return 0;
+}
+
+// A constructed member's destruction if the rest of the constructor throws.
+fn member_eh_cleanup(th: i64, r: i64, fi: i64, loc: u32) {
+    let d = member_destroy(th, r, fi, loc);
+    if d != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT | XP_EHONLY, 0, d as i64, 0, 0, loc)); }
+}
+
+// The destruction of r's members (in reverse order) and bases (in reverse)
+// as cleanups at the start of a destructor's body: pushed in construction
+// order, so that they run after the body on every exit, innermost first.
+recursive fn dtor_cleanups(r: i64, th: i64, loc: u32) -> bool {
     let cr = crecs[r];
-    var b = cr.nbases as i64 - 1;
-    while b >= 0 {
-        let bb = cbases[cr.bases + b];
+    for i in cr.nbases {
+        let bb = cbases[cr.bases + i];
         if bb.flags & BF_VIRTUAL != 0 { return false; }
-        if is_record(bb.ty) {
-            let obj = this_base(th, bb.ty, loc);
-            if obj == 0 { return false; }
-            let st = destroy_stmt(obj, loc);
-            if st != 0 { stmt_buf.push(st); }
-        }
-        b--;
+        let ds = base_destroy(th, bb.ty, loc);
+        if ds != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT, 0, ds as i64, 0, 0, loc)); }
+    }
+    let rec = records[r];
+    for i in rec.first..rec.first + rec.count {
+        let d = member_destroy(th, r, i as i64, loc);
+        if d != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT, 0, d as i64, 0, 0, loc)); }
     }
     return true;
 }
 
 // The body of member function s (parsed: body) with its constructor
-// prologue or destructor epilogue (cx_stmt.parse_function_body).
-recursive fn cg_wrap_body(s: i64, body: u32, inits: u32, loc: u32) -> u32 {
+// prologue or destructor cleanups (cx_stmt.parse_function_body). A
+// function-try-block (handlers nscratch[hmark..], hmark >= 0) encloses the
+// prologue and the destructor's cleanups too.
+recursive fn cg_wrap_body(s: i64, body: u32, inits: u32, loc: u32) -> u32 { return cg_wrap_body_try(s, body, inits, loc, -1); }
+
+recursive fn cg_wrap_body_try(s: i64, body: u32, inits: u32, loc: u32, hmark: i64) -> u32 {
     let fl = cxs[s].flags;
-    if fl & (CF_CTOR | CF_DTOR) == 0 || cg_this < 0 { return body; }
+    if fl & (CF_CTOR | CF_DTOR) == 0 || cg_this < 0 {
+        if hmark < 0 { return body; }
+        let t = cg_try(body, hmark, loc);
+        let m = nscratch.len;
+        nscratch.push(t);
+        return n_block(m, loc);
+    }
     let r = rec_of(scope_class_type(cxs[s].dscope as i64));
     let sm = stmt_buf.len;
     var ok = true;
@@ -1457,25 +1721,20 @@ recursive fn cg_wrap_body(s: i64, body: u32, inits: u32, loc: u32) -> u32 {
             let vs = vptr_store(r, cg_this, loc);
             if vs == 0 { ok = false; } else { stmt_buf.push(vs); }
         }
+        if !dtor_cleanups(r, cg_this, loc) { ok = false; }
     }
+    // the handlers stay below the statements while these are collected
     let mark = nscratch.len;
-    if fl & CF_CTOR != 0 {
-        for i in sm..stmt_buf.len { nscratch.push(stmt_buf[i]); }
-        stmt_buf.resize(sm);
-        nscratch.push(body);
-    } else {
-        for i in sm..stmt_buf.len { nscratch.push(stmt_buf[i]); }
-        stmt_buf.resize(sm);
-        // a return in the body would skip the epilogue
-        if has_return(body) { ok = false; }
-        nscratch.push(body);
-        let em = stmt_buf.len;
-        if !dtor_epilogue(r, cg_this, loc) { ok = false; }
-        for i in em..stmt_buf.len { nscratch.push(stmt_buf[i]); }
-        stmt_buf.resize(em);
-    }
+    for i in sm..stmt_buf.len { nscratch.push(stmt_buf[i]); }
+    stmt_buf.resize(sm);
+    nscratch.push(body);
     if !ok { nscratch.push(mark_bad_stmt(loc)); }
-    return n_block(mark, loc);
+    let inner = n_block(mark, loc);
+    if hmark < 0 { return inner; }
+    let t = cg_try(inner, hmark, loc);
+    let m2 = nscratch.len;
+    nscratch.push(t);
+    return n_block(m2, loc);
 }
 
 // ---------------------------------------------------------------------------
@@ -1514,7 +1773,11 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
         if init != 0 {
             var e = init;
             if nodes[e].kind as i64 == N_INITBRACE && nodes[e].c == 1 { e = nlist[nodes[e].v]; }
+            // a temporary bound to it lives as long as it (a local)
+            let sv = cg_extend;
+            cg_extend = local;
             conv = conv_arg(e, t, loc);
+            cg_extend = sv;
         }
     } else if is_record(t) && !is_opaque(t) && !is_extern {
         let r = rec_of(t);
@@ -1524,6 +1787,10 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
             // an aggregate: C's initializer
             let bi = brace_init(t, init, loc);
             conv = if bi != 0 { bi } else { opaque_node(loc) };
+        } else if init != 0 && nodes[init].kind as i64 == N_INITBRACE && nodes[init].op == 0 && is_aggregate_class(r) && !is_array(t) {
+            // an aggregate whose members need code
+            let a = agg_init(n_var(s, loc), nodes[init].v, nodes[init].c as i64, loc);
+            cst = if a == 0 { mark_bad_stmt(loc) } else { n_expr_stmt(a) };
         } else if init != 0 && nodes[init].kind as i64 != N_CTOR && nodes[init].kind as i64 != N_INITBRACE &&
                   !is_opq(init) && is_record(nodes[init].ty) && unqual(nodes[init].ty) == unqual(t) && class_trivial_copy(r) {
             // a copy of a trivially copyable class: C's initialization
@@ -1632,7 +1899,7 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
     if ctx == DC_COND && cst != 0 { nscratch.push(mark_bad_stmt(loc)); return; }
     if local {
         if cst != 0 { nscratch.push(cst); }
-        if has_dtor { note_dtor_cleanup(s); }
+        if has_dtor { push_dtor_cleanup(s, loc); }
     } else if !static_local && !is_extern {
         if cst != 0 { gi_push(cst, prio); }
         if has_dtor { gi_push(atexit_stmt(s, loc), prio); }
@@ -1709,8 +1976,24 @@ fn arr_dtor_fn(t: u32, loc: u32) -> i64 {
     return f;
 }
 
-// Registers the destructor of a local class object (or array of them) as
-// its cleanup.
+// The destructor of a local class object (or array of them) as a cleanup
+// for the rest of its block (after its construction).
+fn push_dtor_cleanup(s: i64, loc: u32) {
+    let t = syms[s].ty;
+    var f: i64 = -1;
+    if is_array(t) {
+        let et = base_elem_t(t);
+        if !is_record(et) || is_opaque(et) || class_dtor(rec_of(et)) < 0 { return; }
+        f = arr_dtor_fn(t, syms[s].loc);
+    } else {
+        if !is_record(t) || is_opaque(t) { return; }
+        let d = class_dtor(rec_of(t));
+        if d < 0 { return; }
+        f = complete_sym(d);
+    }
+    nscratch.push(node(N_XPUSH, XP_CALL, 0, s, 0, f, loc));
+}
+
 fn note_dtor_cleanup(s: i64) {
     let t = syms[s].ty;
     if is_array(t) {
@@ -1732,7 +2015,7 @@ fn note_dtor_cleanup(s: i64) {
 var atexit_fn: i64 = -1;
 var dso_handle: i64 = -1;
 fn atexit_stmt(s: i64, loc: u32) -> u32 {
-    let d = if is_array(syms[s].ty) { arr_dtor_fn(syms[s].ty, loc) } else { class_dtor(rec_of(syms[s].ty)) };
+    let d = if is_array(syms[s].ty) { arr_dtor_fn(syms[s].ty, loc) } else { complete_sym(class_dtor(rec_of(syms[s].ty))) };
     if atexit_fn < 0 {
         let vfp = mk_ptr(fn_type1(t_void, t_voidptr));
         fn_scratch.clear();
@@ -1766,10 +2049,32 @@ fn fn_type1(ret: u32, p: u32) -> u32 {
 // `return e;` in a function returning rt (a reference or a class).
 recursive fn cg_return(x: u32, rt: u32, loc: u32) -> u32 {
     if is_ref(rt) { return conv_arg(x, rt, loc); }
-    if is_record(rt) {
-        if !by_value_ok(rt) { return opaque_node(loc); }
-        return conv_value(x, unqual(rt), loc);
+    if is_record(rt) && pass_indirect(rt) {
+        // constructed in the return slot (*__ret), which is returned
+        if cg_ret < 0 || (is_opq(x) && nodes[x].kind as i64 != N_INITBRACE) { return opaque_node(loc); }
+        let ct = unqual(rt);
+        let slot = n_deref(rv(n_var(cg_ret, loc)), loc);
+        nodes[slot].ty = ct;
+        let v = local_of(x, ct);
+        if v >= 0 {
+            // a local variable: moved, unless it is the NRVO variable (cg_finish)
+            let xv = n_var(v, loc);
+            nodes[xv].flags = nodes[xv].flags | NF_XVALUE;
+            let init = init_into(slot, class_rv(xv, ct, loc), loc);
+            if init == 0 { return opaque_node(loc); }
+            if syms[v].flags & SF_PARAM != 0 {
+                return node(N_BINARY, B_COMMA, mk_ptr(ct), init as i64, rv(n_var(cg_ret, loc)) as i64, 0, loc);
+            }
+            return node(N_XNRET, 0, mk_ptr(ct), v, init as i64, cg_ret, loc);
+        }
+        var src = x;
+        if !(is_class_prv(x) && unqual(nodes[x].ty) == ct) { src = class_rv(x, ct, loc); }
+        if is_opq(src) { return src; }
+        let init = init_into(slot, src, loc);
+        if init == 0 { return opaque_node(loc); }
+        return node(N_BINARY, B_COMMA, mk_ptr(ct), init as i64, rv(n_var(cg_ret, loc)) as i64, 0, loc);
     }
+    if is_record(rt) { return conv_value(x, unqual(rt), loc); }
     if nodes[x].kind as i64 == N_INITBRACE { return conv_value(x, unqual(rt), loc); }
     if is_pointer(rt) && !is_opq(x) {
         let c = cg_ptr_conv(rv(x), unqual(rt), loc);
@@ -2076,15 +2381,15 @@ fn vtable_slot(r: i64, f: i64) -> i64 {
     return -1;
 }
 
-// The vtable variable of class r (its initializer is built in cg_finish).
+// The vtable variable of class r (its linkage and initializer are decided
+// in cg_finish, when the key function's definition is known).
 fn vtable_sym(r: i64) -> i64 {
     let g = vtable_syms.get(r as u64);
     if g { return g as i64; }
     let first, count = vtable_slots(r);
     if count < 0 { return -1; }
-    let vt = mk_array(t_voidptr, 2 + count);
+    let vt = mk_array(with_q(t_voidptr, Q_CONST), 2 + count);
     let s = csym(SK_VAR, intern("__vtable"), vt, records[r].loc);
-    syms[s].sc = SC_STATIC as! u8;
     syms[s].flags = SF_FILESCOPE | SF_DEFINED;
     cxs[s].flags = CF_IMPLICIT;
     if !mangle_special("_ZTV", records[r].ty << 4) { return -1; }
@@ -2095,10 +2400,12 @@ fn vtable_sym(r: i64) -> i64 {
 }
 
 var typeinfos = dictionary<u64, u32> {};
+var ti_names = dictionary<u64, u32> {};
+var ti_classes: u32[>..] = [];
 var ext_syms = dictionary<u64, u32> {};
 
 // An external variable (array of void *) named `name` (the type_info
-// classes' vtables).
+// classes' vtables, the runtime's typeinfo of fundamental types).
 fn ext_array(name: const u8[:]) -> i64 {
     let id = intern(name);
     let g = ext_syms.get(id as u64);
@@ -2120,79 +2427,157 @@ fn void_addr_of(s: i64, idx: i64, loc: u32) -> u32 {
 
 fn int_as_ptr(v: i64, loc: u32) -> u32 { node(N_ICAST, CK_INT2PTR, t_voidptr, int_node(v, t_long, loc) as i64, 0, 0, loc) }
 
-// The type_info object of class r (_ZTI), with its name (_ZTS).
-recursive fn typeinfo_sym(r: i64) -> i64 {
+// The kind of class r's type_info: 0 __class_type_info, 1 __si_class_type_info
+// (one public non-virtual base at offset 0), 2 __vmi_class_type_info.
+fn ti_kind(r: i64) -> i64 {
+    let cr = crecs[r];
+    if cr.nbases == 0 { return 0; }
+    let b = cbases[cr.bases];
+    if cr.nbases == 1 && b.flags & BF_VIRTUAL == 0 && b.offset == 0 && b.access as i64 == 0 { return 1; }
+    return 2;
+}
+
+// The type_info object of class r (_ZTI), with its name (_ZTS): the
+// symbols now, their linkage and contents in cg_finish (finish_typeinfo).
+fn typeinfo_sym(r: i64) -> i64 {
     let g = typeinfos.get(r as u64);
     if g { return g as i64; }
     let cls = records[r].ty << 4;
     let loc = records[r].loc;
-    // the name: the mangled type
     if !mangle_special("", cls) { return -1; }
+    let name_len = mg.len;
+    let nt = mk_array(t_char | (Q_CONST as! u32), name_len + 1);
+    let ns = csym(SK_VAR, intern("__typeinfo_name"), nt, loc);
+    syms[ns].flags = SF_FILESCOPE | SF_DEFINED;
+    cxs[ns].flags = CF_IMPLICIT;
+    mangle_special("_ZTS", cls);
+    set_label(ns, mg);
+    let k = ti_kind(r);
+    let n = if k == 0 { 2 } else if k == 1 { 3 } else { 3 + 2 * (crecs[r].nbases as i64) };
+    let tt = mk_array(with_q(t_voidptr, Q_CONST), n);
+    let s = csym(SK_VAR, intern("__typeinfo"), tt, loc);
+    syms[s].flags = SF_FILESCOPE | SF_DEFINED;
+    cxs[s].flags = CF_IMPLICIT;
+    mangle_special("_ZTI", cls);
+    set_label(s, mg);
+    typeinfos.insert(r as u64, s as! u32);
+    ti_names.insert(r as u64, ns as! u32);
+    ti_classes.push(r as! u32);
+    return s;
+}
+
+// The linkage and contents of class r's type_info and name.
+fn finish_typeinfo(r: i64) {
+    var s: i64 = -1;
+    var ns: i64 = -1;
+    let g1 = typeinfos.get(r as u64);
+    if g1 { s = g1 as i64; }
+    let g2 = ti_names.get(r as u64);
+    if g2 { ns = g2 as i64; }
+    if s < 0 || ns < 0 { return; }
+    let cls = records[r].ty << 4;
+    let loc = records[r].loc;
+    let dynamic = crecs[r].flags & CR_DYNAMIC != 0;
+    var link = vt_kind(r);
+    if !dynamic && link != 0 { link = 1; }
+    set_data_link(ns, link, false);
+    set_data_link(s, link, true);
+    if link == 3 { return; }
+    // the name: the mangled type
+    mangle_special("", cls);
     let name_len = mg.len;
     let soff = strbytes.len;
     strbytes.append(mg);
     strbytes.push(0);
     let si = strs.len;
     strs.push(StrLit { start: soff as! u32, len: (name_len + 1) as! u32, elem: t_char });
-    let nt = mk_array(t_char | (Q_CONST as! u32), name_len + 1);
-    let ns = csym(SK_VAR, intern("__typeinfo_name"), nt, loc);
-    syms[ns].sc = SC_STATIC as! u8;
-    syms[ns].flags = SF_FILESCOPE | SF_DEFINED;
-    cxs[ns].flags = CF_IMPLICIT;
-    mangle_special("_ZTS", cls);
-    set_label(ns, mg);
-    let sn = node(N_STRING, 0, nt, si, 0, 0, loc);
+    let sn = node(N_STRING, 0, syms[ns].ty, si, 0, 0, loc);
     nodes[sn].flags = NF_LVALUE | NF_STRINIT;
-    cg_extra.push(node(N_DECL, 0, nt, ns, sn as i64, loc as i64, loc));
-    // the bases: none, one public non-virtual at offset 0, or several
+    cg_extra.push(node(N_DECL, 0, syms[ns].ty, ns, sn as i64, loc as i64, loc));
     let cr = crecs[r];
+    let kind = ti_kind(r);
     let mark = nscratch.len;
-    var kind = 0;
-    if cr.nbases == 1 && cbases[cr.bases].flags & BF_VIRTUAL == 0 && cbases[cr.bases].offset == 0 && cbases[cr.bases].access as i64 == 0 { kind = 1; }
-    else if cr.nbases > 0 { kind = 2; }
     let vt = ext_array(if kind == 0 { "_ZTVN10__cxxabiv117__class_type_infoE" } else if kind == 1 { "_ZTVN10__cxxabiv120__si_class_type_infoE" }
                        else { "_ZTVN10__cxxabiv121__vmi_class_type_infoE" });
     nscratch.push(void_addr_of(vt, 2, loc));
     nscratch.push(void_addr_of(ns, 0, loc));
     if kind == 1 {
         let bt = typeinfo_sym(rec_of(cbases[cr.bases].ty));
-        if bt < 0 { nscratch.resize(mark); return -1; }
         nscratch.push(void_addr_of(bt, 0, loc));
     } else if kind == 2 {
-        // flags (u32), base count (u32), then per base: type_info *, offset << 8 | public 2 | virtual 1
-        nscratch.push(int_as_ptr((cr.nbases as i64) << 32, loc));
+        // flags (u32: non-diamond repeat 1, diamond 2), base count (u32), then
+        // per base: type_info *, offset << 8 | public 2 | virtual 1
+        nscratch.push(int_as_ptr(((cr.nbases as i64) << 32) | vmi_flags(r), loc));
         for i in cr.nbases {
             let b = cbases[cr.bases + i];
-            if !is_record(b.ty) || b.flags & BF_VIRTUAL != 0 { nscratch.resize(mark); return -1; }
             let bt = typeinfo_sym(rec_of(b.ty));
-            if bt < 0 { nscratch.resize(mark); return -1; }
             nscratch.push(void_addr_of(bt, 0, loc));
-            nscratch.push(int_as_ptr((b.offset << 8) | (if b.access as i64 == 0 { 2 } else { 0 }), loc));
+            var off = b.offset;
+            if b.flags & BF_VIRTUAL != 0 { off = vbase_offset_offset(r, rec_of(b.ty)); }
+            nscratch.push(int_as_ptr((off << 8) | (if b.access as i64 == 0 { 2 } else { 0 }) | (if b.flags & BF_VIRTUAL != 0 { 1 } else { 0 }), loc));
         }
     }
     let n = nscratch.len - mark;
-    let tt = mk_array(t_voidptr, n);
-    let s = csym(SK_VAR, intern("__typeinfo"), tt, loc);
-    syms[s].sc = SC_STATIC as! u8;
-    syms[s].flags = SF_FILESCOPE | SF_DEFINED;
-    cxs[s].flags = CF_IMPLICIT;
-    mangle_special("_ZTI", cls);
-    set_label(s, mg);
     let start = commit_list(mark);
-    let il = node_v(N_INITLIST, 0, tt, 0, 0, n, loc, start);
-    cg_extra.push(node(N_DECL, 0, tt, s, il as i64, loc as i64, loc));
-    typeinfos.insert(r as u64, s as! u32);
-    return s;
+    let il = node_v(N_INITLIST, 0, syms[s].ty, 0, 0, n, loc, start);
+    cg_extra.push(node(N_DECL, 0, syms[s].ty, s, il as i64, loc as i64, loc));
+}
+
+// The vmi flags of class r (clang's ComputeVMIClassTypeInfoFlags): 1 when
+// a base class is repeated other than as one virtual base (non-diamond
+// repeat), 2 when a virtual base is reached more than once (diamond).
+fn vmi_flags(r: i64) -> i64 {
+    let mark = rec_scratch.len;
+    var f: i64 = 0;
+    let cr = crecs[r];
+    for i in cr.nbases {
+        let b = cbases[cr.bases + i];
+        if is_record(b.ty) { f = f | vmi_flags_base(rec_of(b.ty), b.flags & BF_VIRTUAL != 0, mark); }
+    }
+    rec_scratch.resize(mark);
+    return f;
+}
+var rec_scratch: u32[>..<] = [];
+
+fn vmi_seen(br: i64, tag: u32, mark: i64) -> bool {
+    for j in mark..rec_scratch.len { if rec_scratch[j] == ((br as! u32) | tag) { return true; } }
+    return false;
+}
+
+recursive fn vmi_flags_base(br: i64, virt: bool, mark: i64) -> i64 {
+    var f: i64 = 0;
+    let V: u32 = 0x80000000;
+    if virt {
+        if vmi_seen(br, V, mark) { f = f | 2; }
+        else {
+            rec_scratch.push((br as! u32) | V);
+            if vmi_seen(br, 0, mark) { f = f | 1; }
+        }
+    } else {
+        if vmi_seen(br, 0, mark) { f = f | 1; }
+        else {
+            rec_scratch.push(br as! u32);
+            if vmi_seen(br, V, mark) { f = f | 1; }
+        }
+    }
+    let cr = crecs[br];
+    for i in cr.nbases {
+        let b = cbases[cr.bases + i];
+        if is_record(b.ty) { f = f | vmi_flags_base(rec_of(b.ty), b.flags & BF_VIRTUAL != 0, mark); }
+    }
+    return f;
 }
 
 // The initializer of the vtable of class r.
 fn build_vtable(r: i64) {
     let s = vtable_sym(r);
     let loc = records[r].loc;
+    set_class_data_link(s, r, true, true);
+    if syms[s].sc as i64 == SC_EXTERN { return; }
     let first, count = vtable_slots(r);
     let mark = nscratch.len;
     nscratch.push(node(N_ZEROINIT, 0, t_voidptr, 0, 0, 0, loc));      // offset to top
-    let ti = typeinfo_sym(r);
+    let ti = if opt_rtti { typeinfo_sym(r) } else { -1 };
     if ti < 0 { nscratch.push(int_as_ptr(0, loc)); } else { nscratch.push(void_addr_of(ti, 0, loc)); }
     for i in count {
         var f = vslots[first + i] as i64;
@@ -2202,6 +2587,8 @@ fn build_vtable(r: i64) {
                 cxs[pure_virtual].flags = CF_EXTERN_C;
             }
             f = pure_virtual;
+        } else if cxs[f].flags & CF_DTOR != 0 && cxs[f].flags & CF_DTOR_DELETING == 0 {
+            f = complete_sym(f);
         }
         let fr = icast(n_ref_fn(f, loc), CK_FUNC2PTR, mk_ptr(abi_type(f)));
         nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, fr as i64, 0, 0, loc));
@@ -2211,6 +2598,7 @@ fn build_vtable(r: i64) {
     let il = node_v(N_INITLIST, 0, syms[s].ty, 0, 0, n, loc, start);
     cg_extra.push(node(N_DECL, 0, syms[s].ty, s, il as i64, loc as i64, loc));
 }
+
 var pure_virtual: i64 = -1;
 
 fn fn_type0(ret: u32) -> u32 {
@@ -2258,26 +2646,41 @@ recursive fn synth_body(f: i64, kind: i64) {
             let vs = vptr_store(r, th, loc);
             if vs == 0 { ok = false; } else { stmt_buf.push(vs); }
         }
-        if !dtor_epilogue(r, th, loc) { ok = false; }
+        if !dtor_cleanups(r, th, loc) { ok = false; }
+    } else if kind >= 4 {
+        ok = synth_special(f, kind, r, th, loc);
     } else {
-        // the deleting destructor
+        // the deleting destructor: the complete one, then operator delete
+        // (sized since C++14)
         let d = class_dtor(r);
         let am = nscratch.len;
-        let c = lower_call(d, n_deref(rv(n_var(th, loc)), loc), am, loc, false);
+        let c = lower_call(d, n_deref(rv(n_var(th, loc)), loc), am, loc, false);   // (the complete variant)
         stmt_buf.push(n_expr_stmt(c));
-        let df = global_alloc_fn(OP_DELETE);
-        if df < 0 { ok = false; }
-        else {
-            let am2 = nscratch.len;
-            nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, rv(n_var(th, loc)) as i64, 0, 0, loc));
-            stmt_buf.push(n_expr_stmt(n_call(df, am2, loc)));
+        let am2 = nscratch.len;
+        nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, rv(n_var(th, loc)) as i64, 0, 0, loc));
+        var df: i64 = -1;
+        if opt_cxx_std >= 14 {
+            df = rt_fn("_ZdlPvm", t_void, 2, t_voidptr, t_size, 0, true, false);
+            nscratch.push(int_node(type_size(cls), t_size, loc));
+        } else {
+            df = rt_fn("_ZdlPv", t_void, 1, t_voidptr, 0, 0, true, false);
         }
+        stmt_buf.push(n_expr_stmt(n_call(df, am2, loc)));
     }
     for i in sm..stmt_buf.len { nscratch.push(stmt_buf[i]); }
     stmt_buf.resize(sm);
     if !ok { nscratch.push(mark_bad_stmt(loc)); }
     let body = n_block(mark, loc);
-    let n = node_v(N_FUNCDEF, 0, syms[f].ty, f, body as i64, 0, loc, 0);
+    var np: i64 = 0;
+    var pstart: i64 = 0;
+    let pg = implicit_params.get(f as u64);
+    if pg && kind >= 4 {
+        let pm = nscratch.len;
+        nscratch.push(pg);
+        pstart = commit_list(pm);
+        np = 1;
+    }
+    let n = node_v(N_FUNCDEF, 0, syms[f].ty, f, body as i64, np, loc, pstart);
     syms[f].def = n as! i32;
     cg_extra.push(n);
     cg_this = sv;
@@ -2285,17 +2688,28 @@ recursive fn synth_body(f: i64, kind: i64) {
 
 // Called after parsing in code generation mode; false on errors.
 recursive fn cg_finish(main_file: const u8[:]) -> bool {
-    // implicit members and vtables (each may ask for more)
+    // the vtables of the classes whose key function is defined here
+    for r in crecs.len {
+        if crecs[r].flags & CR_DYNAMIC == 0 || crecs[r].flags & (CR_PATTERN | CR_LAYOUT) != CR_LAYOUT { continue; }
+        if records[r].flags & RF_COMPLETE == 0 { continue; }
+        if vt_kind(r) == 2 { vtable_sym(r); }
+    }
+    // implicit members, vtables and typeinfo (each may ask for more)
     var vi = 0;
     var pi = 0;
+    var ti = 0;
     loop {
         var progress = false;
+        // D2: bodies of instantiated functions used by what was synthesized
+        inst_drain();
+        while inst_defs_taken < inst_defs.len { cg_extra.push(inst_defs[inst_defs_taken]); inst_defs_taken++; progress = true; }
         while vi < vtables.len { build_vtable(vtables[vi] as i64); vi++; progress = true; }
         while pi < pending_bodies.len {
             synth_body(pending_bodies[pi] as i64, pending_bodies[pi + 1] as i64);
             pi += 2;
             progress = true;
         }
+        while ti < ti_classes.len { finish_typeinfo(ti_classes[ti] as i64); ti++; progress = true; }
         if !progress { break; }
     }
     // the dynamic initialization of globals: a function per init_priority
@@ -2318,6 +2732,12 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
     tu_node = node_v(N_TU, 0, 0, 0, 0, count, 0, start);
     // names and linkage
     name_syms();
+    note_nothrow_all();
+    // the named return value optimization
+    for f in ret_fns {
+        let fd = syms[f].def;
+        if fd >= 0 && nodes[fd].kind as i64 == N_FUNCDEF { nrvo_function(f as i64, fd as u32); }
+    }
     // what is emitted: checked and rewritten for C's lowering
     if !check_reachable() { return false; }
     // types: references become pointers, member functions take `this`
@@ -2355,43 +2775,6 @@ fn gi_function(main_file: const u8[:], prio: i64) {
     cg_extra.push(n);
 }
 
-// Mangled names as asm labels; inline functions internal.
-fn name_syms() {
-    cx_grow();
-    for s in 1..syms.len {
-        let k = syms[s].kind as i64;
-        if k != SK_FUNC && k != SK_VAR { continue; }
-        let fl = cxs[s].flags;
-        if fl & (CF_PATTERN | CF_TEMPLATE | CF_TPARAM) != 0 { continue; }
-        if syms[s].attr != 0 && sym_attrs[syms[s].attr].asm_len != 0 { continue; }
-        if k == SK_VAR {
-            if syms[s].flags & SF_COMPLIT != 0 || syms[s].name == 0 { continue; }
-            if fl & CF_MEMBER != 0 { syms[s].sc = 0; syms[s].flags = syms[s].flags | SF_FILESCOPE; }
-            if syms[s].flags & SF_FILESCOPE == 0 { continue; }
-            // a static local: C's lowering names it
-            if syms[s].scope > 0 && fl & CF_MEMBER == 0 { continue; }
-        }
-        let internal = internal_linkage(s) || (cxs[s].dscope > 0 && in_anon_ns(cxs[s].dscope as i64));
-        if mangle_sym(s) {
-            if syms[s].name == 0 || !same_text(mg, ident_text(syms[s].name as i64)) { set_label(s, mg); }
-        } else {
-            // a name D1 cannot mangle (local classes ...): an internal one
-            var nm: u8[>..] = [];
-            format(nm, "_ZL__goosecc_", s);
-            set_label(s, nm);
-            syms[s].sc = SC_STATIC as! u8;
-        }
-        if k == SK_FUNC {
-            let inline = fl & (CF_DEFINED_IN_CLASS | CF_IMPLICIT | CF_CONSTEXPR) != 0 || syms[s].flags & SF_INLINE != 0;
-            if fl & CF_MEMBER != 0 { syms[s].sc = if inline { SC_STATIC as! u8 } else { 0 }; }
-            else if inline && fl & CF_EXTERN_C == 0 { syms[s].sc = SC_STATIC as! u8; }
-        }
-        if internal && syms[s].sc as i64 != SC_EXTERN { syms[s].sc = SC_STATIC as! u8; }
-    }
-}
-
-fn same_text(a: const u8[:], b: const u8[:]) -> bool { a == b }
-
 // The types of symbols for C's lowering.
 fn lower_sym_types() {
     for s in 1..syms.len {
@@ -2400,7 +2783,8 @@ fn lower_sym_types() {
             if s < cxs.len && cxs[s].flags & (CF_PATTERN | CF_TEMPLATE) != 0 { continue; }
             syms[s].ty = abi_type(s);
         } else if k == SK_VAR {
-            syms[s].ty = lower_ty(syms[s].ty);
+            if indirect_params.count > 0 && indirect_params.contains(s as u64) { syms[s].ty = mk_ptr(unqual(syms[s].ty)); }
+            else { syms[s].ty = lower_ty(syms[s].ty); }
         }
     }
     for i in fields.len { fields[i].ty = lower_ty(fields[i].ty); }
@@ -2416,8 +2800,12 @@ var wk: u32[>..<] = [];
 var var_decls = dictionary<u64, u32> {};   // file-scope variable -> its N_DECL
 var n_bad: i64 = 0;
 
-fn reach_fn(f: i64) {
-    if syms[f].def < 0 { return; }
+recursive fn reach_fn(f: i64) {
+    if syms[f].def < 0 {
+        let b = complete_base.get(f as u64);
+        if b { reach_fn(b as i64); }
+        return;
+    }
     let d = syms[f].def as u32;
     if nodes[d].kind as i64 != N_FUNCDEF { return; }
     wk.push(d);
@@ -2441,13 +2829,16 @@ fn check_reachable() -> bool {
         let s = nd.a as i64;
         if nd.kind as i64 == N_FUNCDEF {
             if syms[s].def as u32 != it { continue; }
-            if syms[s].sc as i64 != SC_STATIC || cg_has_attr(s, AM_CTOR) || cg_has_attr(s, AM_USED) { wk.push(it); }
+            if (syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE) || cg_has_attr(s, AM_CTOR) || cg_has_attr(s, AM_USED) { wk.push(it); }
         } else if nd.kind as i64 == N_DECL && syms[s].kind as i64 == SK_VAR {
-            if syms[s].sc as i64 != SC_STATIC && syms[s].flags & SF_FILESCOPE != 0 { wk.push(it); }
+            if syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE && syms[s].flags & SF_FILESCOPE != 0 { wk.push(it); }
         }
     }
     while wk.len > 0 {
-        let n = wk.pop();
+        let e = wk.pop();
+        let n = e & 0x7FFFFFFF;
+        visit_cond = e >> 31 != 0;
+        kid_cond = visit_cond;
         while cg_seen.len < nodes.len { cg_seen.push(0); }
         if cg_seen[n] != 0 { continue; }
         cg_seen[n] = 1;
@@ -2477,7 +2868,19 @@ fn bad(n: u32) {
     }
 }
 
-fn kid(x: u32) { if x != 0 { wk.push(x); } }
+fn kid(x: u32) { if x != 0 { wk.push(x | (if kid_cond { 0x80000000 } else { 0 })); } }
+fn kid_c(x: u32, c: bool) {
+    let sv = kid_cond;
+    kid_cond = c;
+    kid(x);
+    kid_cond = sv;
+}
+// the walk's conditional context: the node is in an operand of ?:, && or ||
+// of its full-expression (a temporary made there is destroyed only if it
+// was made)
+var visit_cond = false;
+var kid_cond = false;
+var indirect_params = dictionary<u64, u32> {};
 fn kids_list(v: i64, c: u32) { for i in c as i64 { kid(nlist[v + i]); } }
 
 // Is t (lowered) one of C's types?
@@ -2493,9 +2896,37 @@ recursive fn c_type_ok(t: u32) -> bool {
     return true;
 }
 
-fn visit(n: u32) {
+recursive fn visit(n: u32) {
     let nd = nodes[n];
     let k = nd.kind as i64;
+    if (k == N_XPRV || (k == N_CTOR && is_record(nd.ty) && !is_opaque(nd.ty) && !class_trivial_copy(rec_of(nd.ty)))) {
+        // a class prvalue no object was initialized from: a temporary
+        let x = xtemp_of(n_copy(n), nd.ty, nd.loc);
+        if is_opq(x) { bad(n); return; }
+        nodes[n] = nodes[x];
+        if visit_cond { nodes[n].op = ((nodes[n].op as i64) | XT_COND) as! u8; }
+        visit(n);
+        return;
+    }
+    if k == N_XNRET {
+        // the NRVO variable is the return slot already: the flag that keeps
+        // it from being destroyed; another variable is copied (moved)
+        let v = nd.a as i64;
+        let fl = nrvo_flags.get(v as u64);
+        var e: u32 = 0;
+        if fl {
+            let lhs = n_var(fl as i64, nd.loc);
+            e = node(N_ASSIGN, 0, t_bool, lhs as i64, int_node(1, t_bool, nd.loc) as i64, 0, nd.loc);
+        } else {
+            e = nd.b;
+        }
+        let r = rv(n_var(nd.c as i64, nd.loc));
+        let cm = node(N_BINARY, B_COMMA, nodes[r].ty, e as i64, r as i64, 0, nd.loc);
+        nodes[n] = nodes[cm];
+        visit(n);
+        return;
+    }
+    if k == N_XTEMP && visit_cond { nodes[n].op = ((nodes[n].op as i64) | XT_COND) as! u8; }
     if k == N_CTOR && is_record(nd.ty) && !is_opaque(nd.ty) && class_trivial_copy(rec_of(nd.ty)) {
         // a temporary of a trivially copyable class used as a value
         let v = ctor_value(n, nd.loc);
@@ -2509,15 +2940,24 @@ fn visit(n: u32) {
     if k == N_FUNCDEF {
         let f = nd.a as i64;
         let ft = types[syms[f].ty >> 4];
-        if !by_value_ok(ft.base) { bad(n); return; }
-        for i in ft.n { if !by_value_ok(tparams[ft.extra + i]) { bad(n); return; } }
-        // `this` first
-        if is_this_fn(f) {
-            let thg = fn_this.get(f as u64);
+        for i in nd.c {
+            let p = nlist[nd.v + i];
+            if pass_indirect(syms[p].ty) { indirect_params.insert(p as u64, 1); }
+        }
+        let rg = fn_ret.get(f as u64);
+        var rs: u32 = 0;
+        if rg { rs = rg; }
+        if pass_indirect(ft.base) && rs == 0 { bad(n); return; }
+        // the return slot, `this`, the parameters
+        if is_this_fn(f) || rs != 0 {
             var th: u32 = 0;
-            if thg { th = thg; } else { bad(n); return; }
+            if is_this_fn(f) {
+                let thg = fn_this.get(f as u64);
+                if thg { th = thg; } else { bad(n); return; }
+            }
             let mark = nscratch.len;
-            nscratch.push(th);
+            if rs != 0 { nscratch.push(rs); }
+            if th != 0 { nscratch.push(th); }
             for i in nd.c { nscratch.push(nlist[nd.v + i]); }
             let count = nscratch.len - mark;
             let start = commit_list(mark);
@@ -2550,7 +2990,12 @@ fn visit(n: u32) {
         } else if sk == SK_VAR {
             if syms[s].flags & SF_FILESCOPE != 0 { reach_var(s); }
             if !c_type_ok(lower_ty(syms[s].ty)) { bad(n); return; }
-            if nd.flags & NF_REFDEREF != 0 {
+            if indirect_params.count > 0 && indirect_params.contains(s as u64) && !is_pointer(nd.ty) {
+                // a parameter passed by invisible reference: through its pointer
+                let c = node(N_DECLREF, 0, mk_ptr(unqual(syms[s].ty)), s, 0, 0, nd.loc);
+                nodes[c].flags = NF_LVALUE;
+                deref_into(n, c);
+            } else if nd.flags & NF_REFDEREF != 0 {
                 let c = node(N_DECLREF, 0, lower_ty(syms[s].ty), s, 0, 0, nd.loc);
                 nodes[c].flags = NF_LVALUE;
                 deref_into(n, c);
@@ -2589,6 +3034,14 @@ fn visit(n: u32) {
     } else if (k == N_ICAST || k == N_CAST) && nd.op as i64 >= CK_DERIVED2BASE {
         bad(n);
         return;
+    } else if k == N_XTEMP {
+        if nd.c != 0 { reach_fn(nd.c as i64); }
+        let s = nd.b as i64;
+        if !c_type_ok(lower_ty(syms[s].ty)) { bad(n); return; }
+    } else if k == N_XPUSH {
+        if (nd.op as i64) & XP_CALL != 0 { reach_fn(nd.c as i64); }
+    } else if k == N_XCATCH {
+        if nd.c != 0 { reach_var(nd.c as i64); }
     } else if k == N_DECL {
         let s = nd.a as i64;
         if syms[s].attr != 0 && sym_attrs[syms[s].attr].cleanup >= 0 { reach_fn(sym_attrs[syms[s].attr].cleanup as i64); }
@@ -2608,6 +3061,13 @@ fn visit(n: u32) {
         to_deref(n, c2);
     }
     push_kids(n);
+}
+
+// A copy of node n.
+fn n_copy(n: u32) -> u32 {
+    let c = nodes.len as! u32;
+    nodes.push(nodes[n]);
+    return c;
 }
 
 // Node n (an lvalue reference to an object through a pointer c) becomes *c.
@@ -2634,6 +3094,18 @@ fn to_deref(n: u32, p: u32) {
 fn push_kids(n: u32) {
     let nd = nodes[n];
     let k = nd.kind as i64;
+    if k >= N_COMPOUND && k <= N_ASMOP || k == N_STMTEXPR || (k >= N_XPUSH && k <= N_XCATCH) { kid_cond = false; }
+    if k == N_COND {
+        kid(nd.a);
+        kid_c(nd.b, true);
+        kid_c(nd.c, true);
+        return;
+    }
+    if k == N_BINARY && (nd.op as i64 == B_LAND || nd.op as i64 == B_LOR) {
+        kid(nd.a);
+        kid_c(nd.b, true);
+        return;
+    }
     if k == N_UNARY || k == N_CAST || k == N_ICAST || k == N_MEMBER || k == N_STMTEXPR || k == N_VAARG || k == N_SWIZZLE ||
        k == N_CASE || k == N_DEFAULT || k == N_RETURN || k == N_EXPR || k == N_IGOTO || k == N_COMPLIT {
         kid(nd.a);
@@ -2646,6 +3118,10 @@ fn push_kids(n: u32) {
     if k == N_INITLIST { kids_list(nd.v, nd.c); kid(nd.b); return; }
     if k == N_BUILTIN || k == N_COMPOUND || k == N_ASM { kids_list(nd.v, nd.c); return; }
     if k == N_DECL || k == N_LABEL || k == N_ASMOP { kid(nd.b); return; }
+    if k == N_XTEMP { kid(nd.a); return; }
+    if k == N_XPUSH { if (nd.op as i64) & XP_STMT != 0 { kid(nd.a); } return; }
+    if k == N_XTRY { kid(nd.a); kids_list(nd.v, nd.c); return; }
+    if k == N_XCATCH { kid(nd.b); kid(nd.v as! u32); return; }
 }
 
 // Does statement n contain a return (not in a nested statement expression's

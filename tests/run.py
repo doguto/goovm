@@ -20,7 +20,8 @@ Optional extra variants:
   --tpde PATH    also compile the O0 bitcode with tpde-llc and compare
   --goosecc PATH instead of the goovm-llc variants, compile the C programs with goosecc -c
                  (variants goosecc and goosecc-g, i.e. with -g); no LLVM involved; with it the
-                 programs of tests/cxx_d1/ (goosecc's C++ subset, milestone D1) run too
+                 programs of tests/cxx_d1/ and tests/cxx_d2/ (goosecc's C++ subset,
+                 milestones D1 and D2) run too
   --target aarch64  (milestone F1) everything for aarch64-linux-gnu: clang and goosecc with
                  --target=aarch64-linux-gnu, linked by clang with lld, run under qemu-aarch64
                  (QEMU_LD_PREFIX=/usr/aarch64-linux-gnu); tests/ll (x86-64 IR) is skipped,
@@ -212,9 +213,10 @@ def programs():
     for f in sorted(os.listdir(os.path.join(HERE, "cxx"))):
         if f.endswith(".cpp"):
             out.append(Prog("cxx/" + f[:-4], [os.path.join(HERE, "cxx", f)]))
-    for f in sorted(os.listdir(os.path.join(HERE, "cxx_d1"))):
-        if f.endswith(".cpp"):
-            out.append(Prog("cxx_d1/" + f[:-4], [os.path.join(HERE, "cxx_d1", f)]))
+    for sub in ("cxx_d1", "cxx_d2", "cxx_gen"):
+        for f in sorted(os.listdir(os.path.join(HERE, sub))):
+            if f.endswith(".cpp"):
+                out.append(Prog(sub + "/" + f[:-4], [os.path.join(HERE, sub, f)]))
     for kind in ("mixed", "ll", "a64"):
         md = os.path.join(HERE, kind)
         if not os.path.isdir(md):
@@ -259,10 +261,10 @@ def main():
         args.work = tmp
     progs = programs()
     if args.goosecc:
-        # goosecc compiles C, and the C++ of tests/cxx_d1
-        progs = [p for p in progs if (not p.cxx or p.name.startswith("cxx_d1/")) and not any(is_ll(s) for s in p.srcs)]
+        # goosecc compiles C, and the C++ of tests/cxx_d1 and tests/cxx_d2
+        progs = [p for p in progs if (not p.cxx or p.name.startswith(("cxx_d1/", "cxx_d2/", "cxx_gen/"))) and not any(is_ll(s) for s in p.srcs)]
     else:
-        progs = [p for p in progs if not p.name.startswith("cxx_d1/")]
+        progs = [p for p in progs if not p.name.startswith(("cxx_d1/", "cxx_d2/", "cxx_gen/"))]
     # x86-64 IR (tests/ll) on x86-64 only; AArch64 programs (tests/a64) on AArch64 only
     if args.target == "aarch64":
         progs = [p for p in progs if not p.name.startswith("ll/")]

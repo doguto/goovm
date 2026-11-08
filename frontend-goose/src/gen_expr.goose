@@ -19,6 +19,7 @@ import .ast;
 import .sema;
 import .builtins;
 import .dtype;
+import .cx_gen_defs;
 
 struct LV {
     addr: u32,      // the address (for a bit-field: of the record holding it)
@@ -188,6 +189,7 @@ recursive fn ex_lv1(n: u32) -> LV {
         return lv_plain(gref(g), nd.ty);
     }
     if k == N_COMPLIT { return lv_plain(ex_complit(n), nd.ty); }
+    if k == N_XTEMP { return lv_plain(ex_xtemp(n), nd.ty); }
     if k == N_SWIZZLE {
         var base: u32 = 0;
         if nd.op == 1 { base = ex_val(nd.a); } else { base = agg_addr_any(nd.a); }
@@ -451,6 +453,8 @@ recursive fn ex_val1(n: u32) -> u32 {
         return c_zero(vty(nd.ty));
     }
     if k == N_ZEROINIT { return c_zero(vty(nd.ty)); }
+    if k == N_XEXN { return ex_xexn(); }
+    if k == N_XRETSLOT { return f_sret; }
     if is_lvalue(n) || k == N_MEMBER || k == N_INDEX { return lv_load(ex_lv(n)); }
     if k == N_ERROR { return c_zero(GIR_T_I32); }
     bug("ex_val", n);

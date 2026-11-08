@@ -142,69 +142,112 @@ fn conv_rank_val(e: u32, p: u32) -> i64 {
     return RK_NONE;
 }
 
-// The candidates of a call: viable functions of the chain s0 for the
-// arguments nscratch[mark..]. The best one, or -1 when there is none or
-// the choice needs what D1 does not do (templates, ties).
+// The candidates of a call: the functions of the chain s0 and the
+// specializations of its function templates deduced from the arguments
+// nscratch[mark..] (C++ [over.match]). The best viable one, or -1 when
+// there is none, the choice is ambiguous, or it depends on what is not
+// known yet (a deduction or a substitution D2 cannot complete).
 var cand_ranks: i64[>..<] = [];
-fn best_candidate(s0: i64, mark: i64, has_obj: bool) -> i64 {
+var cand_syms: u32[>..<] = [];
+var cand_explicit: i32 = -1;        // the call's explicit template arguments (-1 none)
+var cand_unknown: bool = false;     // the last best_candidate met a candidate it could not decide
+
+recursive fn best_candidate(s0: i64, mark: i64, has_obj: bool) -> i64 {
+    let explicit = cand_explicit;
+    cand_explicit = -1;
     let nargs = nscratch.len - mark;
-    var best: i64 = -1;
-    var best_rank0: i64 = 0;
-    let rmark = cand_ranks.len;
-    var tie = false;
+    let cm0 = cand_syms.len;
+    var unknown = false;
     var s = s0;
-    var any_tmpl = false;
     while s >= 0 {
         let f = resolve(s);
-        if f >= 0 && visible(s) && syms[f].kind as i64 == SK_TEMPLATE { any_tmpl = true; }
-        // (a function met again through a using-declaration is the same candidate)
-        if f >= 0 && f != best && visible(s) && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & (CF_PATTERN | CF_DELETED) == 0 {
-            let ft = types[syms[f].ty >> 4];
-            let np = ft.n;
-            let variadic = ft.flags & TF_VARIADIC != 0;
-            var ok = nargs == np || (variadic && nargs >= np);
-            if !ok && nargs < np { ok = defaults_from(f, nargs); }
-            if ok {
-                // the ranks of the arguments
-                let cm = cand_ranks.len;
-                var viable = true;
-                for i in nargs {
-                    var r = RK_ELLIPSIS;
-                    if i < np { r = conv_rank(nscratch[mark + i], tparams[ft.extra + i]); }
-                    if r == RK_NONE { viable = false; break; }
-                    cand_ranks.push(r);
-                }
-                if viable {
-                    if best < 0 {
-                        best = f;
-                        // keep the best's ranks at rmark
-                        move_ranks(rmark, cm, nargs);
-                    } else {
-                        let c = compare_ranks(cm, rmark, nargs);
-                        if c > 0 { best = f; move_ranks(rmark, cm, nargs); tie = false; }
-                        else if c == 0 { tie = true; }
-                    }
-                }
-                cand_ranks.resize(rmark + (if best >= 0 { nargs } else { 0 }));
+        if f >= 0 && visible(s) {
+            let k = syms[f].kind as i64;
+            if k == SK_FUNC && cxs[f].flags & (CF_PATTERN | CF_DELETED) == 0 && explicit < 0 {
+                add_cand(cm0, f);
+            } else if k == SK_TEMPLATE && tmpl_kind(f) == TT_FUNC {
+                let sp = deduce_call(cxs[f].tmpl as i64, explicit, mark, nargs);
+                if sp >= 0 { if cxs[sp].flags & CF_DELETED == 0 { add_cand(cm0, sp); } }
+                else if sp == -2 { unknown = true; }
             }
         }
         s = cxs[s].nnext as i64;
     }
-    var exact = best >= 0 && !tie;
-    if exact && any_tmpl {
-        // a non-template function whose parameters (not references) all
-        // match exactly: no function template specialization is better
-        let ft = types[syms[best].ty >> 4];
-        for i in nargs {
-            if cand_ranks[rmark + i] != RK_EXACT { exact = false; }
-            if i < ft.n && is_ref(tparams[ft.extra + i]) { exact = false; }
-        }
-        if ft.n != nargs { exact = false; }
-    }
-    cand_ranks.resize(rmark);
-    if any_tmpl && exact { return best; }
-    if tie || any_tmpl { return -1; }
+    let best = pick_best(cm0, mark, nargs);
+    cand_syms.resize(cm0);
+    cand_unknown = unknown;
+    if unknown { return -1; }
     return best;
+}
+
+fn add_cand(cm0: i64, f: i64) {
+    for i in cm0..cand_syms.len { if cand_syms[i] as i64 == f { return; } }
+    cand_syms.push(f as! u32);
+}
+
+// The best viable candidate of cand_syms[cm0..], -1 none or ambiguous.
+recursive fn pick_best(cm0: i64, mark: i64, nargs: i64) -> i64 {
+    let rmark = cand_ranks.len;
+    // the viable ones: (candidate index, ranks) pairs; ranks nargs each
+    let vmark = cand_viable.len;
+    for c in cm0..cand_syms.len {
+        let f = cand_syms[c] as i64;
+        let ft = types[syms[f].ty >> 4];
+        let np = ft.n;
+        let variadic = ft.flags & TF_VARIADIC != 0;
+        var ok = nargs == np || (variadic && nargs >= np);
+        if !ok && nargs < np { ok = defaults_from(f, nargs); }
+        if !ok { continue; }
+        let cm = cand_ranks.len;
+        var viable = true;
+        for i in nargs {
+            var r = RK_ELLIPSIS;
+            if i < np { r = conv_rank(nscratch[mark + i], tparams[ft.extra + i]); }
+            if r == RK_NONE { viable = false; break; }
+            cand_ranks.push(r);
+        }
+        if !viable { cand_ranks.resize(cm); continue; }
+        cand_viable.push(c as! u32);
+        cand_viable.push(cm as! u32);
+    }
+    let nv = (cand_viable.len - vmark) / 2;
+    var best: i64 = -1;
+    if nv > 0 {
+        // a tournament, then the winner must beat every other one
+        var w = 0;
+        for i in 1..nv {
+            if cand_better(vmark, i, w, nargs) > 0 { w = i; }
+        }
+        var ok = true;
+        for i in nv {
+            if i == w { continue; }
+            if cand_better(vmark, w, i, nargs) <= 0 { ok = false; break; }
+        }
+        if ok { best = cand_syms[cand_viable[vmark + 2 * w]] as i64; }
+    }
+    cand_viable.resize(vmark);
+    cand_ranks.resize(rmark);
+    return best;
+}
+var cand_viable: u32[>..<] = [];
+
+// 1 if viable candidate i is better than j ([over.match.best]), -1 worse, 0 neither.
+recursive fn cand_better(vmark: i64, i: i64, j: i64, nargs: i64) -> i64 {
+    let fi = cand_syms[cand_viable[vmark + 2 * i]] as i64;
+    let fj = cand_syms[cand_viable[vmark + 2 * j]] as i64;
+    let c = compare_ranks(cand_viable[vmark + 2 * i + 1] as i64, cand_viable[vmark + 2 * j + 1] as i64, nargs);
+    if c != 0 { return c; }
+    let ti = cxs[fi].flags2 & CF2_FSPEC != 0;
+    let tj = cxs[fj].flags2 & CF2_FSPEC != 0;
+    if !ti && tj { return 1; }
+    if ti && !tj { return -1; }
+    if ti && tj {
+        let a = fn_at_least(cxs[fi].tmpl as i64, cxs[fj].tmpl as i64, nargs);
+        let b = fn_at_least(cxs[fj].tmpl as i64, cxs[fi].tmpl as i64, nargs);
+        if a && !b { return 1; }
+        if b && !a { return -1; }
+    }
+    return 0;
 }
 
 fn move_ranks(dst: i64, src0: i64, n: i64) {
@@ -243,7 +286,7 @@ recursive fn mk_call_cx(callee: u32, mark: i64, loc: u32) -> u32 {
     let ck = nodes[callee].kind as i64;
     if ck == N_FUNCREF {
         let obj = nodes[callee].b;
-        if nodes[callee].c != 0 { return opaque_node(loc); }     // explicit template arguments
+        cand_explicit = if nodes[callee].c != 0 { (nodes[callee].c - 1) as! i32 } else { -1 };
         let f = best_candidate(nodes[callee].a as i64, mark, obj != 0);
         if f < 0 { return opaque_node(loc); }
         return build_call(f, obj, mark, loc, nodes[callee].op != 0);
@@ -295,6 +338,7 @@ fn typed_result(ret: u32, loc: u32) -> u32 {
 // A call of the chosen function f (obj: the object for a member function,
 // 0 none).
 recursive fn build_call(f: i64, obj: u32, mark: i64, loc: u32, qualified: bool) -> u32 {
+    inst_use(f);
     if cg_on { return cg_call(f, obj, mark, loc, qualified); }
     let ft = syms[f].ty;
     let member = cxs[f].flags & CF_MEMBER != 0 && cxs[f].flags & CF_STATIC == 0;
@@ -321,6 +365,7 @@ fn funcref_addr(e: u32, loc: u32) -> u32 {
     if n != 1 || syms[found].kind as i64 != SK_FUNC || cxs[found].flags & CF_MEMBER != 0 { return dep_node(t_unknown, loc); }
     let r = node(N_DECLREF, 0, syms[found].ty, found, 0, 0, loc);
     syms[found].flags = syms[found].flags | SF_USED;
+    inst_use(found);
     return node(N_UNARY, U_ADDR, mk_ptr(syms[found].ty), r as i64, 0, 0, loc);
 }
 

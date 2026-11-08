@@ -1507,6 +1507,35 @@ them more than once (four rounds of simplify/GVN/DCE/SimplifyCFG), and
 rebuilds the CFG analyses and use lists after each pass that changes the
 CFG; loop rotation rebuilds them after every rotated loop.
 
+### Run time: SingleSource benchmarks
+
+The 141 programs of `benchmarks` and `benchmarks-cxx` (one `suite.py` run
+per program so that an interrupted session keeps its results, `e1/ss.py`;
+`--time-run 1`: one timed run each after the verified one, so single
+programs are noisier than the CTMark table). Over the 119 programs whose
+clang -O0 run takes at least 50 ms:
+
+| | n | goovm -O1 / clang -O0 | / clang -O1 (geomean) | / clang -O1 (median) | / clang -O2 |
+|---|---:|---:|---:|---:|---:|
+| all | 119 | 0.479 | 1.80 | 1.22 | 1.96 |
+| without the 8 where clang -O1 removes >= 95% of the work | 111 | 0.512 | **1.32** | 1.19 | 1.44 |
+| of which C | 81 | | 1.32 | 1.18 | |
+| of which C++ | 30 | | 1.30 | 1.27 | |
+
+The eight left out are programs whose measured loop LLVM folds away
+(Shootout `nestedloop` and `objinst` in C and C++, Misc `lowercase`: clang
+-O1 runs them in 0.01% to 0.07% of its -O0 time; Adobe `loop_unroll`,
+`stepanov_vector`, `stepanov_abstraction`: 4% to 5%); with them the
+geometric mean is dominated by four ratios above 1,000. The slowest of
+the rest: Dhrystone `dry`/`fldry` (6.4x, 7.0x: clang inlines and
+constant-propagates the whole benchmark), Adobe
+`simple_types_constant_folding` (6.4x), Stanford `FloatMM` (4.8x) and
+`himenobmtxpa` (4.2x) and the Polybench FP kernels (`doitgen`, `3mm`:
+3.0x), where loop-invariant FP values stay in memory (no live-range
+splitting). 39 programs are within 1.1x of clang -O1, among them `ray`
+(0.59x), `methcall`, `puzzle`, `fp-convert` and `Bubblesort` (0.78x to
+0.85x).
+
 ### Compile time: goovm-cc -O1 against clang -O1 and -O2
 
 Every compile command of CTMark (632 files, 316 C++; the -O0 configuration
@@ -1538,4 +1567,99 @@ generation (`--time`):
   where LLVM's -O1 optimizer and code generator take 81.2 s: **24.5x**
   faster (31x against -O2); the target was 5x. The middle-end is 2.34 s of
   the 3.31 s.
+
+### What the exporter rejects in LLVM -O2 IR
+
+E1 made the exporter accept `fastcc`, `llvm.usub.sat`/`llvm.uadd.sat` on
+scalars, relative lookup tables (`GIR_DR_PCREL32`) and `llvm.load.relative`.
+Compiling every source file of the corpora (2,651) with `clang -O2
+-emit-llvm` and `goovm-llc -O1` (`e1/ccheck.py --o2`, aggregated by
+`e1/o2agg.py`), 165 files are still rejected, nearly all for the
+vectorizers' output:
+
+| reason | files |
+|---|---:|
+| vectors of pointers (`<2 x ptr>`, SLP-vectorized pointer pairs) | 72 |
+| `llvm.vector.reduce.add` | 49 |
+| bitcast between a vector and an integer of another lane layout (`<8 x i1>` to `i8`, ...) | 22 |
+| other `llvm.vector.reduce.*` (smax, xor, umin, or, mul) | 12 |
+| bit manipulation or funnel shifts on vectors, saturating arithmetic on vectors | 7 |
+| `llvm.fptosi.sat`, vector GEP, an initializer expression | 3 |
+
+With `-fno-vectorize -fno-slp-vectorize` (the O2nv variant) 7 files remain:
+two vector/integer bitcasts (SSE intrinsics), two reductions and a vector
+GEP in the vectorizer unit tests, `llvm.fptosi.sat.i8` and an assertion in
+the block-local allocator on lencod's `macroblock.c`: LLVM -O2 merges an
+index expression into one GEP of four terms, whose load is deferred into a
+store with a GEP of two more, and the A2 lowerings run out of registers
+(the same IR fails at -O0 too; splitting such GEPs in the middle-end moved
+the failure to the GEP lowering, so the change was not kept). One program fails at link time: torture `pr39501` uses
+`fmin`/`fmax`, which LLVM -O2 forms as `llvm.minnum`/`llvm.maxnum` and the
+exporter lowers to libm calls, and the test does not link `-lm`.
+
+### What is left
+
+**Functional gaps at -O1.** On what the -O1 paths are for (clang -O0 IR
+through `goovm-llc -O1`, `goovm-cc -O1`, `goosecc -O1`) nothing falls back
+to LLVM and nothing is unsupported: every test of the corpora that passes
+with clang -O1 passes, but one:
+
+- torture `pr17377` under `goovm-llc -O1`: a user `noinline` is invisible
+  in clang -O0 IR (every function is `noinline optnone`), so the function
+  is inlined and `__builtin_return_address` sees the caller's frame.
+  (`goovm-cc -O1` honors it.)
+- Debug information at -O1 is valid but degraded: promoted variables have
+  no location (no location lists), inlined code has no inlined-subroutine
+  DIEs and carries the call's line.
+- On LLVM -O2 IR (the experiment, not a supported input): 165 of 2,651
+  files are rejected by the exporter (vectorizer output), 7 with the
+  vectorizers off, one of them an assertion (lencod `macroblock.c`); torture
+  `pr39501` does not link (`llvm.minnum` as a libm call).
+
+Passes that leave a function alone (correct code, less optimization):
+functions whose blocks are named by `blockaddress` get only branch folding;
+functions that call setjmp get no alias information in GVN; the inliner
+skips invokes, variadic and self-recursive callees and callees with
+dynamic allocas, frame addresses or landing pads; the global allocator
+skips functions whose liveness bitsets would exceed 2^26 bits (-O0
+allocation for them).
+
+Performance work:
+
+1. **Live-range splitting** in the global allocator (and callee-saved
+   homes for FP values around calls): mafft's DP loops, Bullet, FP-heavy
+   code in general keep loop-invariant values in frame slots.
+2. **Inlining and SROA for C++ abstraction**: a cost model that discounts
+   arguments that are allocas or constants (LLVM's SROA and constant
+   bonuses), SROA of aggregates passed by pointer to inlined callees and of
+   sret results. Bullet (3.3x) and tramp3d-v4 (3.1x) are 1.2x and 1.1x with
+   LLVM's middle-end, so this is most of their gap.
+3. Promotion of conditionally stored globals (a dirty flag on the exits),
+   loop unrolling, `llvm.minnum`/`maxnum` inline, the vectorizers' IR in
+   the exporter (vectors of pointers, `vector.reduce`).
+4. `noinline` in clang -O0 IR: clang marks every function `noinline
+   optnone`; a front-end attribute that survives (or goovm-cc, which sees
+   the source's `noinline`) is needed for `goovm-llc -O1` to honor it
+   (torture `pr17377`).
+5. Debug information at -O1: location lists for promoted variables and
+   inlined-subroutine DIEs.
+6. Middle-end time (1 to 1.8 us per instruction): fewer rounds, CFG and
+   use-list rebuilds only where a pass changed something.
+
+### Rebuild and reproduce (E1)
+
+```bash
+S=/tmp/claude-0/-home-user-goovm/593b2907-8413-508c-8bdb-c68ef6e66f6e/scratchpad   # this session's scratch
+GOOSE=$S/work/goose-build/goose GOOSE_STDLIB=$S/src/goose/stdlib JOBS=2 backend-goose/build.sh build
+G=build/tools/goovm-llc/goovm-llc; C=build/tools/goovm-cc/goovm-cc
+tests/run.py --goovm $G -j2 --o1
+frontend-goose/build.sh /tmp/gcc && tests/run.py --goosecc /tmp/gcc/goosecc -j2 --o1
+GOOVM_OPT=verify tests/suite.py --goovm $G --cc $C --variants O1,cc-O1,O1-g,O2nv,O2ir --verify-dwarf -j2
+tests/suite.py --goovm $G --cc $C --corpus ctmark,ctmark-cxx --variants O1,cc-O1,O2nv -j 1 --time-run 3 --time-ref O1,O2
+tests/suite.py --goovm $G --corpus benchmarks,benchmarks-cxx --variants O1,O2nv -j 1 --time-run 2 --time-ref O1,O2
+# scripts of this milestone ($S/work/e1/): o0ident.py and gident.py (-O0 byte identity against the
+# base build), ctcomp.py (compile time), ctime.py (middle-end time), cq.py (codequal), ccheck.py and
+# o2agg.py (compile-only checks, the -O2 IR survey), ab.py (A/B of two builds), profprog.py (perf),
+# rt.py (run-time tables from suite.py --json), optbisect.py (GOOVM_OPT bisection of a miscompile)
+```
 

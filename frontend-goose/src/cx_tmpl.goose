@@ -35,6 +35,7 @@ var pending_tmpl: i64 = -1;     // the template record the next declaration defi
 var pending_explicit: bool = false;  // template<> : an explicit specialization follows
 var pending_inst: bool = false;      // template X<..>; an explicit instantiation
 var last_tmpl_sym: i64 = -1;
+var hdr_outer_next: i64 = -1;   // D2: the header enclosing the next one (template<..> template<..>)
 var spec_map = dictionary<u64, u32> {};   // (template record << 32 | argument list) -> the explicit specialization's type
 
 // template-declaration, explicit specialization or explicit instantiation
@@ -70,12 +71,15 @@ recursive fn parse_template_decl(ctx: i64) {
     let t = tmpls.len;
     tmpls.push(Tmpl { kind: 0, depth: tmpl_depth as! u8, rsv: 0, sym: -1, params: first as! u32, nparams: count as! u32,
         scope: cur_scope as! i32, pos: tpos as! u32, t0: pc as! u32, t1: 0, pattern: -1, specs: -1, outer: -1,
-        spec_args: -1, primary: -1, inst_scope: -1 });
+        spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: hdr_outer_next as! i32, pat_t: -1 });
+    hdr_outer_next = -1;
     let sv_pending = pending_tmpl;
     if at_kw(KW_TEMPLATE) {
         // template<...> template<...> ...: an out-of-line member template
         pending_tmpl = -1;
+        hdr_outer_next = t;
         parse_template_decl(ctx);
+        hdr_outer_next = -1;
     } else {
         pending_tmpl = t;
         parse_simple_decl_or_using(ctx);
@@ -152,7 +156,7 @@ recursive fn parse_tparams() {
             let tt = tmpls.len;
             tmpls.push(Tmpl { kind: TT_PARAM as! u8, depth: tmpl_depth as! u8, rsv: 0, sym: s as! i32, params: 0, nparams: 0,
                 scope: cur_scope as! i32, pos: pc as! u32, t0: 0, t1: 0, pattern: -1, specs: -1, outer: -1, spec_args: -1,
-                primary: -1, inst_scope: -1 });
+                primary: -1, inst_scope: -1, def_t: -1, hdr_outer: -1, pat_t: -1 });
             cxs[s].tmpl = tt as! i32;
             cxs[s].flags = CF_TPARAM | CF_TEMPLATE;
             syms[s].v = ((tmpl_depth << 16) | index) as i64;
@@ -258,8 +262,11 @@ fn declare_class_template(name: u32, is_union: bool, loc: u32, defining: bool) -
 // class's symbol (its type is the pattern record).
 fn class_template_def(tsym: i64, is_union: bool, loc: u32) -> i64 {
     merge_tmpl_defaults(cxs[tsym].tmpl as i64, pending_tmpl);
-    pending_tmpl = -1;
     let t = cxs[tsym].tmpl as i64;
+    // D2: the definition's header (its parameter names, its tokens) when an
+    // earlier declaration made the template record
+    if pending_tmpl >= 0 && pending_tmpl != t { tmpls[t].def_t = pending_tmpl as! i32; }
+    pending_tmpl = -1;
     let r = new_record_cx(syms[tsym].name, is_union, loc);
     let s = csym(SK_TAG, syms[tsym].name, records[r].ty << 4, loc);
     syms[s].v = records[r].ty as i64;
@@ -326,7 +333,7 @@ recursive fn specialization(tsym: i64, args: i32) -> u32 {
     if full != args {
         let g0 = spec_map.get(((t as u64) << 32) | (full as u64));
         if g0 { return g0; }
-        return mk_depspec(tsym, full);
+        return inst_or_depspec(tsym, t, full);
     }
     // the pattern of a partial specialization written with the same
     // arguments (an out-of-line member: X<T*>::f)
@@ -338,7 +345,7 @@ recursive fn specialization(tsym: i64, args: i32) -> u32 {
     }
     let g = spec_map.get(((t as u64) << 32) | (args as u64));
     if g { return g; }
-    return mk_depspec(tsym, args);
+    return inst_or_depspec(tsym, t, args);
 }
 
 // An alias template's type for `args`: its type-id parsed again with the
@@ -378,9 +385,29 @@ recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u
         var a = TArg { kind: 0, rsv: 0, rsv2: 0, ty: 0, v: 0 };
         if ok { a = tl_arg(args as i64, i); }
         if p.pack {
-            // a pack binds the rest (as an opaque type if it is used)
-            let s = csym(SK_TYPEDEF, p.name, t_unknown, 0);
-            syms[s].sc = SC_TYPEDEF;
+            // a pack binds the rest (D2: a bound pack when they are known)
+            var pa = TArg { kind: 0, rsv: 0, rsv2: 0, ty: 0, v: 0 };
+            var known = !args_dependent(args);
+            if ok && a.kind as i64 == TA_PACK { pa = a; }
+            else if known {
+                let m2 = targ_scratch.len;
+                var j = i;
+                while j < na {
+                    let x = tl_arg(args as i64, j);
+                    if (x.kind as i64 == TA_TYPE || x.kind as i64 == TA_VALUE) && (x.ty == 0 || is_opaque(x.ty)) { known = false; }
+                    targ_scratch.push(x);
+                    j++;
+                }
+                let pl = targ_intern(m2);
+                pa = TArg { kind: TA_PACK as! u8, rsv: 0, rsv2: 0, ty: 0, v: pl as i64 };
+            }
+            if !known {
+                let s = csym(SK_TYPEDEF, p.name, t_unknown, 0);
+                syms[s].sc = SC_TYPEDEF;
+                bind_sym(s, false);
+                continue;
+            }
+            let s = bound_param_sym(p, true, pa);
             bind_sym(s, false);
             continue;
         }
@@ -523,6 +550,24 @@ recursive fn begin_class_specialization(qn: QN&, is_union: bool, loc: u32) -> i6
         if r >= 0 && syms[r].kind as i64 == SK_TEMPLATE { tsym = r; break; }
         if r >= 0 && cxs[r].flags & CF_INJECTED != 0 && cxs[r].tmpl >= 0 { tsym = tmpls[cxs[r].tmpl].sym as i64; break; }
         s = cxs[s].nnext as i64;
+    }
+    if tsym >= 0 && !(pending_tmpl >= 0 && args_dependent(qn.targs)) {
+        // D2: an explicit specialization of a specialization already named
+        // (declared, not instantiated) defines that record
+        let t0 = cxs[tsym].tmpl as i64;
+        let full0 = complete_args(t0, qn.targs);
+        let g = spec_map.get(((t0 as u64) << 32) | (full0 as u64));
+        if g && is_record(g) {
+            let r0 = rec_of(g);
+            let sc0 = crecs[r0].scope as i64;
+            if sc0 >= 0 && scopes[sc0].flags & SCF_INST_PENDING != 0 {
+                pending_tmpl = -1;
+                scopes[sc0].flags = scopes[sc0].flags & ~((SCF_INST_PENDING | SCF_INST) as! u8);
+                let cs0 = crecs[r0].sym as i64;
+                if dependent_ctx() { scopes[sc0].flags = scopes[sc0].flags | SCF_PATTERN; }
+                return cs0;
+            }
+        }
     }
     let r = new_record_cx(qn.name, is_union, loc);
     let cs = csym(SK_TAG, qn.name, records[r].ty << 4, loc);

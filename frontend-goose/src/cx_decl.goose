@@ -604,6 +604,8 @@ struct CD {
     nparams: i64 = 0,
     fquals: u8 = 0,         // TF_MCONST ... of that function declarator
     noexcept: bool = false,
+    excspec: u8 = 0,        // D3: 0 none, 1 non-throwing, 2 noexcept(false), 3 throw(types) (excpos: its '(')
+    excpos: u32 = 0,
     pack: bool = false,     // a declarator-id after `...`
     is_fn: bool = false,
     loc: u32 = 0,
@@ -694,7 +696,7 @@ fn memptr_ahead() -> bool {
 recursive fn parse_cdeclr(base: u32, abstract: i64, d: CD&) {
     d.loc = tloc();
     let t = ptr_ops(base, d);
-    if accept(TK_ELLIPSIS) { d.pack = true; }
+    if abstract != 1 && accept(TK_ELLIPSIS) { d.pack = true; }    // a type-id leaves P... to its list
     if at(TK_L_PAREN) && paren_is_nested(abstract) {
         let open = pc;
         skip_group();
@@ -801,7 +803,11 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
             let e = parse_cexpr_full();
             paren_depth = sp;
             let ty = nodes[e].ty;
-            if is_opaque(ty) { dep = true; }
+            if nodes[e].kind as i64 == N_CXX && nodes[e].op == 2 && nodes[e].flags & NF_PAREN == 0 {
+                // a non-type template parameter: a dependent bound
+                let dv = syms[nodes[e].a].v;
+                n = -2 - dv;
+            } else if is_opaque(ty) { dep = true; }
             else {
                 let ok, v = const_int(e);
                 if ok { n = v; } else { dep = true; }
@@ -814,7 +820,7 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         cx_attrs(a);
         let inner = parse_csuffixes(base, d, false);
         if vla != 0 && !is_opaque(inner) && cish(inner) { return mk_vla(inner, vla as i64); }
-        if dep || is_opaque(inner) {
+        if dep || (is_opaque(inner) && !is_dep(inner)) {
             // a dependent bound, one D1 does not evaluate, or a VLA (a GNU
             // extension the corpora do not use in C++): opaque
             return t_unknown;
@@ -839,17 +845,25 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         if at(TK_AMP) { fq = fq | TF_MLREF; adv(); }
         else if at(TK_AMPAMP) { fq = fq | TF_MRREF; adv(); }
         var noexc = false;
+        var exck: u8 = 0;
+        var excp: u32 = 0;
         loop {
             if at_kw(KW_NOEXCEPT) {
                 adv();
                 noexc = true;
-                if at(TK_L_PAREN) { skip_group(); }
+                exck = 1;
+                if at(TK_L_PAREN) {
+                    if tk_n(1) == TK_KW + KW_FALSE && tk_n(2) == TK_R_PAREN { noexc = false; exck = 2; }
+                    skip_group();
+                }
                 continue;
             }
             if at_kw(KW_THROW) {
                 adv();
                 if at(TK_L_PAREN) {
                     noexc = tk_n(1) == TK_R_PAREN;
+                    exck = if noexc { 1 } else { 3 };
+                    excp = pc as! u32;
                     skip_group();
                 }
                 continue;
@@ -859,9 +873,13 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         }
         var ret = base;
         if at(TK_ARROW) {
-            // a trailing return type (the specifiers said auto)
+            // a trailing return type (the specifiers said auto): the
+            // parameters are in scope
             adv();
+            push_scope();
+            bind_params(start, count);
             ret = parse_type_id();
+            pop_scope();
         } else {
             ret = parse_csuffixes(base, d, false);
         }
@@ -870,6 +888,8 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
             d.nparams = count;
             d.fquals = fq as! u8;
             d.noexcept = noexc;
+            d.excspec = exck;
+            d.excpos = excp;
             d.is_fn = true;
         }
         fn_scratch.clear();
@@ -959,12 +979,15 @@ recursive fn parse_cparams(variadic: bool&) -> i64, i64 {
     adv();      // (
     push_scope();
     let mark = nscratch.len;
+    let pkm = pk_new.len;
     if at_kw(KW_VOID) && tk_n(1) == TK_R_PAREN {
         adv();
     } else {
         loop {
             if at(TK_R_PAREN) || at(TK_EOF) { break; }
             if at(TK_ELLIPSIS) { adv(); variadic = true; break; }
+            let p0 = pc;
+            let pm = pk_refs.len;
             var ds = CDS { .. };
             var pa = Attrs { .. };
             cx_attrs(pa);
@@ -979,6 +1002,40 @@ recursive fn parse_cparams(variadic: bool&) -> i64, i64 {
             var d = CD { .. };
             parse_cdeclr(base, 2, d);
             cx_attrs(pa);
+            if d.pack {
+                let ok, n = pk_count(pm);
+                if ok {
+                    // D2: a function parameter pack of bound packs: n parameters
+                    let p1 = pc;
+                    let first = nscratch.len;
+                    for i in n {
+                        pc = p0;
+                        let am = pk_activate(pm, i);
+                        var ds2 = CDS { .. };
+                        var pa2 = Attrs { .. };
+                        cx_attrs(pa2);
+                        parse_cds(ds2, pa2, DC_PARAM);
+                        var b2 = finish_cds(ds2);
+                        if b2 == 0 { b2 = t_int; }
+                        var d2 = CD { .. };
+                        parse_cdeclr(b2, 2, d2);
+                        pk_active.resize(am);
+                        var ty2 = d2.ty;
+                        if is_array(ty2) { ty2 = mk_ptr(tbase(ty2)); } else if is_func(ty2) { ty2 = mk_ptr(ty2); }
+                        let s2 = csym(SK_VAR, d2.qn.name, ty2, d2.loc);
+                        syms[s2].flags = SF_PARAM;
+                        nscratch.push(s2 as! u32);
+                    }
+                    pc = p1;
+                    pk_refs.resize(pm);
+                    let pkx = pk_param_pack(d.qn.name, first, nscratch.len, d.loc);
+                    if d.qn.name != 0 { bind_sym(pkx, false); }
+                    pk_new.push(pkx as! u32);
+                    if !accept(TK_COMMA) { break; }
+                    continue;
+                }
+                pk_refs.resize(pm);
+            }
             var ty = d.ty;
             if d.pack { ty = mk_packexp(ty); }
             // adjustments: arrays and functions to pointers
@@ -1002,9 +1059,15 @@ recursive fn parse_cparams(variadic: bool&) -> i64, i64 {
     expect(TK_R_PAREN, "')'");
     pop_scope();
     let count = nscratch.len - mark;
+    // D2: the function parameter packs follow the parameters
+    let npk = pk_new.len - pkm;
+    for i in pkm..pk_new.len { nscratch.push(pk_new[i]); }
+    pk_new.resize(pkm);
     let start = commit_list(mark);
+    if npk > 0 { plist_packs.insert(start as u64, npk as u32); }
     return start, count;
 }
+var pk_new: u32[>..<] = [];
 
 // Skips an assignment-expression (a default argument, a default member
 // initializer, a template default): to ',' ')' ';' '>' at depth 0. A '<'

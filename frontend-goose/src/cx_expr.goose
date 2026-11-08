@@ -9,6 +9,7 @@
 namespace cx;
 
 import std;
+import os;
 import dictionary;
 import .common;
 import .types;
@@ -47,12 +48,37 @@ let NF_DEP = 2048;      // dependent or unknown
 fn opaque_node(loc: u32) -> u32 {
     let n = node(N_CXX, 0, t_unknown, 0, 0, 0, loc);
     nodes[n].flags = NF_DEP;
+    if opq_report() { opq_note(loc, 0); }
     return n;
 }
 fn dep_node(ty: u32, loc: u32) -> u32 {
     let n = node(N_CXX, 0, if ty == 0 { t_unknown } else { ty }, 0, 0, 0, loc);
     nodes[n].flags = NF_DEP;
+    if opq_report() { opq_note(loc, 1); }
     return n;
+}
+
+// D2: GOOSECC_OPAQUE=1 lists the opaque expressions made outside templates
+// (what the semantic analysis does not compute yet), with GOOSECC_OPAQUE=2
+// also inside tentative parses.
+var opq_mode: i64 = -1;
+fn opq_report() -> bool {
+    if opq_mode < 0 {
+        var v: u8[>..] = [];
+        opq_mode = if env("GOOSECC_OPAQUE", v) && v.len > 0 { (v[0] - '0') as i64 } else { 0 };
+    }
+    return opq_mode > 0;
+}
+fn opq_note(loc: u32, kind: i64) {
+    if dependent_ctx() { return; }
+    if opq_mode < 2 && diag_suppress > 0 && diag_suppress != diag_inst_level { return; }
+    var o: u8[>..] = [];
+    loc_prefix(o, loc as i64);
+    o.append(if kind == 0 { "opaque" } else { "opaque-typed" });
+    o.append(" at token ");
+    tok_desc(o, pc);
+    o.push('\n');
+    write_stderr(o);
 }
 fn is_opq(n: u32) -> bool { nodes[n].flags & NF_DEP != 0 || is_opaque(nodes[n].ty) }
 
@@ -122,6 +148,7 @@ recursive fn parse_throw() -> u32 {
     if k != TK_SEMI && k != TK_R_PAREN && k != TK_COMMA && k != TK_COLON && k != TK_R_SQUARE && k != TK_R_BRACE {
         e = parse_assign_cx();
     }
+    if cg_on { return cg_throw(e, loc); }
     return node(N_THROW, 0, t_void, e as i64, 0, 0, loc);
 }
 
@@ -262,9 +289,14 @@ recursive fn parse_unary_cx() -> u32 {
         if at(TK_ELLIPSIS) {
             // sizeof...(pack)
             adv();
-            expect(TK_L_PAREN, "'('");
-            skip_to(TK_R_PAREN);
-            expect(TK_R_PAREN, "')'");
+            let paren = accept(TK_L_PAREN);
+            var n: i64 = -1;
+            if at(TK_IDENT) { n = pack_size_of(tu_toks[pc].val); }
+            if paren { skip_to(TK_R_PAREN); expect(TK_R_PAREN, "')'"); } else { adv(); }
+            if n >= 0 {
+                let r = int_node(n, t_ulong, loc);
+                return r;
+            }
             return dep_node(t_ulong, loc);
         }
         if at(TK_L_PAREN) && paren_is_type() {
@@ -376,7 +408,30 @@ recursive fn parse_args() -> i64 {
     let mark = nscratch.len;
     while !at(TK_R_PAREN) && !at(TK_EOF) {
         var a: u32 = 0;
+        let p0 = pc;
+        let pm = pk_refs.len;
         if at(TK_L_BRACE) { a = parse_braced(); } else { a = parse_assign_cx(); }
+        if at(TK_ELLIPSIS) {
+            let ok, n = pk_count(pm);
+            if ok {
+                // D2: a pack expansion of bound packs
+                adv();
+                let p1 = pc;
+                for i in n {
+                    pc = p0;
+                    let am = pk_activate(pm, i);
+                    var b: u32 = 0;
+                    if at(TK_L_BRACE) { b = parse_braced(); } else { b = parse_assign_cx(); }
+                    pk_active.resize(am);
+                    nscratch.push(b);
+                }
+                pc = p1;
+                pk_refs.resize(pm);
+                if !accept(TK_COMMA) { break; }
+                continue;
+            }
+            pk_refs.resize(pm);
+        }
         if accept(TK_ELLIPSIS) { nodes[a].flags = nodes[a].flags | NF_DEP; }
         nscratch.push(a);
         if !accept(TK_COMMA) { break; }
@@ -524,19 +579,23 @@ recursive fn parse_primary_cx() -> u32 {
         adv();
         // fold expressions: ( ... op e ) ( e op ... ) ( e op ... op e )
         if at(TK_ELLIPSIS) {
-            skip_to(TK_R_PAREN);
-            expect(TK_R_PAREN, "')'");
-            return dep_node(t_unknown, loc);
+            adv();
+            let sp0 = paren_depth;
+            paren_depth++;
+            let f = parse_fold_left(loc);
+            paren_depth = sp0;
+            return f;
         }
         let sp = paren_depth;
         paren_depth++;
+        let p0 = pc;
+        let pm = pk_refs.len;
         let e = parse_expr_cx();
-        if tok_op(tk()) != 0 && tk_n(1) == TK_ELLIPSIS {
+        if (tok_op(tk()) != 0 || at(TK_COMMA)) && tk_n(1) == TK_ELLIPSIS {
             // e op ... [op e]
-            skip_to(TK_R_PAREN);
+            let f = parse_fold_rest(e, p0, pm, loc);
             paren_depth = sp;
-            expect(TK_R_PAREN, "')'");
-            return dep_node(t_unknown, loc);
+            return f;
         }
         paren_depth = sp;
         expect(TK_R_PAREN, "')'");
@@ -730,7 +789,29 @@ recursive fn parse_braced() -> u32 {
             desig = true;
         }
         var e: u32 = 0;
+        let p0 = pc;
+        let pm = pk_refs.len;
         if at(TK_L_BRACE) { e = parse_braced(); } else { e = parse_assign_cx(); }
+        if at(TK_ELLIPSIS) {
+            let ok, n = pk_count(pm);
+            if ok {
+                adv();
+                let p1 = pc;
+                for i in n {
+                    pc = p0;
+                    let am = pk_activate(pm, i);
+                    var b: u32 = 0;
+                    if at(TK_L_BRACE) { b = parse_braced(); } else { b = parse_assign_cx(); }
+                    pk_active.resize(am);
+                    nscratch.push(b);
+                }
+                pc = p1;
+                pk_refs.resize(pm);
+                if !accept(TK_COMMA) { break; }
+                continue;
+            }
+            pk_refs.resize(pm);
+        }
         accept(TK_ELLIPSIS);
         nscratch.push(e);
         if !accept(TK_COMMA) { break; }
@@ -868,6 +949,14 @@ recursive fn parse_id_expr() -> u32 {
         }
     } else {
         lookup_qn(qn);
+    }
+    if qn.dep != 0 {
+        // a member of a class whose bases are unknown
+        if at(TK_L_PAREN) {
+            let mark = parse_args();
+            nscratch.resize(mark);
+        }
+        return dep_node(t_unknown, loc);
     }
     let s0 = qn.sym as i64;
     if s0 < 0 {

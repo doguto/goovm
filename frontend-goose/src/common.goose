@@ -437,9 +437,14 @@ fn loc_prefix(out: u8[>..]&, loc: i64) {
 
 var diag_suppress: i64 = 0;
 var diag_suppressed_errors: i64 = 0;
+// C++ (D2): errors of an instantiation itself (not of the tentative
+// parses inside it) are counted when the suppression level is this one
+var diag_inst_level: i64 = -1;
+var diag_inst_errors: i64 = 0;
 
 fn error_at(loc: i64, msg: const u8[:]) {
     if rec_on { hk_bad(HC_BAD_DIAG); }
+    if diag_suppress == diag_inst_level { diag_inst_errors++; }
     if diag_suppress > 0 { diag_suppressed_errors++; return; }
     var err_out: u8[>..] = [];
     loc_prefix(err_out, loc);
