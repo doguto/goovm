@@ -1653,6 +1653,7 @@ unchanged; `cg_finish` completes the translation unit after parsing.
 | static locals | a guard variable (single-threaded) |
 | `new`/`delete` | statement expressions calling `operator new`/`operator delete` (the deleting destructor through the vtable for a virtual destructor) |
 | operators | overloaded operators, conversion functions and converting constructors resolve to calls of the chosen function |
+| member pointers | a data member pointer is the member's offset (null: -1); a member function pointer is Itanium's `{ ptr, adj }` (a virtual function: `1 + 8 * slot`), called through a test of `ptr & 1` |
 | names | Itanium mangled names as asm labels; inline functions (defined in their class, `inline`, implicit) are internal and emitted on use |
 
 The C lowering needed one change, effective in C++ only so that C objects
@@ -1673,7 +1674,8 @@ does not use them.
 
 Not lowered in D1: templates (no instantiation), exceptions (`throw`,
 `try`), temporaries with non-trivial destructors (and so passing or
-returning such classes by value), member pointers, `typeid` and
+returning such classes by value), member pointer conversions to
+bases at a non-zero offset and comparisons, `typeid` and
 `dynamic_cast`, lambdas, range-based `for`, virtual and multiple
 polymorphic bases, implicit copy constructors and assignment operators of
 classes that are not trivially copyable, class-specific `operator
@@ -1691,7 +1693,7 @@ new`/`delete`, argument-dependent lookup beyond the operands' namespaces.
 - **D3: the rest of the lowering.** Temporaries and their destruction at
   the end of full-expressions (including conditional ones), classes passed
   and returned by invisible reference, implicit copy/move operations,
-  member pointers, lambdas, range-based `for`, RTTI (`typeid`,
+  lambdas, range-based `for`, RTTI (`typeid`,
   `dynamic_cast`), multiple and virtual inheritance (thunks, VTTs,
   construction vtables), and then exceptions (`.eh_frame`/LSDA tables from
   the C lowering, which the Goose back-end already emits for `goovm-llc`).

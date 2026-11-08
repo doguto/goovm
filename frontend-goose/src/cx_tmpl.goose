@@ -217,6 +217,7 @@ fn type_param_ahead() -> bool {
 fn class_template_sym(name: u32, is_union: bool, loc: u32) -> i64 {
     let prev = tag_in_scope(cur_scope, name, false);
     if prev >= 0 && syms[prev].kind as i64 == SK_TEMPLATE {
+        merge_tmpl_defaults(cxs[prev].tmpl as i64, pending_tmpl);
         pending_tmpl = -1;
         return prev;
     }
@@ -236,6 +237,17 @@ fn class_template_sym(name: u32, is_union: bool, loc: u32) -> i64 {
     return s;
 }
 
+// A redeclaration of template t0 with the header t1: default arguments
+// accumulate ([temp.param]p10).
+fn merge_tmpl_defaults(t0: i64, t1: i64) {
+    if t0 < 0 || t1 < 0 || t0 == t1 || tmpls[t0].nparams != tmpls[t1].nparams { return; }
+    for i in tmpls[t0].nparams as i64 {
+        let a = tmpls[t0].params as i64 + i;
+        let b = tmpls[t1].params as i64 + i;
+        if tps[a].def0 == 0 && tps[b].def0 != 0 { tps[a].def0 = tps[b].def0; tps[a].def1 = tps[b].def1; }
+    }
+}
+
 // A class template declaration without a body (template<class T> class X;).
 fn declare_class_template(name: u32, is_union: bool, loc: u32, defining: bool) -> u32 {
     let s = class_template_sym(name, is_union, loc);
@@ -245,6 +257,7 @@ fn declare_class_template(name: u32, is_union: bool, loc: u32, defining: bool) -
 // Starts the definition of class template tsym's pattern: the pattern
 // class's symbol (its type is the pattern record).
 fn class_template_def(tsym: i64, is_union: bool, loc: u32) -> i64 {
+    merge_tmpl_defaults(cxs[tsym].tmpl as i64, pending_tmpl);
     pending_tmpl = -1;
     let t = cxs[tsym].tmpl as i64;
     let r = new_record_cx(syms[tsym].name, is_union, loc);
@@ -394,7 +407,9 @@ recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u
     cur_scope = tmpls[t].scope as i64;
     cur_class = -1;
     pending_tmpl = -1;
-    if !args_dependent(args) { vis_limit = tmpls[t].pos as i64; tmpl_depth = 0; }
+    // two-phase lookup: what was declared before the tokens parsed (a
+    // default argument of a later redeclaration sees what precedes it)
+    if !args_dependent(args) { vis_limit = if tok > tmpls[t].pos as i64 { tok } else { tmpls[t].pos as i64 }; tmpl_depth = 0; }
     pc = tok;
     gt_pos = -1;
     diag_suppress++;
@@ -426,7 +441,8 @@ recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u
 
 // The argument list completed with the template's default arguments
 // (when all given arguments are concrete; a dependent list is kept).
-recursive fn complete_args(t: i64, args: i32) -> i32 {
+recursive fn complete_args(t: i64, args0: i32) -> i32 {
+    let args = convert_value_args(t, args0);
     let n = tmpls[t].nparams as i64;
     let na = tl_count(args as i64);
     if na >= n || args_dependent(args) { return args; }
@@ -457,6 +473,44 @@ recursive fn complete_args(t: i64, args: i32) -> i32 {
     return cur;
 }
 let CF_SUBST = 268435456;   // a non-type template parameter bound to a value (syms[s].v)
+
+// Integral template arguments converted to their parameters' types
+// ([temp.arg.nontype]: X<258> for a parameter of type unsigned is
+// X<258u>; the mangled name says `Lj258E`).
+fn convert_value_args(t: i64, args: i32) -> i32 {
+    let n = tmpls[t].nparams as i64;
+    let na = tl_count(args as i64);
+    var changed = false;
+    for i in na {
+        if i >= n { break; }
+        let p = tps[tmpls[t].params as i64 + i];
+        if p.pack { break; }
+        let a = tl_arg(args as i64, i);
+        if p.kind as i64 != TPK_VALUE || a.kind as i64 != TA_VALUE || a.ty == 0 || is_opaque(a.ty) { continue; }
+        let pt = unqual(nonref(p.ty));
+        if pt == 0 || pt == a.ty || is_opaque(pt) || kind_of(pt) == TY_ENUM || !(is_integer(pt) || kind_of(pt) == TY_BOOL) { continue; }
+        if !(is_integer(a.ty) || kind_of(a.ty) == TY_BOOL || kind_of(a.ty) == TY_ENUM) { continue; }
+        changed = true;
+    }
+    if !changed { return args; }
+    let mark = targ_scratch.len;
+    for i in na {
+        var a = tl_arg(args as i64, i);
+        if i < n {
+            let p = tps[tmpls[t].params as i64 + i];
+            if !p.pack && p.kind as i64 == TPK_VALUE && a.kind as i64 == TA_VALUE && a.ty != 0 && !is_opaque(a.ty) {
+                let pt = unqual(nonref(p.ty));
+                if pt != 0 && pt != a.ty && !is_opaque(pt) && kind_of(pt) != TY_ENUM && (is_integer(pt) || kind_of(pt) == TY_BOOL) &&
+                   (is_integer(a.ty) || kind_of(a.ty) == TY_BOOL || kind_of(a.ty) == TY_ENUM) {
+                    a.v = trunc_to(a.v, pt);
+                    a.ty = pt;
+                }
+            }
+        }
+        targ_scratch.push(a);
+    }
+    return targ_intern(mark);
+}
 
 // template<class T> class X<args> { }: a partial specialization (args
 // dependent) or, after template<>, an explicit specialization.
