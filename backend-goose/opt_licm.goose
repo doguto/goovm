@@ -624,3 +624,251 @@ fn rotate_layout() -> bool {
     }
     return any;
 }
+
+// Scalar promotion of globals in loops (the part of LLVM's LICM promotion
+// that GlobalsAA makes possible): an internal global whose address is never
+// taken (only loaded and stored directly, in the whole module) cannot be
+// touched through a pointer, so in a loop without calls and inline asm its
+// loads and stores are of a value that only the loop changes. The global is
+// demoted to an alloca for the loop (loaded in the preheader, stored back on
+// every exit edge), which mem2reg turns into a register. Stores are added on
+// the exits only when a store of the loop dominates every exiting block (no
+// store where the program had none on that path: another thread may own the
+// global then). The caller runs mem2reg.
+var gp_ok: u8[>..] = [];        // per global: internal, never address-taken
+var gp_ty: u32[>..] = [];       // per global: the one type of its accesses in the loop, NIL
+var gp_st: u32[>..] = [];       // per global: NIL no store, GV_MANY no store that dominates the exits, else a store's block
+var gp_list: u32[>..] = [];
+var gp_exit: u32[>..] = [];     // exit edges (from, to)
+var gp_eblk: u32[>..] = [];     // per exit edge: the block made on it
+fn gp_scan() {
+    let ng = M.globals.len;
+    gp_ok.clear();
+    gp_ok.resize(ng, 0);
+    for G in M.globals {
+        if G.kind == G_ALIAS { return; }   // (an alias may name the global's memory)
+    }
+    for g in 0..ng {
+        let G = M.globals[g];
+        if G.kind == G_VAR && G.flags & GF_DEFINED != 0 && G.flags & GF_INTERNAL != 0
+           && G.flags & (GF_TLS | GF_CONST) == 0 {
+            gp_ok[g] = 1;
+        }
+    }
+    for x in M.opnds {
+        if gir_kind(x) == GIR_V_GLOBAL && gir_idx(x) < ng { gp_ok[gir_idx(x)] = 0; }
+    }
+    for d in M.drelocs {
+        if d.target < ng { gp_ok[d.target] = 0; }
+    }
+    for I in M.insts {
+        let op: u32 = I.op;
+        let m: u32 = if op < GIR_NOPS { OP_VAL[op] } else { 7 };
+        if m & OV_A != 0 && gir_kind(I.a) == GIR_V_GLOBAL && op != GIR_LOAD && gir_idx(I.a) < ng { gp_ok[gir_idx(I.a)] = 0; }
+        if m & OV_B != 0 && gir_kind(I.b) == GIR_V_GLOBAL && op != GIR_STORE && gir_idx(I.b) < ng { gp_ok[gir_idx(I.b)] = 0; }
+        if m & OV_C != 0 && gir_kind(I.c) == GIR_V_GLOBAL && gir_idx(I.c) < ng { gp_ok[gir_idx(I.c)] = 0; }
+        if op == GIR_BLOCKADDR && I.a < ng { gp_ok[I.a] = 0; }
+    }
+}
+fn promote_globals() -> bool {
+    if o_pinned || gp_ok.len != M.globals.len { return false; }
+    ensure_cfg();
+    if lc_mark.len < cfg_nb { lc_mark.resize(cfg_nb, 0); }
+    if gp_ty.len < M.globals.len {
+        gp_ty.resize(M.globals.len, NIL);
+        gp_st.resize(M.globals.len, NIL);
+    }
+    lc_hdr.clear();
+    for h in rpo {
+        if h == 0 { continue; }
+        for k in p_start[h]..p_start[h + 1] {
+            let p = p_list[k];
+            if rpo_num[p] != NIL && dominates(h, p) {
+                lc_hdr.push(h);
+                break;
+            }
+        }
+    }
+    // (preheaders: SimplifyCFG removes the empty ones LICM made)
+    var made = false;
+    for h in lc_hdr {
+        if b_fl[h] & BF_LP == 0 && licm_preheader(h) { made = true; }
+    }
+    if made {
+        ensure_cfg();
+        if lc_mark.len < cfg_nb { lc_mark.resize(cfg_nb, 0); }
+    }
+    var any = false;
+    for h in lc_hdr {
+        if gp_loop(h) {
+            any = true;
+            ensure_cfg();
+            if lc_mark.len < cfg_nb { lc_mark.resize(cfg_nb, 0); }
+        }
+    }
+    return any;
+}
+// Whether block b dominates every exiting block of the loop (gp_exit).
+fn gp_dom_exits(b: u32) -> bool {
+    var e: i64 = 0;
+    while e < gp_exit.len {
+        if !dominates(b, gp_exit[e]) { return false; }
+        e += 2;
+    }
+    return true;
+}
+fn gp_loop(h: u32) -> bool {
+    lc_epoch++;
+    let ep = lc_epoch;
+    tmp_stack.clear();
+    lc_mark[h] = ep;
+    var pre: u32 = NIL;
+    var npre = 0;
+    for k in p_start[h]..p_start[h + 1] {
+        let p = p_list[k];
+        if rpo_num[p] == NIL { return false; }
+        if !dominates(h, p) {
+            pre = p;
+            npre++;
+            continue;
+        }
+        if lc_mark[p] != ep {
+            lc_mark[p] = ep;
+            tmp_stack.push(p);
+        }
+    }
+    while tmp_stack.len != 0 {
+        let b = tmp_stack.pop();
+        for k in p_start[b]..p_start[b + 1] {
+            let q = p_list[k];
+            if rpo_num[q] == NIL || lc_mark[q] == ep { continue; }
+            lc_mark[q] = ep;
+            tmp_stack.push(q);
+        }
+    }
+    if npre != 1 || s_start[pre + 1] - s_start[pre] != 1 || block_invoke(pre) != NIL { return false; }
+    // exit edges (one per pair: a block may branch twice to the same exit)
+    gp_exit.clear();
+    for b in rpo {
+        if lc_mark[b] != ep { continue; }
+        for k in s_start[b]..s_start[b + 1] {
+            let x = s_list[k];
+            if lc_mark[x] == ep { continue; }
+            if b_fl[x] & BF_LP != 0 || block_invoke(b) != NIL { return false; }
+            let tb = b_last[b];
+            if o_ins[tb].op == GIR_CONDBR && o_ins[tb].b == o_ins[tb].c { return false; }
+            if o_ins[tb].op != GIR_BR && o_ins[tb].op != GIR_CONDBR { return false; }
+            gp_exit.push(b);
+            gp_exit.push(x);
+        }
+    }
+    // the accesses; no calls, no asm
+    gp_list.clear();
+    for b in rpo {
+        if lc_mark[b] != ep { continue; }
+        var i = b_first[b];
+        while i != NIL {
+            let I = o_ins[i];
+            let op: u32 = I.op;
+            if op == GIR_CALL || op == GIR_ASM || op == GIR_SJLJ_SETJMP || op == GIR_SJLJ_LONGJMP || op == GIR_LANDINGPAD
+               || op == GIR_VASTART {
+                for g in gp_list {
+                    gp_ty[g] = NIL;
+                    gp_st[g] = NIL;
+                }
+                return false;
+            }
+            var g: u32 = NIL;
+            var t: u32 = NIL;
+            if op == GIR_LOAD && gir_kind(res(I.a)) == GIR_V_GLOBAL {
+                g = gir_idx(res(I.a));
+                t = I.ty;
+            } else if op == GIR_STORE && gir_kind(res(I.b)) == GIR_V_GLOBAL {
+                g = gir_idx(res(I.b));
+                t = I.aux;
+            }
+            if g != NIL && g < gp_ok.len && gp_ok[g] != 0 {
+                if I.flags & (IF_VOLATILE | IF_ORD_MASK) != 0 || !promotable_type(t) { t = GV_MANY; }
+                if gp_ty[g] == NIL {
+                    gp_list.push(g);
+                    gp_ty[g] = t;
+                } else if gp_ty[g] != t {
+                    gp_ty[g] = GV_MANY;
+                }
+                if op == GIR_STORE {
+                    if gp_dom_exits(b) { gp_st[g] = b; } else if gp_st[g] == NIL { gp_st[g] = GV_MANY; }
+                }
+            }
+            i = o_nxt[i];
+        }
+    }
+    // which globals; exit blocks once for all of them
+    var n: u32 = 0;
+    var any_st = false;
+    for g in gp_list {
+        let ok = gp_ty[g] != GV_MANY && gp_st[g] != GV_MANY;
+        if !ok {
+            gp_ty[g] = NIL;
+            gp_st[g] = NIL;
+            continue;
+        }
+        gp_list[n] = g;
+        n++;
+        if gp_st[g] != NIL { any_st = true; }
+    }
+    gp_list.resize(n, 0);
+    if n == 0 { return false; }
+    let dbg = o_ins[b_last[pre]].dbg;
+    gp_eblk.clear();
+    if any_st {
+        var e: i64 = 0;
+        while e < gp_exit.len {
+            let b = gp_exit[e];
+            let x = gp_exit[e + 1];
+            e += 2;
+            let nb = new_block();
+            let br = new_inst(Inst { op: GIR_BR as! u8, sub: 0, flags: 0, ty: GIR_T_VOID, aux: 0, a: x, b: 0, c: 0, dbg: dbg });
+            link_end(nb, br);
+            let bt = b_last[b];
+            if o_ins[bt].op == GIR_BR { o_ins[bt].a = nb; }
+            else if o_ins[bt].b == x { o_ins[bt].b = nb; }
+            else { o_ins[bt].c = nb; }
+            phi_rename_pred(x, b, nb);
+            b_lnext[nb] = b_lnext[b];
+            b_lnext[b] = nb;
+            gp_eblk.push(nb);
+        }
+        o_cfg_ok = false;
+    }
+    for g in gp_list {
+        gp_promote(g, gp_ty[g], ep, pre, gp_st[g] != NIL);
+        gp_ty[g] = NIL;
+        gp_st[g] = NIL;
+    }
+    return true;
+}
+fn gp_promote(g: u32, t: u32, ep: u32, pre: u32, stores: bool) {
+    let gref: u32 = (3 as u32) << 30 | g;
+    let pt = b_last[pre];
+    let a = new_inst(Inst { op: GIR_ALLOCA as! u8, sub: 0, flags: 0, ty: GIR_T_PTR, aux: 0, a: store_of(t),
+                            b: M.types[t].align, c: 0, dbg: o_ins[pt].dbg });
+    link_start(0, a);
+    let v0 = rot_load(gref, t, pt);
+    rot_store(v0, t, a, pt);
+    for b in rpo {
+        if lc_mark[b] != ep { continue; }
+        var i = b_first[b];
+        while i != NIL {
+            let I = o_ins[i];
+            if I.op == GIR_LOAD && res(I.a) == gref { o_ins[i].a = a; }
+            else if I.op == GIR_STORE && res(I.b) == gref { o_ins[i].b = a; }
+            i = o_nxt[i];
+        }
+    }
+    if !stores { return; }
+    for nb in gp_eblk {
+        let br = b_last[nb];
+        let v = rot_load(a, t, br);
+        rot_store(v, t, gref, br);
+    }
+}
