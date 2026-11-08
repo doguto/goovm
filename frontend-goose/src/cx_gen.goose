@@ -1878,22 +1878,36 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
     }
     if !is_extern && (fs || init != 0) { syms[s].flags = syms[s].flags | SF_DEFINED; }
     nscratch.push(node(N_DECL, 0, syms[s].ty, s, conv as i64, dloc as i64, loc));
+    if static_local { note_static_local(s); }
     if static_local && (dyn != 0 || cst != 0 || has_dtor) {
-        // once, on the first pass (a guard variable; not thread-safe in D1)
-        let g = csym(SK_VAR, intern("__guard"), t_int, loc);
+        // once (Itanium 3.3.2): if (guard byte == 0 && __cxa_guard_acquire(&guard)) {
+        //   [EH: __cxa_guard_abort(&guard)] init; atexit; __cxa_guard_release(&guard); }
+        let g = csym(SK_VAR, intern("__guard"), t_long, loc);
         syms[g].sc = SC_STATIC as! u8;
         syms[g].scope = syms[s].scope;
-        nscratch.push(node(N_DECL, 0, t_int, g, 0, loc as i64, loc));
+        guard_of.insert(s as u64, g as! u32);
+        nscratch.push(node(N_DECL, 0, t_long, g, 0, loc as i64, loc));
         let mark = nscratch.len;
-        let gl = node(N_DECLREF, 0, t_int, g, 0, 0, loc);
-        nodes[gl].flags = NF_LVALUE;
-        nscratch.push(n_expr_stmt(node(N_ASSIGN, 0, t_int, gl as i64, int_node(1, t_int, loc) as i64, 0, loc)));
+        let im = nscratch.len;
+        let am = nscratch.len;
+        nscratch.push(guard_addr(g, loc));
+        let abort = n_expr_stmt(n_call(rt_fn("__cxa_guard_abort", t_void, 1, t_voidptr, 0, 0, true, false), am, loc));
+        nscratch.push(node(N_XPUSH, XP_STMT | XP_EHONLY, 0, abort as i64, 0, 0, loc));
         if dyn != 0 { nscratch.push(dyn); }
         if cst != 0 { nscratch.push(cst); }
+        nscratch.push(n_block(im, loc));
         if has_dtor { nscratch.push(atexit_stmt(s, loc)); }
-        let then = n_block(mark, loc);
-        let test = node(N_BINARY, B_EQ, t_int, rv(n_var(g, loc)) as i64, int_node(0, t_int, loc) as i64, 0, loc);
-        nscratch.push(node(N_IF, 0, 0, test as i64, then as i64, 0, loc));
+        let rm = nscratch.len;
+        nscratch.push(guard_addr(g, loc));
+        nscratch.push(n_expr_stmt(n_call(rt_fn("__cxa_guard_release", t_void, 1, t_voidptr, 0, 0, true, false), rm, loc)));
+        let init = n_block(mark, loc);
+        let qm = nscratch.len;
+        nscratch.push(guard_addr(g, loc));
+        let acq = n_call(rt_fn("__cxa_guard_acquire", t_int, 1, t_voidptr, 0, 0, true, false), qm, loc);
+        let acq_if = node(N_IF, 0, 0, icast(acq, CK_INT2BOOL, t_bool) as i64, init as i64, 0, loc);
+        let byte = n_deref(node(N_ICAST, CK_BITCAST, mk_ptr(t_char), n_addr(n_var(g, loc), loc) as i64, 0, 0, loc), loc);
+        let test = node(N_BINARY, B_EQ, t_int, icast(rv(byte), CK_INTEGRAL, t_int) as i64, int_node(0, t_int, loc) as i64, 0, loc);
+        nscratch.push(node(N_IF, 0, 0, test as i64, acq_if as i64, 0, loc));
         return;
     }
     if ctx == DC_COND && cst != 0 { nscratch.push(mark_bad_stmt(loc)); return; }
@@ -1905,6 +1919,8 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
         if has_dtor { gi_push(atexit_stmt(s, loc), prio); }
     }
 }
+
+fn guard_addr(g: i64, loc: u32) -> u32 { node(N_ICAST, CK_BITCAST, t_voidptr, n_addr(n_var(g, loc), loc) as i64, 0, 0, loc) }
 
 // The elements of the array at lvalue arr (of class type, or arrays of
 // them) constructed by default (dtor: destroyed, in reverse order): a for
