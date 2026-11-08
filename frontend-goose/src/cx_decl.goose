@@ -321,7 +321,7 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             lookup_qn(qn);
             var t = qn_type(qn);
             if t == 0 && qn.sym < 0 && qn.dep == 0 && !qn.has_targs && unknown_name_is_type(qn, ctx) { t = t_unknown; }
-            if t == 0 || (qn.dep != 0 && !ds.typename_kw && !assume_type_after(qn)) {
+            if t == 0 || (qn.dep != 0 && !ds.typename_kw && !assume_type_after(qn) && !(ctx == DC_TYPEID && !truly_dep(qn.dep))) {
                 restore(sv);
                 break;
             }
@@ -507,6 +507,30 @@ fn unknown_name_is_type(qn: QN&, ctx: i64) -> bool {
     return false;
 }
 
+// Does t involve a template parameter (as opposed to an uninstantiated
+// specialization with concrete arguments, which is only opaque)?
+recursive fn truly_dep(t: u32) -> bool {
+    let k = kind_of(t);
+    if k == TY_TPARAM || k == TY_DEPEXPR || k == TY_PACKEXP { return true; }
+    if k == TY_DEPNAME { return truly_dep(tbase(t)) || args_dependent_strict(types[t >> 4].n); }
+    if k == TY_DEPSPEC { return args_dependent_strict(types[t >> 4].n); }
+    if k == TY_POINTER || k == TY_LREF || k == TY_RREF || k == TY_ARRAY { return truly_dep(tbase(t)); }
+    if k == TY_STRUCT || k == TY_UNION { return is_dep(t); }
+    return false;
+}
+
+recursive fn args_dependent_strict(l: i64) -> bool {
+    if l < 0 { return false; }
+    let n = tl_count(l);
+    for i in n {
+        let a = tl_arg(l, i);
+        if a.kind as i64 == TA_TYPE && truly_dep(a.ty) { return true; }
+        if a.kind as i64 == TA_VALUE && a.ty != 0 && (kind_of(a.ty) == TY_TPARAM || kind_of(a.ty) == TY_PACKEXP || kind_of(a.ty) == TY_DEPEXPR) { return true; }
+        if a.kind as i64 == TA_TEMPLATE && (a.v < 0 || cxs[a.v].flags & CF_TPARAM != 0) { return true; }
+    }
+    return false;
+}
+
 // The type the specifiers denote.
 fn finish_cds(ds: CDS&) -> u32 {
     var t: u32 = 0;
@@ -596,6 +620,7 @@ recursive fn ptr_ops(t0: u32, d: CD&) -> u32 {
             adv();
             var a = Attrs { .. };
             cx_attrs(a);
+            let q = cv_quals();     // & __restrict
             t = if rv { mk_rref(t) } else { mk_lref(t) };
             continue;
         }

@@ -250,9 +250,12 @@ fn class_template_def(tsym: i64, is_union: bool, loc: u32) -> i64 {
     let r = new_record_cx(syms[tsym].name, is_union, loc);
     let s = csym(SK_TAG, syms[tsym].name, records[r].ty << 4, loc);
     syms[s].v = records[r].ty as i64;
-    cxs[s].dscope = cur_scope as! i32;
+    // the class's scope is in the template's (an out-of-line member template
+    // of a class is defined in that class)
+    let parent = if cxs[tsym].dscope >= 0 { cxs[tsym].dscope as i64 } else { cur_scope };
+    cxs[s].dscope = parent as! i32;
     cxs[s].tmpl = t as! i32;
-    let sc = class_setup(r, s, cur_scope);
+    let sc = class_setup(r, s, parent);
     scopes[sc].flags = scopes[sc].flags | SCF_PATTERN;
     crecs[r].flags = crecs[r].flags | CR_PATTERN;
     // the injected-class-name refers to the template too
@@ -284,7 +287,8 @@ fn own_args(t: i64) -> i32 {
         if p.kind as i64 == TPK_TYPE {
             targ_scratch.push(TArg { kind: TA_TYPE as! u8, rsv: 0, rsv2: 0, ty: if p.pack { mk_packexp(p.ty) } else { p.ty }, v: 0 });
         } else if p.kind as i64 == TPK_VALUE {
-            targ_scratch.push(TArg { kind: TA_VALUE as! u8, rsv: 0, rsv2: 0, ty: mk_tparam(tmpls[t].depth as i64, i, p.name, p.pack), v: -1 });
+            let vt = mk_tparam(tmpls[t].depth as i64, i, 0, false);
+            targ_scratch.push(TArg { kind: TA_VALUE as! u8, rsv: 0, rsv2: 0, ty: if p.pack { mk_packexp(vt) } else { vt }, v: -1 });
         } else {
             targ_scratch.push(TArg { kind: TA_TEMPLATE as! u8, rsv: 0, rsv2: 0, ty: 0, v: p.sym as i64 });
         }

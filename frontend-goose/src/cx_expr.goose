@@ -877,7 +877,8 @@ recursive fn parse_id_expr() -> u32 {
                 return opaque_node(loc);
             }
         }
-        if cur_class >= 0 && (has_dep_base(cur_class) || scopes[cur_class].flags & SCF_PATTERN != 0) { return opaque_node(loc); }
+        let ec = enclosing_class(cur_scope);
+        if ec >= 0 && (has_dep_base(ec) || scopes[ec].flags & SCF_PATTERN != 0) { return opaque_node(loc); }
         if dependent_ctx() || diag_suppress > 0 || lenient > 0 { return opaque_node(loc); }
         if qn.scope >= 0 && (scopes[qn.scope].flags & SCF_PATTERN != 0 || has_dep_base(qn.scope as i64)) { return opaque_node(loc); }
         err_at(qn.loc, str("use of undeclared identifier '", ident_text(qn.name as i64), "'"));

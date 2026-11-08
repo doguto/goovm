@@ -704,6 +704,13 @@ recursive fn parse_targ() {
     let t0 = pc;
     let e = parse_cexpr_noGT();
     let ty = nodes[e].ty;
+    if nodes[e].kind as i64 == N_CXX && nodes[e].op == 2 && nodes[e].flags & NF_PAREN == 0 && (at_gt() || at(TK_COMMA) || at(TK_ELLIPSIS)) {
+        // a non-type template parameter: the canonical argument own_args makes
+        let ps = nodes[e].a as i64;
+        let dv = syms[ps].v;
+        targ_scratch.push(TArg { kind: TA_VALUE as! u8, rsv: 0, rsv2: 0, ty: mk_tparam(dv >> 16, dv & 0xFFFF, 0, false), v: -1 });
+        return;
+    }
     if is_opaque(ty) || nodes[e].kind as i64 == N_ERROR {
         targ_scratch.push(TArg { kind: TA_VALUE as! u8, rsv: 0, rsv2: 0, ty: mk_depexpr(t0), v: t0 });
         return;

@@ -331,7 +331,10 @@ recursive fn mk_name_ref(qn: QN&, s0: i64, loc: u32) -> u32 {
     }
     if k == SK_NTTP {
         if cxs[s].flags & CF_SUBST != 0 { return int_node(syms[s].v, unqual(nonref(syms[s].ty)), loc); }
-        return dep_node(syms[s].ty, loc);
+        let n = dep_node(syms[s].ty, loc);
+        nodes[n].op = 2;        // a template parameter (a = its symbol): canonical as an argument
+        nodes[n].a = s as! u32;
+        return n;
     }
     if k == SK_FUNC || k == SK_TEMPLATE {
         if k == SK_TEMPLATE && tmpl_kind(s) == TT_VAR { return dep_node(t_unknown, loc); }

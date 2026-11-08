@@ -476,6 +476,9 @@ recursive fn parse_enum_spec_cx(ds: CDS&, ctx: i64) -> u32 {
     let esc = enum_scope(e);
     let pattern = dependent_ctx();
     adv();      // {
+    // the enumerators are visible in the enumerator-list (scoped ones through the enum's scope)
+    let sv_scope = cur_scope;
+    if scoped { cur_scope = esc; }
     // the enumerators: in the enum's scope (scoped) or the enclosing one too
     var next: i64 = 0;
     var next_dep = false;
@@ -527,6 +530,7 @@ recursive fn parse_enum_spec_cx(ds: CDS&, ctx: i64) -> u32 {
         if !accept(TK_COMMA) { break; }
     }
     expect(TK_R_BRACE, "'}'");
+    cur_scope = sv_scope;
     // the underlying type of an unscoped enum without a fixed type
     // (C++ [dcl.enum]p7, clang: int, unsigned int, long, unsigned long ...)
     var ut = fixed;
