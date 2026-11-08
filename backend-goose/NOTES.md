@@ -1561,8 +1561,8 @@ With `-fno-vectorize -fno-slp-vectorize` (the O2nv variant) 7 files remain:
 two vector/integer bitcasts (SSE intrinsics), two reductions and a vector
 GEP in the vectorizer unit tests, `llvm.fptosi.sat.i8` and an assertion in
 the -O0 allocator on lencod's `macroblock.c` (a lowering that needs more
-registers than are free; the function is too large for the global
-allocator). One program fails at link time: torture `pr39501` uses
+registers than are free, in a function where the global allocator is
+not active, so there is no pinned register to borrow). One program fails at link time: torture `pr39501` uses
 `fmin`/`fmax`, which LLVM -O2 forms as `llvm.minnum`/`llvm.maxnum` and the
 exporter lowers to libm calls, and the test does not link `-lm`.
 
