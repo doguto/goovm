@@ -309,7 +309,7 @@ fn void_addr_of_any(s: i64, loc: u32) -> u32 {
 // A handler: the variable vs (0 none) of caught type ct (0: catch (...)),
 // the handler's compound statement h. rethrow: a constructor's or
 // destructor's function-try-block.
-recursive fn cg_catch(vs: i64, ct: u32, h: u32, loc: u32, rethrow: bool) -> u32 {
+recursive fn cg_catch(vs0: i64, ct: u32, h: u32, loc: u32, rethrow: bool) -> u32 {
     var op: i64 = if rethrow { XC_RETHROW } else { 0 };
     if ct == 0 {
         return node_v(N_XCATCH, op, 0, 0, h as i64, 0, loc, 0);
@@ -321,6 +321,12 @@ recursive fn cg_catch(vs: i64, ct: u32, h: u32, loc: u32, rethrow: bool) -> u32 
     if ti < 0 { return opaque_node(loc); }
     var init: u32 = 0;
     var body = h;
+    var vs = vs0;
+    if vs == 0 && !is_ref(ct) && is_record(t) && !class_trivial_copy(rec_of(t)) {
+        // an unnamed class parameter is still copied (and destroyed)
+        vs = csym(SK_VAR, intern("__exn_param"), t, loc);
+        syms[vs].scope = 1;
+    }
     if vs > 0 {
         let x = node(N_XEXN, 0, t_voidptr, 0, 0, 0, loc);
         if is_ref(ct) {

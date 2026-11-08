@@ -672,6 +672,8 @@ fn make_this(s: i64, cls_ptr: u32, loc: u32) -> i64 {
 // by the headers) with the arguments nscratch[mark..], or 0.
 var cg_builtins = dictionary<u64, u32> {};
 recursive fn cg_builtin_call(name: u32, mark: i64, loc: u32) -> u32 {
+    // evaluated at run time: not a constant evaluation
+    if ident_text(name as i64) == "__builtin_is_constant_evaluated" && nscratch.len == mark { return int_node(0, t_bool, loc); }
     let b = builtin_index(name);
     if b < 0 || is_library_name(ident_text(name as i64)) { return 0; }
     for i in mark..nscratch.len {
@@ -2598,9 +2600,9 @@ fn check_reachable() -> bool {
         let s = nd.a as i64;
         if nd.kind as i64 == N_FUNCDEF {
             if syms[s].def as u32 != it { continue; }
-            if syms[s].sc as i64 != SC_STATIC || cg_has_attr(s, AM_CTOR) || cg_has_attr(s, AM_USED) { wk.push(it); }
+            if (syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE) || cg_has_attr(s, AM_CTOR) || cg_has_attr(s, AM_USED) { wk.push(it); }
         } else if nd.kind as i64 == N_DECL && syms[s].kind as i64 == SK_VAR {
-            if syms[s].sc as i64 != SC_STATIC && syms[s].flags & SF_FILESCOPE != 0 { wk.push(it); }
+            if syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE && syms[s].flags & SF_FILESCOPE != 0 { wk.push(it); }
         }
     }
     while wk.len > 0 {
