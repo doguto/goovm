@@ -1410,8 +1410,9 @@ O0, mem2reg, O1, O1-g); `tests/run.py --goosecc --o1`: 165/165.
 **-O0 unchanged.** Every source file of the corpora (2,651 files) compiled
 by the base build (66ea246) and the E1 build gives byte-identical objects
 for goovm-llc on -O0, -O0 -g and mem2reg IR and for goovm-cc -O0 and -O0 -g
-(13,255 object pairs), and goosecc -O0 and -O0 -g on the 2,250 C files
-(with `tests/c`) gives byte-identical objects too (4,500 pairs).
+(13,255 object pairs; `e1/o0ident.py`), and goosecc -O0 and -O0 -g on the
+2,251 C files (with `tests/c`) gives byte-identical objects too (4,502
+pairs; `e1/gident.py`, header cache off).
 
 ### Run time: CTMark
 
@@ -1436,8 +1437,9 @@ hour, which the same-round ratios absorb):
 
 goovm -O1 runs CTMark 2.26x faster than its -O0 code (and clang -O0's) and
 at 1.57x clang -O1's time (1.65x clang -O2's): the target of about 1.3x is
-met by six of the ten programs (7zip, kimwitu++, ClamAV, SPASS, typeset at
-1.01x to 1.11x) and missed by four. `cc-O1` (goovm-cc -O1) is the same
+met by five of the ten programs (7zip, kimwitu++, ClamAV, SPASS, typeset at
+1.01x to 1.11x) and missed by five (Bullet, tramp3d-v4, mafft, lencod,
+sqlite3). `cc-O1` (goovm-cc -O1) is the same
 code within noise (1.58x).
 
 **LLVM -O2 IR + the Goose back-end (O2nv).** The same back-end on IR that
