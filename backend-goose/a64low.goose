@@ -55,6 +55,7 @@ fn a_addimm(x: i64) -> bool, u32, bool, bool {
     var v = x;
     var neg = false;
     if v < 0 {
+        if v < -(1 << 24) { return false, 0, false, false; }
         v = -v;
         neg = true;
     }

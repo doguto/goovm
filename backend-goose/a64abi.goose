@@ -24,38 +24,34 @@ let AP_STK = 3;
 let AP_BYVAL = 4;   // the pointee is copied to the stack at soff (size bytes)
 // Part of an argument: `size` bytes at `off` of the value, in x/v register
 // `reg` (0..7, 8 for sret) or at stack offset `soff`; t: the part's type.
-struct APart { kind: u32, reg: u32, off: u32, size: u32, soff: u32, t: u32 }
+// A vector part whose register form differs from its memory form (LLVM's
+// type legalization of vectors that are not 8 or 16 bytes of i8..i64 /
+// f32 / f64 lanes: lanes promoted to a wider integer, or added): nl lanes of
+// lm bytes in memory, lanes of lr bytes in the register; a plain part has
+// nl = 1, lm = lr = size.
+struct APart { kind: u32, reg: u32, off: u32, size: u32, soff: u32, t: u32, nl: u32, lm: u32, lr: u32 }
 var a_parts: APart[>..] = [];
 var a_pfirst: u32[>..] = [];     // per argument: its first part (one more entry at the end)
 var a_ngrn: u32 = 0;
 var a_nsrn: u32 = 0;
 var a_nstk: u32 = 0;
 // leaves of the argument being classified
-struct ALeaf { fp: bool, off: u32, size: u32, t: u32 }
+struct ALeaf { fp: bool, off: u32, size: u32, t: u32, nl: u32, lm: u32, lr: u32 }
 var a_leaf: ALeaf[>..] = [];
 
 recursive fn a_leaves(t: u32, off: u32) {
     let d = M.types[t];
     let c: u32 = d.cls;
     if c == C_INT {
-        a_leaf.push(ALeaf { fp: false, off: off, size: if d.store <= 8 { d.store } else { 8 }, t: t });
+        let n: u32 = if d.store <= 8 { d.store } else { 8 };
+        a_leaf.push(ALeaf { fp: false, off: off, size: n, t: t, nl: 1, lm: n, lr: n });
     } else if c == C_INT2 {
-        a_leaf.push(ALeaf { fp: false, off: off, size: 8, t: GIR_T_I64 });
-        a_leaf.push(ALeaf { fp: false, off: off + 8, size: 8, t: GIR_T_I64 });
+        a_leaf.push(ALeaf { fp: false, off: off, size: 8, t: GIR_T_I64, nl: 1, lm: 8, lr: 8 });
+        a_leaf.push(ALeaf { fp: false, off: off + 8, size: 8, t: GIR_T_I64, nl: 1, lm: 8, lr: 8 });
     } else if c == C_FP {
-        a_leaf.push(ALeaf { fp: true, off: off, size: d.store, t: t });
+        a_leaf.push(ALeaf { fp: true, off: off, size: d.store, t: t, nl: 1, lm: d.store, lr: d.store });
     } else if c == C_VEC {
-        if d.store == 8 || d.store == 16 {
-            a_leaf.push(ALeaf { fp: true, off: off, size: d.store, t: t });
-        } else {
-            // (other vector sizes: in 16-byte pieces, as LLVM legalizes them by widening)
-            var p: u32 = 0;
-            while p < d.store {
-                let n: u32 = if d.store - p > 8 { 16 } else { 8 };
-                a_leaf.push(ALeaf { fp: true, off: off + p, size: n, t: GIR_T_F64 });
-                p += n;
-            }
-        }
+        a_vec_leaves(t, off);
     } else if d.kind == TK_STRUCT {
         for i in 0..d.n {
             a_leaves(M.opnds[d.elems + 2 * i], off + M.opnds[d.elems + 2 * i + 1]);
@@ -63,6 +59,85 @@ recursive fn a_leaves(t: u32, off: u32) {
     } else if d.kind == TK_ARRAY {
         let es = M.types[d.elems].size;
         for i in 0..d.n { a_leaves(d.elems, off + i * es); }
+    }
+}
+// The registers of a vector value, as LLVM's type legalization makes them
+// (AArch64: v1i8..v1f32 are widened, other power-of-two vectors narrower
+// than 64 bits get wider integer lanes, other lane counts are widened to a
+// power of two, vectors wider than 128 bits are split in 128-bit pieces).
+fn a_vec_leaves(t: u32, off: u32) {
+    let d = M.types[t];
+    let L = M.types[d.elems];
+    let n = d.n;
+    let lb: u32 = L.size;
+    let fp = L.cls == C_FP;
+    if (d.store == 8 || d.store == 16) && lb * n == d.store {
+        a_leaf.push(ALeaf { fp: true, off: off, size: d.store, t: t, nl: 1, lm: d.store, lr: d.store });
+        return;
+    }
+    if n == 1 {
+        let sz: u32 = if lb > 8 { 16 } else { 8 };
+        a_leaf.push(ALeaf { fp: true, off: off, size: sz, t: t, nl: 1, lm: lb, lr: lb });
+        return;
+    }
+    var n2: u32 = 1;
+    while n2 < n { n2 = n2 * 2; }
+    var lr = lb;
+    if !fp { while n2 * lr < 8 { lr = lr * 2; } }
+    var total = n2 * lr;
+    if total < 8 { total = 8; }
+    if total <= 16 {
+        a_leaf.push(ALeaf { fp: true, off: off, size: total, t: t, nl: n, lm: lb, lr: lr });
+        return;
+    }
+    // 128-bit pieces of 16 / lr lanes each
+    let per = 16 / lr;
+    var k: u32 = 0;
+    while k < n {
+        let cnt: u32 = if n - k < per { n - k } else { per };
+        a_leaf.push(ALeaf { fp: true, off: off + k * lb, size: 16, t: t, nl: cnt, lm: lb, lr: lr });
+        k += per;
+    }
+}
+// Whether part P is a plain load/store of `size` bytes.
+checkfree fn a_plain(P: APart) -> bool { P.nl * P.lm == P.size && P.lm == P.lr }
+// V register r = part P of the memory at base + off.
+fn a_part_load_v(P: APart, r: u32, base: u32, off: i64) {
+    if a_plain(P) {
+        a_ls(LS_FLDR, a_log2(P.size), r, base, off + P.off as i64);
+        return;
+    }
+    let sm = a_log2(P.lm);
+    let sr = a_log2(P.lr);
+    if P.lm == P.lr && P.lm >= 4 && P.nl * P.lm > 8 {
+        // (widened: the lanes are contiguous; read them as one access when it stays inside)
+        a_vzero(true, r);
+    } else {
+        a_vzero(true, r);
+    }
+    for k in 0..P.nl {
+        let o: i64 = off + P.off as i64 + (k * P.lm) as i64;
+        if P.lm == 8 && P.lr == 8 {
+            a_ls(LS_LDR, 3, AX17, base, o);
+            a_ins_gp(3, r, AX17, k);
+        } else {
+            a_ls(LS_LDR, sm, AX17, base, o);
+            a_ins_gp(sr, r, AX17, k);
+        }
+    }
+}
+// Part P from V register r to the memory at base + off.
+fn a_part_store_v(P: APart, r: u32, base: u32, off: i64) {
+    if a_plain(P) {
+        a_ls(LS_FSTR, a_log2(P.size), r, base, off + P.off as i64);
+        return;
+    }
+    let sm = a_log2(P.lm);
+    let sr = a_log2(P.lr);
+    for k in 0..P.nl {
+        let o: i64 = off + P.off as i64 + (k * P.lm) as i64;
+        a_umov(sr, AX17, r, k);
+        a_ls(LS_STR, sm, AX17, base, o);
     }
 }
 fn a_classify_reset() {
@@ -79,7 +154,7 @@ fn a_stack(size: u32, al: u32) -> u32 {
     return o;
 }
 fn a_part(kind: u32, reg: u32, L: ALeaf, soff: u32) {
-    a_parts.push(APart { kind: kind, reg: reg, off: L.off, size: L.size, soff: soff, t: L.t });
+    a_parts.push(APart { kind: kind, reg: reg, off: L.off, size: L.size, soff: soff, t: L.t, nl: L.nl, lm: L.lm, lr: L.lr });
 }
 // Appends the parts of the next argument (type t, ABI word w).
 fn a_classify(t: u32, w: u32) {
@@ -89,11 +164,11 @@ fn a_classify(t: u32, w: u32) {
         if al < 8 { al = 8; }
         let size = abi_size(w);
         let o = a_stack(align_up32(size, 8), al);
-        a_parts.push(APart { kind: AP_BYVAL, reg: 0, off: 0, size: size, soff: o, t: t });
+        a_parts.push(APart { kind: AP_BYVAL, reg: 0, off: 0, size: size, soff: o, t: t, nl: 1, lm: size, lr: size });
         return;
     }
     if w & ABI_SRET != 0 {
-        a_parts.push(APart { kind: AP_X, reg: 8, off: 0, size: 8, soff: 0, t: GIR_T_PTR });
+        a_parts.push(APart { kind: AP_X, reg: 8, off: 0, size: 8, soff: 0, t: GIR_T_PTR, nl: 1, lm: 8, lr: 8 });
         return;
     }
     a_leaf.clear();
@@ -104,6 +179,7 @@ fn a_classify(t: u32, w: u32) {
     if D.kind == TK_ARRAY && a_leaf.len != 0 {
         blk = true;
         for L in a_leaf { if L.fp != a_leaf[0].fp || L.size != a_leaf[0].size { blk = false; } }
+        if a_leaf.len < 2 && D.cls != C_INT2 { blk = a_leaf.len == 1; }
     }
     if blk {
         let n: u32 = a_leaf.len as! u32;
@@ -166,10 +242,10 @@ fn a_classify_ret(t: u32) {
     var f: u32 = 0;
     for L in a_leaf {
         if L.fp {
-            a_rparts.push(APart { kind: AP_V, reg: f, off: L.off, size: L.size, soff: 0, t: L.t });
+            a_rparts.push(APart { kind: AP_V, reg: f, off: L.off, size: L.size, soff: 0, t: L.t, nl: L.nl, lm: L.lm, lr: L.lr });
             f++;
         } else {
-            a_rparts.push(APart { kind: AP_X, reg: g, off: L.off, size: L.size, soff: 0, t: L.t });
+            a_rparts.push(APart { kind: AP_X, reg: g, off: L.off, size: L.size, soff: 0, t: L.t, nl: 1, lm: L.size, lr: L.size });
             g++;
         }
     }
@@ -295,26 +371,43 @@ fn a_val_mem(v: u32, r: u32) -> u32, i64 {
     return AFP, a_home_off(id) as i64;
 }
 // Loads `size` bytes (1..8, zero-extended) at base + off into x register r.
-recursive fn a_load_n(r: u32, base: u32, off: i64, size: u32) {
+fn a_load_n(r: u32, base: u32, off: i64, size: u32) {
     if size == 1 || size == 2 || size == 4 || size == 8 {
         a_ls(LS_LDR, a_log2(size), r, base, off);
         return;
     }
-    // 3, 5, 6, 7 bytes: the low power of two, then the rest above it (x17)
-    let lo: u32 = if size > 4 { 4 } else { 2 };
-    a_ls(LS_LDR, a_log2(lo), r, base, off);
-    a_load_n(AX17, base, off + lo as i64, size - lo);
-    a_logic_rr(AL_ORR, true, r, r, AX17, 0, 8 * lo);
+    // 3, 5, 6, 7 bytes: the largest power of two first, then the smaller
+    // pieces above it, each through x17 (r must not be the base)
+    var p: u32 = 0;
+    while p < size {
+        let rest = size - p;
+        let c: u32 = if rest >= 4 { 4 } else if rest >= 2 { 2 } else { 1 };
+        if p == 0 {
+            a_ls(LS_LDR, a_log2(c), r, base, off);
+        } else {
+            a_ls(LS_LDR, a_log2(c), AX17, base, off + p as i64);
+            a_logic_rr(AL_ORR, true, r, r, AX17, 0, 8 * p);
+        }
+        p += c;
+    }
 }
-recursive fn a_store_n(r: u32, base: u32, off: i64, size: u32) {
+fn a_store_n(r: u32, base: u32, off: i64, size: u32) {
     if size == 1 || size == 2 || size == 4 || size == 8 {
         a_ls(LS_STR, a_log2(size), r, base, off);
         return;
     }
-    let lo: u32 = if size > 4 { 4 } else { 2 };
-    a_ls(LS_STR, a_log2(lo), r, base, off);
-    a_lsr_imm(true, AX17, r, 8 * lo);
-    a_store_n(AX17, base, off + lo as i64, size - lo);
+    var p: u32 = 0;
+    while p < size {
+        let rest = size - p;
+        let c: u32 = if rest >= 4 { 4 } else if rest >= 2 { 2 } else { 1 };
+        if p == 0 {
+            a_ls(LS_STR, a_log2(c), r, base, off);
+        } else {
+            a_lsr_imm(true, AX17, r, 8 * p);
+            a_ls(LS_STR, a_log2(c), AX17, base, off + p as i64);
+        }
+        p += c;
+    }
 }
 // Whether an access of 2^s bytes at offset off is one instruction.
 checkfree fn a_ls_ok(s: u32, off: i64) -> bool {
@@ -398,26 +491,49 @@ fn a_lower_call(I: Inst, j: u32) {
     if sbytes != 0 { a_add_off(ASP, ASP, -(sbytes as i64)); }
     // stack parts and byval copies first (they use x17 / v31 and temps)
     if a_nstk != 0 {
+        // (no register is allocated or locked here: a call may have many stack arguments)
         for k in 0..n {
             let v = M.opnds[s + 2 * k];
             let t = type_of(v);
+            var r: u32 = 64;
+            if is_val(v) {
+                r = vi[vid(v)].reg;
+                a_note(vid(v));
+            }
             for q in a_pfirst[k]..a_pfirst[k + 1] {
                 let P = a_parts[q];
                 if P.kind == AP_STK {
                     let c = arc(t);
                     if c == ARC_GPR {
-                        let r = a_gpr_z(v, false);
-                        a_ls(LS_STR, 3, r, ASP, P.soff as i64);
-                    } else if a_inv(c) && P.off == 0 && P.size == M.types[t].store {
-                        let r = a_vr(v);
-                        a_ls(LS_FSTR, a_log2(P.size), r, ASP, P.soff as i64);
+                        var x = r;
+                        if x >= 32 {
+                            x = AX17;
+                            if gir_kind(v) == GIR_V_CONST && a_const_bits(gir_idx(v)) == 0 { x = AZR; }
+                            else { a_mat_gpr(v, AX17); }
+                        }
+                        a_ls(LS_STR, 3, x, ASP, P.soff as i64);
+                    } else if a_inv(c) && P.off == 0 && P.size == M.types[t].store && a_plain(P) {
+                        var x = r;
+                        if x < 32 || x >= 64 {
+                            x = AV31;
+                            a_mat_v(v, AV31);
+                        }
+                        a_ls(LS_FSTR, a_log2(P.size), x, ASP, P.soff as i64);
+                    } else if a_plain(P) || P.size <= 8 && P.lm == P.lr && P.nl * P.lm <= P.size {
+                        let b, o = a_val_mem(v, AX16);
+                        a_copy(ASP, P.soff as i64, b, o + P.off as i64, if a_plain(P) { P.size } else { P.nl * P.lm });
                     } else {
                         let b, o = a_val_mem(v, AX16);
-                        a_copy(ASP, P.soff as i64, b, o + P.off as i64, P.size);
+                        a_part_load_v(P, AV31, b, o);
+                        a_ls(LS_FSTR, a_log2(P.size), AV31, ASP, P.soff as i64);
                     }
                 } else if P.kind == AP_BYVAL {
-                    let r = a_gpr(v, false);
-                    a_copy(ASP, P.soff as i64, r, 0, P.size);
+                    var x = r;
+                    if x >= 32 {
+                        x = AX16;
+                        a_mat_gpr(v, AX16);
+                    }
+                    a_copy(ASP, P.soff as i64, x, 0, P.size);
                 }
             }
         }
@@ -487,7 +603,7 @@ fn a_lower_call(I: Inst, j: u32) {
         for q in q0..q1 {
             let P = a_parts[q];
             if P.kind == AP_X { a_load_n(P.reg, b, o + P.off as i64, P.size); }
-            else if P.kind == AP_V { a_ls(LS_FLDR, a_log2(P.size), AV0 + P.reg, b, o + P.off as i64); }
+            else if P.kind == AP_V { a_part_load_v(P, AV0 + P.reg, b, o); }
         }
     }
     if !direct && creg == AX16 { a_mat_gpr(callee, AX16); }
@@ -520,7 +636,7 @@ fn a_call_result(j: u32, t: u32) {
     let off: i64 = a_home_off(j) as i64;
     for P in a_rparts {
         if P.kind == AP_X { a_store_n(P.reg, AFP, off + P.off as i64, P.size); }
-        else { a_ls(LS_FSTR, a_log2(P.size), AV0 + P.reg, AFP, off + P.off as i64); }
+        else { a_part_store_v(P, AV0 + P.reg, AFP, off); }
     }
 }
 
@@ -539,7 +655,7 @@ fn a_ret_value(v: u32, t: u32) {
     let b, o = a_val_mem(v, AX16);
     for P in a_rparts {
         if P.kind == AP_X { a_load_n(P.reg, b, o + P.off as i64, P.size); }
-        else { a_ls(LS_FLDR, a_log2(P.size), AV0 + P.reg, b, o + P.off as i64); }
+        else { a_part_load_v(P, AV0 + P.reg, b, o); }
     }
 }
 
@@ -640,9 +756,12 @@ fn a_prologue_args() {
                     a_store_n(P.reg, AFP, ho + P.off as i64, P.size);
                 }
             } else if P.kind == AP_V {
-                a_ls(LS_FSTR, a_log2(P.size), AV0 + P.reg, AFP, ho + P.off as i64);
-            } else {
+                a_part_store_v(P, AV0 + P.reg, AFP, ho);
+            } else if a_plain(P) {
                 a_copy(AFP, ho + P.off as i64, AFP, a_frame + P.soff as i64, P.size);
+            } else {
+                a_ls(LS_FLDR, a_log2(P.size), AV31, AFP, a_frame + P.soff as i64);
+                a_part_store_v(P, AV31, AFP, ho);
             }
         }
         if vi[id].reg < 64 { vi[id].st |= ST_MEM; }

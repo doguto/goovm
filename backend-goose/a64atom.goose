@@ -321,12 +321,13 @@ fn b_lower_asm(I: Inst, j: u32) {
     if single {
         let r = M.opnds[outs];
         let c = arc(I.ty);
-        if r < ASMREG_V0 && c == ARC_GPR {
+        // (registers the allocator hands out: x0..x15, v0..v7, v16..v30)
+        if r < 16 && c == ARC_GPR {
             a_zext(r, bits_of(I.ty));
             b_set(j, r, false);
             return;
         }
-        if r >= ASMREG_V0 && a_inv(c) {
+        if r >= ASMREG_V0 && abit(r) & A_V_CALLER != 0 && a_inv(c) {
             b_set(j, r, false);
             return;
         }
