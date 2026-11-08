@@ -9,6 +9,11 @@ AST; the lowering (milestone B2) turns that AST into GIR version 2
 ELF object in the same process. There is no LLVM anywhere: `goosecc -c
 file.c -o file.o` produces objects that link with clang-20's and glibc.
 
+Since milestone D1 goosecc is also the first stage of a C++ compiler:
+`goosecc -E` and `-fsyntax-only` handle C++17 (C++98 to C++23 for what
+the libstdc++ headers use), and `goosecc -c` compiles a "C with classes"
+subset of C++ (DESIGN.md, section 13; results below, "C++ (D1)").
+
 - [DESIGN.md](DESIGN.md): architecture, data structures, recursion under
   Goose's rules, the AST contract, and the lowering to GIR (section 7:
   values, the SysV calling convention, globals, static data and
@@ -18,6 +23,28 @@ file.c -o file.o` produces objects that link with clang-20's and glibc.
   in section 10 what B3's speed work met in the language and runtime, in
   section 11 what B4's header cache did, and in section 12 B5's debug
   information.
+
+Status of the C++ front end (milestone D1; DESIGN.md, section 13):
+
+- **Preprocessing** in C++ mode is clang++-20's: the 423 C++ files of the
+  corpora and the 647 libstdc++-header tests (every top-level header alone
+  under six standards) give clang++-20's tokens.
+- **Parsing and declarations**: all 423 C++ corpus files (SingleSource
+  UnitTests, Regression and Benchmarks C++, the CTMark C++ programs 7zip,
+  Bullet, kimwitu++ and tramp3d-v4) are accepted, with no false error and
+  no crash; so are the libstdc++ headers under C++98 to C++17 (the
+  C++20 concepts in them are not parsed yet).
+- **Layout and mangling** are held to clang by two oracles over the same
+  files: every size, alignment, offset and member type of every nameable
+  class (306,000 assertions) and the Itanium mangled name of every function
+  and variable declared in a main file that D1 can name.
+- **Code generation** covers classes, member functions, virtual functions
+  (vtables and typeinfo), constructors and destructors (at scope exit, for
+  members, bases, arrays and globals), references, overloading and
+  operators, namespaces, new/delete, static initialization and member
+  pointers. A program using anything else (templates, exceptions,
+  temporaries with destructors, ...) stops with an error naming the
+  construct; no wrong code was found.
 
 Status (milestone G1; DESIGN.md, section 12; measurements in
 [`../bench/results/g1-2026-11-07/`](../bench/results/g1-2026-11-07/)):
@@ -167,6 +194,20 @@ goosecc --layout-check [options] file.c -o check.c
                                               write the layout oracle (see Tests)
 goosecc --dump-ast [options] file.c [-o out]  print the typed AST in clang's terms
 ```
+
+A file is C++ when its extension is `.cpp`, `.cc`, `.cxx`, `.C`, `.c++` or
+`.cp` (or with `-x c++`); then `-std=c++98` ... `c++26` and `gnu++*`
+(default `gnu++17`, as clang-20), `-fno-exceptions`, `-fno-rtti`,
+`-Wno-deprecated` and `-fenable-matrix` apply as in clang++, the include
+path starts with libstdc++ 13's directories, and two more outputs exist:
+
+```
+goosecc --dump-decls [options] file.cpp [-o out]   every function and variable declared in the file, with its mangled name
+goosecc --layout-check [options] file.cpp -o check.cpp   the C++ layout oracle
+```
+
+`-c` in C++ mode compiles the subset of DESIGN.md, section 13.9; objects
+link with `clang++-20` (libstdc++).
 
 Options are clang's: `-I`, `-iquote`, `-isystem`, `-idirafter`, `-nostdinc`,
 `-D`, `-U`, `-include`, `-std=` (c89, gnu89, c99, gnu99, c11, gnu11, c17,
@@ -338,6 +379,43 @@ double` and `_Complex`; variadic callees reading with `va_arg`), compiles
 the callees and the callers by both compilers, and checks that the four
 mixes print the hashes of every argument and return value that the
 all-clang build prints.
+
+### C++ tests (D1)
+
+The C++ corpora are `tests/corpus.py`'s `cxx-unit` (35 files),
+`cxx-regress` (31), `cxx-bench` (41), `cxx-ctmark` (316; `cxx` names all
+four), with the flags of `tests/suite.py`, and `cxx-hdrs`: every top-level
+libstdc++ 13 header included alone, under `-std=gnu++98`, `c++11`,
+`gnu++14`, `gnu++17`, `c++17` and `gnu++20` (647 files, written to
+`$GOOSECC_HDR_DIR`).
+
+```bash
+frontend-goose/tests/cmp_E.py --corpus cxx,cxx-hdrs -j 2         # -E token streams vs clang++-20 -E
+frontend-goose/tests/cmp_syntax.py --corpus cxx,cxx-hdrs -j 2    # no false errors
+frontend-goose/tests/layout_check.py --corpus cxx -j 2           # the C++ layout oracle, compiled by clang++-20
+frontend-goose/tests/cmp_decls_cxx.py --corpus cxx -j 2          # mangled names vs clang (libclang)
+frontend-goose/tests/bench_cxx.py -n 3                           # speed of -E and -fsyntax-only vs clang++-20 (CTMark C++)
+tests/run.py --goosecc frontend-goose/build/goosecc               # also runs tests/cxx_d1/*.cpp
+tests/suite_goosecc.py --corpus unittests-cxx,regression-cxx,benchmarks-cxx --variants O0,g
+```
+
+- The C++ layout check writes, for every class D1 can name, C++98
+  `static_assert`s on `sizeof`, `__alignof__`, field offsets (and the first
+  field of each base), `__is_polymorphic`, `__is_empty`, and the declared
+  types of members and namespace-scope variables (through helper class
+  templates, `__is_same(__typeof__(...), ...)`); `clang++-20
+  -fno-access-control` must compile it.
+- `cmp_decls_cxx.py` builds `tests/cxx_decls.c` (libclang) on first use:
+  it prints every function and variable declared in the main file with
+  `clang_Cursor_getMangling`; `goosecc --dump-decls` prints the same for
+  what D1 declares. A declaration goosecc prints with another name is
+  *wrong*; one it does not print (in templates D1 does not instantiate)
+  is *missing*.
+- `tests/cxx_d1/` holds the code generation tests (classes, constructors
+  and destructors, virtual functions, operators, arrays of objects,
+  statics, small programs, member pointers): `run.py --goosecc` compiles
+  each with goosecc, with and without `-g`, links with clang++-20 and
+  compares the output and exit status with clang++-20 -O0's.
 
 ### Front-end oracles (B1)
 
