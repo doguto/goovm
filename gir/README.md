@@ -26,7 +26,7 @@ generated Goose struct against `gir.h`.
 
 | table | record | size | content |
 |---|---|---:|---|
-| `header` | `GirHeader` | 32 | one record: version, module flags (`PIE`), the `__tls_get_addr` global |
+| `header` | `GirHeader` | 32 | one record: version, module flags (`PIE`), the `__tls_get_addr` global, the optimization level |
 | `types` | `GirTypeDef` | 24 | every type id: kind, value class, bits, size, alignment, store size, elements |
 | `funcs` | `GirFunc` | 40 | defined functions: block and instruction ranges, argument (type, ABI word) run, return type, flags, DISubprogram |
 | `blocks` | `GirBlock` | 8 | basic blocks: instruction range |
@@ -36,7 +36,7 @@ generated Goose struct against `gir.h`.
 | `globals` | `GirGlobal` | 40 | functions, variables and aliases: name, kind, flags, initializer, alignment, section |
 | `sections` | `GirSection` | 16 | explicitly named sections: name, flags, ELF type |
 | `data` | `u8` | 1 | initializer bytes, aggregate constants, assembled inline asm |
-| `drelocs` | `GirDataReloc` | 32 | relocations inside initializers (addresses, block addresses, label differences) |
+| `drelocs` | `GirDataReloc` | 32 | relocations inside initializers (addresses, block addresses, label differences, PC-relative offsets) |
 | `strtab` | `u8` | 1 | symbol and section names (a valid ELF string table) |
 | `asms` | `GirAsm` | 24 | inline-asm machine code and operand bindings |
 | `dlocs` | `GirDLoc` | 16 | DILocations: line, column, scope, inlined-at |
@@ -366,6 +366,40 @@ be empty or a new opcode or flag that older producers never emit.
    for every function and, when `dlocs` has locations, `.debug_line` and a
    minimal `.debug_info` even with empty `dies` - which is how goosecc's
    `-g` gets line tables without a change on its side.
+
+### Additions in milestone E1 (backward compatible)
+
+The optimizing mode (`backend-goose/DESIGN.md` §15, §16) needs five
+additive changes; a producer that does not know them keeps getting -O0 code
+generation and byte-identical objects.
+
+1. **`GirHeader.opt_level`** (was the first `reserved` word, so 0 from
+   older producers): 0 = -O0 code generation; 1 or more = the back-end runs
+   its middle-end on the tables and allocates registers globally.
+   `goovm-llc -O1`, `goovm-cc -O1` and `goosecc -O1` set it (`-O2`/`-O3` set
+   2/3, which currently behave as 1).
+2. **Function flags** `GIR_FN_NOINLINE` (64) and `GIR_FN_ALWAYSINLINE`
+   (128), hints for the inliner. `NOINLINE` is set only for a `noinline`
+   that does not come with `optnone`: clang -O0 marks every function
+   `noinline optnone`, which says nothing about the source, so a user's
+   `noinline` is visible only in IR that `goovm-cc -O1` produces (clang's
+   front end at -O0 semantics without `optnone`).
+3. **Instruction flag** `GIR_IF_NSW` (0x1000) on `ADD`, `SUB`, `MUL`, `SHL`
+   whose signed overflow is undefined (LLVM `nsw`): the optimizer
+   distributes sign extensions over them and widens induction variables.
+4. **`fastcc`** is accepted on definitions and calls (LLVM's optimizers give
+   it to internal functions; on x86-64 it is the C convention for the
+   arguments the exporter supports).
+5. **Data relocation kind** `GIR_DR_PCREL32` (3): 4 bytes, the address of
+   `globals[target] + addend` minus the address of the field. LLVM -O2
+   turns switch lookup tables of pointers into relative tables (entries
+   `trunc (sub (ptrtoint X, ptrtoint table))`, read by
+   `llvm.load.relative`); the exporter writes each entry as a PCREL32 with
+   the addend X's offset plus the entry's offset, and lowers
+   `llvm.load.relative` to `p + sext(load i32 (p + off))`. The exporter also
+   lowers `llvm.usub.sat`/`llvm.uadd.sat` on scalars to a compare and a
+   select. (What it still rejects in LLVM -O2 IR is listed in
+   `backend-goose/NOTES.md` §12.)
 
 ## Debugging aid
 

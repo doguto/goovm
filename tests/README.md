@@ -2,7 +2,7 @@
 
 | script | what |
 |---|---|
-| `run.py` | the small differential tests in `c/` (51 programs), `cxx/`, `mixed/` (C and C++ linked together) and `ll/` (hand-written LLVM IR with a C driver) |
+| `run.py` | the small differential tests in `c/` (55 programs), `cxx/`, `mixed/` (C and C++ linked together) and `ll/` (hand-written LLVM IR with a C driver) |
 | `suite.py` | the llvm-test-suite C and C++ corpora through goovm-llc (and goovm-cc), against their reference outputs |
 | `gdb_oracle.py` | the same scripted gdb session on a clang -O0 -g build and a goovm build, compared; `--unwind`: single-step every function checking the backtrace |
 | `realworld_mixed.py` | (v0) links SPASS and consumer-typeset from a mix of goovm and clang objects |
@@ -33,12 +33,22 @@ variants pass it through `opt-20 -passes=verify` (O0) or `mem2reg`. With
 `--goosecc` these programs are skipped.
 
 ```
-tests/run.py --goovm build/tools/goovm-llc/goovm-llc -j3 [--opt-passes PASSES] [filter ...]
-tests/run.py --goosecc frontend-goose/build/goosecc -j3 [filter ...]
+tests/run.py --goovm build/tools/goovm-llc/goovm-llc -j3 [--opt-passes PASSES] [--o1] [filter ...]
+tests/run.py --goosecc frontend-goose/build/goosecc -j3 [--o1] [filter ...]
 ```
 
 With `--goosecc`, the variants are `goosecc -c` and `goosecc -c -g` instead
 (no LLVM involved; C programs only).
+
+`--o1` (milestone E1) adds the optimizing variants: `O1` (the `-O0`
+bitcode through `goovm-llc -O1`: the Goose middle-end and global register
+allocation) and `O1-g` (the `-O0 -g` bitcode through `goovm-llc -O1`), or
+with `--goosecc` `goosecc-O1`. `c/52_opt_divconst.c` (division and
+remainder by constants at the edges of the magic-number ranges) and
+`c/53_opt_shapes.c` (short-circuit loop conditions, dead stores next to
+aliasing stores, structs that SROA splits, narrow arguments of inlined
+calls, loop invariants, register pressure across calls, switches) were
+written for the middle-end; they pass at every level.
 
 ## suite.py
 
@@ -46,7 +56,7 @@ With `--goosecc`, the variants are `goosecc -c` and `goosecc -c -g` instead
 tests/suite.py --goovm build/tools/goovm-llc/goovm-llc [--corpus a,b,...] [--variants O0,g,mem2reg]
                [--cc build/tools/goovm-cc/goovm-cc] [--verify-dwarf]
                [-j 3] [--work DIR] [--fallback] [--report FILE] [--json FILE] [--rebaseline]
-               [--time-run N] [filter ...]
+               [--time-run N [--time-ref O1,O2]] [filter ...]
 ```
 
 Corpora (from the llvm-test-suite checkout, `--suite`, default
@@ -80,6 +90,19 @@ source file becomes a goovm object; the objects are linked by `clang-20` /
 variants; an error or warning fails the test, and the report gives the
 number of verified objects.
 
+Optimizing variants (milestone E1): `O1` (`clang-20 -O0 -emit-llvm`, then
+`goovm-llc -O1`), `O1-g` (the same with `-g`), `cc-O1` (with `--cc`:
+`goovm-cc -O1`, clang's front end at -O0 semantics without `optnone`, and
+the Goose middle-end), `O2ir` (`clang-20 -O2 -emit-llvm`, then `goovm-llc
+-O1`: LLVM's middle-end with the Goose back-end) and `O2nv` (the same with
+`-fno-vectorize -fno-slp-vectorize`, since the exporter rejects much of the
+vectorizers' output). They run only the tests that also pass when built
+with plain `clang-20 -O1` (a second baseline, cached under `<id>@O1`, which
+also excludes programs whose undefined behaviour shows at -O1); the report
+gives the number they ran as "of N". Setting `GOOVM_OPT=verify` in the
+environment makes every goovm-llc and goovm-cc run check the optimizer's
+invariants (`backend-goose/DESIGN.md` §15).
+
 Verification follows the llvm-test-suite:
 
 - SingleSource and MultiSource ("traditional output", `lit.local.cfg`):
@@ -112,6 +135,10 @@ when the numbers matter, e.g. the CTMark comparison:
 ```
 tests/suite.py --goovm build/tools/goovm-llc/goovm-llc --corpus ctmark --variants O0 -j 1 --time-run 3
 ```
+
+`--time-ref O1,O2` also times clang builds at those levels; the table then
+gives each variant's time relative to clang -O0 and, for the optimizing
+variants, relative to clang -O1 too, with geometric means.
 
 ## gdb_oracle.py
 
@@ -157,7 +184,9 @@ tests/suite_goosecc.py --goosecc frontend-goose/build/goosecc [--corpus a,b,...]
                        [-j 3] [--work DIR] [--report FILE] [--json FILE] [--rebaseline] [filter ...]
 ```
 
-Variants: `O0` (`goosecc -c`) and `g` (`goosecc -c -g`). Results: `pass`,
+Variants: `O0` (`goosecc -c`), `g` (`goosecc -c -g`) and `O1` (`goosecc -c
+-O1`, milestone E1: the tests that also pass with plain `clang-20 -O1`, as in
+`suite.py`). Results: `pass`,
 `fail` (wrong output, crash, timeout, link error), `error` (goosecc exited
 non-zero or crashed; the report gives the first line of its message). The
 baseline cache (`<work>/baseline.json`) has `suite.py`'s format, so a work
