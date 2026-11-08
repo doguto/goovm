@@ -831,6 +831,9 @@ fn pick_ctor(r: i64, mark: i64) -> i64 {
     let cls = records[r].ty << 4;
     let sc = crecs[r].scope as i64;
     let s = scope_find(sc, id_ctor);
+    // a copy with the implicit (trivial) copy constructor
+    if n == 1 && is_record(nodes[nscratch[mark]].ty) && unqual(nodes[nscratch[mark]].ty) == cls && !is_opq(nscratch[mark]) &&
+       nodes[nscratch[mark]].kind as i64 != N_CTOR && class_trivial_copy(r) { return -3; }
     if s >= 0 {
         let f = best_candidate(s, mark, true);
         if f >= 0 {
@@ -1583,7 +1586,11 @@ recursive fn cg_new(t: u32, count: u32, init: u32, has_init: bool, loc: u32) -> 
     if count != 0 {
         // arrays of types that need no construction or destruction
         let bt = base_elem_t(t);
-        if is_record(bt) && (needs_default_init(rec_of(bt)) || class_dtor(rec_of(bt)) >= 0) { return opaque_node(loc); }
+        if is_record(bt) && class_dtor(rec_of(bt)) >= 0 { return opaque_node(loc); }
+        if is_record(bt) && needs_default_init(rec_of(bt)) {
+            if has_init && !(init == 0 || nodes[init].c == 0) { return opaque_node(loc); }
+            return new_class_array(t, count, loc);
+        }
         if has_init && !(init == 0 || nodes[init].c == 0) { return opaque_node(loc); }
         let na = global_alloc_fn(OP_NEW_ARR);
         if na < 0 || is_opq(count) || !is_integer(nodes[count].ty) { return opaque_node(loc); }
@@ -1653,6 +1660,41 @@ recursive fn cg_new(t: u32, count: u32, init: u32, has_init: bool, loc: u32) -> 
     nscratch.push(n_expr_stmt(rv(n_var(s, loc))));
     let body = n_block(mark, loc);
     return node(N_STMTEXPR, 0, pt, body as i64, 0, 0, loc);
+}
+
+// new T[n] for a class T with a default constructor and a trivial
+// destructor: ({ long n_ = n; T *p = (T *)operator new[](n_ * sizeof(T));
+// for (long i = 0; i < n_; ++i) T::T(&p[i]); p; }).
+recursive fn new_class_array(t: u32, count: u32, loc: u32) -> u32 {
+    let na = global_alloc_fn(OP_NEW_ARR);
+    if na < 0 || is_opq(count) || !is_integer(nodes[count].ty) || is_array(t) { return opaque_node(loc); }
+    let pt = mk_ptr(unqual(t));
+    let mark = nscratch.len;
+    let ns = csym(SK_VAR, intern("__count"), t_long, loc);
+    syms[ns].scope = 1;
+    nscratch.push(node(N_DECL, 0, t_long, ns, assign_convert(rv(count), t_long, loc, 1) as i64, loc as i64, loc));
+    let am = nscratch.len;
+    let szl = assign_convert(rv(n_var(ns, loc)), t_size, loc, 1);
+    nscratch.push(node(N_BINARY, B_MUL, t_size, szl as i64, int_node(type_size(t), t_size, loc) as i64, 0, loc));
+    let c = lower_call(na, 0, am, loc, false);
+    if is_opq(c) { nscratch.resize(mark); return c; }
+    let ps = csym(SK_VAR, intern("__new_tmp"), pt, loc);
+    syms[ps].scope = 1;
+    nscratch.push(node(N_DECL, 0, pt, ps, node(N_ICAST, CK_BITCAST, pt, c as i64, 0, 0, loc) as i64, loc as i64, loc));
+    let i = csym(SK_VAR, intern("__i"), t_long, loc);
+    syms[i].scope = 1;
+    let el = node(N_INDEX, 0, unqual(t), rv(n_var(ps, loc)) as i64, rv(n_var(i, loc)) as i64, 0, loc);
+    nodes[el].flags = NF_LVALUE;
+    let cm = nscratch.len;
+    let body = construct_at(el, cm, loc);
+    if body == 0 { nscratch.resize(mark); return opaque_node(loc); }
+    let init = node(N_DECL, 0, t_long, i, int_node(0, t_long, loc) as i64, loc as i64, loc);
+    let cond = node(N_BINARY, B_LT, t_int, rv(n_var(i, loc)) as i64, rv(n_var(ns, loc)) as i64, 0, loc);
+    let inc = node(N_UNARY, U_PREINC, t_long, n_var(i, loc) as i64, 0, 0, loc);
+    nscratch.push(node_v(N_FOR, 0, 0, init as i64, cond as i64, inc as i64, loc, body as i64));
+    nscratch.push(n_expr_stmt(rv(n_var(ps, loc))));
+    let b = n_block(mark, loc);
+    return node(N_STMTEXPR, 0, pt, b as i64, 0, 0, loc);
 }
 
 var memset_fn: i64 = -1;
@@ -2239,6 +2281,15 @@ recursive fn c_type_ok(t: u32) -> bool {
 fn visit(n: u32) {
     let nd = nodes[n];
     let k = nd.kind as i64;
+    if k == N_CTOR && is_record(nd.ty) && !is_opaque(nd.ty) && class_trivial_copy(rec_of(nd.ty)) {
+        // a temporary of a trivially copyable class used as a value
+        let v = ctor_value(n, nd.loc);
+        if !is_opq(v) {
+            nodes[n] = nodes[v];
+            push_kids(n);
+            return;
+        }
+    }
     if k >= N_THIS && k <= N_RANGEFOR { bad(n); return; }
     if k == N_FUNCDEF {
         let f = nd.a as i64;
