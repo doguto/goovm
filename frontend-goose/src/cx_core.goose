@@ -193,6 +193,9 @@ let CS_BLOCK = 4;       // the parent of a local class: a function body
 let SCF_INLINE = 1;     // an inline namespace
 let SCF_PATTERN = 2;    // a class template's pattern, or nested in one: dependent
 let SCF_ANON = 4;       // an unnamed namespace
+let SCF_INST = 8;       // D2: a class instantiated from a template (or nested in one): member bodies on use
+let SCF_INST_PENDING = 16;  // D2: an implicit instantiation not instantiated yet (its members are unknown)
+let CS_TPARAMS = 5;     // D2: the template parameters bound for an instantiated class (Scope.tps)
 
 struct Scope {
     kind: u8,
@@ -204,6 +207,7 @@ struct Scope {
     using_ns: i32,      // using-directives in it: a list in ulinks
     inl: i32,           // inline namespaces in it: a list in ulinks
     rec: i32,           // classes: the record
+    tps: i32,           // D2: an instantiated class: its bound template parameters (a CS_TPARAMS scope), -1
 }
 var scopes: Scope[>..] = [];
 struct Link { v: i32, next: i32 }
@@ -215,8 +219,8 @@ var nmap = dictionary<u64, i32> {};
 fn new_scope(kind: i64, parent: i64, sym: i64, name: u32) -> i64 {
     let s = scopes.len;
     scopes.push(Scope { kind: kind as! u8, flags: 0, rsv: 0, parent: parent as! i32, sym: sym as! i32, name: name,
-        using_ns: -1, inl: -1, rec: -1 });
-    if parent >= 0 && scopes[parent].flags & SCF_PATTERN != 0 { scopes[s].flags = SCF_PATTERN; }
+        using_ns: -1, inl: -1, rec: -1, tps: -1 });
+    if parent >= 0 { scopes[s].flags = scopes[parent].flags & (SCF_PATTERN | SCF_INST); }
     return s;
 }
 
@@ -279,13 +283,16 @@ struct CxSym {
     mname: u32,         // the mangled name (offset in names, 0: not computed)
     mlen: u32,
     targs: i32,         // an instantiation's template arguments (a list in targs)
+    flags2: u32,        // D2: more flags (CF2_*)
+    pat: i32,           // D2: an instantiated member: its pattern's symbol (-1 not looked up yet, -2 none)
+    odef: i32,          // D2: a pattern member defined out of its class: the Tmpl of that definition's header
 }
 var cxs: CxSym[>..] = [];
 
 fn cx_grow() {
     while cxs.len < syms.len {
         cxs.push(CxSym { dscope: -1, nnext: -1, flags: 0, access: 0, op: 0, rsv: 0, tmpl: -1, pos: 0, target: -1,
-            vidx: -1, body: 0, body_end: 0, mname: 0, mlen: 0, targs: -1 });
+            vidx: -1, body: 0, body_end: 0, mname: 0, mlen: 0, targs: -1, flags2: 0, pat: -1, odef: -1 });
     }
 }
 
@@ -301,6 +308,7 @@ fn csym(kind: i64, name: u32, ty: u32, loc: u32) -> i64 {
     let s = new_sym(kind, name, ty, loc);
     cx_grow();
     cxs[s].pos = pc as! u32;
+    if inst_depth > 0 { syms[s].scope = 0; }
     return s;
 }
 
@@ -416,6 +424,9 @@ struct Tmpl {
     spec_args: i32,         // a partial specialization: its argument patterns (targs list), else -1
     primary: i32,           // a partial specialization: the primary template
     inst_scope: i32,        // a member template of an instantiated class: the instantiated class scope
+    def_t: i32,             // D2: a function template: the Tmpl of its definition when that is another declaration, -1
+    hdr_outer: i32,         // D2: template<..> template<..>: the Tmpl of the enclosing header, -1
+    pat_t: i32,             // D2: a member template of an instantiated class: the pattern's member template (-1 unknown, -2 none)
 }
 var tmpls: Tmpl[>..] = [];
 
@@ -553,7 +564,7 @@ fn cx_types_init() {
     t_char32 = mk_basic(TY_UINT, 4, 4) << 4;
     t_char8 = mk_basic(TY_UCHAR, 1, 1) << 4;
     t_wchar_cxx = mk_basic(TY_INT, 4, 4) << 4;
-    scopes.push(Scope { kind: CS_NS, flags: 0, rsv: 0, parent: -1, sym: -1, name: 0, using_ns: -1, inl: -1, rec: -1 });
+    scopes.push(Scope { kind: CS_NS, flags: 0, rsv: 0, parent: -1, sym: -1, name: 0, using_ns: -1, inl: -1, rec: -1, tps: -1 });
     cur_scope = 0;
 }
 
@@ -583,8 +594,11 @@ fn visible(s: i64) -> bool {
     // block-scope bindings (template parameters bound for a substitution
     // among them) are always visible: the limit is for namespace members
     if syms[s].scope > 0 { return true; }
-    return cxs[s].pos as i64 <= vis_limit || cxs[s].flags & CF_MEMBER != 0;
+    // D2: VIS_PC while instantiating: what precedes the token being parsed
+    let lim = if vis_limit == VIS_PC { pc } else { vis_limit };
+    return cxs[s].pos as i64 <= lim || cxs[s].flags & CF_MEMBER != 0;
 }
+let VIS_PC = 0x7FFFFFFE;
 
 // The first visible symbol of the chain starting at s.
 fn first_visible(s0: i64) -> i64 {
@@ -629,6 +643,7 @@ recursive fn ns_lookup_rec(ns: i64, name: u32, mark: i64) -> i64 {
 
 // Lookup in class scope sc and its bases (non-dependent ones).
 recursive fn class_lookup(sc: i64, name: u32) -> i64 {
+    if scopes[sc].flags & SCF_INST_PENDING != 0 { inst_scope_now(sc); }
     let s = scope_find(sc, name);
     if s >= 0 { return s; }
     let r = scopes[sc].rec as i64;
@@ -650,6 +665,7 @@ recursive fn class_lookup(sc: i64, name: u32) -> i64 {
 recursive fn has_dep_base(sc: i64) -> bool {
     let r = scopes[sc].rec as i64;
     if r < 0 || r >= crecs.len { return false; }
+    if inst_dirty.contains(r as u64) { return true; }
     let cr = crecs[r];
     for i in cr.nbases {
         let bt = cbases[cr.bases + i].ty;
@@ -695,7 +711,10 @@ recursive fn unqual_lookup_from(from: i64, name: u32) -> i64 {
     while sc >= 0 {
         let k = scopes[sc].kind as i64;
         var s: i64 = -1;
-        if k == CS_CLASS { s = class_lookup(sc, name); }
+        if k == CS_CLASS {
+            s = class_lookup(sc, name);
+            if s < 0 && scopes[sc].tps >= 0 { s = scope_find(scopes[sc].tps as i64, name); }
+        }
         else if k == CS_NS { s = ns_lookup(sc, name, false); }
         else if k == CS_ENUM { s = scope_find(sc, name); }
         if s >= 0 { return s; }
@@ -721,11 +740,15 @@ fn sym_scope(s0: i64) -> i64 {
 }
 
 // The class or enum scope of a type, or -1.
-fn type_scope(t: u32) -> i64 {
+recursive fn type_scope(t: u32) -> i64 {
     let k = kind_of(t);
     if k == TY_STRUCT || k == TY_UNION {
         let r = rec_of(t);
-        if r < crecs.len { return crecs[r].scope as i64; }
+        if r < crecs.len {
+            let sc = crecs[r].scope as i64;
+            if sc >= 0 && scopes[sc].flags & SCF_INST_PENDING != 0 { inst_scope_now(sc); }
+            return sc;
+        }
         return -1;
     }
     if k == TY_ENUM { return enum_scope(types[t >> 4].extra as i64); }

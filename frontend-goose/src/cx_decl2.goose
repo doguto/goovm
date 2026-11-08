@@ -271,6 +271,11 @@ recursive fn function_body(s: i64, d: CD&, in_class: bool) {
         cxs[s].body_end = pc as! u32;
         cxs[s].flags = cxs[s].flags | CF_HAS_BODY_LATER;
         syms[s].flags = syms[s].flags | SF_DEFINED;
+        if in_class && !pattern && cur_class >= 0 && scopes[cur_class].flags & SCF_INST != 0 {
+            // D2: a member of an instantiation: its body is instantiated on use
+            cxs[s].flags2 = cxs[s].flags2 | CF2_LAZY_BODY;
+            return;
+        }
         if in_class && !pattern && cur_class >= 0 {
             deferred.push(s as! u32);
             deferred.push(cur_class as! u32);
@@ -583,6 +588,7 @@ var decl_is_extern: bool = false;    // the variable declaration being parsed sa
 recursive fn declare_var(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     decl_is_extern = ds.sc == SC_EXTERN;
     var ty = apply_type_attrs(d.ty, a, d.loc);
+    if ds.sc != SC_EXTERN && ctx != DC_CLASS && !is_ref(ty) && !dependent_ctx() { need_complete(ty); }
     if ctx != DC_NS { cur_init_prio = 65535; }
     let name = d.qn.name;
     if pending_tmpl >= 0 {
@@ -912,7 +918,7 @@ recursive fn parse_static_assert_cx() {
     expect(TK_L_PAREN, "'('");
     let sp = paren_depth;
     paren_depth = 1;
-    let e = parse_cexpr_full();
+    let e = parse_assign_cx();
     paren_depth = sp;
     if accept(TK_COMMA) {
         if at(TK_STRING) { while at(TK_STRING) { adv(); } } else { skip_to(TK_R_PAREN); }
@@ -983,7 +989,7 @@ fn func_with_ret(ft: u32, ret: u32) -> u32 {
 fn builtin_template(name: const u8[:]) {
     let t = tmpls.len;
     tmpls.push(Tmpl { kind: TT_CLASS as! u8, depth: 1, rsv: 0, sym: -1, params: 0, nparams: 0, scope: 0, pos: 0, t0: 0, t1: 0,
-        pattern: -1, specs: -1, outer: -1, spec_args: -1, primary: -1, inst_scope: -1 });
+        pattern: -1, specs: -1, outer: -1, spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: -1, pat_t: -1 });
     let s = csym(SK_TEMPLATE, intern(name), 0, 0);
     cxs[s].tmpl = t as! i32;
     cxs[s].flags = CF_TEMPLATE;
@@ -993,6 +999,7 @@ fn builtin_template(name: const u8[:]) {
 
 // The parser's start: the C++ types and the global namespace.
 fn cx_init() {
+    rec_inst_hook = true;
     id_this = intern("this");
     cx_types_init();
     names_init();

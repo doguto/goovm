@@ -869,6 +869,14 @@ recursive fn parse_id_expr() -> u32 {
     } else {
         lookup_qn(qn);
     }
+    if qn.dep != 0 {
+        // a member of a class whose bases are unknown
+        if at(TK_L_PAREN) {
+            let mark = parse_args();
+            nscratch.resize(mark);
+        }
+        return dep_node(t_unknown, loc);
+    }
     let s0 = qn.sym as i64;
     if s0 < 0 {
         if qn.kind as i64 == QK_IDENT && at(TK_L_PAREN) {

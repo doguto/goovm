@@ -299,6 +299,7 @@ recursive fn parse_class_body(r: i64, w: i64) {
                 }
             }
             if accept(TK_ELLIPSIS) { bt = mk_packexp(bt); }
+            need_complete(bt);
             cbscratch.push(Base { ty: bt, flags: bf, access: acc, rsv: 0, offset: 0 });
             if !accept(TK_COMMA) { break; }
         }
@@ -393,6 +394,9 @@ recursive fn complete_class(r: i64) {
         records[r].size = -1;
         return;
     }
+    // D2: members of class types not instantiated yet
+    let rec = records[r];
+    for i in rec.first..rec.first + rec.count { need_complete(fields[i].ty); }
     class_facts(r);
     cx_layout(r);
 }

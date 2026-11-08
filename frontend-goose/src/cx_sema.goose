@@ -295,15 +295,18 @@ recursive fn mk_unary_cx(k: i64, e: u32, loc: u32) -> u32 {
     return mk_unary_arith(op, e, loc);
 }
 
-fn mk_sizeof_cx(t0: u32, is_align: bool, loc: u32) -> u32 {
+recursive fn mk_sizeof_cx(t0: u32, is_align: bool, loc: u32) -> u32 {
     let t = nonref(t0);
     if is_opaque(t) || t == 0 { return dep_node(t_ulong, loc); }
+    need_complete(t);
     if is_record(t) && records[rec_of(t)].size < 0 { return dep_node(t_ulong, loc); }
     if !is_complete(t) && !is_void(t) && !is_func(t) { return dep_node(t_ulong, loc); }
     if is_record(t) || is_array(t) && is_record(base_elem(t)) {
         let v = if is_align { type_align(t) } else { type_size(t) };
         if v < 0 { return dep_node(t_ulong, loc); }
-        return node_v(N_SIZEOF, if is_align { 1 } else { 0 }, t_ulong, 0, t as i64, 0, loc, v);
+        let n = node_v(N_SIZEOF, if is_align { 1 } else { 0 }, t_ulong, 0, t as i64, 0, loc, v);
+        nodes[n].flags = NF_ICE;
+        return n;
     }
     return mk_sizeof_type(t, is_align, loc);
 }
