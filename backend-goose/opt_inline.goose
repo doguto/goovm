@@ -9,8 +9,8 @@
 // addresses, byval parameters) never. A call that is an invoke is not
 // inlined. The caller grows by at most a few thousand instructions.
 
-let INL_SMALL: u32 = 24;        // always
-let INL_LOOP: u32 = 60;         // a call in a loop
+let INL_SMALL: u32 = 40;        // always
+let INL_LOOP: u32 = 80;         // a call in a loop
 let INL_ONCE: u32 = 500;        // an internal function's only call site
 let INL_GROWTH: u32 = 4000;     // instructions a caller may grow by
 let FN_DEAD: u32 = 0x100;       // output GirFunc flag: all calls were inlined; not emitted

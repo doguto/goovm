@@ -33,6 +33,7 @@ fn sroa_init() {
             if nm == "memcpy" { k = 1; }
             else if nm == "memmove" { k = 2; }
             else if nm == "memset" { k = 3; }
+            else if nm == "pow" { k = 4; }   // (for the simplifier)
         }
         sr_isfn.push(k);
     }
@@ -42,7 +43,7 @@ fn sroa_init() {
 fn sr_libcall(I: Inst) -> u32, u64 {
     if I.op != GIR_CALL || I.c != 3 || gir_kind(I.a) != GIR_V_GLOBAL { return 0, 0; }
     let k: u32 = sr_isfn[gir_idx(I.a)];
-    if k == 0 { return 0, 0; }
+    if k == 0 || k > 3 { return 0, 0; }
     let kn, n = ci(res(o_ops[I.b + 4]));
     if !kn { return 0, 0; }
     return k, n;

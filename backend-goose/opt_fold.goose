@@ -126,7 +126,24 @@ fn simp(i: u32) -> u32 {
     }
     if op == GIR_GEP { return simp_gep(i); }
     if op == GIR_EXTRACTVALUE { return simp_extract(i); }
+    if op == GIR_CALL { return simp_call(i); }
     return NIL;
+}
+
+// pow(x, 2.0) -> x * x (LLVM's LibCallSimplifier does it at any level; what
+// libstdc++'s std::pow(double, int) leaves for a square).
+fn simp_call(i: u32) -> u32 {
+    let I = o_ins[i];
+    if I.flags & (IF_INVOKE | IF_VARARG) != 0 || I.c != 2 || I.ty != GIR_T_F64 || gir_kind(I.a) != GIR_V_GLOBAL {
+        return NIL;
+    }
+    if sr_isfn[gir_idx(I.a)] != 4 { return NIL; }
+    let y = res(o_ops[I.b + 2]);
+    if gir_kind(y) != GIR_V_CONST { return NIL; }
+    let C = x_consts[xb_c + gir_idx(y)];
+    if C.ty != GIR_T_F64 || C.lo != 0x4000000000000000 { return NIL; }
+    let x = res(o_ops[I.b]);
+    return ins_new(i, GIR_FMUL, GIR_T_F64, x, x);
 }
 
 // extractvalue (load p), off -> load (p + off), right after the aggregate

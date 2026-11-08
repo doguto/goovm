@@ -11,8 +11,9 @@ Milestone E1 added an optimizing mode. When the GIR header's `opt_level`
 is 1 or more (`goovm-llc -O1`, `goovm-cc -O1`, `goosecc -O1`), a middle-end
 written in Goose optimizes the tables before code generation (§15:
 mem2reg and SROA, instruction simplification, dominator CSE with load
-forwarding, SimplifyCFG with jump threading, inlining, LICM, induction
-variable widening, DCE), and the values that live across blocks get a
+forwarding, SimplifyCFG with jump threading and if-conversion, inlining,
+tail recursion elimination, loop rotation, LICM, induction variable
+widening, DCE), and the values that live across blocks get a
 register for their whole live range from a global allocator (§16), with
 the -O0 block-local allocator working around them. At `opt_level` 0 none
 of it runs and the objects are byte-identical to the previous milestone's.
@@ -636,7 +637,9 @@ for the debug information.
 load
 sroa, mem2reg, simplify_phis       (after removing unreachable blocks)
 round                              = simplify; simplify_phis; gvn; dce; simplify_cfg
+tail_recursion -> round
 inline_calls -> round; sroa; mem2reg; round      (if anything was inlined)
+rotate_loops -> mem2reg
 round
 licm -> indvars -> licm; round                   (if anything was hoisted)
 rotate_layout
@@ -668,9 +671,10 @@ verify (GOOVM_OPT=verify); record the size for the inliner; store
   signed; unsigned `x / d` with `d >= 2^31` is a compare), compares
   (constants to the right, unsigned extremes, `(zext i1 x) ==/!= c`,
   `(zext x)` or `(sext x)` against a constant in x's range), selects on
-  constants or with equal arms, cast chains, and GEPs (constant terms
-  folded into the offset, a GEP of a GEP merged when at most two terms
-  result, scales other than 1/2/4/8 to an explicit multiply or shift).
+  constants or with equal arms, cast chains, GEPs (constant terms folded
+  into the offset, a GEP of a GEP merged when at most two terms result,
+  scales other than 1/2/4/8 to an explicit multiply or shift), and
+  `pow(x, 2.0)` to `x * x` (what libstdc++'s `std::pow(double, int)` leaves).
 - **gvn** (`opt_gvn.goose`): EarlyCSE-style dominator CSE. The dominator
   tree is walked in pre-order with a scoped hash table of pure instructions
   (the key is the record plus its operand run). Loads are keyed by (address,
@@ -678,7 +682,10 @@ verify (GOOVM_OPT=verify); record the size for the inliner; store
   generation that guards them has not moved: stores and calls move the
   generation, a block with several predecessors starts a new one, and
   allocas whose address does not escape have generations of their own that
-  only stores into them move (calls leave them alone). Within a block a
+  only stores into them move (calls leave them alone); such an alloca whose
+  writes are all in one block that dominates the load keeps its entries
+  across merge points (no write can come between: a path from the writing
+  block back to the load passes the entry's block again). Within a block a
   store overwritten by a later store to the same address with no possible
   read in between is deleted (local DSE). Functions that call setjmp or use
   sjlj exceptions get no alias information.
@@ -688,10 +695,21 @@ verify (GOOVM_OPT=verify); record the size for the inliner; store
   only branches on is bypassed (its predecessors go straight to its target
   when the PHIs allow); a branch on a PHI with constant incoming values
   (what `while (a && b)` leaves at -O0) is threaded: each such predecessor
-  jumps to the known target. Functions whose blocks are named by
-  `blockaddress` only get the branch folding (block numbers are fixed).
+  jumps to the known target; small triangles and diamonds (at most four
+  cheap speculatable instructions, at most two PHIs to merge, integer or
+  pointer PHIs) become selects, which are cmovs, with the hoisted code placed
+  before the compare so that the compare sets the flags for the select.
+  Functions whose blocks are named by `blockaddress` only get the branch
+  folding (block numbers are fixed).
+- **tail_recursion** (`opt_inline.goose`): a self-call right before a
+  return (`return f(...)`, or `return x + f(...)`: an accumulator) becomes a
+  branch back to a new header whose PHIs are the arguments (and the
+  accumulator, which every other return then adds); a return of a PHI is
+  first copied into the predecessors that compute such a call. Not in
+  functions with allocas (the frame is reused), byval or variadic
+  arguments.
 - **inline_calls** (`opt_inline.goose`): the cost model is the optimized
-  callee's instruction count: up to 24 always, up to 60 when the call is in
+  callee's instruction count: up to 40 always, up to 80 when the call is in
   a loop, up to 500 for an internal function's only call site, any size for
   `always_inline`; a caller grows by at most 4000 instructions. Never:
   `noinline` (exported only when it does not come with `optnone`, so a user
@@ -720,6 +738,15 @@ verify (GOOVM_OPT=verify); record the size for the inliner; store
   `i = phi [init, i + c]` whose extensions are used gets an i64 twin that
   replaces the extensions and the loop's own compares of `i`. With the GEP
   split, `a[i * n + j]` costs one add per iteration.
+- **rotate_loops** (`opt_licm.goose`, LLVM's LoopRotate for small headers):
+  a loop whose header holds only PHIs, at most four cheap instructions and
+  the exit test, with one latch ending in a branch to it, gets a copy of the
+  test on the entry edge (a preheader is made first if several edges enter);
+  the header is then entered only from the latch and merged into it, so the
+  loop is a guarded do-while with no jump on entry (a loop that runs once or
+  twice paid one per entry). The header's values used outside it are
+  repaired by demotion to an alloca stored in both copies, which mem2reg
+  promotes again with the PHIs the new CFG needs. Inner loops first.
 - **rotate_layout**: a loop whose header tests and whose single latch
   branches back is laid out with the header after the latch, so an
   iteration takes one taken branch (the preheader jumps to the test once).
@@ -733,7 +760,8 @@ measured time per instruction.
 
 **Switches.** `GOOVM_OPT` holds a list of `-pass` names that switch passes
 off for bisecting (`-m2r`, `-sroa`, `-fold`, `-gvn`, `-cfg`, `-inline`,
-`-licm`, `-iv`, `-rotate`, `-ra` for the global allocator, `-all`), plus
+`-licm`, `-iv`, `-rotate`, `-lrot`, `-tre`, `-select`, `-ra` for the
+global allocator, `-all`), plus
 `verify` (check the invariants after each function: every operand
 dominates its use, PHI entries match the predecessors, one terminator per
 block, allocas in the entry block) and `dump` (print the optimized tables).
