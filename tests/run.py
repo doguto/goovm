@@ -13,6 +13,8 @@ build compiles the IR with clang -O0 too). For each program:
               clang++) and cxx-goovm (the other way round), so that C++
               exceptions cross frames of the other compiler
 Optional extra variants:
+  --o1           also O1: the O0 bitcode through goovm-llc -O1 (the Goose middle-end and global
+                 register allocation), and O1-g: the -O0 -g bitcode through goovm-llc -O1
   --opt-passes P also run opt-20 -passes=P on the mem2reg input (e.g. "sroa,instcombine,simplifycfg")
   --backend B    goovm-llc back-end to test (goose, llvm)
   --tpde PATH    also compile the O0 bitcode with tpde-llc and compare
@@ -110,7 +112,8 @@ def test_one(p, args):
         expect = execute(ref)
 
         if args.goosecc:
-            for variant, flags in (("goosecc", []), ("goosecc-g", ["-g"])):
+            gvars = [("goosecc", []), ("goosecc-g", ["-g"])] + ([("goosecc-O1", ["-O1"])] if args.o1 else [])
+            for variant, flags in gvars:
                 try:
                     objs = []
                     for i, s in enumerate(p.srcs):
@@ -129,11 +132,13 @@ def test_one(p, args):
             cc = compiler(s, args)
             base = os.path.join(wd, f"{variant}{i}")
             if is_ll(s):
-                passes = "verify" if variant == "O0" else "mem2reg" if variant == "mem2reg" else args.opt_passes
+                passes = ("verify" if variant in ("O0", "O1", "O1-g") else "mem2reg" if variant == "mem2reg"
+                          else args.opt_passes)
                 step([args.opt, f"-passes={passes}", s, "-o", base + ".bc"], "opt")
                 return base + ".bc"
-            if variant == "O0":
-                step([cc, "-O0", "-w", "-c", "-emit-llvm", s, "-o", base + ".bc"], "clang -emit-llvm")
+            if variant in ("O0", "O1", "O1-g"):
+                g = ["-g"] if variant == "O1-g" else []
+                step([cc, "-O0", "-w"] + g + ["-c", "-emit-llvm", s, "-o", base + ".bc"], "clang -emit-llvm")
                 return base + ".bc"
             raw = base + ".noopt.bc"
             step([cc, "-O0", "-w", "-Xclang", "-disable-O0-optnone", "-c", "-emit-llvm", s, "-o", raw],
@@ -142,18 +147,19 @@ def test_one(p, args):
             step([args.opt, f"-passes={passes}", raw, "-o", base + ".bc"], "opt")
             return base + ".bc"
 
-        def goovm(bcf):
+        def goovm(bcf, opt=()):
             obj = bcf[:-3] + ".o"
-            r = run([args.goovm, f"--backend={args.backend}", bcf, "-o", obj])
+            r = run([args.goovm, f"--backend={args.backend}"] + list(opt) + [bcf, "-o", obj])
             if r.returncode != 0:
                 raise Fail(f"goovm-llc exit {r.returncode} on {os.path.basename(bcf)}: "
                            f"{r.stderr.decode(errors='replace').strip()}")
             return obj
 
-        variants = ["O0", "mem2reg"] + (["opt"] if args.opt_passes else [])
+        variants = ["O0", "mem2reg"] + (["opt"] if args.opt_passes else []) + (["O1", "O1-g"] if args.o1 else [])
         for variant in variants:
             try:
-                compare(variant, [goovm(bitcode(s, i, variant)) for i, s in enumerate(p.srcs)])
+                opt = ["-O1"] if variant.startswith("O1") else []
+                compare(variant, [goovm(bitcode(s, i, variant), opt) for i, s in enumerate(p.srcs)])
                 results.append((variant, True, ""))
             except Fail as e:
                 results.append((variant, False, str(e)))
@@ -211,6 +217,7 @@ def main():
     ap.add_argument("--clangxx", default="clang++-20")
     ap.add_argument("--opt", default="opt-20")
     ap.add_argument("--opt-passes", dest="opt_passes", default="")
+    ap.add_argument("--o1", action="store_true", help="also the O1 and O1-g variants (goovm-llc -O1)")
     ap.add_argument("--tpde", default="")
     ap.add_argument("--goosecc", default="")
     ap.add_argument("-j", type=int, default=2)

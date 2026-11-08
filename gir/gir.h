@@ -302,6 +302,9 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
                                       /*   block of its landing pad (the unwind edge);   */
                                       /*   the block's terminator, next, is the BR to    */
                                       /*   the normal destination                        */
+#define GIR_IF_NSW           0x1000u  /* additive (E1): ADD, SUB, MUL, SHL whose signed   */
+                                      /*   overflow is undefined (LLVM nsw); a hint for  */
+                                      /*   the optimizer, ignored by -O0 code generation */
 
 /* ABI words of CALL arguments and Func arguments. 0 = passed by value as
  * its type says. GIR_ABI_BYVAL: the argument is a pointer whose pointee
@@ -336,6 +339,12 @@ typedef struct GirBlock {
 #define GIR_FN_SJLJ     16u    /* contains SJLJ_SETJMP: preserve all callee-saved registers */
 #define GIR_FN_RETURNS_TWICE 32u /* calls a returns_twice function (setjmp, vfork, ...): */
                                /*   a frame slot must not be shared between values */
+/* additive (milestone E1), hints for the optimizer (opt_level >= 1); an -O0
+ * back-end ignores them */
+#define GIR_FN_NOINLINE 64u    /* do not inline calls of this function (the source said
+                                  noinline; clang -O0's implied noinline, which comes with
+                                  optnone, is not exported) */
+#define GIR_FN_ALWAYSINLINE 128u /* always_inline */
 #define GIR_FN_ALIGN_SHIFT 24  /* bits 24..31: log2 of the function alignment (>= 4) */
 
 /* 40 bytes. Functions are also globals (Func.global is their entry in the
@@ -424,10 +433,15 @@ typedef struct GirSection {
  *           globals[target] + addend (blockaddress)
  *   BLOCKDIFF32  4 bytes: (block `block` - block `block2`) of function
  *           globals[target] + addend, a link-time constant the back-end
- *           computes itself (&&l1 - &&l2 in an initializer) */
+ *           computes itself (&&l1 - &&l2 in an initializer)
+ *   PCREL32 4 bytes: address of globals[target] + addend - address of the
+ *           field (additive, E1: the relative lookup tables of LLVM -O2 IR,
+ *           whose entries are X - table: addend = X's offset + the field's
+ *           offset in the table) */
 #define GIR_DR_ABS64      0u
 #define GIR_DR_BLOCK      1u
 #define GIR_DR_BLOCKDIFF32 2u
+#define GIR_DR_PCREL32    3u
 typedef struct GirDataReloc {
     uint32_t owner;              /* index into globals (the variable) */
     uint32_t offset;             /* byte offset inside that variable */
@@ -584,7 +598,12 @@ typedef struct GirHeader {
     uint32_t flags;              /* GIR_MF_* */
     uint32_t tls_get_addr;       /* globals index of __tls_get_addr, or GIR_NONE */
     uint32_t n_llvm_insts;       /* statistics */
-    uint32_t reserved[4];
+    uint32_t opt_level;          /* additive (milestone E1; was reserved, so 0 from older
+                                    producers): 0 = -O0 code generation; >= 1 = the
+                                    back-end runs its middle-end on the tables and
+                                    allocates registers globally (backend-goose/DESIGN.md
+                                    §15, §16) */
+    uint32_t reserved[3];
 } GirHeader;
 
 /* The whole module, as the host holds it (host-side only: this struct is

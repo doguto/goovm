@@ -417,6 +417,9 @@ fn collect_relocs() {
         if d.kind == DR_ABS64 {
             rels.push(Rel2 { offset: off, info: (g_sym[d.target] as u64 << 32) | R_X86_64_64, addend: d.addend,
                              sec: s as u64 });
+        } else if d.kind == DR_PCREL32 {
+            rels.push(Rel2 { offset: off, info: (g_sym[d.target] as u64 << 32) | R_X86_64_PC32, addend: d.addend,
+                             sec: s as u64 });
         } else {
             let F = M.funcs[M.globals[d.target].func];
             let ga: i64 = F.first_block + d.blk;

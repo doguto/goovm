@@ -396,7 +396,7 @@ fn dbg_keep_homes(fi: u32) {
         } else {
             continue;
         }
-        vi[id].st |= ST_GLOB;
+        vi[id].st |= ST_GLOB | ST_KEEP;
         if vi[id].nuse == 0 { vi[id].nuse = 1; }
     }
 }

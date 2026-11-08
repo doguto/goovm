@@ -1332,6 +1332,23 @@ struct Exporter : GirDwarfHost {
             vmap[&CB] = cmp_select(p, a, b, a, b, t);
             return;
         }
+        case Intrinsic::usub_sat:
+        case Intrinsic::uadd_sat: {
+            // (E1, LLVM -O2 IR) usub.sat(a, b) = a > b ? a - b : 0;
+            // uadd.sat(a, b) = a + b < a ? ~0 : a + b
+            uint16_t t = ty(CB.getType());
+            if (cls(t) != GIR_C_INT) fail("saturating arithmetic on a vector or a wide integer");
+            uint32_t a = ref_multi(CB.getArgOperand(0));
+            uint32_t b = ref_multi(CB.getArgOperand(1));
+            if (id == Intrinsic::usub_sat) {
+                uint32_t d = emit(GIR_SUB, t, 0, 0, 0, a, b, 0, RB);
+                vmap[&CB] = cmp_select(GIR_UGT, a, b, d, cint(0, t), t);
+            } else {
+                uint32_t s = emit(GIR_ADD, t, 0, 0, 0, a, b, 0, RB);
+                vmap[&CB] = cmp_select(GIR_ULT, s, a, cint(~0ull, t), s, t);
+            }
+            return;
+        }
         case Intrinsic::ctlz:
         case Intrinsic::cttz: {
             uint16_t t = ty(CB.getType());
@@ -1447,6 +1464,20 @@ struct Exporter : GirDwarfHost {
         case Intrinsic::is_constant:
             vmap[&CB] = cint(isa<Constant>(CB.getArgOperand(0)) ? 1 : 0, GIR_T_I1);
             return;
+        case Intrinsic::load_relative: {
+            // (E1, LLVM -O2 IR: relative lookup tables) p + sext(load i32 (p + off))
+            if (ty(CB.getArgOperand(1)->getType()) != GIR_T_I64) fail("load.relative with a narrow offset");
+            uint32_t p = ref_multi(CB.getArgOperand(0));
+            uint32_t o = ref(CB.getArgOperand(1));
+            uint32_t pi = emit(GIR_PTRTOINT, GIR_T_I64, 0, 0, GIR_T_PTR, p, 0, 0, RA);
+            uint32_t e = emit(GIR_ADD, GIR_T_I64, 0, 0, 0, pi, o, 0, RB);
+            uint32_t ep = emit(GIR_INTTOPTR, GIR_T_PTR, 0, 0, GIR_T_I64, e, 0, 0, 0);
+            uint32_t l = emit(GIR_LOAD, GIR_T_I32, 0, 0, 0, ep, 0, 0, 0);
+            uint32_t x = emit(GIR_SEXT, GIR_T_I64, 0, 0, GIR_T_I32, l, 0, 0, 0);
+            uint32_t r = emit(GIR_ADD, GIR_T_I64, 0, 0, 0, pi, x, 0, 0);
+            vmap[&CB] = emit(GIR_INTTOPTR, GIR_T_PTR, 0, 0, GIR_T_I64, r, 0, 0, 0);
+            return;
+        }
         case Intrinsic::ptrmask: {
             uint16_t mt = ty(CB.getArgOperand(1)->getType());
             if (mt != GIR_T_I64) fail("ptrmask with a mask narrower than 64 bits");
@@ -1880,7 +1911,10 @@ struct Exporter : GirDwarfHost {
         if (CB.isInlineAsm()) return inline_asm(CB);
         if (const auto *fn = dyn_cast<Function>(callee); fn && fn->isIntrinsic())
             return intrinsic(CB, fn->getIntrinsicID());
-        if (CB.getCallingConv() != CallingConv::C) fail("calling convention " + std::to_string(CB.getCallingConv()));
+        // fastcc (LLVM's optimizer gives it to internal functions) is compiled
+        // as the C convention, as the callee is: both sides are in the module
+        if (CB.getCallingConv() != CallingConv::C && CB.getCallingConv() != CallingConv::Fast)
+            fail("calling convention " + std::to_string(CB.getCallingConv()));
         if (CB.hasOperandBundles()) fail("operand bundle");
         if (CB.isMustTailCall()) fail("musttail call");
         FunctionType *FT = CB.getFunctionType();
@@ -1988,7 +2022,12 @@ struct Exporter : GirDwarfHost {
                 vmap[&I] = r;
                 return;
             }
-            vmap[&I] = emit(op, t, 0, 0, 0, a, b, 0, RA | RB);
+            // nsw (signed overflow is undefined): the optimizer may widen
+            uint16_t fl = 0;
+            if ((op == GIR_ADD || op == GIR_SUB || op == GIR_MUL || op == GIR_SHL) &&
+                cast<OverflowingBinaryOperator>(I).hasNoSignedWrap())
+                fl = GIR_IF_NSW;
+            vmap[&I] = emit(op, t, 0, fl, 0, a, b, 0, RA | RB);
             return;
         }
         case Instruction::FAdd: case Instruction::FSub: case Instruction::FMul: case Instruction::FDiv:
@@ -2432,7 +2471,8 @@ struct Exporter : GirDwarfHost {
         F = &Fn;
         curI = nullptr;
         cur_dbg = 0;
-        if (Fn.getCallingConv() != CallingConv::C) fail("calling convention " + std::to_string(Fn.getCallingConv()));
+        if (Fn.getCallingConv() != CallingConv::C && Fn.getCallingConv() != CallingConv::Fast)
+            fail("calling convention " + std::to_string(Fn.getCallingConv()));
         if (Fn.hasPrefixData() || Fn.hasPrologueData()) fail("prefix/prologue data");
         if (Fn.hasGC()) fail("garbage collector");
         if (Fn.hasFnAttribute(Attribute::Naked)) fail("naked function");
@@ -2441,6 +2481,12 @@ struct Exporter : GirDwarfHost {
         GirFunc gf{};
         gf.global = g;
         fn_flags = (Fn.hasLocalLinkage() ? GIR_FN_INTERNAL : 0) | (FT->isVarArg() ? GIR_FN_VARARG : 0);
+        // inlining hints for the optimizer (-O1); clang -O0 puts noinline on
+        // every function together with optnone, so that noinline is not the
+        // source's and is not exported
+        if (Fn.hasFnAttribute(Attribute::NoInline) && !Fn.hasFnAttribute(Attribute::OptimizeNone))
+            fn_flags |= GIR_FN_NOINLINE;
+        if (Fn.hasFnAttribute(Attribute::AlwaysInline)) fn_flags |= GIR_FN_ALWAYSINLINE;
         uint64_t falign = Fn.getAlign() ? Fn.getAlign()->value() : 16;
         if (falign < 16) falign = 16;
         gf.first_block = (uint32_t)T.blocks.size();
@@ -2630,6 +2676,19 @@ struct Exporter : GirDwarfHost {
                         block_of(L->getOperand(0), fa, ba) && block_of(R->getOperand(0), fb, bb) && fa == fb) {
                         reloc(g, off, fa, GIR_DR_BLOCKDIFF32, 0, ba, bb);
                         return;
+                    }
+                    // trunc (sub (ptrtoint X, ptrtoint this variable)): a relative lookup
+                    // table entry (E1, LLVM -O2 IR), a PC-relative 32-bit reference
+                    if (L && R && L->getOpcode() == Instruction::PtrToInt && R->getOpcode() == Instruction::PtrToInt &&
+                        R->getOperand(0) == GV) {
+                        APInt xo(64, 0);
+                        const Value *xb = L->getOperand(0)->stripAndAccumulateConstantOffsets(DL, xo, true);
+                        const auto *xg = dyn_cast<GlobalValue>(xb);
+                        auto xi = xg ? gmap.find(xg) : gmap.end();
+                        if (xi != gmap.end() && !is_tls(xg)) {
+                            reloc(g, off, xi->second, GIR_DR_PCREL32, xo.getSExtValue() + (int64_t)off);
+                            return;
+                        }
                     }
                 }
             if (const auto *CE = dyn_cast<ConstantExpr>(p); CE && CE->getOpcode() == Instruction::PtrToInt)

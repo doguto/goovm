@@ -14,6 +14,7 @@
 //   (backend-goose/CMakeLists.txt does this when goovm-llc is built.)
 
 import std;
+import os;
 import gir;
 import x86;
 import ra;
@@ -24,8 +25,22 @@ import dwarf;
 import abi;
 import lowera;
 import lower;
+import opt;
+import opt_cfg;
+import opt_ssa;
+import opt_fold;
+import opt_scfg;
+import opt_gvn;
+import rag;
+import opt_inline;
+import opt_sroa;
+import opt_licm;
+import opt_iv;
+import opt_verify;
+import opt_dump;
 
 var M: Module;
+var opt_on = false;          // opt_level >= 1 (the middle-end ran; global register allocation)
 
 // The object file being built; the host reads it until the next call.
 var obj: u8[>..] = [];
@@ -40,6 +55,31 @@ var cur_code_sec: u32 = 0;
 fn has_phi(b: u32) -> bool {
     let B = M.blocks[f_first_block + b];
     return B.n_inst != 0 && M.insts[B.first_inst].op == GIR_PHI;
+}
+// Whether edge from -> to has PHI moves that emit code: with global register
+// allocation, an edge whose incoming values all sit in their PHIs' registers
+// (coalesced) has none.
+fn edge_phi(from: u32, to: u32) -> bool {
+    if !has_phi(to) { return false; }
+    if !rg_on { return true; }
+    let B = M.blocks[f_first_block + to];
+    for k in B.first_inst..B.first_inst + B.n_inst {
+        let I = M.insts[k];
+        if I.op != GIR_PHI { break; }
+        let j = k - f_first_inst;
+        if vi[j].nuse == 0 { continue; }
+        if vi[j].st & ST_PIN == 0 { return true; }
+        let d: u32 = rg_reg[j];
+        for p in 0..I.c {
+            if M.opnds[I.b + 2 * p + 1] != from { continue; }
+            let v = M.opnds[I.b + 2 * p];
+            if !is_val(v) { return true; }
+            let r: u32 = vi[vid(v)].reg;
+            if r != d || (r < 16 && vi[vid(v)].st & ST_EXT != 0) { return true; }
+            break;
+        }
+    }
+    return false;
 }
 // Scratch registers for the PHI moves of a terminator, taken before the
 // terminator branches (a move on one path must not evict values: the other
@@ -137,6 +177,10 @@ fn pend_peek(id: u32) -> Mem {
 }
 // Edge from -> to: write each PHI's incoming value.
 fn phi_moves(from: u32, to: u32) {
+    if rg_on {
+        phi_moves_rg(from, to);
+        return;
+    }
     let B = M.blocks[f_first_block + to];
     for k in B.first_inst..B.first_inst + B.n_inst {
         let I = M.insts[k];
@@ -150,10 +194,81 @@ fn phi_moves(from: u32, to: u32) {
         }
     }
 }
+// Edge from -> to with global register allocation: PHIs in memory are written
+// first (they read registers the register moves may overwrite), then the
+// pinned PHIs get their incoming values by a parallel copy of the registers,
+// then the incoming values that are not in registers (constants, homes,
+// deferred loads, addresses) are loaded into theirs.
+fn phi_moves_rg(from: u32, to: u32) {
+    let B = M.blocks[f_first_block + to];
+    var npin = 0;
+    for k in B.first_inst..B.first_inst + B.n_inst {
+        let I = M.insts[k];
+        if I.op != GIR_PHI { break; }
+        let j = k - f_first_inst;
+        if vi[j].nuse == 0 { continue; }
+        if vi[j].st & ST_PIN != 0 {
+            npin++;
+            continue;
+        }
+        for p in 0..I.c {
+            if M.opnds[I.b + 2 * p + 1] != from { continue; }
+            phi_copy(phi_dst(to, j), M.opnds[I.b + 2 * p], I.ty);
+            break;
+        }
+    }
+    if npin == 0 { return; }
+    for pass in 2 {
+        for k in B.first_inst..B.first_inst + B.n_inst {
+            let I = M.insts[k];
+            if I.op != GIR_PHI { break; }
+            let j = k - f_first_inst;
+            if vi[j].nuse == 0 || vi[j].st & ST_PIN == 0 { continue; }
+            let dst: u32 = rg_reg[j];
+            for p in 0..I.c {
+                if M.opnds[I.b + 2 * p + 1] != from { continue; }
+                let v = M.opnds[I.b + 2 * p];
+                var src: u32 = 32;
+                if is_val(v) {
+                    let id = vid(v);
+                    let r: u32 = vi[id].reg;
+                    if r < 32 {
+                        src = r;
+                        if pass == 0 && r < 16 && vi[id].st & ST_EXT != 0 { ra_norm(id, r); }
+                    }
+                }
+                if pass == 0 && src < 32 {
+                    mv_src.push(src);
+                    mv_dst.push(dst);
+                } else if pass == 1 && src == 32 {
+                    phi_mat(v, dst, I.ty);
+                }
+                break;
+            }
+        }
+        if pass == 0 && mv_src.len != 0 { emit_moves(); }
+    }
+}
+// Value v (not in a register) into register r (0..31), without changing the
+// allocator's state (a deferred load stays deferred for other edges).
+fn phi_mat(v: u32, r: u32, t: u32) {
+    if is_val(v) && vi[vid(v)].reg == PEND {
+        let m = pend_peek(vid(v));
+        if r >= 16 { xmm_load_t(r - 16, m, t); } else { load_int(r, m, bits_of(t)); }
+        return;
+    }
+    if r >= 16 {
+        if is_val(v) && vi[vid(v)].home == H_STACK { xmm_load_t(r - 16, m_rbp(vi[vid(v)].off), t); }
+        else { ra_mat_xmm(v, r - 16); }
+    } else {
+        ra_mat_gpr(v, r);
+    }
+}
+
 // A PHI at the start of its block: the value is in its home (copied there
 // from the temp slot first if the block uses temps).
 fn lower_phi(I: Inst, j: u32, b: u32) {
-    if vi[j].nuse == 0 { return; }
+    if vi[j].nuse == 0 || vi[j].st & ST_PIN != 0 { return; }   // (a pinned PHI is in its register)
     if b_tag[b] == pp_epoch {
         if t_off[j] == 0 { t_off[j] = new_slot(val_slot_size(I.ty)); }
         let t = ra_temp();
@@ -226,8 +341,8 @@ fn lower_condbr(I: Inst, cur: u32, next: u32) {
         flags_comb = 0;
     }
     flags_id = RV_NONE;
-    let pb = has_phi(I.b);
-    let pc = has_phi(I.c);
+    let pb = edge_phi(cur, I.b);
+    let pc = edge_phi(cur, I.c);
     if pb != pc {
         // PHI moves on one edge only: branch straight to the other successor
         // and do the moves on the fall-through path (a loop's back edge then
@@ -421,6 +536,7 @@ fn gen_inst(gi: u32, cur: u32) {
     cur_pos = j;
     let k: u32 = vi[j].kind;
     if k == K_DONE { return; }   // (an extractvalue the call before it defined)
+    if rg_on && vi[j].st & ST_PIN != 0 && I.op != GIR_PHI { rg_def_start(j); }
     if k == K_A || k == K_CALL {
         match I.op {   // (the most frequent first: the match is a chain of compares)
             GIR_LOAD => lower_load_a(I, j),
@@ -439,7 +555,7 @@ fn gen_inst(gi: u32, cur: u32) {
                     phi_moves(cur, I.a);
                 }
                 if I.a != next { jmp_block(I.a); }
-                else if M.blocks[f_first_block + cur].n_inst == 1 {
+                else if M.blocks[f_first_block + cur].n_inst == 1 && !opt_on {
                     // a block of only a branch to the next block: LLVM's
                     // FastISel emits the jump anyway "for more accurate line
                     // information" (a debugger stops on the branch's line)
@@ -482,6 +598,7 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_ISFPCLASS => lower_isfpclass_a(I, j),
             _ => ud2(),
         }
+        if rg_on && vi[j].st & ST_PIN != 0 { rg_def_end(j); }
         ra_end_inst();
         return;
     }
@@ -492,6 +609,7 @@ fn gen_inst(gi: u32, cur: u32) {
     ra_tierb_begin(k == K_ALL);
     gen_inst_b(I, j);
     ra_tierb_end();
+    if rg_on && vi[j].st & ST_PIN != 0 { rg_def_end(j); }
     ra_end_inst();
 }
 
@@ -744,13 +862,29 @@ fn gen_function(fi: u32) {
 
     ra_prepass(insts, blocks);
     if dbg_on { dbg_keep_homes(fi); }
+    rg_on = false;
+    if opt_on && !opt_off("ra") { rg_alloc(insts, blocks); }
     f_share = f.flags & (FN_SJLJ | FN_RETURNS_TWICE) == 0;
     var ncs = pp_ncs;
     if ncs > 5 { ncs = 5; }
     if f_sjlj || f_asm { ncs = 5; }
-    f_ncs = ncs;
     var cs: u32 = 0;
-    for q in 0..ncs { cs |= bit(CS_REGS[q]); }
+    if rg_on {
+        // the pinned values' callee-saved registers, then as many more as
+        // local values spanning calls want
+        cs = rg_cs;
+        var target: i64 = popcount(rg_cs as u64) + ncs;
+        if target > 5 { target = 5; }
+        var q = 0;
+        while popcount(cs as u64) < target {
+            cs |= bit(CS_REGS[q]);
+            q++;
+        }
+        ncs = popcount(cs as u64) as! u32;
+    } else {
+        for q in 0..ncs { cs |= bit(CS_REGS[q]); }
+    }
+    f_ncs = ncs;
     r_alloc = GP_CALLER | XMM_ALL | cs;
     r_cs_used = if f_sjlj || f_asm { cs } else { 0 };
     ra_func_start();
@@ -786,6 +920,10 @@ fn gen_function(fi: u32) {
             cur_blk = b as! u32;
             block_off[b] = here();
             if b == 0 { ra_entry_state(); } else { ra_block_start(); }
+            if rg_on {
+                rg_block_enter(b as! u32);
+                if b == 0 { rg_entry_moves(); }
+            }
             dbg_block_start();
             for k in B.first_inst..B.first_inst + B.n_inst {
                 dbg_inst(k);
@@ -799,6 +937,10 @@ fn gen_function(fi: u32) {
             cur_blk = b as! u32;
             block_off[b] = here();
             if b == 0 { ra_entry_state(); } else { ra_block_start(); }
+            if rg_on {
+                rg_block_enter(b as! u32);
+                if b == 0 { rg_entry_moves(); }
+            }
             for k in B.first_inst..B.first_inst + B.n_inst { gen_inst(k, b as! u32); }
         }
     }
@@ -847,6 +989,7 @@ fn gen_functions() {
         for k in sec_end[s - 1]..sec_end[s] {
             let G = M.globals[g_order[k]];
             if G.kind != G_FUNC || G.func == GIR_NONE { continue; }
+            if M.funcs[G.func].flags & FN_DEAD != 0 { continue; }   // (-O1: inlined everywhere)
             gen_function(G.func);
         }
         osecs[s].size = mcode.len as u64 - osecs[s].start;
@@ -854,6 +997,10 @@ fn gen_functions() {
 }
 
 // ------------------------------------------------------------------ entry
+
+// Time the middle-end took in the last call (ns; 0 at -O0).
+var opt_ns: i64 = 0;
+export fn gir_last_opt_ns() -> i64 { return opt_ns; }
 
 // Empty additive tables for modules made without them (goosecc).
 var no_ehs: Eh[>..] = [];
@@ -896,6 +1043,15 @@ export fn gir_codegen_ex(header: const Header[:], types: const TypeDef[:], funcs
 }
 
 fn codegen() -> const u8[:] {
+    // -O1: the middle-end makes new tables (opt.goose), which the code
+    // generator then compiles
+    opt_on = M.header.len != 0 && M.header[0].r0 >= 1;
+    opt_ns = 0;
+    if opt_on {
+        let t0 = clock_ns();
+        opt_module();
+        opt_ns = clock_ns() - t0;
+    }
     code.clear();
     mcode.clear();
     rela_code.clear();

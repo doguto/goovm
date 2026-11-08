@@ -1,12 +1,15 @@
 // goovm-llc: LLVM bitcode -> GIR -> x86-64 ELF object.
 //
-//   goovm-llc [--backend=goose|llvm|llvm-only] [--fallback] [--time] [--dump-gir]
+//   goovm-llc [--backend=goose|llvm|llvm-only] [-O0|-O1] [--fallback] [--time] [--dump-gir]
 //             in.bc -o out.o
 //
 //   goose      the Goose back-end (default; backend-goose/)
 //   llvm       LLVM's own -O0 code generator, in process (for comparison)
 //   llvm-only  parse and export only: no back-end, no object written
 //
+//   -O1         run the Goose middle-end and the global register allocator
+//               (GIR header opt_level 1; -O2 and -O3 mean the same); -O0 is
+//               the default
 //   --fallback  if the module uses something GIR cannot express, compile it
 //               with LLVM's -O0 code generator instead and say so on stderr
 //               ("goovm-llc: fallback: <reason>")
@@ -47,7 +50,8 @@ double us(clk::time_point a, clk::time_point b) { return std::chrono::duration<d
 
 [[noreturn]] void usage() {
     std::fprintf(stderr,
-                 "usage: goovm-llc [--backend=goose|llvm|llvm-only] [--fallback] [--time] [--dump-gir] in.bc -o out.o\n");
+                 "usage: goovm-llc [--backend=goose|llvm|llvm-only] [-O0|-O1] [--fallback] [--time] [--dump-gir] in.bc -o "
+                 "out.o\n");
     std::exit(1);
 }
 
@@ -153,9 +157,11 @@ bool goose_codegen(const GirModule &m, const uint8_t *&obj, size_t &obj_len) {
 int main(int argc, char **argv) {
     std::string backend = "goose", in, out;
     bool time = false, dump = false, fallback = false;
+    unsigned opt_level = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!std::strncmp(a, "--backend=", 10)) backend = a + 10;
+        else if (a[0] == '-' && a[1] == 'O' && a[2] >= '0' && a[2] <= '3' && !a[3]) opt_level = a[2] == '0' ? 0 : 1;
         else if (!std::strcmp(a, "--time")) time = true;
         else if (!std::strcmp(a, "--dump-gir")) dump = true;
         else if (!std::strcmp(a, "--fallback")) fallback = true;
@@ -201,6 +207,7 @@ int main(int argc, char **argv) {
     if (!use_llvm) {
         try {
             gir_export(*m, tables, (*buf)->getBufferSize());
+            tables.header.opt_level = opt_level;
         } catch (const GirUnsupported &e) {
             if (!fallback || backend == "llvm-only") {
                 std::fprintf(stderr, "goovm-llc: %s\n", e.msg.c_str());
@@ -242,6 +249,10 @@ int main(int argc, char **argv) {
         }
     }
     auto t4 = clk::now();
+    double opt_us = 0;
+#ifdef GOOVM_WITH_GOOSE
+    if (backend == "goose" && !use_llvm) opt_us = (double)gir_last_opt_ns() / 1000.0;
+#endif
 
     if (time) {
         uint64_t llvm_insts = tables.n_llvm_insts;
@@ -251,18 +262,18 @@ int main(int argc, char **argv) {
                      "goovm-llc --backend=%s%s %s\n"
                      "  parse    %10.0f us\n"
                      "  export   %10.0f us\n"
-                     "  backend  %10.0f us\n"
+                     "  backend  %10.0f us (middle-end %.0f us)\n"
                      "  write    %10.0f us\n"
                      "  total    %10.0f us\n"
                      "  llvm instructions %llu, gir instructions %zu, functions %zu, object %zu bytes\n",
                      backend.c_str(), use_llvm && backend != "llvm" ? " (fallback)" : "", in.c_str(), us(t0, t1),
-                     us(t1, t2), us(t2, t3), us(t3, t4), us(t0, t4), (unsigned long long)llvm_insts,
+                     us(t1, t2), us(t2, t3), opt_us, us(t3, t4), us(t0, t4), (unsigned long long)llvm_insts,
                      tables.insts.size(), tables.funcs.size(), obj_len);
         std::fprintf(stderr,
                      "goovm-time: parse_us=%.0f export_us=%.0f backend_us=%.0f write_us=%.0f total_us=%.0f "
-                     "llvm_insts=%llu gir_insts=%zu\n",
+                     "llvm_insts=%llu gir_insts=%zu opt_us=%.0f\n",
                      us(t0, t1), us(t1, t2), us(t2, t3), us(t3, t4), us(t0, t4), (unsigned long long)llvm_insts,
-                     tables.insts.size());
+                     tables.insts.size(), opt_us);
     }
 #ifdef GOOVM_WITH_GOOSE
     goose_exit();
