@@ -1312,7 +1312,6 @@ recursive fn construct_at(obj: u32, mark: i64, loc: u32) -> u32 {
             if b == 0 { return 0; }
             src = b;
         }
-        if !is_lvalue(src) && !class_trivial_copy(r) { src = materialize(src, loc); }
         let a = node(N_ASSIGN, 0, unqual(t), obj as i64, (if is_lvalue(src) { rv(src) } else { src }) as i64, 0, loc);
         return n_expr_stmt(a);
     }
@@ -2704,58 +2703,88 @@ recursive fn synth_body(f: i64, kind: i64) {
 
 // Called after parsing in code generation mode; false on errors.
 recursive fn cg_finish(main_file: const u8[:]) -> bool {
+    var dv: u8[>..] = [];
+    cg_debug = env("GOOSECC_DEBUG_CG", dv);
+    if cg_debug { write_stderr("cg_finish\n"); }
     // the vtables of the classes whose key function is defined here
     for r in crecs.len {
         if crecs[r].flags & CR_DYNAMIC == 0 || crecs[r].flags & (CR_PATTERN | CR_LAYOUT) != CR_LAYOUT { continue; }
         if records[r].flags & RF_COMPLETE == 0 { continue; }
         if vt_kind(r) == 2 { vtable_sym(r); }
     }
-    // implicit members, vtables and typeinfo (each may ask for more)
+    // Rounds: implicit members, vtables, typeinfo and instantiations (each
+    // may ask for more); names and linkage; the walk of what is emitted,
+    // which may materialize temporaries and so ask for more again.
+    let tu0 = tu_node;
     var vi = 0;
     var pi = 0;
     var ti = 0;
+    var round = 0;
+    var extra_seen = 0;
     loop {
-        var progress = false;
-        // D2: bodies of instantiated functions used by what was synthesized
-        inst_drain();
-        while inst_defs_taken < inst_defs.len { cg_extra.push(inst_defs[inst_defs_taken]); inst_defs_taken++; progress = true; }
-        while vi < vtables.len { build_vtable(vtables[vi] as i64); vi++; progress = true; }
-        while pi < pending_bodies.len {
-            synth_body(pending_bodies[pi] as i64, pending_bodies[pi + 1] as i64);
-            pi += 2;
-            progress = true;
+        let before = syms.len;
+        loop {
+            var progress = false;
+            // D2: bodies of instantiated functions used by what was synthesized
+            inst_drain();
+            while inst_defs_taken < inst_defs.len { cg_extra.push(inst_defs[inst_defs_taken]); inst_defs_taken++; progress = true; }
+            while vi < vtables.len { if cg_debug { write_stderr(str("vtable ", vtables[vi], "\n")); } build_vtable(vtables[vi] as i64); vi++; progress = true; }
+            while pi < pending_bodies.len {
+                if cg_debug { write_stderr(str("synth ", pending_bodies[pi], " kind ", pending_bodies[pi + 1], "\n")); }
+                synth_body(pending_bodies[pi] as i64, pending_bodies[pi + 1] as i64);
+                pi += 2;
+                progress = true;
+            }
+            if cg_debug { write_stderr("typeinfos\n"); }
+            while ti < ti_classes.len { finish_typeinfo(ti_classes[ti] as i64); ti++; progress = true; }
+            if !progress { break; }
         }
-        while ti < ti_classes.len { finish_typeinfo(ti_classes[ti] as i64); ti++; progress = true; }
-        if !progress { break; }
+        if round == 0 {
+            // the dynamic initialization of globals: a function per init_priority
+            // (clang: _GLOBAL__I_000101 ..., then _GLOBAL__sub_I_<file>)
+            var done_prio: i64 = -1;
+            loop {
+                var p: i64 = 65536;
+                for x in gi_prio { if x as i64 > done_prio && (x as i64) < p { p = x as i64; } }
+                if p > 65535 { break; }
+                done_prio = p;
+                gi_function(main_file, p);
+            }
+        }
+        // the translation unit with the extra items
+        let tu = nodes[tu0];
+        let mark = nscratch.len;
+        for i in tu.c as i64 { nscratch.push(nlist[tu.v + i]); }
+        for x in cg_extra { nscratch.push(x); }
+        let count = nscratch.len - mark;
+        let start = commit_list(mark);
+        tu_node = node_v(N_TU, 0, 0, 0, 0, count, 0, start);
+        // names and linkage
+        if cg_debug { write_stderr(str("cg_finish round ", round, " syms ", syms.len, "\n")); }
+        name_syms();
+        note_nothrow_all();
+        if cg_debug { write_stderr("named\n"); }
+        if round == 0 {
+            // the named return value optimization
+            for f in ret_fns {
+                let fd = syms[f].def;
+                if fd >= 0 && nodes[fd].kind as i64 == N_FUNCDEF { nrvo_function(f as i64, fd as u32); }
+            }
+            if !check_reachable() { return false; }
+        } else {
+            // what the last walk asked for: the new definitions it reached
+            for f in reach_wanted { if syms[f].def >= 0 { reach_fn(f as i64); } }
+            for i in extra_seen..cg_extra.len {
+                let it = cg_extra[i];
+                if nodes[it].kind as i64 == N_DECL && syms[nodes[it].a].kind as i64 == SK_VAR { var_decls.insert(nodes[it].a as u64, it); }
+            }
+            if !walk_reachable() { return false; }
+        }
+        extra_seen = cg_extra.len;
+        round++;
+        if syms.len == before && vi == vtables.len && pi == pending_bodies.len && ti == ti_classes.len && inst_defs_taken == inst_defs.len { break; }
+        if round > 50 { break; }
     }
-    // the dynamic initialization of globals: a function per init_priority
-    // (clang: _GLOBAL__I_000101 ..., then _GLOBAL__sub_I_<file>)
-    var done_prio: i64 = -1;
-    loop {
-        var p: i64 = 65536;
-        for x in gi_prio { if x as i64 > done_prio && (x as i64) < p { p = x as i64; } }
-        if p > 65535 { break; }
-        done_prio = p;
-        gi_function(main_file, p);
-    }
-    // the translation unit with the extra items
-    let tu = nodes[tu_node];
-    let mark = nscratch.len;
-    for i in tu.c as i64 { nscratch.push(nlist[tu.v + i]); }
-    for x in cg_extra { nscratch.push(x); }
-    let count = nscratch.len - mark;
-    let start = commit_list(mark);
-    tu_node = node_v(N_TU, 0, 0, 0, 0, count, 0, start);
-    // names and linkage
-    name_syms();
-    note_nothrow_all();
-    // the named return value optimization
-    for f in ret_fns {
-        let fd = syms[f].def;
-        if fd >= 0 && nodes[fd].kind as i64 == N_FUNCDEF { nrvo_function(f as i64, fd as u32); }
-    }
-    // what is emitted: checked and rewritten for C's lowering
-    if !check_reachable() { return false; }
     // types: references become pointers, member functions take `this`
     lower_sym_types();
     return n_errors == 0;
@@ -2812,6 +2841,8 @@ fn lower_sym_types() {
 // unsupported constructs reported.
 
 var cg_seen: u8[>..] = [];
+var reach_wanted: u32[>..] = [];
+var cg_debug = false;       // functions reached before their bodies were synthesized
 var wk: u32[>..<] = [];
 var var_decls = dictionary<u64, u32> {};   // file-scope variable -> its N_DECL
 var n_bad: i64 = 0;
@@ -2820,6 +2851,7 @@ recursive fn reach_fn(f: i64) {
     if syms[f].def < 0 {
         let b = complete_base.get(f as u64);
         if b { reach_fn(b as i64); }
+        else { reach_wanted.push(f as! u32); }
         return;
     }
     let d = syms[f].def as u32;
@@ -2850,6 +2882,10 @@ fn check_reachable() -> bool {
             if syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE && syms[s].flags & SF_FILESCOPE != 0 { wk.push(it); }
         }
     }
+    return walk_reachable();
+}
+
+fn walk_reachable() -> bool {
     while wk.len > 0 {
         let e = wk.pop();
         let n = e & 0x7FFFFFFF;
