@@ -1560,13 +1560,42 @@ vectorizers' output:
 With `-fno-vectorize -fno-slp-vectorize` (the O2nv variant) 7 files remain:
 two vector/integer bitcasts (SSE intrinsics), two reductions and a vector
 GEP in the vectorizer unit tests, `llvm.fptosi.sat.i8` and an assertion in
-the -O0 allocator on lencod's `macroblock.c` (a lowering that needs more
-registers than are free, in a function where the global allocator is
-not active, so there is no pinned register to borrow). One program fails at link time: torture `pr39501` uses
+the block-local allocator on lencod's `macroblock.c`: LLVM -O2 merges an
+index expression into one GEP of four terms, whose load is deferred into a
+store with a GEP of two more, and the A2 lowerings run out of registers
+(the same IR fails at -O0 too; splitting such GEPs in the middle-end moved
+the failure to the GEP lowering, so the change was not kept). One program fails at link time: torture `pr39501` uses
 `fmin`/`fmax`, which LLVM -O2 forms as `llvm.minnum`/`llvm.maxnum` and the
 exporter lowers to libm calls, and the test does not link `-lm`.
 
 ### What is left
+
+**Functional gaps at -O1.** On what the -O1 paths are for (clang -O0 IR
+through `goovm-llc -O1`, `goovm-cc -O1`, `goosecc -O1`) nothing falls back
+to LLVM and nothing is unsupported: every test of the corpora that passes
+with clang -O1 passes, but one:
+
+- torture `pr17377` under `goovm-llc -O1`: a user `noinline` is invisible
+  in clang -O0 IR (every function is `noinline optnone`), so the function
+  is inlined and `__builtin_return_address` sees the caller's frame.
+  (`goovm-cc -O1` honors it.)
+- Debug information at -O1 is valid but degraded: promoted variables have
+  no location (no location lists), inlined code has no inlined-subroutine
+  DIEs and carries the call's line.
+- On LLVM -O2 IR (the experiment, not a supported input): 165 of 2,651
+  files are rejected by the exporter (vectorizer output), 7 with the
+  vectorizers off, one of them an assertion (lencod `macroblock.c`); torture
+  `pr39501` does not link (`llvm.minnum` as a libm call).
+
+Passes that leave a function alone (correct code, less optimization):
+functions whose blocks are named by `blockaddress` get only branch folding;
+functions that call setjmp get no alias information in GVN; the inliner
+skips invokes, variadic and self-recursive callees and callees with
+dynamic allocas, frame addresses or landing pads; the global allocator
+skips functions whose liveness bitsets would exceed 2^26 bits (-O0
+allocation for them).
+
+Performance work:
 
 1. **Live-range splitting** in the global allocator (and callee-saved
    homes for FP values around calls): mafft's DP loops, Bullet, FP-heavy
