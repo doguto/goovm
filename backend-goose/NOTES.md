@@ -1507,6 +1507,35 @@ them more than once (four rounds of simplify/GVN/DCE/SimplifyCFG), and
 rebuilds the CFG analyses and use lists after each pass that changes the
 CFG; loop rotation rebuilds them after every rotated loop.
 
+### Run time: SingleSource benchmarks
+
+The 141 programs of `benchmarks` and `benchmarks-cxx` (one `suite.py` run
+per program so that an interrupted session keeps its results, `e1/ss.py`;
+`--time-run 1`: one timed run each after the verified one, so single
+programs are noisier than the CTMark table). Over the 119 programs whose
+clang -O0 run takes at least 50 ms:
+
+| | n | goovm -O1 / clang -O0 | / clang -O1 (geomean) | / clang -O1 (median) | / clang -O2 |
+|---|---:|---:|---:|---:|---:|
+| all | 119 | 0.479 | 1.80 | 1.22 | 1.96 |
+| without the 8 where clang -O1 removes >= 95% of the work | 111 | 0.512 | **1.32** | 1.19 | 1.44 |
+| of which C | 81 | | 1.32 | 1.18 | |
+| of which C++ | 30 | | 1.30 | 1.27 | |
+
+The eight left out are programs whose measured loop LLVM folds away
+(Shootout `nestedloop` and `objinst` in C and C++, Misc `lowercase`: clang
+-O1 runs them in 0.01% to 0.07% of its -O0 time; Adobe `loop_unroll`,
+`stepanov_vector`, `stepanov_abstraction`: 4% to 5%); with them the
+geometric mean is dominated by four ratios above 1,000. The slowest of
+the rest: Dhrystone `dry`/`fldry` (6.4x, 7.0x: clang inlines and
+constant-propagates the whole benchmark), Adobe
+`simple_types_constant_folding` (6.4x), Stanford `FloatMM` (4.8x) and
+`himenobmtxpa` (4.2x) and the Polybench FP kernels (`doitgen`, `3mm`:
+3.0x), where loop-invariant FP values stay in memory (no live-range
+splitting). 39 programs are within 1.1x of clang -O1, among them `ray`
+(0.59x), `methcall`, `puzzle`, `fp-convert` and `Bubblesort` (0.78x to
+0.85x).
+
 ### Compile time: goovm-cc -O1 against clang -O1 and -O2
 
 Every compile command of CTMark (632 files, 316 C++; the -O0 configuration
