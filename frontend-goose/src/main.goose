@@ -53,6 +53,7 @@ import .cx_tmpl;
 import .cx_inst;
 import .cx_fspec;
 import .cx_pack;
+import .cx_conv;
 import .cx_decl2;
 import .cx_expr;
 import .cx_sema;
