@@ -20,6 +20,7 @@ import .ppdir;
 import .ppexpr;
 import .print;
 import .predef_gen;
+import .predef_cxx_gen;
 import .types;
 import .dtype;
 import .ast;
@@ -44,6 +45,20 @@ import .gen_dwarf;
 import .gen_tu;
 import .hcache;
 import .pcache;
+import .cx_core;
+import .cx_names;
+import .cx_decl;
+import .cx_class;
+import .cx_tmpl;
+import .cx_decl2;
+import .cx_expr;
+import .cx_sema;
+import .cx_over;
+import .cx_stmt;
+import .cx_layout;
+import .cx_mangle;
+import .cx_check;
+import .cx_gen;
 import cg from "../../backend-goose";
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
@@ -56,6 +71,8 @@ var opt_mode: i64 = 0;      // 0 = -fsyntax-only, 1 = -E, 2 = --layout-check, 3 
 var opt_time: bool = false;
 var nostdinc: bool = false;
 var opt_state_hash: i64 = 0;  // --pp-state-hash (2: =v, per array)
+var lang_x: i64 = 0;        // -x: 0 none, 1 c, 2 c++
+var in_lang: i64 = 0;       // the -x in effect for the input
 
 fn add_dir(d: const u8[:], sys: bool) {
     var s = d;
@@ -72,7 +89,11 @@ fn tu_add(t0: Tok) {
     }
     if t.kind == TK_IDENT {
         let kwc = idents[t.val].kw;
-        if kwc != 0 { t.kind = (TK_KW + (kwc as i64)) as! u8; }
+        if kwc != 0 {
+            // C++: an alternative token (and, or ...) is its operator
+            if kwc as i64 == cx::KW_CXXOP { t.kind = cxxop_kind(t.val) as! u8; }
+            else { t.kind = (TK_KW + (kwc as i64)) as! u8; }
+        }
     }
     tu_toks.push(t);
 }
@@ -306,6 +327,7 @@ fn options() {
             else if which == 5 { sys_dirs_after.push(name_add(val)); sys_dirs_after.push(val.len as! u32); }
             else if which == 6 { cmd_macros.push(CmdMacro { def: false, inc: true, off: name_add(val), len: val.len as! u32 }); }
             else if which == 7 { out_off = name_add(val); out_len = val.len; }
+            else if which == 8 { lang_x = if val == "c++" || val == "c++-header" { 2 } else if val == "c" || val == "c-header" { 1 } else { 0 }; }
             else if which == 12 { std_off = name_add(val); std_len = val.len; }
         }
         if has_val { continue; }
@@ -315,6 +337,7 @@ fn options() {
         else if s == "--dump-ast" { opt_mode = 3; }
         else if s == "-c" { if opt_mode == 0 { opt_mode = 4; } }
         else if s == "--emit-gir" { opt_mode = 5; }
+        else if s == "--dump-decls" { opt_mode = 6; }
         else if s == "-g" || starts_with(s, "-g") && s != "-g0" && !starts_with(s, "-gno") { gen::opt_debug = true; dbg_types = true; dbg_g = true; }
         else if s == "-g0" { gen::opt_debug = false; dbg_types = false; dbg_g = false; }
         else if s == "-fPIC" || s == "-fpic" { gen::opt_pic = true; gen::opt_pie = false; opt_pic_mode = if s == "-fPIC" { 2 } else { 3 }; }
@@ -344,7 +367,15 @@ fn options() {
             opt_optimize = 1;
             if s == "-Os" || s == "-Oz" { opt_os = true; }
         }
-        else if s == "-" || (s.len > 0 && s[0] != '-') { in_off = name_add(s); in_len = s.len; }
+        else if s == "-fno-exceptions" { opt_exceptions = false; }
+        else if s == "-fexceptions" || s == "-fcxx-exceptions" { opt_exceptions = true; }
+        else if s == "-fno-cxx-exceptions" { opt_exceptions = false; }
+        else if s == "-fno-rtti" { opt_rtti = false; }
+        else if s == "-Wno-deprecated" { opt_deprecated = false; }
+        else if s == "-fenable-matrix" { opt_matrix = true; }
+        else if s == "-Wdeprecated" { opt_deprecated = true; }
+        else if s == "-frtti" { opt_rtti = true; }
+        else if s == "-" || (s.len > 0 && s[0] != '-') { in_off = name_add(s); in_len = s.len; in_lang = lang_x; }
         else if !(starts_with(s, "-W") || s == "-w" || starts_with(s, "-f") || starts_with(s, "-m") || starts_with(s, "-g") ||
                   starts_with(s, "-pedantic") || s == "-pipe" || s == "-ansi" || s == "-v" || s == "-Qunused-arguments" ||
                   starts_with(s, "-M") || s == "-S" || s == "-emit-llvm" || starts_with(s, "--")) {
@@ -353,6 +384,30 @@ fn options() {
         // everything else (-w, -W..., -f..., -m...) is accepted and ignored
     }
     if in_len == 0 { usage(); }
+    // C++ (D1): -x c++ before the input, or a C++ extension
+    let inp = opt_input();
+    if in_lang == 2 { opt_cxx = true; }
+    else if in_lang == 0 {
+        for e in [".cpp", ".cc", ".cxx", ".C", ".c++", ".cp", ".CPP", ".hpp", ".hh", ".hxx"] {
+            if inp.len > e.len && inp[inp.len - e.len..] == e { opt_cxx = true; }
+        }
+    }
+    if opt_cxx {
+        let sd = opt_std();
+        if sd.len > 0 {
+            if find(sd, "++98") >= 0 || find(sd, "++03") >= 0 { opt_cxx_std = 98; }
+            else if find(sd, "++11") >= 0 || find(sd, "++0x") >= 0 { opt_cxx_std = 11; }
+            else if find(sd, "++14") >= 0 || find(sd, "++1y") >= 0 { opt_cxx_std = 14; }
+            else if find(sd, "++17") >= 0 || find(sd, "++1z") >= 0 { opt_cxx_std = 17; }
+            else if find(sd, "++20") >= 0 || find(sd, "++2a") >= 0 { opt_cxx_std = 20; }
+            else if find(sd, "++23") >= 0 || find(sd, "++2b") >= 0 || find(sd, "++26") >= 0 || find(sd, "++2c") >= 0 { opt_cxx_std = 23; }
+            else {
+                // a C standard with a C++ input: clang's error
+                write_stderr(str("goosecc: error: invalid argument '-std=", sd, "' not allowed with 'C++'\n"));
+                exit(1);
+            }
+        }
+    }
 
     pp_init_tables();
     // Search list: -iquote, -I, -isystem, then the system directories.
@@ -366,6 +421,12 @@ fn options() {
     k = 0;
     while k + 1 < isystem_dirs.len { add_dir(names[isystem_dirs[k]..isystem_dirs[k] + isystem_dirs[k + 1]], true); k += 2; }
     if !nostdinc {
+        if opt_cxx {
+            // clang++'s libstdc++ directories, spelled as it spells them
+            add_dir("/usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13", true);
+            add_dir("/usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/x86_64-linux-gnu/c++/13", true);
+            add_dir("/usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/backward", true);
+        }
         add_dir("/usr/lib/llvm-20/lib/clang/20/include", true);
         add_dir("/usr/local/include", true);
         add_dir("/usr/include/x86_64-linux-gnu", true);
@@ -425,22 +486,52 @@ fn main() {
         opt_kw_restrict = v.len > 0;
         opt_kw_gnu = opt_gnu;
         opt_c89 = v.len == 0;
-        keywords_init();
+        if opt_cxx {
+            opt_kw_gnu = opt_gnu;
+            opt_c89 = false;
+            cx::keywords_init_cxx();
+        } else {
+            keywords_init();
+        }
         // G1: the parser's starting state before preprocessing, so that the
         // identifiers it interns are the same in every translation unit
         // (the parse cache's entries refer to them: pcache.goose)
         types_init();
         parse_init();
-        pt_track = hc_on;
+        if opt_cxx { cx::cx_init(); cx::cg_on = opt_mode == 4 || opt_mode == 5; }
+        // the parse cache holds C's parser state only
+        pt_track = hc_on && !opt_cxx;
         pt_setup_opts();
         if hc_on { hc_tu_check(); }
         pp_fill();
         after_pp();
         let t1 = clock_ns();
         pf_scan();
-        parse_tu();
+        if opt_cxx { cx::parse_tu_cxx(); } else { parse_tu(); }
         if opt_state_hash > 0 { pt_state_hash(opt_state_hash == 2); }
         hc_report();
+        if opt_cxx && opt_mode == 6 && n_errors == 0 {
+            if !cx::dump_decls(names[out_off..out_off + out_len]) { fatal("cannot write the declarations"); }
+        }
+        if opt_cxx && opt_mode == 2 && n_errors == 0 {
+            var abs: u8[>..] = [];
+            if opt_input()[0] != '/' {
+                if !env("PWD", abs) { fatal("cannot determine the current directory (PWD)"); }
+                abs.push('/');
+            }
+            abs.append(opt_input());
+            if out_len == 0 { fatal("--layout-check needs -o file"); }
+            if !cx::write_cxx_layout_check(abs, names[out_off..out_off + out_len]) { fatal("cannot write the layout check file"); }
+            exit(0);
+        }
+        if opt_cxx && opt_mode == 3 && n_errors == 0 {
+            write_stderr("goosecc: error: --dump-ast is C only\n");
+            exit(1);
+        }
+        if opt_cxx && (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
+            // D1: the C++ AST's lowered C form (cx_gen.goose)
+            if !cx::cg_finish(opt_input()) { exit(1); }
+        }
         if (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
             let t2 = clock_ns();
             let ok = gen::lower_tu(opt_input());

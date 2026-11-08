@@ -141,8 +141,55 @@ recursive fn contains_label_noswitch(n: u32) -> bool {
 
 fn gen_label(l: i64) {
     let b = label_block(l);
+    if fwd_gotos.len > 0 { fwd_goto_blocks(l, b); }
     start_block(b);
     fmap.insert(fk(FM_LABEL, l as! u32), cleanups.len as! u32);
+}
+
+// D1 (C++ only, so that C's objects stay the same): a goto forward out of
+// the scope of objects with destructors (cleanups) jumps to a block of its
+// own, filled at the label, where the cleanups to run are known: those
+// active at the goto beyond the label's depth.
+struct FwdGoto { blk: u32, label: u32, first: u32, count: u32 }
+var fwd_gotos: FwdGoto[>..<] = [];
+var fwd_cl: Cleanup[>..<] = [];
+
+fn fwd_goto(l: i64) {
+    var any = false;
+    for c in cleanups { if c.kind == 2 { any = true; } }
+    if !any { br(label_block(l)); return; }
+    let t = new_block();
+    fwd_gotos.push(FwdGoto { blk: t, label: l as! u32, first: fwd_cl.len as! u32, count: cleanups.len as! u32 });
+    for c in cleanups { fwd_cl.push(c); }
+    br(t);
+}
+
+fn fwd_goto_blocks(l: i64, b: u32) {
+    var any = false;
+    for fg in fwd_gotos { if fg.label as i64 == l { any = true; } }
+    if !any { return; }
+    if cur_blk >= 0 { br(b); }
+    let depth = cleanups.len;
+    for fg in fwd_gotos {
+        if fg.label as i64 != l { continue; }
+        start_block(fg.blk);
+        var i = (fg.first + fg.count) as i64 - 1;
+        while i >= fg.first as i64 + depth {
+            let c = fwd_cl[i];
+            if c.kind == 1 {
+                emit(GIR_STACKRESTORE, GIR_T_VOID, 0, 0, 0, c.val, 0, 0);
+            } else {
+                let fgl = func_global(c.fsym);
+                let addr = var_addr(c.sym);
+                let s = m_opnds.len as! u32;
+                op_ref(addr);
+                op_imm(0);
+                emit(GIR_CALL, GIR_T_VOID, 0, 0, 0, gref(fgl), s, 1);
+            }
+            i--;
+        }
+        br(b);
+    }
 }
 
 recursive fn gen_stmt(n: u32) {
@@ -244,6 +291,7 @@ recursive fn gen_stmt1(n: u32) {
         // a jump back to before a VLA (or a cleanup variable) leaves its scope
         let d = fmap.get(fk(FM_LABEL, nd.a));
         if d && (d as i64) < cleanups.len { run_cleanups(d as i64); }
+        if !d && opt_cxx && cleanups.len > 0 { fwd_goto(nd.a as i64); return; }
         br(label_block(nd.a as i64));
         return;
     }
@@ -1292,6 +1340,8 @@ fn gen_function0(fd: u32) {
     if fmap.count > 0 { fmap.clear(); }   // clear walks every slot
     cleanups.clear();
     cleanup_marks.clear();
+    fwd_gotos.clear();
+    fwd_cl.clear();
     if f_ret.kind == AK_SRET || f_ret.kind == AK_IGNORE { nrvo_mark(fd, f_ret_q); } else if f_nrvo.count > 0 { f_nrvo.clear(); }
     dbg_function_begin(s, nd.loc);
     dbg_fn_begin();

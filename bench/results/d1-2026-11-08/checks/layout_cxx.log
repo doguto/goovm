@@ -1,0 +1,5 @@
+
+cxx-unit files    35  checked    35  ok    35  mismatch    0  goosecc-error   0  assertions   19459
+cxx-regress files    31  checked    31  ok    31  mismatch    0  goosecc-error   0  assertions    3685
+cxx-bench files    41  checked    41  ok    41  mismatch    0  goosecc-error   0  assertions   30809
+cxx-ctmark files   316  checked   316  ok   316  mismatch    0  goosecc-error   0  assertions  253504

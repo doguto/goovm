@@ -2,6 +2,10 @@
 """The layout oracle over the corpora: goosecc --layout-check writes a C file
 that includes the TU and _Static_asserts goosecc's size, alignment and member
 offsets of every file-scope struct/union/typedef; clang-20 must accept it.
+For C++ files (D1) the check file is C++: sizes, alignments, member offsets
+(base members through the derived class), __is_polymorphic, __is_empty and
+the declared types of members and variables of every nameable non-template
+class, compiled by clang++-20 with -fno-access-control.
 
 usage: tests/layout_check.py [--goosecc build/goosecc] [-j 3] [--corpus ...] [--show N]
                              [--keep DIR] [files... -- flags]
@@ -21,10 +25,12 @@ def run(cmd):
 
 
 def check(a, path, flags, workdir):
-    rc, err = run([a.clang, "-fsyntax-only"] + flags + [path])
+    cxx = corpus_mod.is_cxx(path)
+    clang = "clang++-20" if cxx and a.clang == "clang-20" else a.clang
+    rc, err = run([clang, "-fsyntax-only"] + flags + [path])
     if rc != 0:
         return "clang-invalid", "", 0
-    out = os.path.join(workdir, re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.relpath(path, "/")) + ".layout.c")
+    out = os.path.join(workdir, re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.relpath(path, "/")) + (".layout.cpp" if cxx else ".layout.c"))
     rc, err = run([a.goosecc, "--layout-check"] + flags + [path, "-o", out])
     if rc != 0 or not os.path.exists(out):
         return "goosecc-error", (err.strip().splitlines() or ["rc=%d" % rc])[0], 0
@@ -33,7 +39,8 @@ def check(a, path, flags, workdir):
         m = re.search(r"/\* (\d+) assertions \*/", f.read())
         if m:
             n = int(m.group(1))
-    rc, err = run([a.clang, "-fsyntax-only"] + flags + [out])
+    # C++: private members and classes are checked too (-fno-access-control)
+    rc, err = run([clang, "-fsyntax-only"] + flags + (["-fno-access-control", "-w"] if cxx else []) + [out])
     if rc != 0:
         fails = [l for l in err.splitlines() if "static assertion failed" in l or "error" in l]
         return "mismatch", "\n      ".join(fails[:4]), n

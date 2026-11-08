@@ -1,0 +1,5 @@
+
+cxx-unit    files   35  same   35  only-missing    0  wrong    0  goosecc-error   0 | decls matched    160  missing     0  wrong    0
+cxx-regress files   31  same   30  only-missing    1  wrong    0  goosecc-error   0 | decls matched    146  missing     1  wrong    0
+cxx-bench   files   41  same   37  only-missing    4  wrong    0  goosecc-error   0 | decls matched    654  missing    10  wrong    0
+cxx-ctmark  files  316  same  310  only-missing    6  wrong    0  goosecc-error   0 | decls matched   7568  missing   160  wrong    0

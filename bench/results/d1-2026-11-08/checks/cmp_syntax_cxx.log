@@ -1,0 +1,66 @@
+false-error /tmp/goosecc-cxx-hdrs/hdr_algorithm.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_any.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_array.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_atomic.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_barrier.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_bit.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_bitset.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_ccomplex.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_charconv.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_chrono.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_cmath.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_codecvt.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_compare.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_complex.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_complex_h.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_concepts.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_condition_variable.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_coroutine.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_ctgmath.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_deque.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_exception.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_execution.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_filesystem.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_format.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_forward_list.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_fstream.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_functional.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_future.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_iomanip.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+false-error /tmp/goosecc-cxx-hdrs/hdr_ios.cpp
+      /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/type_traits:2651:5: error: expected a declarator, got 'requires'
+
+cxx-hdrs files   678  clang-valid   647  accepted   572  false-errors   75  crashes   0  | clang-invalid   31 (goosecc rejects 31, misses 0)
+cxx-unit files    35  clang-valid    35  accepted    35  false-errors    0  crashes   0  | clang-invalid    0 (goosecc rejects 0, misses 0)
+cxx-regress files    31  clang-valid    31  accepted    31  false-errors    0  crashes   0  | clang-invalid    0 (goosecc rejects 0, misses 0)
+cxx-bench files    41  clang-valid    41  accepted    41  false-errors    0  crashes   0  | clang-invalid    0 (goosecc rejects 0, misses 0)
+cxx-ctmark files   316  clang-valid   316  accepted   316  false-errors    0  crashes   0  | clang-invalid    0 (goosecc rejects 0, misses 0)

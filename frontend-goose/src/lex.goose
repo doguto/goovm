@@ -36,7 +36,7 @@ fn lex_init_tables() {
         if c == ' ' || c == '\t' || c == 11 || c == 12 || c == '\r' { v |= CC_HSPACE; }
         cc[i] = v;
         var k: u8 = LX_OTHER;
-        if v & CC_IDSTART != 0 { k = if c == 'L' || c == 'u' || c == 'U' { LX_IDPREFIX } else { LX_IDENT }; }
+        if v & CC_IDSTART != 0 { k = if c == 'L' || c == 'u' || c == 'U' || (c == 'R' && opt_cxx) { LX_IDPREFIX } else { LX_IDENT }; }
         if v & CC_HSPACE != 0 { k = LX_SPACE; }
         let p1: u8 = match c {
             '[' => TK_L_SQUARE, ']' => TK_R_SQUARE, '(' => TK_L_PAREN, ')' => TK_R_PAREN, '{' => TK_L_BRACE,
@@ -72,7 +72,12 @@ fn scan_token(buf: const u8[:], i: i64) -> i64, i64, u8 {
     let c1 = if i + 1 < buf.len { buf[i + 1] } else { 0 };
     if cc[c] & CC_IDSTART != 0 {
         // String and character prefixes.
-        if c == 'L' || ((c == 'u' || c == 'U') && opt_c11) {
+        if opt_cxx {
+            if c == 'L' || c == 'u' || c == 'U' || c == 'R' {
+                let k, e, fl = cxx_literal(buf, i);
+                if k != 0 { return k, e, fl; }
+            }
+        } else if c == 'L' || ((c == 'u' || c == 'U') && opt_c11) {
             var j = i + 1;
             if c == 'u' && c1 == '8' && opt_c11 { j = i + 2; }
             let q = if j < buf.len { buf[j] } else { 0 };
@@ -97,12 +102,12 @@ fn scan_token(buf: const u8[:], i: i64) -> i64, i64, u8 {
     match c {
         '"' => {
             let e = scan_quoted(buf, i, '"');
-            if e > 0 { return TK_STRING, e, 0; }
+            if e > 0 { return TK_STRING, ud_suffix(buf, e, true), 0; }
             return TK_OTHER, -e, 0;
         },
         '\'' => {
             let e = scan_quoted(buf, i, '\'');
-            if e > 0 { return TK_CHAR, e, 0; }
+            if e > 0 { return TK_CHAR, ud_suffix(buf, e, false), 0; }
             return TK_OTHER, -e, 0;
         },
         '[' => { return TK_L_SQUARE, i + 1, 0; },
@@ -117,6 +122,7 @@ fn scan_token(buf: const u8[:], i: i64) -> i64, i64, u8 {
         '?' => { return TK_QUESTION, i + 1, 0; },
         '.' => {
             if c1 == '.' && i + 2 < buf.len && buf[i + 2] == '.' { return TK_ELLIPSIS, i + 3, 0; }
+            if c1 == '*' && opt_cxx { return TK_PERIODSTAR, i + 2, 0; }
             return TK_PERIOD, i + 1, 0;
         },
         '&' => {
@@ -134,7 +140,10 @@ fn scan_token(buf: const u8[:], i: i64) -> i64, i64, u8 {
             return TK_PLUS, i + 1, 0;
         },
         '-' => {
-            if c1 == '>' { return TK_ARROW, i + 2, 0; }
+            if c1 == '>' {
+                if opt_cxx && i + 2 < buf.len && buf[i + 2] == '*' { return TK_ARROWSTAR, i + 3, 0; }
+                return TK_ARROW, i + 2, 0;
+            }
             if c1 == '-' { return TK_MINUSMINUS, i + 2, 0; }
             if c1 == '=' { return TK_MINUSEQUAL, i + 2, 0; }
             return TK_MINUS, i + 1, 0;
@@ -175,8 +184,17 @@ fn scan_token(buf: const u8[:], i: i64) -> i64, i64, u8 {
                 if i + 2 < buf.len && buf[i + 2] == '=' { return TK_LESSLESSEQUAL, i + 3, 0; }
                 return TK_LESSLESS, i + 2, 0;
             }
-            if c1 == '=' { return TK_LESSEQUAL, i + 2, 0; }
-            if c1 == ':' { return TK_L_SQUARE, i + 2, F_DIGRAPH; }
+            if c1 == '=' {
+                if opt_cxx && opt_cxx_std >= 20 && i + 2 < buf.len && buf[i + 2] == '>' { return TK_SPACESHIP, i + 3, 0; }
+                return TK_LESSEQUAL, i + 2, 0;
+            }
+            if c1 == ':' {
+                // C++11 [lex.pptoken]p3: <:: not followed by : or > is < ::
+                if opt_cxx && opt_cxx_std >= 11 && i + 3 < buf.len && buf[i + 2] == ':' && buf[i + 3] != ':' && buf[i + 3] != '>' {
+                    return TK_LESS, i + 1, 0;
+                }
+                return TK_L_SQUARE, i + 2, F_DIGRAPH;
+            }
             if c1 == '%' { return TK_L_BRACE, i + 2, F_DIGRAPH; }
             return TK_LESS, i + 1, 0;
         },
@@ -199,6 +217,7 @@ fn scan_token(buf: const u8[:], i: i64) -> i64, i64, u8 {
         },
         ':' => {
             if c1 == '>' { return TK_R_SQUARE, i + 2, F_DIGRAPH; }
+            if c1 == ':' && opt_cxx { return TK_COLONCOLON, i + 2, 0; }
             return TK_COLON, i + 1, 0;
         },
         '=' => {
@@ -227,10 +246,104 @@ fn scan_quoted(buf: const u8[:], i: i64, q: u8) -> i64 {
     return -j;
 }
 
+// C++ (D1): a literal with an encoding prefix or a raw string at buf[i]
+// (L u U R): (kind, end, flags), kind 0 when it is an identifier. As
+// clang's lexer: u, U and u8 strings from C++11, u8 characters from C++17,
+// raw strings R"d(...)d" (LR, uR, UR, u8R) from C++11, then a ud-suffix.
+fn cxx_literal(buf: const u8[:], i: i64) -> i64, i64, u8 {
+    var j = i;
+    let c = buf[i];
+    var pfx = 0;    // 1 L, 2 u/U, 3 u8
+    if c == 'L' { j = i + 1; pfx = 1; }
+    else if c == 'u' && buf[i + 1] == '8' && opt_cxx_std >= 11 { j = i + 2; pfx = 3; }
+    else if (c == 'u' || c == 'U') && opt_cxx_std >= 11 { j = i + 1; pfx = 2; }
+    var raw = false;
+    if buf[j] == 'R' && opt_cxx_std >= 11 { raw = true; j++; }
+    if pfx == 0 && !raw { return 0, 0, 0; }
+    let q = buf[j];
+    if q == '"' {
+        if raw {
+            let e = scan_raw(buf, j);
+            if e > 0 { return TK_STRING, ud_suffix(buf, e, true), F_RAWSTR; }
+            return TK_OTHER, -e, F_RAWSTR;
+        }
+        let e = scan_quoted(buf, j, '"');
+        if e > 0 { return TK_STRING, ud_suffix(buf, e, true), 0; }
+        return TK_OTHER, -e, 0;
+    }
+    if q == '\'' && !raw && (pfx != 3 || opt_cxx_std >= 17) {
+        let e = scan_quoted(buf, j, '\'');
+        if e > 0 { return TK_CHAR, ud_suffix(buf, e, false), 0; }
+        return TK_OTHER, -e, 0;
+    }
+    return 0, 0, 0;
+}
+
+// A raw string's text from the '"' at buf[j]: the end (> 0) after the
+// closing )delim", or -(end) of the unknown token clang makes of a bad
+// delimiter or an unterminated literal. The text is the physical one:
+// splices inside a raw string are not removed (C++11 [lex.pptoken]p3).
+fn scan_raw(buf: const u8[:], j: i64) -> i64 {
+    var k = j + 1;
+    while k < buf.len && k - (j + 1) <= 16 {
+        let d = buf[k];
+        if d == '(' { break; }
+        if d == ' ' || d == ')' || d == '\\' || d == '\t' || d == 11 || d == 12 || d == '\n' || d == 0 || d == '"' { break; }
+        k++;
+    }
+    if k >= buf.len || buf[k] != '(' || k - (j + 1) > 16 {
+        // salvage as clang does: up to the next '"'
+        var r = k;
+        while r < buf.len && buf[r] != '"' && buf[r] != 0 { r++; }
+        if r < buf.len && buf[r] == '"' { r++; }
+        return -r;
+    }
+    let dlen = k - (j + 1);
+    var r = k + 1;
+    while r < buf.len {
+        let ch = buf[r];
+        if ch == 0 { return -r; }
+        if ch == ')' && r + 1 + dlen < buf.len && buf[r + 1 + dlen] == '"' && buf[r + 1..r + 1 + dlen] == buf[j + 1..k] {
+            return r + 2 + dlen;
+        }
+        r++;
+    }
+    return -r;
+}
+
+// C++11: the end of the literal ending at e, with its ud-suffix (clang's
+// LexUDSuffix): a suffix that starts with '_', or, after a string literal
+// from C++14, one of the library's suffixes. Anything else is a separate
+// identifier. The identity outside C++11.
+fn ud_suffix(buf: const u8[:], e: i64, is_str: bool) -> i64 {
+    if !opt_cxx || opt_cxx_std < 11 || e >= buf.len { return e; }
+    let c = buf[e];
+    if cc[c] & CC_IDSTART == 0 || c == '$' { return e; }
+    if c != '_' {
+        if !is_str || opt_cxx_std < 14 { return e; }
+        // at most 3 characters, then the end of the suffix
+        var n = 1;
+        while n < 4 && e + n < buf.len && cc[buf[e + n]] & CC_IDCONT != 0 && buf[e + n] != '$' { n++; }
+        if e + n < buf.len && cc[buf[e + n]] & CC_IDCONT != 0 && buf[e + n] != '$' { return e; }
+        let sfx = buf[e..e + n];
+        let ok = sfx == "h" || sfx == "min" || sfx == "s" || sfx == "ms" || sfx == "us" || sfx == "ns" ||
+            sfx == "il" || sfx == "i" || sfx == "if" || sfx == "sv" || (opt_cxx_std >= 20 && (sfx == "d" || sfx == "y"));
+        if !ok { return e; }
+    }
+    var r = e + 1;
+    while r < buf.len && cc[buf[r]] & CC_IDCONT != 0 { r++; }
+    return r;
+}
+
 fn scan_number(buf: const u8[:], i: i64) -> i64 {
     var j = i + 1;
     while j < buf.len {
         let c = buf[j];
+        // C++14 separators: ' followed by an identifier character
+        if c == '\'' && opt_cxx && opt_cxx_std >= 14 && j + 1 < buf.len && cc[buf[j + 1]] & CC_IDCONT != 0 {
+            j += 2;
+            continue;
+        }
         if cc[c] & CC_NUMCONT != 0 {
             if (c == 'e' || c == 'E' || c == 'p' || c == 'P') && j + 1 < buf.len && (buf[j + 1] == '+' || buf[j + 1] == '-') {
                 j += 2;
@@ -425,9 +538,10 @@ fn lex_file_token() -> Tok {
             continue;
         }
         let k, e, fl = scan_token(src, p);
-        // A splice right after the token, or inside a literal, may change it.
-        var dirty = src[e] == '\\' && splice_at(e) > 0;
-        if (k == TK_STRING || k == TK_CHAR || k == TK_COMMENT || k == TK_OTHER) && !dirty {
+        // A splice right after the token, or inside a literal, may change it
+        // (not inside a C++ raw string, whose text is physical).
+        var dirty = src[e] == '\\' && splice_at(e) > 0 && fl & F_RAWSTR == 0;
+        if (k == TK_STRING || k == TK_CHAR || k == TK_COMMENT || k == TK_OTHER) && !dirty && fl & F_RAWSTR == 0 {
             var j = p;
             while j < e {
                 if src[j] == '\\' && splice_at(j) > 0 { dirty = true; break; }
@@ -459,6 +573,10 @@ fn lex_file_token() -> Tok {
 // Does the identifier start L, u or U at p begin a literal (L"", u'', u8"",
 // U"" ...)? u and U prefixes are C11's.
 fn quote_follows(p: i64) -> bool {
+    if opt_cxx {
+        let k, e, fl = cxx_literal(src, p);
+        return k != 0;
+    }
     let c1 = src[p + 1];
     if c1 == '"' { return src[p] == 'L' || opt_c11; }
     if c1 == '\'' { return src[p] == 'L' || opt_c11; }

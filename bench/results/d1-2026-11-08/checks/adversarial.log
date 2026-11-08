@@ -1,0 +1,35 @@
+policy: The default units: <...> includes from the program's files; "..." includes of the main file from its second compile on.
+   ok
+evict: A size limit (GOOSECC_CACHE_SIZE): files go, the cache stays near the limit, results do not change.
+   ok
+lru: Eviction goes by last use: entries a replay read survive older ones nobody read since.
+   ok
+edit_same_size: A header edited between compiles, same size, mtime restored (touch -d): the replay must not use the old text.
+   ok
+racy: A header changed just before the compile is not recorded (its stat cannot show a change in the same tick).
+   ok
+macros: -D/-U and the macros defined before an include change a header's meaning.
+   ok
+order: Include order: b.h depends on what a.h defined; guards seen in another order.
+   ok
+include_next: #include_next chains, and a header created later in an earlier directory (shadowing).
+   ok
+counter: __COUNTER__ in a header: its value depends on what was counted before.
+   ok
+states: One header included under different macro states: guard predefined, a macro it expands redefined.
+   ok
+symlink: A symlinked include directory retargeted, and a relocated one.
+   ok
+relative: Quoted includes from the same spelling in different directories (relative paths, two working directories).
+   ok
+pragmas: #pragma once, push_macro/pop_macro, pack, GCC system_header, poison, __FILE__/__LINE__/__INCLUDE_LEVEL__.
+   ok
+time: __DATE__/__TIME__ in a header: never recorded.
+   ok
+deleted: A header deleted after it was recorded: the same error as without the cache.
+   ok
+concurrent: Concurrent compiles writing the same entries: 16 files sharing headers, 8 at a time, twice.
+   ok
+corrupt: Corrupted cache files: flipped bytes, truncation, garbage, an empty file; none may change a result or crash.
+   ok
+17 tests, 0 failures

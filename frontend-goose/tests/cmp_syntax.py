@@ -27,6 +27,8 @@ def run(cmd, timeout=120):
 
 
 def check(goosecc, path, flags, clang):
+    if clang == "clang-20" and (corpus_mod.is_cxx(path) or "c++" in flags):
+        clang = "clang++-20"
     rc, err = run([clang, "-fsyntax-only"] + flags + [path])
     rc2, err2 = run([goosecc, "-fsyntax-only"] + flags + [path])
     first = next((l for l in err2.splitlines() if "error" in l), (err2.strip().splitlines() or [""])[0])

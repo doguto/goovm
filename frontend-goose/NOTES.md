@@ -4,8 +4,9 @@ goosecc is about 17,600 lines of Goose without comments and blank lines
 (compiler commit 335fddc, runtime d22ae129d92b): the front end of milestone
 B1 (sections 1-8), the lowering to GIR of B2 (section 9), the speed
 work of B3 (section 10), the header cache of B4 (section 11), the
-debug information of B5 (section 12) and G1's start-up, parse cache and
-clang-style folding (section 13), plus the
+debug information of B5 (section 12), G1's start-up, parse cache and
+clang-style folding (section 13) and D1's C++ front end (section 14, which
+adds about 11,400 lines), plus the
 Goose back-end imported as a package. It is compiled with `goose
 --standalone` to one 5.1 MB C file and then with `clang-20 -O2`
 (2 s and 18 s). This page records what was
@@ -808,3 +809,100 @@ for above them.
   of wrong output: `index 0 out of bounds (length 0) (src/hcache.goose:501)`
   during an early replay, and a string element read past the literal
   (the evaluator's, which the torture test `widechar-2` hit).
+
+## 14. Milestone D1: a C++ front end
+
+D1 added fourteen files, `src/cx_*.goose` (11,400 lines with comments; 195
+`recursive fn`), about 600 lines in the lexer, the preprocessor, the types, the driver
+and the C lowering (a C++-only change in `gen_stmt.goose`), the generated `predef_cxx_gen.goose`, the libclang declaration
+oracle `tests/cxx_decls.c`, and C++ modes in the oracles (DESIGN.md,
+section 13). The C++ parser is a second parser over C's tables, so most of
+what it met in Goose is what the C parser met, more often. What was new:
+
+### Every semantic action can close a cycle
+
+A C++ parser calls back into itself from places a C parser never does: a
+default argument is parsed at the call, a default member initializer in
+the constructor, a template's tokens at the substitution, a conversion to
+`bool` may look up and call a conversion function. Each new call of that
+kind turns a plain function on the way into part of a cycle, and the
+checker reports the cycle at the function that has to change, with the
+chain that closed it:
+
+```
+src/cx_over.goose:340: error: recursive call cycle through to_bool, which is not declared `recursive fn` (§7.8)
+        if c != 0 && !is_opq(c) { return to_bool(c); }
+  in fn cx::conv_to_bool(u32) instantiated from src/cx_sema.goose:105
+  in fn cx::to_bool(u32) instantiated from src/cx_gen.goose:299
+```
+
+The fix is always the keyword (here on `to_bool`, a ten-line helper that
+had been a leaf until code generation let it call a conversion function). The message is precise; the cost is that the
+keyword spreads: 195 of the C++ files' functions carry it, against 94 in the
+whole C front end.
+
+### The growable-local rule meets string building
+
+```
+src/cx_gen.goose:1455: error: arr_dtor_fn calls into its recursive cycle while non-fixed-size local nm (declared at src/cx_gen.goose:1449) is in scope (§7.8): end its scope before the call
+    let lp = arr_loop(n_deref(rv(n_var(p, loc)), loc), true, loc);
+```
+
+`nm` held a generated name for a moment before an unrelated call into
+the cycle. The fix moved the three lines that build and store the name
+into a function of their own (`label_numbered`), which is not in the
+cycle. The same rule decided the shape of the layout oracle's type
+printer: a C++ type name for the check file is naturally built inside out
+(a declarator), which wants a string per level while recursing; it writes
+types left to right through helper class templates of the check file
+(`__gt_ptr< T >::t` for `T *`) instead, in one append-only pass
+(DESIGN.md, 13.6).
+
+### Flag constants are `i64`, flag fields are not
+
+The node and symbol flags are `u16`/`u32` fields and the flag constants are
+untyped `let`s, which are `i64`. Combining them in an `if` expression is
+an error even when every value fits:
+
+```
+p3_flags.goose:5: error: expected a value of type u16, got i64 (narrowing and sign changes require an explicit `as`)
+fn main() { ns.push(N { flags: 0 }); let c = true; ns[0].flags = NF_A | (if c { NF_B } else { 0 }); }
+```
+
+so the code is full of `(NF_LVALUE | (if r { NF_REFDEREF } else { 0 })) as! u16`.
+The cast's precedence is still B5's: `x as i64 & F` does not parse
+(`error: expected ';' in variable declaration, found 'F'`), and every
+`(f.flags as i64) & TF_MCONST` needs its parentheses.
+
+### No functions as values
+
+```
+p6_lambda.goose:1: error: expression expected, found 'fn'
+fn main() { let f = fn(x: i64) -> i64 { return x + 1; }; }
+```
+
+There are no lambdas or function values, so every "for each child of this
+node, do X" is written out: code generation's checker has its own table of
+which node fields are children (`push_kids`), next to the C lowering's
+`contains_label` and `has_side_effects`, each a copy of the same
+knowledge. A visitor passed as a value would have been one function.
+
+### What worked well
+
+- **One namespace in many files.** `namespace cx;` spans fourteen files that
+  call each other freely without imports or declaration order; the parser,
+  the semantic actions and the code generator are split by topic, not by
+  dependency.
+- **Dictionaries as indexes.** C++ lookup is one `dictionary<u64, i32>` keyed
+  by `scope << 32 | name`, with chains through a side table; the dictionary
+  replaced what would have been a symbol table per scope.
+- **Re-parsing is cheap.** The parser state is the token position and a few
+  globals, so substitution, default arguments and deferred member bodies
+  are `save()`, move the cursor, parse, `restore(sv)`: the Goose rules
+  against long-lived growable locals made this the natural design, and it
+  needed no AST copying at all.
+- **Struct copies of table rows** (`nodes[n] = nodes[v]`) made the rewrites of
+  code generation (a node becoming a dereference of a new node) one-liners.
+- **The back-end's last two lines** (`export fn gir_codegen: could not resolve
+  one concrete function signature`, section 13) still follow every front-end
+  error; by D1 they were easy to skip.

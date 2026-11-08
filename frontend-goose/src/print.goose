@@ -81,6 +81,14 @@ fn needs_space(t: Tok, first: u8) -> bool {
     if pr_prev_kind < 0 { return false; }
     let a = pr_last;
     let b = first;
+    if opt_cxx {
+        // C++ tokens that would merge: : :, . *, -> *, a literal and a
+        // ud-suffix, a number and a separator
+        if a == ':' && b == ':' { return true; }
+        if (pr_prev_kind == TK_PERIOD || pr_prev_kind == TK_ARROW) && b == '*' { return true; }
+        if (pr_prev_kind == TK_STRING || pr_prev_kind == TK_CHAR) && cc[b] & CC_IDSTART != 0 { return true; }
+        if pr_prev_kind == TK_NUMBER && b == '\'' { return true; }
+    }
     if cc[a] & CC_IDCONT != 0 && (cc[b] & CC_IDCONT != 0 || b == '"' || b == '\'') { return true; }
     if pr_prev_kind == TK_NUMBER && (b == '.' || b == '+' || b == '-' || cc[b] & CC_IDCONT != 0) { return true; }
     if a == '.' && (cc[b] & CC_DIGIT != 0 || b == '.') { return true; }

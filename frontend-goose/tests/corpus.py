@@ -7,8 +7,18 @@ Corpora (llvm-test-suite at SUITE):
   regress   SingleSource/Regression/C (not torture)
   bench     SingleSource/Benchmarks (C files)
   ctmark    the C files of the CTMark programs, with their -D/-I flags
+
+C++ corpora (D1; only when named, so that corpus() with no names stays the
+C corpus of the C oracles), from tests/suite.py's definitions and flags:
+  cxx-unit      SingleSource/UnitTests C++ files
+  cxx-regress   SingleSource/Regression/C++
+  cxx-bench     SingleSource/Benchmarks C++ files
+  cxx-ctmark    the CTMark C++ programs (7zip, Bullet, kimwitu++, tramp3d-v4)
+  (cxx = all four)
+  cxx-hdrs      every top-level libstdc++ 13 header alone, under six standards
 """
 import os
+import sys
 
 SUITE = os.environ.get("LLVM_TEST_SUITE", "/home/user/llvm/llvm-test-suite")
 
@@ -56,8 +66,65 @@ def c_files(root, skip=()):
     return out
 
 
+CXX_CORPORA = {"cxx-unit": "unittests-cxx", "cxx-regress": "regression-cxx", "cxx-bench": "benchmarks-cxx",
+               "cxx-ctmark": "ctmark-cxx"}
+CXX_EXTS = (".cpp", ".cc", ".cxx", ".C")
+
+
+def is_cxx(path):
+    return os.path.splitext(path)[1] in CXX_EXTS
+
+
+def cxx_corpus(names):
+    """Yields (corpus, path, flags) for the C++ files of the named C++ corpora."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tests"))
+    import suite
+    want = set()
+    for n in names:
+        if n == "cxx":
+            want |= set(CXX_CORPORA)
+        elif n in CXX_CORPORA:
+            want.add(n)
+    for n in sorted(want, key=list(CXX_CORPORA).index):
+        for t in suite.all_tests(SUITE, [CXX_CORPORA[n]]):
+            for src in t.srcs:
+                if is_cxx(src):
+                    yield n, src, ["-w"] + [f for f in t.flags(src) if f not in ("-mllvm", "-enable-vplan-native-path")]
+
+
+LIBSTDCXX = "/usr/include/c++/13"
+HDR_STDS = ["-std=gnu++98", "-std=c++11", "-std=gnu++14", "-std=gnu++17", "-std=c++17", "-std=gnu++20"]
+
+
+def cxx_headers():
+    """cxx-hdrs: each top-level libstdc++ 13 header alone (`#include <H>`) under six standards; the
+    files are written to $GOOSECC_HDR_DIR (default /tmp/goosecc-cxx-hdrs)."""
+    d = os.environ.get("GOOSECC_HDR_DIR", "/tmp/goosecc-cxx-hdrs")
+    os.makedirs(d, exist_ok=True)
+    for h in sorted(os.listdir(LIBSTDCXX)):
+        if os.path.isdir(os.path.join(LIBSTDCXX, h)):
+            continue
+        p = os.path.join(d, "hdr_" + h.replace(".", "_") + ".cpp")
+        txt = "#include <%s>\nint main() { return 0; }\n" % h
+        if not os.path.exists(p) or open(p).read() != txt:
+            with open(p, "w") as f:
+                f.write(txt)
+        for st in HDR_STDS:
+            yield "cxx-hdrs", p, ["-w", st]
+
+
 def corpus(names=None):
-    """Yields (corpus, path, flags)."""
+    """Yields (corpus, path, flags): the C corpora, or the named ones (C or C++)."""
+    if names and "cxx-hdrs" in names:
+        yield from cxx_headers()
+        names = [n for n in names if n != "cxx-hdrs"]
+        if not names:
+            return
+    if names and any(n == "cxx" or n in CXX_CORPORA for n in names):
+        yield from cxx_corpus(names)
+        names = [n for n in names if n != "cxx" and n not in CXX_CORPORA]
+        if not names:
+            return
     ss = os.path.join(SUITE, "SingleSource")
     want = lambda n: not names or n in names
     if want("torture"):
