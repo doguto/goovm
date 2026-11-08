@@ -3623,6 +3623,287 @@ unlikely 201803
 let HAS_CXX_DECLSPEC_ATTRIBUTE = """
 
 """;
+let CXX_KEYWORDS = """
+_Alignas 1
+_Alignof 1
+_Atomic 1
+_BitInt 1
+_Complex 1
+_Decimal128 1
+_Decimal32 1
+_Decimal64 1
+_ExtInt 1
+_Float16 1
+_Generic 1
+_Imaginary 1
+_Nonnull 1
+_Noreturn 1
+_Null_unspecified 1
+_Nullable 1
+_Nullable_result 1
+_Static_assert 1
+_Thread_local 1
+__FUNCTION__ 1
+__PRETTY_FUNCTION__ 1
+__add_lvalue_reference 1
+__add_pointer 1
+__add_rvalue_reference 1
+__alignof 1
+__alignof__ 1
+__arm_agnostic 1
+__arm_in 1
+__arm_inout 1
+__arm_locally_streaming 1
+__arm_new 1
+__arm_out 1
+__arm_preserves 1
+__arm_streaming 1
+__arm_streaming_compatible 1
+__array_extent 1
+__array_rank 1
+__asm 1
+__asm__ 1
+__attribute 1
+__attribute__ 1
+__auto_type 1
+__bf16 1
+__builtin_COLUMN 1
+__builtin_FILE 1
+__builtin_FILE_NAME 1
+__builtin_FUNCTION 1
+__builtin_LINE 1
+__builtin_available 1
+__builtin_bit_cast 1
+__builtin_choose_expr 1
+__builtin_convertvector 1
+__builtin_is_implicit_lifetime 1
+__builtin_is_virtual_base_of 1
+__builtin_offsetof 1
+__builtin_omp_required_simd_align 1
+__builtin_ptrauth_type_discriminator 1
+__builtin_source_location 1
+__builtin_va_arg 1
+__builtin_vectorelements 1
+__can_pass_in_regs 1
+__cdecl 1
+__char16_t 1
+__char32_t 1
+__complex 1
+__complex__ 1
+__const 1
+__const__ 1
+__datasizeof 1
+__decay 1
+__decltype 1
+__extension__ 1
+__fastcall 1
+__float128 1
+__fp16 1
+__func__ 1
+__funcref 1
+__has_nothrow_assign 1
+__has_nothrow_constructor 1
+__has_nothrow_copy 1
+__has_nothrow_move_assign 1
+__has_trivial_assign 1
+__has_trivial_constructor 1
+__has_trivial_copy 1
+__has_trivial_destructor 1
+__has_trivial_move_assign 1
+__has_trivial_move_constructor 1
+__has_unique_object_representations 1
+__has_virtual_destructor 1
+__ibm128 1
+__imag 1
+__imag__ 1
+__inline 1
+__inline__ 1
+__int128 1
+__is_abstract 1
+__is_aggregate 1
+__is_arithmetic 1
+__is_array 1
+__is_assignable 1
+__is_base_of 1
+__is_bitwise_cloneable 1
+__is_bounded_array 1
+__is_class 1
+__is_complete_type 1
+__is_compound 1
+__is_const 1
+__is_constructible 1
+__is_convertible 1
+__is_convertible_to 1
+__is_destructible 1
+__is_empty 1
+__is_enum 1
+__is_final 1
+__is_floating_point 1
+__is_function 1
+__is_fundamental 1
+__is_integral 1
+__is_layout_compatible 1
+__is_literal 1
+__is_literal_type 1
+__is_lvalue_expr 1
+__is_lvalue_reference 1
+__is_member_function_pointer 1
+__is_member_object_pointer 1
+__is_member_pointer 1
+__is_nothrow_assignable 1
+__is_nothrow_constructible 1
+__is_nothrow_convertible 1
+__is_nothrow_destructible 1
+__is_object 1
+__is_pod 1
+__is_pointer 1
+__is_pointer_interconvertible_base_of 1
+__is_polymorphic 1
+__is_reference 1
+__is_referenceable 1
+__is_rvalue_expr 1
+__is_rvalue_reference 1
+__is_same 1
+__is_same_as 1
+__is_scalar 1
+__is_scoped_enum 1
+__is_signed 1
+__is_standard_layout 1
+__is_trivial 1
+__is_trivially_assignable 1
+__is_trivially_constructible 1
+__is_trivially_copyable 1
+__is_trivially_destructible 1
+__is_trivially_equality_comparable 1
+__is_trivially_relocatable 1
+__is_unbounded_array 1
+__is_union 1
+__is_unsigned 1
+__is_void 1
+__is_volatile 1
+__label__ 1
+__make_signed 1
+__make_unsigned 1
+__module_private__ 1
+__null 1
+__nullptr 1
+__objc_no 1
+__objc_yes 1
+__pascal 1
+__private_extern__ 1
+__real 1
+__real__ 1
+__reference_binds_to_temporary 1
+__reference_constructs_from_temporary 1
+__reference_converts_from_temporary 1
+__regcall 1
+__remove_all_extents 1
+__remove_const 1
+__remove_cv 1
+__remove_cvref 1
+__remove_extent 1
+__remove_pointer 1
+__remove_reference_t 1
+__remove_restrict 1
+__remove_volatile 1
+__restrict 1
+__restrict__ 1
+__signed 1
+__signed__ 1
+__stdcall 1
+__thiscall 1
+__thread 1
+__typeof 1
+__typeof__ 1
+__typeof_unqual 1
+__typeof_unqual__ 1
+__underlying_type 1
+__vectorcall 1
+__volatile 1
+__volatile__ 1
+alignas 1
+alignof 1
+and 1
+and_eq 1
+asm 1
+auto 1
+bitand 1
+bitor 1
+bool 1
+break 1
+case 1
+catch 1
+char 1
+char16_t 1
+char32_t 1
+class 1
+compl 1
+const 1
+const_cast 1
+constexpr 1
+continue 1
+decltype 1
+default 1
+delete 1
+double 1
+dynamic_cast 1
+else 1
+enum 1
+explicit 1
+export 1
+extern 1
+false 1
+float 1
+for 1
+friend 1
+goto 1
+inline 1
+int 1
+long 1
+mutable 1
+namespace 1
+new 1
+noexcept 1
+not 1
+not_eq 1
+nullptr 1
+operator 1
+or_eq 1
+private 1
+protected 1
+public 1
+register 1
+reinterpret_cast 1
+return 1
+short 1
+signed 1
+sizeof 1
+static 1
+static_assert 1
+static_cast 1
+struct 1
+switch 1
+template 1
+this 1
+thread_local 1
+throw 1
+true 1
+try 1
+typedef 1
+typeid 1
+typename 1
+typeof 1
+union 1
+unsigned 1
+using 1
+virtual 1
+void 1
+volatile 1
+wchar_t 1
+while 1
+xor 1
+xor_eq 1
+""";
 let HAS_CXX_STD_DELTA = """
 =c++98
 feature cxx_access_control_sfinae 0
@@ -3731,6 +4012,17 @@ builtin strcasecmp 0
 builtin strdup 0
 builtin strncasecmp 0
 builtin strndup 0
+keyword alignas 0
+keyword alignof 0
+keyword char16_t 0
+keyword char32_t 0
+keyword constexpr 0
+keyword decltype 0
+keyword noexcept 0
+keyword nullptr 0
+keyword static_assert 0
+keyword thread_local 0
+keyword typeof 0
 =gnu++98
 feature cxx_access_control_sfinae 0
 feature cxx_aggregate_nsdmi 0
@@ -3813,6 +4105,16 @@ extension cxx_unicode_literals 0
 extension cxx_unrestricted_unions 0
 extension cxx_user_literals 0
 extension objc_cxx_static_assert 0
+keyword alignas 0
+keyword alignof 0
+keyword char16_t 0
+keyword char32_t 0
+keyword constexpr 0
+keyword decltype 0
+keyword noexcept 0
+keyword nullptr 0
+keyword static_assert 0
+keyword thread_local 0
 =c++11
 feature cxx_aggregate_nsdmi 0
 feature cxx_binary_literals 0
@@ -3854,6 +4156,7 @@ builtin strcasecmp 0
 builtin strdup 0
 builtin strncasecmp 0
 builtin strndup 0
+keyword typeof 0
 =gnu++11
 feature cxx_aggregate_nsdmi 0
 feature cxx_binary_literals 0
@@ -3896,6 +4199,7 @@ builtin strcasecmp 0
 builtin strdup 0
 builtin strncasecmp 0
 builtin strndup 0
+keyword typeof 0
 =gnu++14
 =c++17
 builtin _exit 0
@@ -3923,6 +4227,7 @@ builtin strcasecmp 0
 builtin strdup 0
 builtin strncasecmp 0
 builtin strndup 0
+keyword typeof 0
 =c++20
 feature modules 1
 extension cxx_generalized_nttp 1
@@ -3967,6 +4272,15 @@ builtin strcasecmp 0
 builtin strdup 0
 builtin strncasecmp 0
 builtin strndup 0
+keyword char8_t 1
+keyword co_await 1
+keyword co_return 1
+keyword co_yield 1
+keyword concept 1
+keyword consteval 1
+keyword constinit 1
+keyword requires 1
+keyword typeof 0
 =gnu++20
 feature modules 1
 extension cxx_generalized_nttp 1
@@ -3986,6 +4300,14 @@ builtin __builtin_coro_resume 1
 builtin __builtin_coro_size 1
 builtin __builtin_coro_suspend 1
 builtin __builtin_is_within_lifetime 1
+keyword char8_t 1
+keyword co_await 1
+keyword co_return 1
+keyword co_yield 1
+keyword concept 1
+keyword consteval 1
+keyword constinit 1
+keyword requires 1
 =c++23
 feature modules 1
 extension cxx_explicit_this_parameter 1
@@ -4031,6 +4353,15 @@ builtin strcasecmp 0
 builtin strdup 0
 builtin strncasecmp 0
 builtin strndup 0
+keyword char8_t 1
+keyword co_await 1
+keyword co_return 1
+keyword co_yield 1
+keyword concept 1
+keyword consteval 1
+keyword constinit 1
+keyword requires 1
+keyword typeof 0
 =gnu++23
 feature modules 1
 extension cxx_explicit_this_parameter 1
@@ -4051,4 +4382,12 @@ builtin __builtin_coro_resume 1
 builtin __builtin_coro_size 1
 builtin __builtin_coro_suspend 1
 builtin __builtin_is_within_lifetime 1
+keyword char8_t 1
+keyword co_await 1
+keyword co_return 1
+keyword co_yield 1
+keyword concept 1
+keyword consteval 1
+keyword constinit 1
+keyword requires 1
 """;

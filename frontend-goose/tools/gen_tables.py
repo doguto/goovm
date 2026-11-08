@@ -18,7 +18,7 @@ The name of an entry is its line up to the first ' ' (predef tables) or '|'
 (BUILTIN_TYPES). Of two entries with one name the later wins, as the
 dictionary that the tables replace did.
 
-Run it after tools/gen_predef.py or tools/gen_builtins.py.
+Run it after tools/gen_predef.py, tools/gen_predef_cxx.py or tools/gen_builtins.py.
 
 usage: tools/gen_tables.py
 """
@@ -31,6 +31,9 @@ OUT = os.path.join(SRC, "tables_gen.goose")
 
 PREDEF_TABLES = ["HAS_BUILTIN", "HAS_FEATURE", "HAS_EXTENSION", "HAS_ATTRIBUTE", "HAS_C_ATTRIBUTE",
                  "HAS_DECLSPEC_ATTRIBUTE", "WARNING_OPTIONS"]
+# D1: C++ mode (predef_cxx_gen.goose, tools/gen_predef_cxx.py)
+PREDEF_CXX_TABLES = ["HAS_CXX_BUILTIN", "HAS_CXX_FEATURE", "HAS_CXX_EXTENSION", "HAS_CXX_ATTRIBUTE",
+                     "HAS_CXX_CPP_ATTRIBUTE", "HAS_CXX_DECLSPEC_ATTRIBUTE", "CXX_KEYWORDS"]
 
 
 def goose_text(path, name):
@@ -111,6 +114,9 @@ def main():
         parts.append(table(t, goose_text(os.path.join(SRC, "predef_gen.goose"), t), b" "))
         parts.append("\n")
     parts.append(table("BUILTIN_TYPES", goose_text(os.path.join(SRC, "builtins_gen.goose"), "BUILTIN_TYPES"), b"|"))
+    for t in PREDEF_CXX_TABLES:
+        parts.append("\n")
+        parts.append(table(t, goose_text(os.path.join(SRC, "predef_cxx_gen.goose"), t), b" "))
     with open(OUT, "w") as f:
         f.write("".join(parts))
     print("wrote", OUT)

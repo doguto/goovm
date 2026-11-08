@@ -20,6 +20,7 @@ import .ppdir;
 import .ppexpr;
 import .print;
 import .predef_gen;
+import .predef_cxx_gen;
 import .types;
 import .dtype;
 import .ast;
@@ -56,6 +57,8 @@ var opt_mode: i64 = 0;      // 0 = -fsyntax-only, 1 = -E, 2 = --layout-check, 3 
 var opt_time: bool = false;
 var nostdinc: bool = false;
 var opt_state_hash: i64 = 0;  // --pp-state-hash (2: =v, per array)
+var lang_x: i64 = 0;        // -x: 0 none, 1 c, 2 c++
+var in_lang: i64 = 0;       // the -x in effect for the input
 
 fn add_dir(d: const u8[:], sys: bool) {
     var s = d;
@@ -306,6 +309,7 @@ fn options() {
             else if which == 5 { sys_dirs_after.push(name_add(val)); sys_dirs_after.push(val.len as! u32); }
             else if which == 6 { cmd_macros.push(CmdMacro { def: false, inc: true, off: name_add(val), len: val.len as! u32 }); }
             else if which == 7 { out_off = name_add(val); out_len = val.len; }
+            else if which == 8 { lang_x = if val == "c++" || val == "c++-header" { 2 } else if val == "c" || val == "c-header" { 1 } else { 0 }; }
             else if which == 12 { std_off = name_add(val); std_len = val.len; }
         }
         if has_val { continue; }
@@ -344,7 +348,15 @@ fn options() {
             opt_optimize = 1;
             if s == "-Os" || s == "-Oz" { opt_os = true; }
         }
-        else if s == "-" || (s.len > 0 && s[0] != '-') { in_off = name_add(s); in_len = s.len; }
+        else if s == "-fno-exceptions" { opt_exceptions = false; }
+        else if s == "-fexceptions" || s == "-fcxx-exceptions" { opt_exceptions = true; }
+        else if s == "-fno-cxx-exceptions" { opt_exceptions = false; }
+        else if s == "-fno-rtti" { opt_rtti = false; }
+        else if s == "-Wno-deprecated" { opt_deprecated = false; }
+        else if s == "-fenable-matrix" { opt_matrix = true; }
+        else if s == "-Wdeprecated" { opt_deprecated = true; }
+        else if s == "-frtti" { opt_rtti = true; }
+        else if s == "-" || (s.len > 0 && s[0] != '-') { in_off = name_add(s); in_len = s.len; in_lang = lang_x; }
         else if !(starts_with(s, "-W") || s == "-w" || starts_with(s, "-f") || starts_with(s, "-m") || starts_with(s, "-g") ||
                   starts_with(s, "-pedantic") || s == "-pipe" || s == "-ansi" || s == "-v" || s == "-Qunused-arguments" ||
                   starts_with(s, "-M") || s == "-S" || s == "-emit-llvm" || starts_with(s, "--")) {
@@ -353,6 +365,30 @@ fn options() {
         // everything else (-w, -W..., -f..., -m...) is accepted and ignored
     }
     if in_len == 0 { usage(); }
+    // C++ (D1): -x c++ before the input, or a C++ extension
+    let inp = opt_input();
+    if in_lang == 2 { opt_cxx = true; }
+    else if in_lang == 0 {
+        for e in [".cpp", ".cc", ".cxx", ".C", ".c++", ".cp", ".CPP", ".hpp", ".hh", ".hxx"] {
+            if inp.len > e.len && inp[inp.len - e.len..] == e { opt_cxx = true; }
+        }
+    }
+    if opt_cxx {
+        let sd = opt_std();
+        if sd.len > 0 {
+            if find(sd, "++98") >= 0 || find(sd, "++03") >= 0 { opt_cxx_std = 98; }
+            else if find(sd, "++11") >= 0 || find(sd, "++0x") >= 0 { opt_cxx_std = 11; }
+            else if find(sd, "++14") >= 0 || find(sd, "++1y") >= 0 { opt_cxx_std = 14; }
+            else if find(sd, "++17") >= 0 || find(sd, "++1z") >= 0 { opt_cxx_std = 17; }
+            else if find(sd, "++20") >= 0 || find(sd, "++2a") >= 0 { opt_cxx_std = 20; }
+            else if find(sd, "++23") >= 0 || find(sd, "++2b") >= 0 || find(sd, "++26") >= 0 || find(sd, "++2c") >= 0 { opt_cxx_std = 23; }
+            else {
+                // a C standard with a C++ input: clang's error
+                write_stderr(str("goosecc: error: invalid argument '-std=", sd, "' not allowed with 'C++'\n"));
+                exit(1);
+            }
+        }
+    }
 
     pp_init_tables();
     // Search list: -iquote, -I, -isystem, then the system directories.
@@ -366,6 +402,12 @@ fn options() {
     k = 0;
     while k + 1 < isystem_dirs.len { add_dir(names[isystem_dirs[k]..isystem_dirs[k] + isystem_dirs[k + 1]], true); k += 2; }
     if !nostdinc {
+        if opt_cxx {
+            // clang++'s libstdc++ directories, spelled as it spells them
+            add_dir("/usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13", true);
+            add_dir("/usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/x86_64-linux-gnu/c++/13", true);
+            add_dir("/usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/backward", true);
+        }
         add_dir("/usr/lib/llvm-20/lib/clang/20/include", true);
         add_dir("/usr/local/include", true);
         add_dir("/usr/include/x86_64-linux-gnu", true);

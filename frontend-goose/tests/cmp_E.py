@@ -71,6 +71,46 @@ def tokenize(text):
     return toks
 
 
+# C++ (D1): the whole output at once (raw strings span lines); line markers
+# are dropped first. Literals keep their ud-suffix, numbers their ' separators.
+CXX_PUNCTS = sorted("""%:%: ... <<= >>= ->* -> ++ -- << >> <= >= == != && || *= /= %= += -= &= ^= |= ## <: :> <% %> %:
+:: .* [ ] ( ) { } . & * + - ~ ! / % < > ^ | ? : ; = , #""".split(), key=len, reverse=True)
+CXX_TOKEN = re.compile(r"""
+  (?P<raw>(?:u8|u|U|L)?R"(?P<d>[^ ()\\\t\v\f\n]{0,16})\((?:.|\n)*?\)(?P=d)"[A-Za-z0-9_$]*)
+| (?P<str>(?:u8|u|U|L)?(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')[A-Za-z0-9_$]*)
+| (?P<id>[A-Za-z_$\x80-\uffff][A-Za-z0-9_$\x80-\uffff]*)
+| (?P<num>\.?[0-9](?:[eEpP][+-]|'[A-Za-z0-9_]|[A-Za-z0-9_.$\x80-\uffff])*)
+| (?P<ws>[ \t\r\f\v\n]+)
+""", re.X)
+
+
+def tokenize_cxx(text):
+    lines = [l for l in text.split("\n") if not MARKER.match(l)]
+    text = "\n".join(lines)
+    toks = []
+    i, n = 0, len(text)
+    while i < n:
+        m = CXX_TOKEN.match(text, i)
+        if m and m.end() > i:
+            if m.lastgroup != "ws":
+                toks.append(m.group(0))
+            i = m.end()
+            continue
+        if text.startswith("<::", i) and text[i + 3:i + 4] not in (":", ">"):
+            toks.append("<")    # C++11 [lex.pptoken]p3
+            i += 1
+            continue
+        for p in CXX_PUNCTS:
+            if text.startswith(p, i):
+                toks.append(p)
+                i += len(p)
+                break
+        else:
+            toks.append(text[i])
+            i += 1
+    return toks
+
+
 def run(cmd, env=None):
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     return r.returncode, r.stdout.decode("utf-8", "surrogateescape"), r.stderr.decode("utf-8", "replace")
@@ -80,13 +120,17 @@ ENV = dict(os.environ, SOURCE_DATE_EPOCH="1700000000", TZ="UTC")
 
 
 def compare(goosecc, path, flags, clang="clang-20"):
+    cxx = corpus_mod.is_cxx(path) or "c++" in flags
+    if cxx and clang == "clang-20":
+        clang = "clang++-20"
     rc, ref, err = run([clang, "-E"] + flags + [path], ENV)
     if rc != 0:
         return "clang-error", err.strip().splitlines()[-1:] if err.strip() else ""
     rc2, got, err2 = run([goosecc, "-E"] + flags + [path], ENV)
     if rc2 != 0 and not got:
         return "goosecc-error", (err2.strip().splitlines() or ["rc=%d" % rc2])[0]
-    a, b = tokenize(ref), tokenize(got)
+    tk = tokenize_cxx if cxx else tokenize
+    a, b = tk(ref), tk(got)
     if a == b:
         return ("same" if rc2 == 0 else "same-but-rc"), (err2.strip().splitlines() or [""])[0]
     k = 0

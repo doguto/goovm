@@ -105,6 +105,8 @@ var opt_cxx: bool = false;
 var opt_cxx_std: i64 = 17;     // 98 (also c++03), 11, 14, 17, 20, 23
 var opt_exceptions: bool = true;
 var opt_rtti: bool = true;
+var opt_matrix: bool = false;     // -fenable-matrix: __has_extension(matrix_types)
+var opt_deprecated: bool = true;  // -Wno-deprecated: no __DEPRECATED (clang++'s driver)
 
 // Well-known identifiers.
 var id_defined: u32 = 0;

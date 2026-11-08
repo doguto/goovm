@@ -10,6 +10,7 @@ import .pp;
 import .ppdir;
 import .print;
 import .predef_gen;
+import .predef_cxx_gen;
 import .tables_gen;
 
 // ---------------------------------------------------------------------------
@@ -19,7 +20,13 @@ import .tables_gen;
 var pe_tok: Tok = Tok { kind: 0, flags: 0, aux: 0, spell: 0, val: 0, xloc: 0 };
 var pe_err: bool = false;
 
-recursive fn pe_advance() { pe_tok = pp_lex(); }
+recursive fn pe_advance() {
+    pe_tok = pp_lex();
+    // C++: an alternative token is its operator
+    if opt_cxx && pe_tok.kind == TK_IDENT && idents[pe_tok.val].flags & ID_CXXOP != 0 {
+        pe_tok.kind = cxxop_kind(pe_tok.val) as! u8;
+    }
+}
 
 fn pe_error(msg: const u8[:]) {
     if !pe_err { error_at(pe_tok.xloc as i64, msg); }
@@ -226,7 +233,8 @@ recursive fn pe_unary(ev: bool) -> i64, bool {
             pe_advance();
             return if d { 1 } else { 0 }, false;
         }
-        // Any other identifier is 0.
+        // C++: true and false; any other identifier is 0.
+        if opt_cxx && t.val == id_true { pe_advance(); return 1, false; }
         pe_advance();
         return 0, false;
     }
@@ -404,12 +412,23 @@ let B_BUILDING_MODULE = 29;
 let B_FLT_EVAL_METHOD = 30;
 let B_LITERAL_ENCODING = 31;
 let B_WIDE_LITERAL_ENCODING = 32;
+let B_HAS_CPP_ATTRIBUTE = 33;     // C++ only
 
 var base_file_name: u32 = 0;
 var base_file_name_len: u32 = 0;
 var bt: u8[>..] = [];
 
+// Tables: 0 __has_builtin, 1 __has_feature, 2 __has_extension, 3
+// __has_attribute, 4 __has_c_attribute, 5 __has_declspec_attribute, 6 the
+// warning options; in C++ mode (D1) clang++'s tables, 7
+// __has_cpp_attribute and 8 the words that are not identifiers.
 fn table_text(k: i64) -> const u8[:] {
+    if opt_cxx {
+        return match k {
+            0 => HAS_CXX_BUILTIN, 1 => HAS_CXX_FEATURE, 2 => HAS_CXX_EXTENSION, 3 => HAS_CXX_ATTRIBUTE,
+            5 => HAS_CXX_DECLSPEC_ATTRIBUTE, 7 => HAS_CXX_CPP_ATTRIBUTE, 8 => CXX_KEYWORDS, _ => WARNING_OPTIONS,
+        };
+    }
     return match k {
         0 => HAS_BUILTIN, 1 => HAS_FEATURE, 2 => HAS_EXTENSION, 3 => HAS_ATTRIBUTE,
         4 => HAS_C_ATTRIBUTE, 5 => HAS_DECLSPEC_ATTRIBUTE, _ => WARNING_OPTIONS,
@@ -420,6 +439,7 @@ fn table_text(k: i64) -> const u8[:] {
 // there is none), 0 for a name not in the table. The lookup goes through
 // the static hash tables of tables_gen.goose.
 fn table_lookup(k: i64, name: const u8[:]) -> i64 {
+    if opt_cxx && k != 6 { return cxx_table_lookup(k, name); }
     let text = table_text(k);
     let h = hash_bytes(name);
     let e = match k {
@@ -447,13 +467,99 @@ fn table_lookup(k: i64, name: const u8[:]) -> i64 {
 
 fn warning_known(name: const u8[:]) -> bool { table_lookup(6, name) != 0 }
 
+// C++ (D1): the standard's answer from the delta (cxx_delta), else
+// clang++'s gnu++17 table.
+fn cxx_table_lookup(k: i64, name: const u8[:]) -> i64 {
+    if k == 4 || name.len == 0 { return 0; }
+    var i = 0;
+    while i + 3 < cxx_delta.len {
+        if cxx_delta[i] as i64 == k {
+            let o = cxx_delta[i + 1] as i64;
+            if HAS_CXX_STD_DELTA[o..o + cxx_delta[i + 2]] == name { return cxx_delta[i + 3] as i64; }
+        }
+        i += 4;
+    }
+    let text = table_text(k);
+    let h = hash_bytes(name);
+    let e = match k {
+        0 => tbl_find(text, TBL_HAS_CXX_BUILTIN_OFF, TBL_HAS_CXX_BUILTIN_HT, TBL_HAS_CXX_BUILTIN_LEN, name, h, ' '),
+        1 => tbl_find(text, TBL_HAS_CXX_FEATURE_OFF, TBL_HAS_CXX_FEATURE_HT, TBL_HAS_CXX_FEATURE_LEN, name, h, ' '),
+        2 => tbl_find(text, TBL_HAS_CXX_EXTENSION_OFF, TBL_HAS_CXX_EXTENSION_HT, TBL_HAS_CXX_EXTENSION_LEN, name, h, ' '),
+        3 => tbl_find(text, TBL_HAS_CXX_ATTRIBUTE_OFF, TBL_HAS_CXX_ATTRIBUTE_HT, TBL_HAS_CXX_ATTRIBUTE_LEN, name, h, ' '),
+        5 => tbl_find(text, TBL_HAS_CXX_DECLSPEC_ATTRIBUTE_OFF, TBL_HAS_CXX_DECLSPEC_ATTRIBUTE_HT, TBL_HAS_CXX_DECLSPEC_ATTRIBUTE_LEN, name, h, ' '),
+        7 => tbl_find(text, TBL_HAS_CXX_CPP_ATTRIBUTE_OFF, TBL_HAS_CXX_CPP_ATTRIBUTE_HT, TBL_HAS_CXX_CPP_ATTRIBUTE_LEN, name, h, ' '),
+        _ => tbl_find(text, TBL_CXX_KEYWORDS_OFF, TBL_CXX_KEYWORDS_HT, TBL_CXX_KEYWORDS_LEN, name, h, ' '),
+    };
+    if e < 0 { return 0; }
+    let off: u32 = match k {
+        0 => TBL_HAS_CXX_BUILTIN_OFF[e], 1 => TBL_HAS_CXX_FEATURE_OFF[e], 2 => TBL_HAS_CXX_EXTENSION_OFF[e],
+        3 => TBL_HAS_CXX_ATTRIBUTE_OFF[e], 5 => TBL_HAS_CXX_DECLSPEC_ATTRIBUTE_OFF[e],
+        7 => TBL_HAS_CXX_CPP_ATTRIBUTE_OFF[e], _ => TBL_CXX_KEYWORDS_OFF[e],
+    };
+    var j = off as i64 + name.len;
+    if j >= text.len || text[j] != ' ' { return 1; }
+    j++;
+    var v: i64 = 0;
+    while j < text.len && text[j] >= '0' && text[j] <= '9' { v = v * 10 + (text[j] - '0'); j++; }
+    return v;
+}
+
+// The standard's deltas of the __has_* tables (HAS_CXX_STD_DELTA): per
+// entry (table, offset of the word in the text, its length, value).
+var cxx_delta: u32[>..] = [];
+// The -std= name whose deltas the generated tables hold ("" for gnu++17).
+fn cxx_std_name() -> const u8[:] {
+    let s = opt_std();
+    let gnu = s.len == 0 || s[0] == 'g';
+    return match opt_cxx_std {
+        98 => if gnu { "gnu++98" } else { "c++98" },
+        11 => if gnu { "gnu++11" } else { "c++11" },
+        14 => if gnu { "gnu++14" } else { "c++14" },
+        17 => if gnu { "" } else { "c++17" },
+        20 => if gnu { "gnu++20" } else { "c++20" },
+        _ => if gnu { "gnu++23" } else { "c++23" },
+    };
+}
+
+fn cxx_delta_init() {
+    let want = cxx_std_name();
+    if want.len == 0 { return; }
+    let text = HAS_CXX_STD_DELTA;
+    var on = false;
+    var i = 0;
+    while i < text.len {
+        var j = i;
+        while j < text.len && text[j] != '\n' { j++; }
+        let line = text[i..j];
+        if line.len > 0 && line[0] == '=' {
+            on = line[1..] == want;
+        } else if on {
+            // "TABLE WORD VALUE"
+            let a = find(line, " ");
+            let rest = line[a + 1..];
+            let b = find(rest, " ");
+            let tbl = line[..a];
+            let k: u32 = if tbl == "builtin" { 0 } else if tbl == "feature" { 1 } else if tbl == "extension" { 2 }
+                else if tbl == "cpp_attribute" { 7 } else { 8 };
+            var v: u32 = 0;
+            for c in rest[b + 1..] { if c >= '0' && c <= '9' { v = v * 10 + (c - '0') as u32; } }
+            cxx_delta.push(k);
+            cxx_delta.push((i + a + 1) as! u32);
+            cxx_delta.push(b as! u32);
+            cxx_delta.push(v);
+        }
+        i = j + 1;
+    }
+}
+
 fn feature_value(kind: i64, name: const u8[:]) -> i64 {
     var nm = name;
     if nm.len >= 4 && nm[0] == '_' && nm[1] == '_' && nm[nm.len - 1] == '_' && nm[nm.len - 2] == '_' {
         nm = nm[2..nm.len - 2];
     }
+    if kind == B_HAS_EXTENSION && opt_matrix && nm == "matrix_types" { return 1; }
     if kind == B_HAS_FEATURE {
-        if !opt_std_c11 && starts_with(nm, "c_") && nm != "c_fixed_enum" { return 0; }
+        if !opt_cxx && !opt_std_c11 && starts_with(nm, "c_") && nm != "c_fixed_enum" { return 0; }
         return table_lookup(1, nm);
     }
     return table_lookup(2, nm);
@@ -466,7 +572,10 @@ fn attr_value(k: i64, name: const u8[:]) -> i64 {
     var scope_len = -1;
     let cpos = find(nm, "::");
     if cpos >= 0 {
-        bt2.append(nm[..cpos + 2]);
+        let sc = nm[..cpos];
+        if opt_cxx && sc == "__gnu__" { bt2.append("gnu::"); }
+        else if opt_cxx && (sc == "_Clang" || sc == "__clang__") { bt2.append("clang::"); }
+        else { bt2.append(nm[..cpos + 2]); }
         nm = nm[cpos + 2..];
         scope_len = cpos;
     }
@@ -706,7 +815,7 @@ recursive fn expand_builtin(name: Tok, b: i64) -> i64 {
         return 2;
     }
     // The feature-check macros: name ( identifier )
-    let expand = b == B_HAS_ATTRIBUTE || b == B_HAS_C_ATTRIBUTE;
+    let expand = b == B_HAS_ATTRIBUTE || b == B_HAS_C_ATTRIBUTE || b == B_HAS_CPP_ATTRIBUTE;
     let id = builtin_paren_name(name, expand);
     var v: i64 = 0;
     if b == B_HAS_BUILTIN || b == B_HAS_CONSTEXPR_BUILTIN {
@@ -718,12 +827,18 @@ recursive fn expand_builtin(name: Tok, b: i64) -> i64 {
         v = attr_value(3, bt);
     } else if b == B_HAS_C_ATTRIBUTE {
         v = attr_value(4, bt);
+    } else if b == B_HAS_CPP_ATTRIBUTE {
+        v = attr_value(7, bt);
     } else if b == B_HAS_DECLSPEC {
         v = attr_value(5, bt);
     } else if b == B_HAS_WARNING {
         v = if is_known_warning(bt) { 1 } else { 0 };
     } else if b == B_IS_IDENTIFIER {
-        v = if id >= 0 && idents[id].kw == 0 { 1 } else { 0 };
+        if opt_cxx {
+            v = if table_lookup(8, bt) != 0 { 0 } else { 1 };
+        } else {
+            v = if id >= 0 && idents[id].kw == 0 { 1 } else { 0 };
+        }
     } else if b == B_IS_TARGET_ARCH {
         v = if bt == "x86_64" || bt == "amd64" || bt == "x86-64" { 1 } else { 0 };
     } else if b == B_IS_TARGET_VENDOR {
@@ -816,7 +931,9 @@ fn pp_init_tables() {
     add_builtin("__has_include", B_HAS_INCLUDE); add_builtin("__has_include_next", B_HAS_INCLUDE_NEXT);
     add_builtin("__has_builtin", B_HAS_BUILTIN); add_builtin("__has_feature", B_HAS_FEATURE);
     add_builtin("__has_extension", B_HAS_EXTENSION); add_builtin("__has_attribute", B_HAS_ATTRIBUTE);
-    add_builtin("__has_c_attribute", B_HAS_C_ATTRIBUTE); add_builtin("__has_declspec_attribute", B_HAS_DECLSPEC);
+    if opt_cxx { add_builtin("__has_cpp_attribute", B_HAS_CPP_ATTRIBUTE); }
+    else { add_builtin("__has_c_attribute", B_HAS_C_ATTRIBUTE); }
+    add_builtin("__has_declspec_attribute", B_HAS_DECLSPEC);
     add_builtin("__has_warning", B_HAS_WARNING); add_builtin("__is_identifier", B_IS_IDENTIFIER);
     add_builtin("__has_constexpr_builtin", B_HAS_CONSTEXPR_BUILTIN); add_builtin("__has_embed", B_HAS_EMBED);
     add_builtin("__is_target_arch", B_IS_TARGET_ARCH); add_builtin("__is_target_vendor", B_IS_TARGET_VENDOR);
@@ -826,7 +943,23 @@ fn pp_init_tables() {
     add_builtin("__building_module", B_BUILDING_MODULE); add_builtin("__FLT_EVAL_METHOD__", B_FLT_EVAL_METHOD);
     add_builtin("__clang_literal_encoding__", B_LITERAL_ENCODING);
     add_builtin("__clang_wide_literal_encoding__", B_WIDE_LITERAL_ENCODING);
+    if opt_cxx {
+        // the alternative tokens (C++ [lex.digraph]): never macros; #if and
+        // the parser see their operators
+        let ops = ["and", "and_eq", "bitand", "bitor", "compl", "not", "not_eq", "or", "or_eq", "xor", "xor_eq"];
+        let kinds = [TK_AMPAMP, TK_AMPEQUAL, TK_AMP, TK_PIPE, TK_TILDE, TK_EXCLAIM, TK_EXCLAIMEQUAL, TK_PIPEPIPE,
+            TK_PIPEEQUAL, TK_CARET, TK_CARETEQUAL];
+        for o, i in ops {
+            let id = intern(o);
+            idents[id].flags = idents[id].flags | ID_CXXOP;
+            cxxops.push(id);
+            cxxops.push(kinds[i] as! u32);
+        }
+        id_true = intern("true");
+        cxx_delta_init();
+    }
 }
+var id_true: u32 = 0;
 
 // The <built-in> buffer: predefined macros adjusted for the options, then
 // the command line -D/-U, then -include.
@@ -839,12 +972,55 @@ fn std_version() -> const u8[:] {
     return "201710L";
 }
 
+// C++ (D1): clang++'s predefined macros: the gnu++17 set with the
+// standard's delta (PREDEF_CXX_STD: -NAME removes, +NAME VALUE adds or
+// replaces), -fno-exceptions and -fno-rtti. A base macro the delta names is
+// left out, then the delta's additions follow.
+fn cxx_predef_line(line: const u8[:], delta: const u8[:]) -> bool {
+    // "#define NAME ..." -> is NAME removed or replaced?
+    var e = 8;
+    while e < line.len && line[e] != ' ' { e++; }
+    let name = line[8..e];
+    if !opt_exceptions && (name == "__EXCEPTIONS" || name == "__cpp_exceptions") { return false; }
+    if !opt_rtti && (name == "__GXX_RTTI" || name == "__cpp_rtti") { return false; }
+    if !opt_deprecated && name == "__DEPRECATED" { return false; }
+    var i = 0;
+    while i < delta.len {
+        var j = i;
+        while j < delta.len && delta[j] != '\n' { j++; }
+        let d = delta[i + 1..j];
+        if d.len >= name.len && d[..name.len] == name && (d.len == name.len || d[name.len] == ' ') { return false; }
+        i = j + 1;
+    }
+    return true;
+}
+
+fn cxx_std_delta() -> const u8[:] {
+    let want = cxx_std_name();
+    if want.len == 0 { return ""; }
+    let text = PREDEF_CXX_STD;
+    var i = 0;
+    var start = -1;
+    while i < text.len {
+        var j = i;
+        while j < text.len && text[j] != '\n' { j++; }
+        if text[i] == '=' {
+            if start >= 0 { return text[start..i]; }
+            if text[i + 1..j] == want { start = j + 1; }
+        }
+        i = j + 1;
+    }
+    if start >= 0 { return text[start..]; }
+    return "";
+}
+
 // Appends it to src.
 fn build_builtin_text() {
     let s = opt_std();
     let strict = s.len > 0 && s[0] != 'g';
-    let c89 = std_version().len == 0;
-    let text = PREDEF_BASE;
+    let c89 = !opt_cxx && std_version().len == 0;
+    let text = if opt_cxx { PREDEF_CXX_BASE } else { PREDEF_BASE };
+    let delta = if opt_cxx { cxx_std_delta() } else { "" };
     var i = 0;
     while i < text.len {
         var j = i;
@@ -852,6 +1028,7 @@ fn build_builtin_text() {
         let line = text[i..j];
         i = j + 1;
         var keep = true;
+        if opt_cxx && !cxx_predef_line(line, delta) { keep = false; }
         if line == "#define __NO_INLINE__ 1" && opt_optimize > 0 { keep = false; }
         if opt_pic_mode != 0 && (starts_with(line, "#define __PIC__ ") || starts_with(line, "#define __pic__ ") ||
                                  starts_with(line, "#define __PIE__ ") || starts_with(line, "#define __pie__ ")) {
@@ -860,7 +1037,7 @@ fn build_builtin_text() {
             let lvl = if opt_pic_mode == 1 || opt_pic_mode == 3 { " 1\n" } else { " 2\n" };
             if opt_pic_mode <= 1 || (opt_pic_mode <= 3 && !pie) { src.append(line[..15]); src.append(lvl); }
         }
-        if strict && (line == "#define linux 1" || line == "#define unix 1") { keep = false; }
+        if strict && !opt_cxx && (line == "#define linux 1" || line == "#define unix 1") { keep = false; }
         if starts_with(line, "#define __STDC_VERSION__ ") {
             keep = false;
             if !c89 { src.append("#define __STDC_VERSION__ "); src.append(std_version()); src.push('\n'); }
@@ -871,9 +1048,25 @@ fn build_builtin_text() {
         }
         if keep { src.append(line); src.push('\n'); }
     }
+    if opt_cxx {
+        // the delta's additions and replacements
+        var k = 0;
+        while k < delta.len {
+            var j = k;
+            while j < delta.len && delta[j] != '\n' { j++; }
+            if delta[k] == '+' {
+                let d = delta[k + 1..j];
+                src.append("#define ");
+                let sp = find(d, " ");
+                if sp >= 0 { src.append(d); } else { src.append(d); src.append(" "); }
+                src.push('\n');
+            }
+            k = j + 1;
+        }
+    }
     if opt_optimize > 0 { src.append("#define __OPTIMIZE__ 1\n"); }
     if opt_os { src.append("#define __OPTIMIZE_SIZE__ 1\n"); }
-    if strict { src.append("#define __STRICT_ANSI__ 1\n"); }
+    if strict && !opt_cxx { src.append("#define __STRICT_ANSI__ 1\n"); }
     if opt_pthread { src.append("#define _REENTRANT 1\n"); }
     if opt_unsigned_char { src.append("#define __CHAR_UNSIGNED__ 1\n"); }
     for m in cmd_macros {
@@ -908,6 +1101,14 @@ fn build_builtin_text() {
 fn pp_set_lang() {
     let s = opt_std();
     opt_gnu = s.len == 0 || s[0] == 'g';
+    if opt_cxx {
+        opt_c99 = true;
+        opt_std_c11 = true;
+        opt_c11 = opt_cxx_std >= 11;
+        // trigraphs: strict C++ before C++17 (clang's default)
+        opt_trigraphs = !opt_gnu && opt_cxx_std < 17;
+        return;
+    }
     let v = std_version();
     opt_c99 = v.len > 0;
     opt_std_c11 = v == "201112L" || v == "201710L";

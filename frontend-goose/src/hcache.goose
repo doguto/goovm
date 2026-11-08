@@ -257,6 +257,15 @@ fn hc_prepare() -> bool {
     hcb.push(bit(opt_gnu)); hcb.push(bit(opt_c99)); hcb.push(bit(opt_std_c11)); hcb.push(bit(opt_c11));
     hcb.push(bit(opt_trigraphs)); hcb.push(bit(opt_kw_inline)); hcb.push(bit(opt_kw_restrict)); hcb.push(bit(opt_kw_gnu));
     hcb.push(bit(tu_annot));
+    if opt_matrix { hcb.append(" matrix"); }
+    // C++ (D1): the language, its standard and the options that change
+    // the predefined macros' meaning for the parser
+    if opt_cxx {
+        format(hcb, " c++", opt_cxx_std, " ");
+        hcb.push(bit(opt_exceptions));
+        hcb.push(bit(opt_rtti));
+        hcb.push(bit(opt_deprecated));
+    }
     format(hcb, " dirs ", quote_dirs_end, " ", angle_start, " ", sys_start);
     for dr in dirs {
         hcb.push('\n');

@@ -10,7 +10,8 @@ macros each; -O, -pthread, -funsigned-char and -fPIC are the C deltas
 (gen_predef.py), and this script checks that they are the same in C++.
 
 The __has_builtin / __has_feature / __has_extension / __has_attribute /
-__has_cpp_attribute / __has_declspec_attribute answers are probed from
+__has_cpp_attribute / __has_declspec_attribute answers, and the words that
+are not identifiers (!__is_identifier: C++ keywords, type traits), are probed from
 clang++ over the same candidate words as gen_predef.py (every
 identifier-like string in libclang-cpp). __has_feature, __has_extension
 and __has_cpp_attribute depend on the standard: the tables hold the
@@ -44,10 +45,11 @@ def macros(clang, flags):
 
 
 def probe(clang, words, fn, flags=()):
-    """{word: value} for fn(word) != 0."""
+    """{word: value} for fn(word) != 0 (fn "!__is_identifier": value 1)."""
     lines = []
     for i, w in enumerate(words):
-        lines.append(f"#if {fn}({w})\nGOOSECC_YES_{i} = {fn}({w})\n#endif\n")
+        val = "1" if fn.startswith("!") else f"{fn}({w})"
+        lines.append(f"#if {fn}({w})\nGOOSECC_YES_{i} = {val}\n#endif\n")
     with tempfile.NamedTemporaryFile("w", suffix=".cpp", delete=False) as f:
         f.write("".join(lines))
         path = f.name
@@ -112,7 +114,7 @@ def main():
     words = sorted(set(w for w in out.split("\n") if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", w)))
     print(f"{len(words)} candidate words", file=sys.stderr)
     fns = ["__has_builtin", "__has_feature", "__has_extension", "__has_attribute",
-           "__has_cpp_attribute", "__has_declspec_attribute"]
+           "__has_cpp_attribute", "__has_declspec_attribute", "!__is_identifier"]
     tables = {}
     for fn in fns:
         tables[fn] = probe(a.clang, words, fn)
@@ -122,7 +124,7 @@ def main():
     tables["__has_cpp_attribute"].update(probe(a.clang, scoped, "__has_cpp_attribute"))
     tables["__has_attribute"].update(probe(a.clang, scoped, "__has_attribute"))
     # the standard-dependent tables, per standard
-    dep = ["__has_feature", "__has_extension", "__has_cpp_attribute", "__has_builtin"]
+    dep = ["__has_feature", "__has_extension", "__has_cpp_attribute", "__has_builtin", "!__is_identifier"]
     dwords = {fn: sorted(set(tables[fn]) | set(words if fn != "__has_cpp_attribute" else [])) for fn in dep}
     dwords["__has_cpp_attribute"] = sorted(set(tables["__has_cpp_attribute"]) | set(attrs) | set(scoped))
     sdelta = []
@@ -130,7 +132,7 @@ def main():
         sdelta.append("=" + s)
         for fn in dep:
             t = probe(a.clang, dwords[fn], fn, ["-std=" + s])
-            short = fn[len("__has_"):]
+            short = "keyword" if fn.startswith("!") else fn[len("__has_"):]
             for w in sorted(set(t) | set(tables[fn])):
                 if t.get(w, 0) != tables[fn].get(w, 0):
                     sdelta.append(f"{short} {w} {t.get(w, 0)}")
@@ -141,7 +143,7 @@ def main():
         f.write(goose_str("PREDEF_CXX_BASE", base_text.rstrip("\n")))
         f.write(goose_str("PREDEF_CXX_STD", "\n".join(std_lines)))
         for fn in fns:
-            name = "HAS_CXX_" + fn[len("__has_"):].upper()
+            name = "CXX_KEYWORDS" if fn.startswith("!") else "HAS_CXX_" + fn[len("__has_"):].upper()
             body = "\n".join(f"{k} {v}" for k, v in sorted(tables[fn].items()))
             f.write(goose_str(name, body))
         f.write(goose_str("HAS_CXX_STD_DELTA", "\n".join(sdelta)))
