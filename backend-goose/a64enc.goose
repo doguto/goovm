@@ -649,24 +649,23 @@ checkfree fn a_fmov_hi_from_gp(vd: u32, rn: u32) { a4(0x9EAF0000 | ((rn & 31) <<
 // The fmov 8-bit immediate of an f32/f64 bit pattern, or 0xFFFFFFFF.
 fn a_fp_imm8(bits: u64, dbl: bool) -> u32 {
     if dbl {
-        // aBbbbbbb bbcdefgh 0..0 (48 zeros)
+        // a:NOT(b):bbbbbbbb:cd:efgh:0{48}
         if bits & 0x0000FFFFFFFFFFFF != 0 { return 0xFFFFFFFF; }
-        let b = (bits >> 54) & 0x1FF;
-        if b != 0x100 && b != 0x0FF { return 0xFFFFFFFF; }
+        let e9 = (bits >> 54) & 0x1FF;
+        if e9 != 0x100 && e9 != 0x0FF { return 0xFFFFFFFF; }
         let a: u32 = ((bits >> 63) & 1) as! u32;
-        let bb: u32 = ((bits >> 62) & 1) as! u32;
-        if ((bits >> 61) & 1 == 1) != (bb == 0) { return 0xFFFFFFFF; }
+        let b: u32 = ((bits >> 61) & 1) as! u32;
         let cdefgh: u32 = ((bits >> 48) & 0x3F) as! u32;
-        return (a << 7) | (bb << 6) | cdefgh;
+        return (a << 7) | (b << 6) | cdefgh;
     }
+    // a:NOT(b):bbbbb:cd:efgh:0{19}
     let x: u32 = bits as! u32;
     if x & 0x7FFFF != 0 { return 0xFFFFFFFF; }
-    let b = (x >> 25) & 0x3F;
-    if b != 0x20 && b != 0x1F { return 0xFFFFFFFF; }
+    let e6 = (x >> 25) & 0x3F;
+    if e6 != 0x20 && e6 != 0x1F { return 0xFFFFFFFF; }
     let a = (x >> 31) & 1;
-    let bb = (x >> 30) & 1;
-    if ((x >> 29) & 1 == 1) != (bb == 0) { return 0xFFFFFFFF; }
-    return (a << 7) | (bb << 6) | ((x >> 19) & 0x3F);
+    let b = (x >> 29) & 1;
+    return (a << 7) | (b << 6) | ((x >> 19) & 0x3F);
 }
 
 // ------------------------------------------------------------ SIMD

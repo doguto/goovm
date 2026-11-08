@@ -63,7 +63,7 @@ LFLAGS = []          # link flags of the target
 
 def execute(exe):
     try:
-        r = run(RUNNER + [exe], timeout=60 if RUNNER else 20)
+        r = run(RUNNER + [exe], timeout=600 if RUNNER else 20)   # (C++ exceptions are slow under qemu)
     except subprocess.TimeoutExpired:
         return (b"<timeout>", -999)
     return (r.stdout, r.returncode)
@@ -114,7 +114,14 @@ def test_one(p, args):
         refs = []
         for i, s in enumerate(p.srcs):
             o = os.path.join(wd, f"ref{i}.o")
-            step([compiler(s, args)] + TFLAGS + ["-O0", "-w", "-c", s, "-o", o], "reference build")
+            try:
+                step([compiler(s, args)] + TFLAGS + ["-O0", "-w", "-c", s, "-o", o], "reference build")
+            except Fail as e:
+                if args.target != "aarch64":
+                    raise
+                # x86-64-specific programs (x86 inline assembly, ...) do not build for AArch64
+                err = str(e).split("\n")
+                return p.name, [("skip", None, next((l for l in err if "error:" in l), err[0])[:200])]
             refs.append(o)
         ref = os.path.join(wd, "ref")
         step([link] + LFLAGS + refs + ["-o", ref, "-lm"], "reference link")
@@ -264,11 +271,15 @@ def main():
     if args.filter:
         progs = [p for p in progs if any(f in p.name for f in args.filter)]
 
-    passed = failed = 0
+    passed = failed = skipped = 0
     with cf.ThreadPoolExecutor(max_workers=args.j) as ex:
         for name, results in ex.map(lambda p: test_one(p, args), progs):
             line = []
             for variant, ok, msg in results:
+                if ok is None:
+                    line.append(f"skipped ({msg})")
+                    skipped += 1
+                    continue
                 line.append(f"{variant}:{'ok' if ok else 'FAIL'}")
                 if ok:
                     passed += 1
@@ -276,9 +287,10 @@ def main():
                     failed += 1
             print(f"{name:28s} {'  '.join(line)}")
             for variant, ok, msg in results:
-                if not ok:
+                if ok is False:
                     print("    [" + variant + "] " + msg.replace("\n", "\n    "))
-    print(f"\n{passed} passed, {failed} failed ({len(progs)} programs)")
+    print(f"\n{passed} passed, {failed} failed ({len(progs)} programs" + (f", {skipped} skipped: not buildable for "
+          f"the target" if skipped else "") + ")")
     if tmp and not args.keep and failed == 0:
         shutil.rmtree(tmp, ignore_errors=True)
     elif tmp:

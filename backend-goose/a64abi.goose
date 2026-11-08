@@ -549,6 +549,8 @@ fn a_ret_value(v: u32, t: u32) {
 // only when the prologue is made: the prologue copies them to their homes.
 struct AProArg { a: u32, off: i32 }
 var a_pro: AProArg[>..] = [];
+var a_fparts: APart[>..] = [];   // the function's own parameters (a_parts is reused by calls)
+var a_fpfirst: u32[>..] = [];
 var a_va_gr: u32 = 0;     // GPRs taken by named arguments
 var a_va_vr: u32 = 0;
 var a_va_stk: u32 = 0;    // stack bytes of named arguments
@@ -560,6 +562,10 @@ fn a_setup_args() {
     a_va_gr = a_ngrn;
     a_va_vr = a_nsrn;
     a_va_stk = a_nstk;
+    a_fparts.clear();
+    a_fparts.append(a_parts);
+    a_fpfirst.clear();
+    a_fpfirst.append(a_pfirst);
     a_pro.clear();
     for a in 0..f_nargs {
         let id = f_nins + a;
@@ -620,10 +626,10 @@ fn a_prologue_args() {
         qq++;
         let id = f_nins + a;
         let t = M.opnds[f_args + 2 * a];
-        let q0 = a_pfirst[a];
-        let q1 = a_pfirst[a + 1];
+        let q0 = a_fpfirst[a];
+        let q1 = a_fpfirst[a + 1];
         for q in q0..q1 {
-            let P = a_parts[q];
+            let P = a_fparts[q];
             if P.kind == AP_BYVAL {
                 a_add_off(AX16, AFP, a_frame + P.soff as i64);
                 a_ls(LS_STR, 3, AX16, AFP, ho);
