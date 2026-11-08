@@ -35,7 +35,11 @@ let CAST_FUNCTIONAL = 5;
 recursive fn cish(t: u32) -> bool {
     let k = kind_of(t);
     if k == TY_POINTER { return cish_ptr(tbase(t)); }
-    if k == TY_ARRAY { return cish(tbase(t)); }
+    if k == TY_ARRAY || k == TY_VLA {
+        // code generation: arrays of classes decay to pointers C handles
+        if cg_on { return cish_ptr(tbase(t)) && (cish(tbase(t)) || is_record(tbase(t))); }
+        return cish(tbase(t));
+    }
     if k == TY_FUNC { return true; }
     return (k >= TY_VOID && k <= TY_COMPLEX) || k == TY_ENUM || k == TY_VECTOR || k == TY_EXTVECTOR;
 }
@@ -164,6 +168,9 @@ recursive fn mk_cond_cx(c: u32, a: u32, b: u32, loc: u32) -> u32 {
         let n = node(N_COND, 0, nodes[aa].ty, to_bool(c) as i64, aa as i64, bb as i64, loc);
         nodes[n].flags = NF_LVALUE;
         return n;
+    }
+    if cg_on && aa == 0 && is_lvalue(c) && is_lvalue(bb) && nodes[c].ty == nodes[bb].ty && !is_array(nodes[c].ty) && !is_func(nodes[c].ty) {
+        return cg_elvis_lvalue(c, bb, loc);
     }
     let n = mk_cond(if aa == 0 { c } else { to_bool(c) }, aa, bb, loc);
     return n;

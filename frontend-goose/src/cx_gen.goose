@@ -637,6 +637,23 @@ recursive fn cg_builtin_call(name: u32, mark: i64, loc: u32) -> u32 {
     return c;
 }
 
+// c ?: b with both lvalues of one type (GNU): an lvalue,
+// *({ T *p = &c; *p ? p : &b; }).
+fn cg_elvis_lvalue(c: u32, b: u32, loc: u32) -> u32 {
+    let t = nodes[c].ty;
+    let pt = mk_ptr(t);
+    let s = csym(SK_VAR, intern("__elvis_tmp"), pt, loc);
+    syms[s].scope = 1;
+    let mark = nscratch.len;
+    nscratch.push(node(N_DECL, 0, pt, s, n_addr(c, loc) as i64, loc as i64, loc));
+    let test = to_bool(rv(n_deref(rv(n_var(s, loc)), loc)));
+    let sel = node(N_COND, 0, pt, test as i64, rv(n_var(s, loc)) as i64, n_addr(b, loc) as i64, loc);
+    nscratch.push(n_expr_stmt(sel));
+    let body = n_block(mark, loc);
+    let se = node(N_STMTEXPR, 0, pt, body as i64, 0, 0, loc);
+    return n_deref(se, loc);
+}
+
 // ---------------------------------------------------------------------------
 // Operators on classes.
 
@@ -1057,7 +1074,13 @@ recursive fn ctor_prologue(r: i64, th: i64, inits: u32, loc: u32) -> bool {
         }
         if is_array(ft) {
             let bt = base_elem_t(ft);
-            if is_record(bt) && (needs_default_init(rec_of(bt)) || args != 0) { return false; }
+            if is_record(bt) && args != 0 { return false; }
+            if is_record(bt) && needs_default_init(rec_of(bt)) {
+                let lp = arr_loop(lv, false, loc);
+                if lp == 0 { return false; }
+                stmt_buf.push(lp);
+                continue;
+            }
             if args == 0 { continue; }
             let bi = brace_init(ft, args, loc);
             if bi == 0 { return false; }
@@ -1180,7 +1203,11 @@ recursive fn dtor_epilogue(r: i64, th: i64, loc: u32) -> bool {
             if st != 0 { stmt_buf.push(st); }
         } else if f.name != 0 && is_array(f.ty) {
             let bt = base_elem_t(f.ty);
-            if is_record(bt) && class_dtor(rec_of(bt)) >= 0 { return false; }
+            if is_record(bt) && !is_opaque(bt) && class_dtor(rec_of(bt)) >= 0 {
+                let lp = arr_loop(this_member(th, r, i, loc), true, loc);
+                if lp == 0 { return false; }
+                stmt_buf.push(lp);
+            }
         }
         i--;
     }
@@ -1240,6 +1267,13 @@ recursive fn cg_wrap_body(s: i64, body: u32, inits: u32, loc: u32) -> u32 {
 // Variables.
 
 var gi_stmts: u32[>..] = [];     // the dynamic initialization of namespace-scope variables, in order
+var gi_prio: u32[>..] = [];      // their init_priority (65535: none)
+var cur_init_prio: i64 = 65535;  // init_priority(N) of the declaration being parsed
+
+fn gi_push(st: u32, prio: i64) {
+    gi_stmts.push(st);
+    gi_prio.push(prio as! u32);
+}
 
 // The N_DECL of variable s (block or namespace scope, ctx) with initializer
 // `init` as written (form: 0 none, 1 =, 2 (), 3 {}) and conv as C's path
@@ -1248,12 +1282,16 @@ var gi_stmts: u32[>..] = [];     // the dynamic initialization of namespace-scop
 recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u32, ctx: i64) {
     var conv = conv0;
     let t = syms[s].ty;
+    let prio = cur_init_prio;
+    cur_init_prio = 65535;
     if ctx == DC_NS || cxs[s].flags & CF_MEMBER != 0 { syms[s].flags = syms[s].flags | SF_FILESCOPE; }
+    // a static local: no linkage (C's lowering names it function.name)
+    let static_local = ctx != DC_NS && cxs[s].flags & CF_MEMBER == 0 && block_fn_depth > 0 && syms[s].sc as i64 == SC_STATIC;
+    if static_local { syms[s].flags = syms[s].flags & ~SF_FILESCOPE; }
     let fs = syms[s].flags & SF_FILESCOPE != 0;
     if !decl_is_extern && syms[s].sc as i64 == SC_EXTERN { syms[s].sc = 0; }
     let is_extern = syms[s].sc as i64 == SC_EXTERN;
-    let local = !fs && !is_extern;
-    let static_local = fs && block_fn_depth > 0;
+    let local = !fs && !is_extern && !static_local;
     var cst: u32 = 0;
     var has_dtor = false;
     if is_ref(t) {
@@ -1292,12 +1330,43 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
             else if nodes[cst].kind as i64 == N_NULL { cst = 0; }
         }
         if is_array(t) { conv = opaque_node(loc); }
-    } else if is_array(t) && is_record(base_elem_t(t)) && !is_opaque(base_elem_t(t)) {
+    } else if is_array(t) && is_record(base_elem_t(t)) && !is_opaque(base_elem_t(t)) && !is_extern {
         let br = rec_of(base_elem_t(t));
-        if needs_default_init(br) || class_dtor(br) >= 0 { conv = opaque_node(loc); }
-        else if init != 0 && nodes[init].kind as i64 == N_INITBRACE {
+        has_dtor = class_dtor(br) >= 0;
+        conv = 0;
+        if init != 0 && nodes[init].kind as i64 == N_INITBRACE && c_initializable(t) {
             let bi = brace_init(t, init, loc);
             conv = if bi != 0 { bi } else { opaque_node(loc) };
+            if bi != 0 && types[t >> 4].n < 0 { syms[s].ty = with_q(nodes[bi].ty, quals(t)); }
+        } else if init != 0 && nodes[init].kind as i64 == N_INITBRACE && kind_of(t) == TY_ARRAY {
+            // each element from its initializer, the rest by default
+            let n = nodes[init].c as i64;
+            if types[t >> 4].n < 0 { syms[s].ty = with_q(mk_array(tbase(t), n), quals(t)); }
+            let at = syms[s].ty;
+            let et = tbase(at);
+            if is_array(et) || n > types[at >> 4].n { conv = opaque_node(loc); }
+            else {
+                let mark = nscratch.len;
+                for i in types[at >> 4].n {
+                    let el = node(N_INDEX, 0, et, icast(n_var(s, loc), CK_ARRAY2PTR, mk_ptr(et)) as i64, int_node(i, t_long, loc) as i64, 0, loc);
+                    nodes[el].flags = NF_LVALUE;
+                    let am = nscratch.len;
+                    if i < n {
+                        let x = nlist[nodes[init].v + i];
+                        let xk = nodes[x].kind as i64;
+                        if xk == N_CTOR || xk == N_INITBRACE { for j in nodes[x].c as i64 { nscratch.push(nlist[nodes[x].v + j]); } }
+                        else { nscratch.push(x); }
+                    }
+                    var st = construct_at(el, am, loc);
+                    if st == 0 { st = mark_bad_stmt(loc); }
+                    nscratch.push(st);
+                }
+                cst = n_block(mark, loc);
+            }
+        } else if init != 0 {
+            conv = opaque_node(loc);
+        } else if needs_default_init(br) {
+            cst = arr_loop(n_var(s, loc), false, loc);
         }
     } else if init != 0 && nodes[init].kind as i64 == N_INITBRACE {
         let bi = brace_init(t, init, loc);
@@ -1311,34 +1380,129 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
         conv = conv_value(init, unqual(t), loc);
     }
     // the dynamic initialization of a namespace-scope (or static local) variable
+    var dyn: u32 = 0;
     if !local && conv != 0 && !is_opq(conv) {
         nc_node = 0;
         if !const_init(conv) {
-            if static_local { conv = opaque_node(loc); }
-            else {
-                let lhs = node(N_DECLREF, 0, lower_ty(t), s, 0, 0, loc);
-                nodes[lhs].flags = NF_LVALUE;
-                gi_stmts.push(n_expr_stmt(node(N_ASSIGN, 0, unqual(lower_ty(t)), lhs as i64, conv as i64, 0, loc)));
-                conv = 0;
-            }
+            let lhs = node(N_DECLREF, 0, lower_ty(t), s, 0, 0, loc);
+            nodes[lhs].flags = NF_LVALUE;
+            dyn = n_expr_stmt(node(N_ASSIGN, 0, unqual(lower_ty(t)), lhs as i64, conv as i64, 0, loc));
+            if !static_local { gi_push(dyn, prio); }
+            conv = 0;
         }
     }
     if !is_extern && (fs || init != 0) { syms[s].flags = syms[s].flags | SF_DEFINED; }
-    if static_local && (cst != 0 || has_dtor) { conv = opaque_node(loc); cst = 0; }
     nscratch.push(node(N_DECL, 0, syms[s].ty, s, conv as i64, dloc as i64, loc));
+    if static_local && (dyn != 0 || cst != 0 || has_dtor) {
+        // once, on the first pass (a guard variable; not thread-safe in D1)
+        let g = csym(SK_VAR, intern("__guard"), t_int, loc);
+        syms[g].sc = SC_STATIC as! u8;
+        syms[g].scope = syms[s].scope;
+        nscratch.push(node(N_DECL, 0, t_int, g, 0, loc as i64, loc));
+        let mark = nscratch.len;
+        let gl = node(N_DECLREF, 0, t_int, g, 0, 0, loc);
+        nodes[gl].flags = NF_LVALUE;
+        nscratch.push(n_expr_stmt(node(N_ASSIGN, 0, t_int, gl as i64, int_node(1, t_int, loc) as i64, 0, loc)));
+        if dyn != 0 { nscratch.push(dyn); }
+        if cst != 0 { nscratch.push(cst); }
+        if has_dtor { nscratch.push(atexit_stmt(s, loc)); }
+        let then = n_block(mark, loc);
+        let test = node(N_BINARY, B_EQ, t_int, rv(n_var(g, loc)) as i64, int_node(0, t_int, loc) as i64, 0, loc);
+        nscratch.push(node(N_IF, 0, 0, test as i64, then as i64, 0, loc));
+        return;
+    }
     if ctx == DC_COND && cst != 0 { nscratch.push(mark_bad_stmt(loc)); return; }
     if local {
         if cst != 0 { nscratch.push(cst); }
         if has_dtor { note_dtor_cleanup(s); }
     } else if !static_local && !is_extern {
-        if cst != 0 { gi_stmts.push(cst); }
-        if has_dtor { gi_stmts.push(atexit_stmt(s, loc)); }
+        if cst != 0 { gi_push(cst, prio); }
+        if has_dtor { gi_push(atexit_stmt(s, loc), prio); }
     }
 }
 
-// Registers the destructor of a local class object as its cleanup.
+// The elements of the array at lvalue arr (of class type, or arrays of
+// them) constructed by default (dtor: destroyed, in reverse order): a for
+// loop over them as one array, or 0 when D1 cannot.
+fn arr_loop(arr: u32, dtor: bool, loc: u32) -> u32 {
+    let t = nodes[arr].ty;
+    if kind_of(t) != TY_ARRAY { return 0; }
+    let et = base_elem_t(t);
+    var total: i64 = 1;
+    var x = t;
+    while kind_of(x) == TY_ARRAY { total = total * types[x >> 4].n; x = tbase(x); }
+    if total <= 0 { return n_null(loc); }
+    let i = csym(SK_VAR, intern("__i"), t_long, loc);
+    syms[i].scope = 1;
+    let base = n_ptrcast(n_addr(arr, loc), mk_ptr(et), loc);
+    let el = node(N_INDEX, 0, et, base as i64, rv(n_var(i, loc)) as i64, 0, loc);
+    nodes[el].flags = NF_LVALUE;
+    var body: u32 = 0;
+    if dtor { body = destroy_stmt(el, loc); }
+    else {
+        let mark = nscratch.len;
+        body = construct_at(el, mark, loc);
+    }
+    if body == 0 { return 0; }
+    var init: u32 = 0;
+    var cond: u32 = 0;
+    var inc: u32 = 0;
+    if dtor {
+        // for (long i = total; i-- > 0;)
+        init = node(N_DECL, 0, t_long, i, int_node(total, t_long, loc) as i64, loc as i64, loc);
+        let dec = node(N_UNARY, U_POSTDEC, t_long, n_var(i, loc) as i64, 0, 0, loc);
+        cond = node(N_BINARY, B_GT, t_int, dec as i64, int_node(0, t_long, loc) as i64, 0, loc);
+    } else {
+        // for (long i = 0; i < total; ++i)
+        init = node(N_DECL, 0, t_long, i, int_node(0, t_long, loc) as i64, loc as i64, loc);
+        cond = node(N_BINARY, B_LT, t_int, rv(n_var(i, loc)) as i64, int_node(total, t_long, loc) as i64, 0, loc);
+        inc = node(N_UNARY, U_PREINC, t_long, n_var(i, loc) as i64, 0, 0, loc);
+    }
+    return node_v(N_FOR, 0, 0, init as i64, cond as i64, inc as i64, loc, body as i64);
+}
+
+// The destroying function of an array type (a cleanup and __cxa_atexit
+// target): void f(T (*p)[N]) { destroy (*p)[N-1] ... (*p)[0] }.
+var arr_dtors = dictionary<u64, u32> {};
+fn arr_dtor_fn(t: u32, loc: u32) -> i64 {
+    let g = arr_dtors.get(unqual(t) as u64);
+    if g { return g as i64; }
+    let pt = mk_ptr(unqual(t));
+    let ft = fn_type1(t_void, pt);
+    let f = csym(SK_FUNC, intern("__array_dtor"), ft, loc);
+    syms[f].sc = SC_STATIC as! u8;
+    syms[f].flags = SF_DEFINED;
+    cxs[f].flags = CF_IMPLICIT;
+    label_numbered(f, "__goosecc_array_dtor_");
+    let p = csym(SK_VAR, intern("p"), pt, loc);
+    syms[p].flags = SF_PARAM;
+    syms[p].scope = 1;
+    let lp = arr_loop(n_deref(rv(n_var(p, loc)), loc), true, loc);
+    let mark = nscratch.len;
+    nscratch.push(if lp == 0 { mark_bad_stmt(loc) } else { lp });
+    let body = n_block(mark, loc);
+    let pm = nscratch.len;
+    nscratch.push(p as! u32);
+    let ps = commit_list(pm);
+    let n = node_v(N_FUNCDEF, 0, ft, f, body as i64, 1, loc, ps);
+    syms[f].def = n as! i32;
+    cg_extra.push(n);
+    arr_dtors.insert(unqual(t) as u64, f as! u32);
+    return f;
+}
+
+// Registers the destructor of a local class object (or array of them) as
+// its cleanup.
 fn note_dtor_cleanup(s: i64) {
     let t = syms[s].ty;
+    if is_array(t) {
+        let et = base_elem_t(t);
+        if !is_record(et) || is_opaque(et) || class_dtor(rec_of(et)) < 0 { return; }
+        let f = arr_dtor_fn(t, syms[s].loc);
+        let ai = get_attr(s);
+        sym_attrs[ai].cleanup = f as! i32;
+        return;
+    }
     if !is_record(t) || is_opaque(t) { return; }
     let d = class_dtor(rec_of(t));
     if d < 0 { return; }
@@ -1350,7 +1514,7 @@ fn note_dtor_cleanup(s: i64) {
 var atexit_fn: i64 = -1;
 var dso_handle: i64 = -1;
 fn atexit_stmt(s: i64, loc: u32) -> u32 {
-    let d = class_dtor(rec_of(syms[s].ty));
+    let d = if is_array(syms[s].ty) { arr_dtor_fn(syms[s].ty, loc) } else { class_dtor(rec_of(syms[s].ty)) };
     if atexit_fn < 0 {
         let vfp = mk_ptr(fn_type1(t_void, t_voidptr));
         fn_scratch.clear();
@@ -1804,6 +1968,12 @@ fn fn_type0(ret: u32) -> u32 {
 
 var cg_extra: u32[>..] = [];        // more top-level items (N_FUNCDEF, N_DECL)
 
+fn label_numbered(s: i64, prefix: const u8[:]) {
+    var nm: u8[>..] = [];
+    format(nm, prefix, s);
+    set_label(s, nm);
+}
+
 fn set_label(s: i64, name: const u8[:]) {
     let ai = get_attr(s);
     let off = strbytes.len;
@@ -1871,26 +2041,15 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
         }
         if !progress { break; }
     }
-    // the dynamic initialization of globals
-    if gi_stmts.len > 0 {
-        var b = 0;
-        for c, i in main_file { if c == '/' { b = i + 1; } }
-        var nm: u8[>..] = [];
-        nm.append("_GLOBAL__sub_I_");
-        nm.append(main_file[b..]);
-        let f = csym(SK_FUNC, intern("__global_init"), fn_type0(t_void), 0);
-        syms[f].sc = SC_STATIC as! u8;
-        syms[f].flags = SF_DEFINED;
-        cxs[f].flags = CF_IMPLICIT;
-        set_label(f, nm);
-        let ai = get_attr(f);
-        sym_attrs[ai].flags = sym_attrs[ai].flags | AM_CTOR;
-        let mark = nscratch.len;
-        for st in gi_stmts { nscratch.push(st); }
-        let body = n_block(mark, 0);
-        let n = node_v(N_FUNCDEF, 0, syms[f].ty, f, body as i64, 0, 0, 0);
-        syms[f].def = n as! i32;
-        cg_extra.push(n);
+    // the dynamic initialization of globals: a function per init_priority
+    // (clang: _GLOBAL__I_000101 ..., then _GLOBAL__sub_I_<file>)
+    var done_prio: i64 = -1;
+    loop {
+        var p: i64 = 65536;
+        for x in gi_prio { if x as i64 > done_prio && (x as i64) < p { p = x as i64; } }
+        if p > 65535 { break; }
+        done_prio = p;
+        gi_function(main_file, p);
     }
     // the translation unit with the extra items
     let tu = nodes[tu_node];
@@ -1907,6 +2066,36 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
     // types: references become pointers, member functions take `this`
     lower_sym_types();
     return n_errors == 0;
+}
+
+fn gi_function(main_file: const u8[:], prio: i64) {
+    var nm: u8[>..] = [];
+    if prio == 65535 {
+        var b = 0;
+        for c, i in main_file { if c == '/' { b = i + 1; } }
+        nm.append("_GLOBAL__sub_I_");
+        nm.append(main_file[b..]);
+    } else {
+        nm.append("_GLOBAL__I_");
+        var digits: u8[>..] = [];
+        format(digits, prio);
+        for i in 6 - digits.len { nm.push('0'); }
+        nm.append(digits);
+    }
+    let f = csym(SK_FUNC, intern("__global_init"), fn_type0(t_void), 0);
+    syms[f].sc = SC_STATIC as! u8;
+    syms[f].flags = SF_DEFINED;
+    cxs[f].flags = CF_IMPLICIT;
+    set_label(f, nm);
+    let ai = get_attr(f);
+    sym_attrs[ai].flags = sym_attrs[ai].flags | AM_CTOR;
+    sym_attrs[ai].ctor_prio = prio as! u16;
+    let mark = nscratch.len;
+    for st, i in gi_stmts { if gi_prio[i] as i64 == prio { nscratch.push(st); } }
+    let body = n_block(mark, 0);
+    let n = node_v(N_FUNCDEF, 0, syms[f].ty, f, body as i64, 0, 0, 0);
+    syms[f].def = n as! i32;
+    cg_extra.push(n);
 }
 
 // Mangled names as asm labels; inline functions internal.

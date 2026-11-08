@@ -102,6 +102,8 @@ recursive fn cx_attr_one(a: Attrs&) {
             let v = strbytes[o..o + l];
             if v == "hidden" || v == "internal" { a.vis = 1; } else if v == "protected" { a.vis = 2; } else { a.vis = 0; }
         }
+    } else if name == "init_priority" {
+        if at(TK_L_PAREN) { cur_init_prio = cx_attr_int(); }
     } else if name == "constructor" || name == "destructor" {
         var prio: i64 = 65535;
         if at(TK_L_PAREN) { prio = cx_attr_int(); }
@@ -792,6 +794,7 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         adv();
         var n: i64 = -1;
         var dep = false;
+        var vla: u32 = 0;
         if !at(TK_R_SQUARE) {
             let sp = paren_depth;
             paren_depth++;
@@ -802,12 +805,15 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
             else {
                 let ok, v = const_int(e);
                 if ok { n = v; } else { dep = true; }
+                // code generation: a VLA (GNU) in a function body
+                if !ok && cg_on && block_fn_depth > 0 && !dependent_ctx() && cish_node(e) && is_integer(nodes[e].ty) { vla = rv(e); }
             }
         }
         expect(TK_R_SQUARE, "']'");
         var a = Attrs { .. };
         cx_attrs(a);
         let inner = parse_csuffixes(base, d, false);
+        if vla != 0 && !is_opaque(inner) && cish(inner) { return mk_vla(inner, vla as i64); }
         if dep || is_opaque(inner) {
             // a dependent bound, one D1 does not evaluate, or a VLA (a GNU
             // extension the corpora do not use in C++): opaque

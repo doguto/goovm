@@ -583,6 +583,7 @@ var decl_is_extern: bool = false;    // the variable declaration being parsed sa
 recursive fn declare_var(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     decl_is_extern = ds.sc == SC_EXTERN;
     var ty = apply_type_attrs(d.ty, a, d.loc);
+    if ctx != DC_NS { cur_init_prio = 65535; }
     let name = d.qn.name;
     if pending_tmpl >= 0 {
         // a variable template (or a static data member of a class template)

@@ -190,7 +190,19 @@ fn best_candidate(s0: i64, mark: i64, has_obj: bool) -> i64 {
         }
         s = cxs[s].nnext as i64;
     }
+    var exact = best >= 0 && !tie;
+    if exact && any_tmpl {
+        // a non-template function whose parameters (not references) all
+        // match exactly: no function template specialization is better
+        let ft = types[syms[best].ty >> 4];
+        for i in nargs {
+            if cand_ranks[rmark + i] != RK_EXACT { exact = false; }
+            if i < ft.n && is_ref(tparams[ft.extra + i]) { exact = false; }
+        }
+        if ft.n != nargs { exact = false; }
+    }
     cand_ranks.resize(rmark);
+    if any_tmpl && exact { return best; }
     if tie || any_tmpl { return -1; }
     return best;
 }
