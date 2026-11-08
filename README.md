@@ -30,6 +30,16 @@ C1 で、浮動小数点を多く使うコードの実行時間が clang `-O0` �
 - テストを足しました：`tests/ll/`（手書きの LLVM IR と C の呼び出し側。`tests/run.py` が扱います）、`tests/cxx/03_fp_structs.cpp`、`tests/c/50_fp_classify.c`、`tests/c/51_fp_convert.c`。
 - 正しさ：全コーパス（C と C++ の1,921本、clang で通る1,915本）の全変種（O0、g、mem2reg、cc、cc-g）で失敗0、フォールバック0。`-g` の全オブジェクト（5,266個）が `llvm-dwarfdump --verify` を通ります。
 
+## マイルストーン D1：goosecc の C++ フロントエンド（第一段階）
+
+`goosecc` に、Goose で書いた C++ のフロントエンドの第一段階を加えました（`frontend-goose/src/cx_*.goose`、約11,400行）。設計とロードマップ（D2：テンプレートの実体化、D3：例外と残りのコード生成、D4：C++20）は [`frontend-goose/DESIGN.md`](frontend-goose/DESIGN.md) の §13、記録は [`frontend-goose/NOTES.md`](frontend-goose/NOTES.md) の14節、報告書の §7、計測と検証の記録は [`bench/results/d1-2026-11-08/`](bench/results/d1-2026-11-08/) です。バックエンド、GIR、`tools/` は変えていません。
+
+- **前処理：** C++ のコーパス423本と、libstdc++ の全ヘッダを6つの規格で読む647本が、`clang++-20 -E` とトークン単位で同一です。
+- **構文解析と宣言：** 423本すべてを誤ったエラーなしで受け付けます。libstdc++ のヘッダは C++98〜C++17 で全部、`gnu++20` では concepts を使う75本が未対応です。レイアウト（30.7万個の `static_assert`）と Itanium のマングル名（8,528個。誤り0、テンプレート内の171個は未出力）を clang と突き合わせて一致しています。
+- **コード生成（「クラス付きの C」）：** クラス、仮想関数（vtable と typeinfo）、コンストラクタとデストラクタ、参照、オーバーロードと演算子、名前空間、`new`/`delete`、静的初期化、メンバへのポインタ。SingleSource の C++ テスト111本のうち28本が `-O0` と `-g` で通り、残りはテンプレート・例外などの「未対応」のエラーで止まります（誤ったコードは0本）。
+- **速さ**（CTMark の C++ 316本、3回の最良値）：`-E` は clang++ の3.9倍（温まったヘッダキャッシュで13.9倍）、`-fsyntax-only` は8.7倍速い（ただし D1 はテンプレートを実体化しないので、仕事の量が違います）。
+- **C は変わっていません：** C のコーパス2,357本の全出力（`-E`、構文木、レイアウト、`-c`、`-c -g`）が D1 前とバイト単位で同一で、C の全オラクルと 1,804件のテスト（`-O0`、`-g`）も通ります。C のコンパイル時間は +1.4%（キャッシュあり +0.6%）です。
+
 ## マイルストーン G1：goosecc の起動、構文解析のキャッシュ、clang の畳み込み
 
 G1 で、`goosecc` のプロセス起動を1ミリ秒よりずっと短くし、ヘッダの宣言の構文解析と型検査を永続キャッシュで再生するようにし、clang-20 が `-O0` でも行う畳み込みとインライン展開を取り入れました。設計は [`frontend-goose/DESIGN.md`](frontend-goose/DESIGN.md) の §12、記録は [`frontend-goose/NOTES.md`](frontend-goose/NOTES.md) の13節、ランタイムへのパッチと Goose の作者への提案は [`frontend-goose/runtime-patches/README.md`](frontend-goose/runtime-patches/README.md)、計測と検証の記録は [`bench/results/g1-2026-11-07/`](bench/results/g1-2026-11-07/) です。バックエンド、GIR、`tools/` は変えていません。
