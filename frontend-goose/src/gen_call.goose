@@ -12,6 +12,7 @@ import .types;
 import .ast;
 import .sema;
 import .builtins;
+import .cx_gen_defs;
 
 var call_vals: u32[>..<] = [];     // (value, ABI word) pairs of calls being built
 
@@ -177,7 +178,9 @@ recursive fn ex_call(n: u32, dst: u32) -> u32 {
     if noproto || variadic { fl = fl | IF_VARARG; }
     let noret = fty.flags & TF_NORETURN != 0 || (ds >= 0 && syms[ds].flags & SF_NORETURN != 0);
     if noret { fl = fl | IF_NORETURN; }
-    let r = emit(GIR_CALL, rt, 0, fl, 0, cref, s, cnt as! u32);
+    var r: u32 = 0;
+    if opt_cxx { r = call_eh(rt, fl, cref, s, cnt as! u32, sym_may_throw(ds)); }
+    else { r = emit(GIR_CALL, rt, 0, fl, 0, cref, s, cnt as! u32); }
     var res: u32 = NONE;
     if ra.kind == AK_DIRECT {
         res = r;

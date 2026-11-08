@@ -12,6 +12,8 @@ import .types;
 import .ast;
 import .sema;
 import .parse;
+import .cx_gen_defs;
+import .cx_eh;
 
 // f80 values (also used as a 128-bit (lo, hi) pair) and their C helpers.
 struct F80 { lo: u64, hi: u64 }
@@ -83,8 +85,9 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             let s = nd.a as i64;
             if !fn_emitted_def(s) { continue; }
             if syms[s].def as u32 != it { continue; }
-            let always = (!is_internal_sym(s) && !fn_local_inline(s)) || sym_has_attr(s, AM_USED) || sym_has_attr(s, AM_CTOR) ||
+            var always = (!is_internal_sym(s) && !fn_local_inline(s)) || sym_has_attr(s, AM_USED) || sym_has_attr(s, AM_CTOR) ||
                 sym_has_attr(s, AM_DTOR);
+            if opt_cxx && cxl_link(s) == LK_LINKONCE { always = false; }
             if !always { continue; }
             let g = func_global(s);
             if glob_gen[g].state == 0 {
@@ -96,6 +99,7 @@ fn lower_tu(main_file: const u8[:]) -> bool {
             if syms[s].kind != SK_VAR || syms[s].flags & SF_FILESCOPE == 0 { continue; }
             if syms[s].flags & (SF_DEFINED | SF_TENTATIVE) == 0 { continue; }
             if is_internal_sym(s) && !sym_has_attr(s, AM_USED) { continue; }
+            if opt_cxx && cxl_link(s) == LK_LINKONCE { continue; }
             let g = var_global(s);
             if glob_gen[g].state == 0 {
                 glob_gen[g].state = 1;
@@ -149,9 +153,12 @@ fn lower_tu(main_file: const u8[:]) -> bool {
         }
         if n_errors > 0 && n_errors >= 50 { break; }
     }
+    if opt_cxx { emit_terminate_fn(); }
     emit_aliases();
+    if opt_cxx { cx_aliases(); }
     emit_structors();
     finish_undefined();
+    if opt_cxx { cx_comdats(); }
     if n_errors == 0 { dbg_build(); }
     if f128_loc != NONE { err_at(f128_loc, "goosecc: __float128 is not supported (GIR has no fp128 type)"); }
     return n_errors == 0;
@@ -283,6 +290,11 @@ var no_ehs: Eh[>..] = [];
 var no_comdats: Comdat[>..] = [];
 var no_gcomdat: u32[>..] = [];
 fn codegen() -> const u8[:] {
+    if opt_cxx {
+        return gir_codegen_ex(m_header, m_types, m_funcs, m_blocks, m_insts, m_opnds, m_consts, m_globals, m_sections,
+            m_data, m_drelocs, m_strtab, m_dlocs, m_dscopes, m_dfiles, m_dstr, m_asms, m_ehs, m_comdats, m_gcomdat,
+            m_dies, m_dattrs);
+    }
     if opt_debug {
         return gir_codegen_ex(m_header, m_types, m_funcs, m_blocks, m_insts, m_opnds, m_consts, m_globals, m_sections,
             m_data, m_drelocs, m_strtab, m_dlocs, m_dscopes, m_dfiles, m_dstr, m_asms, no_ehs, no_comdats, no_gcomdat,

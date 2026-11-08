@@ -236,8 +236,8 @@ recursive fn mangle_tmpl_prefix(tsym: i64, parent: i64) {
 
 fn unqualified(s: i64) {
     let fl = cxs[s].flags;
-    if fl & CF_CTOR != 0 { mg.append("C1"); return; }
-    if fl & CF_DTOR != 0 { mg.append(if fl & 2147483648 != 0 { "D0" } else { "D1" }); return; }
+    if fl & CF_CTOR != 0 { mg.append(if mg_structor == 2 { "C2" } else { "C1" }); return; }
+    if fl & CF_DTOR != 0 { mg.append(if fl & 2147483648 != 0 { "D0" } else if mg_structor == 2 { "D2" } else { "D1" }); return; }
     if fl & CF_CONV != 0 {
         mg.append("cv");
         mangle_type(types[syms[s].ty >> 4].base);

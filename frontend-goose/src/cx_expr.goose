@@ -148,6 +148,7 @@ recursive fn parse_throw() -> u32 {
     if k != TK_SEMI && k != TK_R_PAREN && k != TK_COMMA && k != TK_COLON && k != TK_R_SQUARE && k != TK_R_BRACE {
         e = parse_assign_cx();
     }
+    if cg_on { return cg_throw(e, loc); }
     return node(N_THROW, 0, t_void, e as i64, 0, 0, loc);
 }
 
