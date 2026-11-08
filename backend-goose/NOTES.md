@@ -26,6 +26,12 @@ clang -O0's (Bullet 1.69x -> 0.97x, tramp3d-v4 1.19x -> 1.02x): the causes
 found with their measured shares, the fixes, what was tried and dropped, the
 results and the pain points.
 
+Section 12 is milestone **E1**: the optimizing mode (`-O1`): a middle-end
+in Goose and a global register allocator (DESIGN.md §15, §16), with the
+bugs the tests found, the Goose pain points, correctness, run time against
+clang -O0/-O1/-O2, compile time, and the "LLVM -O2 IR + Goose back-end"
+experiment.
+
 v0 page contents:
 
 - the structure of the port;
@@ -1263,3 +1269,238 @@ python3 bench/backend/time_backend.py --goovm <A3 build> --goovm $G -n 11 \
 frontend-goose/build.sh /tmp/gcc && tests/run.py --goosecc /tmp/gcc/goosecc -j2
 # profiles and microbenchmarks of this milestone: $S/work/c1/{prof.sh,cmp.py,dis.py,tround.py,tsuite.py,tbe.py,t/}
 ```
+
+## 12. Milestone E1: the optimizing mode (-O1)
+
+E1 adds an optimizer and a global register allocator to the back-end, used
+when the GIR header's `opt_level` is 1 or more (`goovm-llc -O1`, `goovm-cc
+-O1`, `goosecc -O1`; DESIGN.md §15, §16). 6,163 lines of Goose in thirteen
+new files (`opt*.goose`, 5,304 lines; `rag.goose`, 859) and 309 changed
+lines in `cg.goose`, `ra.goose`, `lowera.goose`, `abi.goose` and
+`dwarf.goose`, every change behind `opt_on` / `rg_on`; additive GIR fields
+(`opt_level`, `FN_NOINLINE`, `FN_ALWAYSINLINE`, `IF_NSW`), exporter and
+driver plumbing in `tools/`, one line in `frontend-goose/src/main.goose`.
+
+The middle-end works on a per-function copy of the GIR records (the OIR)
+and writes new tables; it needs no persistent use lists, no hash maps of
+instructions and no allocation per instruction. The scalar passes (mem2reg,
+the simplifier, DCE, SimplifyCFG, CSE) passed the -O1 suite variant early;
+the global allocator took longer, because every lowering of the -O0
+allocator had to learn that some registers belong to values it does not
+own.
+
+### Bugs found by the tests (all fixed)
+
+1. **srem folded with Goose's `%`** (torture `bitfld-1`): Goose's `%` is
+   the Euclidean remainder (never negative), C's is truncating; constant
+   folding of `srem` now uses `rem()`.
+2. **The canonical-constant hash table filled up** on a module with more
+   constants than its initial size; it is now sized from the input's
+   constant count and grows.
+3. **Block merging corrupted the successor lists** (CSR arrays shared by
+   all blocks): merging rewrote the merged block's successors in place;
+   they are now recomputed into a scratch array.
+4. **Empty-block forwarding read stale predecessor lists** after an earlier
+   forward in the same round: blocks touched in a round are marked and
+   skipped until the CFG is rebuilt.
+5. **The global allocator ran out of scratch registers** (`tests/c/23_matrix`,
+   7zip's `Ppmd8.c`, `assert failed (rag.goose:798)`): with all ten
+   pinnable GPRs taken, a lowering that needs three scratch registers (a
+   GEP of a merged four-term address plus a store) found none. Pinned
+   values that the instruction does not use now lend their register for
+   one instruction (`rg_borrow`), and GEP merging keeps at most two terms.
+6. **GVN's alias analysis read a replaced pointer** (torture
+   `mayalias-2`): a store through a pointer that an earlier replacement had
+   forwarded was attributed to the wrong memory generation; GVN now resolves
+   every operand first.
+7. **A pinned vector from a legacy lowering was never loaded** (torture
+   `pr53645`, `pr53645-2`): the A1 lowerings write their result to the
+   value's home, and the pinned register kept garbage; `rg_def_end` loads
+   it.
+8. **GVN never matched two GEPs** (a missed optimization): the key included
+   the index of the operand run, which differs for every instruction.
+9. **Unsigned division by a constant of 2^31 or more** overflowed the
+   magic-number shift; it is now a compare (`x >= d`).
+10. **Induction-variable widening rewrote a compare outside the loop**
+    (`tests/c/21_sort`'s quicksort: the i64 twin does not dominate the
+    exit): the "operand does not dominate its use" condition that the
+    output then violated is now checked by `GOOVM_OPT=verify`, which found
+    no other violation over the corpora.
+11. **Loop rotation stored a constant through `o_ins`** (`index 2147483648
+    out of bounds (length 80) (opt_licm.goose:521)`, most `tests/` programs
+    at once): the demotion store of a header PHI's entry value took the
+    value's type from its instruction record, and the entry value is often
+    a constant or an argument (kind bits 31..30 set). The type now comes
+    from the PHI.
+12. **Known limitation, not fixed: torture `pr17377`** fails under
+    `goovm-llc -O1` (`O1` and `O1-g`): it needs a `noinline` function to stay
+    a call (`__builtin_return_address`), and clang -O0 IR marks every
+    function `noinline optnone`, so the source's `noinline` is invisible.
+    `goovm-cc -O1` (front end without `optnone`) passes it.
+
+### New pain points
+
+The messages are verbatim from the Goose compiler.
+
+1. **An array a global struct may view cannot shrink.** The middle-end
+   points the module's table views (M) at its output arrays, so clearing
+   one for the next module is refused:
+   `error: cannot clear x_insts: global M may hold a reference into it,
+   stored at backend-goose/opt.goose:644 (§5.1)`. The rule is sound (a
+   later `clear` would leave M dangling), but there is no way to say "M is
+   reassigned before it is read again". The output arrays are append-only,
+   with a region base per call (`xb_*`).
+2. **Assigning the whole struct widens the analysis to every array of the
+   same element type.** `M = Module { ..., insts: x_insts[..], ... }` made
+   the checker assume that M may view *any* `u32[>..]` or `u8[>..]` global,
+   and code generation's own arrays were refused:
+   `error: cannot resize vi: global M may hold a reference into it, stored
+   at backend-goose/cg.goose:924 (§5.1)` (and `b_tag`, `block_off`,
+   `jt_case`, `mv_src`, `cfi_pro`, ...). Assigning the fields one by one
+   (`M.insts = x_insts[xb_i..]`) keeps the analysis precise.
+3. **The same code checks differently in another host program.** goosecc
+   compiles the back-end with its own globals, and there a local slice
+   read out of M before `rg_alloc` resized `vi` was refused:
+   `error: cannot resize vi while blocks is still used: it may hold a
+   reference or slice into it; it was read out of M and may point into M
+   (§5.1)`. goovm-llc's build had accepted it; the field-by-field
+   assignment of item 2 fixed both.
+4. **One global namespace for all files.** `opt_scfg.goose` and
+   `dwarf.goose` both had a counter named `sc_epoch`:
+   `error: global name already declared: sc_epoch`. Every global of the
+   middle-end now has a pass prefix (`fe_`, `th_`, `gv_`, `ds_`, ...).
+5. **Untyped integer constants are `i64` where a type is inferred.** A
+   block passed to a generic helper (`each_slot(i) { s => ... vget(i, s)
+   ... }`, which calls `F(0)`) got an `i64` parameter from the literal:
+   `error: no matching overload for call to vget ... argument 2: cannot
+   pass i64 as u32`. The same for named type constants:
+   `ins_cast(i, GIR_ZEXT, I64, a, I32)` with `let I64 = 5;` gives
+   `argument 3: cannot pass i64 as u32`. Both need typed constants
+   (`let SLOT_A: u32 = 0;`).
+6. **A table of strings must stay untyped to be indexable.** `let OPN:
+   u8[][>..] = ["ret", "br", ...];` cannot be indexed by opcode:
+   `error: arrays of variable-size elements cannot be indexed, only
+   iterated; for random access, keep your own array of references to them
+   (§3.3)`; the untyped literal `let OPN = [...]` can.
+7. **A block expression is not an operand.** `x || { opt_off(""); find(e,
+   "verify") >= 0 }` gives `error: expression expected, found '{'`; it
+   became two statements.
+8. **`%` is Euclidean** (bug 1): correct and documented, but a C compiler
+   written in Goose has to remember it for every constant fold.
+
+### Correctness
+
+`tests/suite.py` over all eleven corpora (1,921 tests, 1,915 pass with
+clang -O0; the optimizing variants run the 1,894 that also pass with plain
+clang-20 -O1), with `GOOVM_OPT=verify` (the SSA and CFG invariants checked
+after every function) and `--verify-dwarf`:
+
+| variant | pass | fail | unsupported |
+|---|---:|---:|---:|
+| O1 (`goovm-llc -O1` on clang -O0 IR) | 1,893 | 1 (`pr17377`) | 0 |
+| cc-O1 (`goovm-cc -O1`) | 1,894 | 0 | 0 |
+| O1-g | 1,893 | 1 (`pr17377`) | 0 |
+| O2nv (clang -O2 IR without vectorizers) | 1,875 | 1 (`pr39501`: link) | 18 |
+| O2ir (clang -O2 IR) | 1,821 | 1 (`pr39501`: link) | 72 |
+
+`llvm-dwarfdump --verify` passes on all 2,570 `-O1 -g` objects; the
+verifier found no violation. `tests/run.py --o1`: 246/246 (61 programs,
+O0, mem2reg, O1, O1-g); `tests/run.py --goosecc --o1`: 165/165.
+
+**-O0 unchanged.** Every source file of the corpora (2,651 files) compiled
+by the base build (66ea246) and the E1 build gives byte-identical objects
+for goovm-llc on -O0, -O0 -g and mem2reg IR and for goovm-cc -O0 and -O0 -g
+(13,255 object pairs), and goosecc -O0 and -O0 -g on the 2,250 C files
+(with `tests/c`) gives byte-identical objects too (4,500 pairs).
+
+### Run time: CTMark
+
+`tests/suite.py --corpus ctmark,ctmark-cxx -j 1 --time-run 3 --time-ref
+O1,O2` (best of 3, seconds; the ratios against clang -O1 timed in the same
+rounds; the host was quiet but its speed drifts by up to 25% within an
+hour, which the same-round ratios absorb):
+
+| program | clang -O0 | clang -O1 | clang -O2 | O1 | cc-O1 | O1 / clang -O1 | O2nv / clang -O1 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 7zip | 12.12 | 7.66 | 7.66 | 8.46 | 8.50 | 1.10 | 1.15 |
+| Bullet | 16.77 | 2.86 | 2.77 | 9.53 | 9.51 | 3.34 | 1.20 |
+| kimwitu++ | 0.023 | 0.019 | 0.018 | 0.019 | 0.019 | 1.01 | 0.97 |
+| tramp3d-v4 | 16.94 | 0.161 | 0.136 | 0.492 | 0.482 | 3.06 | 1.10 |
+| ClamAV | 0.161 | 0.113 | 0.108 | 0.125 | 0.129 | 1.11 | 1.11 |
+| SPASS | 13.57 | 5.42 | 5.28 | 5.81 | 6.02 | 1.07 | 1.08 |
+| consumer-typeset | 0.134 | 0.084 | 0.079 | 0.091 | 0.091 | 1.09 | 0.92 |
+| lencod | 9.61 | 3.16 | 2.99 | 5.02 | 4.98 | 1.59 | - |
+| mafft | 32.50 | 13.40 | 13.13 | 23.57 | 23.66 | 1.76 | 1.78 |
+| sqlite3 | 3.64 | 1.69 | 1.60 | 2.42 | 2.41 | 1.43 | 1.31 |
+| **geometric mean** (9 with clang -O0 >= 50 ms) | | 0.282x -O0 | 0.268x -O0 | 0.443x -O0 | 0.445x -O0 | **1.57** | **1.19** (8) |
+
+goovm -O1 runs CTMark 2.26x faster than its -O0 code (and clang -O0's) and
+at 1.57x clang -O1's time (1.65x clang -O2's): the target of about 1.3x is
+met by six of the ten programs (7zip, kimwitu++, ClamAV, SPASS, typeset at
+1.01x to 1.11x) and missed by four. `cc-O1` (goovm-cc -O1) is the same
+code within noise (1.58x).
+
+**LLVM -O2 IR + the Goose back-end (O2nv).** The same back-end on IR that
+LLVM's -O2 middle-end produced (`clang -O2 -fno-vectorize
+-fno-slp-vectorize -emit-llvm`, then `goovm-llc -O1`: the Goose middle-end
+runs on it too) runs at **1.19x clang -O1** over eight
+programs (lencod's `macroblock.c` hits an assertion of the -O0 allocator in
+a lowering that needs more registers than are free). The split of the gap:
+
+- **Middle-end** (C++ abstraction): Bullet 3.34x -> 1.20x and tramp3d-v4
+  3.06x -> 1.10x with LLVM's middle-end. Their hot code is small methods
+  that LLVM inlines and then takes apart with SROA (btVector3 math,
+  `Loc<3>` arithmetic returned through sret, `DomainTraits` operators); the
+  Goose inliner's size limit (40 GIR instructions, 80 in loops) and its SROA
+  (constant offsets only, no splitting of arguments passed through memory)
+  leave many of those calls and copies.
+- **Back-end**: mafft 1.76x / 1.78x and part of sqlite3 (1.43x / 1.31x).
+  mafft's two DP loops (98% of its time) keep their loop-invariant floats
+  in frame slots: FP values live across calls elsewhere in the function, the
+  SysV ABI has no callee-saved xmm registers, and the global allocator does
+  not split live ranges, so such a value gets no register anywhere (LLVM's
+  greedy allocator splits it around the calls). A conditionally stored
+  static (`mi`) also stays in memory (scalar promotion needs a dominating
+  store).
+
+### Run time: bench/codequal
+
+The kernels of `bench/codequal/kernels.c` at scale 10 (best of 5, seconds;
+`e1/cq.py`): goovm -O1 against clang -O1.
+
+| kernel | clang -O0 | clang -O1 | clang -O2 | goovm -O0 | goovm -O1 | O2ir | goovm -O1 / clang -O1 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| sieve | 0.419 | 0.202 | 0.202 | 0.371 | 0.215 | 0.227 | 1.06 |
+| sort | 1.720 | 1.018 | 1.000 | 1.699 | 1.171 | 1.345 | 1.15 |
+| hash | 0.624 | 0.433 | 0.431 | 0.637 | 0.419 | 0.453 | 0.97 |
+| matmul | 7.955 | 1.868 | 2.380 | 7.489 | 1.861 | 8.252 | 1.00 |
+| string | 1.331 | 0.711 | 0.650 | 1.375 | 0.773 | 0.675 | 1.09 |
+| fib | 0.138 | 0.066 | 0.071 | 0.134 | 0.086 | 0.098 | 1.31 |
+| whole program | 12.21 | 4.44 | 4.74 | 11.91 | 4.70 | 11.18 | **1.06** |
+
+What moved the kernels (measured one change at a time on the way): string
+1.48x -> 1.09x (if-conversion of `if (k == m) total += ...` into a cmov,
+then loop rotation, which removed the jump into the inner loop's test on
+every entry; GVN's single-writer rule forwards `pats[p]` across the inner
+loop), fib 2.2x -> 1.31x (tail recursion elimination with an accumulator:
+one recursive call per level, as clang's), matmul 1.54x -> 1.00x
+(induction-variable widening, GEP splitting in LICM). O2ir's matmul is
+slow because LLVM -O2 vectorizes it and the vector code goes through the
+A1 lowerings (memory homes).
+
+### Compile time: the middle-end
+
+`goovm-llc --time` (best of 5, ms; `e1/ctime.py`), single-threaded:
+
+| input | GIR instructions | -O0 back-end | -O1 back-end | of which middle-end | middle-end per instruction |
+|---|---:|---:|---:|---:|---:|
+| spass.bc (SPASS, one module) | 114,371 | 10.8 | 245.7 | 210.0 | 1.84 us |
+| typeset.bc | 119,262 | 9.2 | 135.9 | 111.2 | 0.93 us |
+| gen-20000.bc (generated C) | 3,205,263 | 208.9 | 3,767.9 | 3,196.2 | 1.00 us |
+
+The optimizing back-end takes 15x to 23x the time of the -O0 one: the
+middle-end is 85% of it (the global allocator and the larger functions the
+rest). The middle-end runs about 15 passes over each function, several of
+them more than once (four rounds of simplify/GVN/DCE/SimplifyCFG), and
+rebuilds the CFG analyses and use lists after each pass that changes the
+CFG; loop rotation rebuilds them after every rotated loop.
