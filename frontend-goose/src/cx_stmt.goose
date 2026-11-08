@@ -698,6 +698,9 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
     this_type = 0;
     let sv_cgthis = cg_this;
     cg_this = -1;
+    let sv_cgret = cg_ret;
+    cg_ret = -1;
+    if cg_on && pass_indirect(ret_type) { cg_ret = make_ret(s, ret_type, loc); }
     if member {
         let sc = cxs[s].dscope as i64;
         let ct = scope_class_type(sc);
@@ -770,6 +773,7 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
     }
     if cg_on && (cg_this >= 0 || hmark >= 0) && body != 0 { body = cg_wrap_body_try(s, body, inits, loc, hmark); }
     cg_this = sv_cgthis;
+    cg_ret = sv_cgret;
     pop_scope();
     block_fn_depth--;
     for j in lmark..label_syms.len {

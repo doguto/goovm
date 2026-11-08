@@ -50,6 +50,20 @@ let N_XEXN = 104;
 // ty) in a function whose result is a class passed by invisible reference.
 let N_XRETSLOT = 105;
 
+// A class prvalue made by a call returning it by invisible reference: a =
+// the N_CALL (of type T *), b = its first argument, an N_XDST placeholder
+// that receives the destination's address when the prvalue is used to
+// initialize an object (cx_gen's init_into); a prvalue never used so is
+// materialized as a temporary (N_XTEMP) by cg_finish. ty = the class.
+let N_XPRV = 106;
+let N_XDST = 107;
+// return of a candidate for the named return value optimization: a = the
+// variable, b = the expression that copies (moves) it into the return
+// slot otherwise, c = the function's return slot parameter.
+let N_XNRET = 108;
+
+let CXL_NRVO = 32;      // a local variable that lives in the return slot (the sret argument)
+
 var n_xtemps: i64 = 0;  // N_XTEMP nodes with a destructor made so far (the lowering looks for them in conditions only then)
 
 // ---------------------------------------------------------------------------

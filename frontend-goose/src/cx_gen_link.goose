@@ -41,6 +41,7 @@ var complete_base = dictionary<u64, u32> {};    // complete-object symbol -> str
 // The complete-object variant of constructor or destructor s.
 fn complete_sym(s: i64) -> i64 {
     if cxs[s].flags & (CF_CTOR | CF_DTOR) == 0 || cxs[s].flags & CF_DTOR_DELETING != 0 { return s; }
+    if complete_base.count > 0 && complete_base.contains(s as u64) { return s; }
     let g = complete_of.get(s as u64);
     if g { return g as i64; }
     let a = csym(SK_FUNC, syms[s].name, syms[s].ty, syms[s].loc);
@@ -52,6 +53,7 @@ fn complete_sym(s: i64) -> i64 {
     complete_base.insert(a as u64, s as! u32);
     complete_pairs.push(s as! u32);
     complete_pairs.push(a as! u32);
+    if names_done { name_complete(s, a); }
     return a;
 }
 
@@ -182,25 +184,30 @@ fn name_syms() {
         }
         if internal && syms[s].sc as i64 != SC_EXTERN { syms[s].sc = SC_STATIC as! u8; }
     }
-    // the complete-object variants of constructors and destructors
-    for i in 0..complete_pairs.len / 2 {
-        let s = complete_pairs[2 * i] as i64;
-        let a = complete_pairs[2 * i + 1] as i64;
-        cxs[a].flags = cxs[s].flags;
-        syms[a].ty = syms[s].ty;
-        syms[a].sc = syms[s].sc;
-        if syms[s].sc as i64 == SC_STATIC || cxl_link(s) != LK_DEFAULT {
-            // one function: the same symbol
-            set_label(a, ident_text(gen::link_name(s) as i64));
-            cxl[a] = cxl[s];
-            continue;
-        }
-        mg_structor = 1;
-        let ok = mangle_sym(s);
-        if !ok { set_label(a, ident_text(gen::link_name(s) as i64)); continue; }
-        set_label(a, mg);
-        cxl[a].alias = s as! i32;
+    // the complete-object variants of constructors and destructors (and
+    // those made from now on)
+    for i in 0..complete_pairs.len / 2 { name_complete(complete_pairs[2 * i] as i64, complete_pairs[2 * i + 1] as i64); }
+    names_done = true;
+}
+var names_done = false;
+
+// The name and linkage of a, the complete-object variant of structor s.
+fn name_complete(s: i64, a: i64) {
+    cxl_grow();
+    cxs[a].flags = cxs[s].flags;
+    syms[a].ty = syms[s].ty;
+    syms[a].sc = syms[s].sc;
+    if syms[s].sc as i64 == SC_STATIC || cxl_link(s) != LK_DEFAULT {
+        // one function: the same symbol
+        set_label(a, ident_text(gen::link_name(s) as i64));
+        cxl[a] = cxl[s];
+        return;
     }
+    mg_structor = 1;
+    let ok = mangle_sym(s);
+    if !ok { set_label(a, ident_text(gen::link_name(s) as i64)); return; }
+    set_label(a, mg);
+    cxl[a].alias = s as! i32;
 }
 
 fn same_text(a: const u8[:], b: const u8[:]) -> bool { a == b }

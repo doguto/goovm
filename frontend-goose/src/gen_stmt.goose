@@ -825,6 +825,11 @@ recursive fn gen_local_decl(n: u32) {
         ensure_sym_tables();
         sym_gen[s].addr = f_sret;
     }
+    if opt_cxx && cxl_has(s, CXL_NRVO) {
+        // D3: C++'s NRVO variable: the return slot (the first argument)
+        ensure_sym_tables();
+        sym_gen[s].addr = KARG | 0;
+    }
     if !has_insert() && !is_vm_any(q) {
         // unreachable: the storage still exists for jumps into the scope
         ensure_sym_tables();
