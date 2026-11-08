@@ -45,6 +45,17 @@ import .gen_dwarf;
 import .gen_tu;
 import .hcache;
 import .pcache;
+import .cx_core;
+import .cx_names;
+import .cx_decl;
+import .cx_class;
+import .cx_tmpl;
+import .cx_decl2;
+import .cx_expr;
+import .cx_sema;
+import .cx_over;
+import .cx_stmt;
+import .cx_layout;
 import cg from "../../backend-goose";
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
@@ -75,7 +86,11 @@ fn tu_add(t0: Tok) {
     }
     if t.kind == TK_IDENT {
         let kwc = idents[t.val].kw;
-        if kwc != 0 { t.kind = (TK_KW + (kwc as i64)) as! u8; }
+        if kwc != 0 {
+            // C++: an alternative token (and, or ...) is its operator
+            if kwc as i64 == cx::KW_CXXOP { t.kind = cxxop_kind(t.val) as! u8; }
+            else { t.kind = (TK_KW + (kwc as i64)) as! u8; }
+        }
     }
     tu_toks.push(t);
 }
@@ -467,22 +482,38 @@ fn main() {
         opt_kw_restrict = v.len > 0;
         opt_kw_gnu = opt_gnu;
         opt_c89 = v.len == 0;
-        keywords_init();
+        if opt_cxx {
+            opt_kw_gnu = opt_gnu;
+            opt_c89 = false;
+            cx::keywords_init_cxx();
+        } else {
+            keywords_init();
+        }
         // G1: the parser's starting state before preprocessing, so that the
         // identifiers it interns are the same in every translation unit
         // (the parse cache's entries refer to them: pcache.goose)
         types_init();
         parse_init();
-        pt_track = hc_on;
+        if opt_cxx { cx::cx_init(); }
+        // the parse cache holds C's parser state only
+        pt_track = hc_on && !opt_cxx;
         pt_setup_opts();
         if hc_on { hc_tu_check(); }
         pp_fill();
         after_pp();
         let t1 = clock_ns();
         pf_scan();
-        parse_tu();
+        if opt_cxx { cx::parse_tu_cxx(); } else { parse_tu(); }
         if opt_state_hash > 0 { pt_state_hash(opt_state_hash == 2); }
         hc_report();
+        if opt_cxx && (opt_mode == 2 || opt_mode == 3) && n_errors == 0 {
+            write_stderr("goosecc: error: --layout-check and --dump-ast are C only (C++: --cxx-layout-check)\n");
+            exit(1);
+        }
+        if opt_cxx && (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
+            write_stderr("goosecc: error: C++ code generation is not supported yet\n");
+            exit(1);
+        }
         if (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
             let t2 = clock_ns();
             let ok = gen::lower_tu(opt_input());

@@ -1140,7 +1140,9 @@ recursive fn do_pragma(t: Tok, from_op: bool) {
         } else {
             print = false;
         }
-    } else if ptok_is(0, "clang") && ptok_is(1, "__debug") {
+    } else if ptok_is(0, "clang") && (ptok_is(1, "__debug") || ptok_is(1, "deprecated") || ptok_is(1, "restrict_expansion") ||
+                                       ptok_is(1, "final") || ptok_is(1, "assume_nonnull")) {
+        // handled by clang's preprocessor itself: not printed by -E
         print = false;
     } else if ptok_is(0, "message") {
         // printed as message("...") with the strings concatenated

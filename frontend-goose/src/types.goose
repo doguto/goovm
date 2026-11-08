@@ -43,11 +43,29 @@ let TY_UNION = 28;      // extra = record id
 let TY_ENUM = 29;       // extra = enum id, base = underlying type once complete
 let TY_VECTOR = 30;     // base = element, n = lanes
 let TY_EXTVECTOR = 31;  // clang ext_vector_type
+// C++ (D1)
+let TY_LREF = 32;       // T&: base = T
+let TY_RREF = 33;       // T&&: base = T
+let TY_MEMPTR = 34;     // T C::*: base = T (a function type for a member function), extra = the class qtype
+let TY_NULLPTR = 35;    // std::nullptr_t
+let TY_TPARAM = 36;     // a template type parameter: n = depth << 16 | index, extra = name, flags TF_PACK
+let TY_DEPSPEC = 37;    // a template-id with dependent arguments: extra = template symbol, n = argument list (cx targs)
+let TY_DEPNAME = 38;    // typename Q::name<args>: base = Q, extra = name, n = argument list or -1
+let TY_DEPEXPR = 39;    // decltype(e) and other types of dependent expressions: not uniqued, n = token index
+let TY_UNKNOWN = 40;    // a type D1 does not compute (an uninstantiated template's member ...): every check passes
+let TY_AUTO = 41;       // auto / decltype(auto) before deduction: n = 1 for decltype(auto)
+let TY_PACKEXP = 42;    // a pack expansion pattern P...: base = P
 
 let TF_VARIADIC = 1;
 let TF_NOPROTO = 2;     // K&R or ()
 let TF_NORETURN = 4;    // function type carries noreturn
 let TF_ALIGNED = 8;     // an alignment override (typedef with aligned attribute)
+// C++ (D1): member function qualifiers on TY_FUNC; TF_PACK on TY_TPARAM
+let TF_MCONST = 16;
+let TF_MVOLATILE = 32;
+let TF_MLREF = 64;
+let TF_MRREF = 128;
+let TF_PACK = 16;
 
 struct Type {
     kind: u8,
@@ -299,6 +317,14 @@ fn compute_size(id: i64) {
     } else if k == TY_FUNC {
         size = -1;
         al = 1;
+    } else if k == TY_LREF || k == TY_RREF || k == TY_NULLPTR {
+        size = 8;
+        al = 8;
+    } else if k == TY_MEMPTR {
+        // Itanium: a data member pointer is an offset, a member function
+        // pointer a (pointer or vtable offset + 1, this adjustment) pair
+        size = if kind_of(t.base) == TY_FUNC { 16 } else { 8 };
+        al = 8;
     }
     types[id].size = size;
     types[id].align = al;
@@ -758,9 +784,9 @@ fn type_name_decl(out: u8[>..]&, q: u32, name: const u8[:]) {
     var prev_ptr = false;
     loop {
         let k = kind_of(t);
-        if k == TY_POINTER {
+        if k == TY_POINTER || k == TY_LREF || k == TY_RREF {
             tn_tmp2.clear();
-            tn_tmp2.push('*');
+            tn_tmp2.append(if k == TY_LREF { "&" } else if k == TY_RREF { "&&" } else { "*" });
             quals_text(tn_tmp2, quals(t), true);
             tn_tmp2.append(tn_tmp);
             tn_tmp.clear();
@@ -867,6 +893,9 @@ recursive fn base_name(out: u8[>..]&, q: u32) {
         TY_UINT => "unsigned int", TY_LONG => "long", TY_ULONG => "unsigned long", TY_LLONG => "long long",
         TY_ULLONG => "unsigned long long", TY_INT128 => "__int128", TY_UINT128 => "unsigned __int128",
         TY_FLOAT16 => "_Float16", TY_BF16 => "__bf16", TY_FLOAT => "float", TY_DOUBLE => "double",
-        TY_LDOUBLE => "long double", TY_FLOAT128 => "__float128", _ => "<type>",
+        TY_LDOUBLE => "long double", TY_FLOAT128 => "__float128", TY_NULLPTR => "std::nullptr_t",
+        TY_UNKNOWN => "<unknown type>", TY_AUTO => "auto", TY_TPARAM => "<template parameter>",
+        TY_DEPSPEC => "<dependent template-id>", TY_DEPNAME => "<dependent name>", TY_DEPEXPR => "<dependent type>",
+        _ => "<type>",
     });
 }
