@@ -1689,7 +1689,7 @@ new`/`delete`, argument-dependent lookup beyond the operands' namespaces.
   deduction, partial ordering, SFINAE in deduction, and the lazy
   instantiation of members; argument-dependent lookup. Target:
   `std::vector`, `std::string`, iostreams compile; the declaration
-  oracle's 173 missing declarations (all in templates) appear.
+  oracle's 171 missing declarations (all in templates) appear.
 - **D3: the rest of the lowering.** Temporaries and their destruction at
   the end of full-expressions (including conditional ones), classes passed
   and returned by invisible reference, implicit copy/move operations,
