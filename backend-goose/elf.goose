@@ -108,11 +108,60 @@ fn new_pool_sym(sec: u32, off: u32, size: u32) -> u32 {
 }
 // Final symbol index of a provisional one.
 fn final_sym(s: u64) -> u64 {
+    if s >= LIBSYM_BASE {
+        // after every global: null, sections, globals, pool, signatures, mapping symbols
+        return (osecs.len + M.globals.len) as u64 + pool_syms.len as u64 + cd_own.len as u64 + map_syms.len as u64
+               + (s - LIBSYM_BASE);
+    }
     if s >= CDSYM_BASE { return n_local_syms + pool_syms.len as u64 + (s - CDSYM_BASE); }
     if s >= POOL_BASE { return n_local_syms + (s - POOL_BASE); }
-    if s >= n_local_syms { return s + pool_syms.len as u64 + cd_own.len as u64; }
+    if s >= n_local_syms { return s + pool_syms.len as u64 + cd_own.len as u64 + map_syms.len as u64; }
     return s;
 }
+
+// AArch64 (milestone F1): the target, mapping symbols and the library
+// functions the back-end calls on its own.
+var tgt_a64 = false;
+// Mapping symbols ($x at the start of code, $d / $x around data in code,
+// AArch64 ELF): local, after the group signatures.
+struct MapSym { sec: u32, off: u32, data: bool }
+var map_syms: MapSym[>..] = [];
+// Undefined functions the back-end names (fp128 soft float, outline atomics):
+// provisional numbers LIBSYM_BASE + k, written after the globals; their names
+// follow the GIR string table in .strtab (xstrtab, at M.strtab.len + offset).
+let LIBSYM_BASE = 0x60000000;
+var xstrtab: u8[>..] = [];
+var lib_name: u32[>..] = [];     // per library symbol: its name's offset in xstrtab
+var lib_len: u32[>..] = [];
+var map_name_x: u32 = 0xFFFFFFFF;   // xstrtab offsets of "$x", "$d"
+var map_name_d: u32 = 0xFFFFFFFF;
+// The base of xstrtab in .strtab.
+fn xstr_base() -> u32 { if M.strtab.len != 0 { M.strtab.len as! u32 } else { 1 } }
+fn xstr_add(name: const u8[:]) -> u32 {
+    let o = xstrtab.len as! u32;
+    xstrtab.append(name);
+    xstrtab.push(0);
+    return o;
+}
+// The symbol of library function `name`: a global of that name if the module
+// has one, else an undefined symbol of ours.
+fn a_libsym(name: const u8[:]) -> u32 {
+    for k in 0..lib_name.len {
+        let o: i64 = lib_name[k];
+        if xstrtab[o..o + lib_len[k]] == name { return LIBSYM_BASE + k as! u32; }
+    }
+    for G, g in M.globals {
+        if G.name_len == name.len as! u32 && M.strtab[G.name..G.name + G.name_len] == name { return g_sym[g]; }
+    }
+    lib_name.push(xstr_add(name));
+    lib_len.push(name.len as! u32);
+    return LIBSYM_BASE + (lib_name.len - 1) as! u32;
+}
+// Relocation types of the data and debug relocations.
+fn r_abs64() -> u32 { if tgt_a64 { R_AARCH64_ABS64 } else { R_X86_64_64 } }
+fn r_abs32() -> u32 { if tgt_a64 { R_AARCH64_ABS32 } else { R_X86_64_32 } }
+fn r_pc32() -> u32 { if tgt_a64 { R_AARCH64_PREL32 } else { R_X86_64_PC32 } }
+fn r_dtpoff64() -> u32 { if tgt_a64 { R_AARCH64_TLS_DTPREL64 } else { R_X86_64_DTPOFF64 } }
 fn final_info(info: u64) -> u64 { (final_sym(info >> 32) << 32) | (info & 0xFFFFFFFF) }
 
 checkfree fn o1(o: u8[>..]&, x: u32) { o.push(x as! u8); }
@@ -176,7 +225,7 @@ fn make_sections() {
     sec_eh = 0;
     if M.funcs.len != 0 {
         sec_eh = osecs.len as! u32;
-        add_osec(SHT_X86_64_UNWIND, SHF_ALLOC, 8, 0, BUF_EH, ".eh_frame");
+        add_osec(if tgt_a64 { SHT_PROGBITS } else { SHT_X86_64_UNWIND }, SHF_ALLOC, 8, 0, BUF_EH, ".eh_frame");
     }
     cs_lsda.clear();
     cs_lsda.resize(osecs.len, 0);
@@ -415,10 +464,10 @@ fn collect_relocs() {
         let s: i64 = g_sec[ow];
         let off = g_value[ow] + d.offset;
         if d.kind == DR_ABS64 {
-            rels.push(Rel2 { offset: off, info: (g_sym[d.target] as u64 << 32) | R_X86_64_64, addend: d.addend,
+            rels.push(Rel2 { offset: off, info: (g_sym[d.target] as u64 << 32) | r_abs64(), addend: d.addend,
                              sec: s as u64 });
         } else if d.kind == DR_PCREL32 {
-            rels.push(Rel2 { offset: off, info: (g_sym[d.target] as u64 << 32) | R_X86_64_PC32, addend: d.addend,
+            rels.push(Rel2 { offset: off, info: (g_sym[d.target] as u64 << 32) | r_pc32(), addend: d.addend,
                              sec: s as u64 });
         } else {
             let F = M.funcs[M.globals[d.target].func];
@@ -426,7 +475,7 @@ fn collect_relocs() {
             let fstart = g_value[d.target];
             if d.kind == DR_BLOCK {
                 let a = (blk_code[ga] - osecs[g_sec[d.target]].start - fstart) as! i64 + d.addend;
-                rels.push(Rel2 { offset: off, info: (g_sym[d.target] as u64 << 32) | R_X86_64_64, addend: a,
+                rels.push(Rel2 { offset: off, info: (g_sym[d.target] as u64 << 32) | r_abs64(), addend: a,
                                  sec: s as u64 });
             } else {
                 let gb: i64 = F.first_block + d.blk2;
@@ -541,7 +590,7 @@ fn write_elf(o: u8[>..]&) {
     o1(o, 1);  // EV_CURRENT
     for i in 9 { o1(o, 0); }
     o2(o, 1);   // ET_REL
-    o2(o, 62);  // EM_X86_64
+    o2(o, if tgt_a64 { 183 } else { 62 });  // EM_AARCH64 / EM_X86_64
     o4(o, 1);   // e_version
     o8(o, 0);   // e_entry
     o8(o, 0);   // e_phoff
@@ -670,6 +719,15 @@ fn write_elf(o: u8[>..]&) {
                 o8(o, 0);
                 o8(o, 0);
             }
+            // mapping symbols (AArch64)
+            for ms in map_syms {
+                o4(o, xstr_base() + (if ms.data { map_name_d } else { map_name_x }));
+                o1(o, 0);   // STB_LOCAL, STT_NOTYPE
+                o1(o, 0);
+                o2(o, ms.sec + ng as! u32);
+                o8(o, ms.off);
+                o8(o, 0);
+            }
         }
         for G, g in M.globals {
             let local: u32 = if G.flags & GF_INTERNAL != 0 { 1 } else { 0 };
@@ -692,12 +750,22 @@ fn write_elf(o: u8[>..]&) {
             }
         }
     }
+    // library functions the back-end calls (AArch64): global, undefined
+    for k in 0..lib_name.len {
+        o4(o, xstr_base() + lib_name[k]);
+        o1(o, 0x10);   // STB_GLOBAL, STT_NOTYPE
+        o1(o, 0);
+        o2(o, 0);
+        o8(o, 0);
+        o8(o, 0);
+    }
     sh_size[sec_symtab] = o.len as u64 - sh_off[sec_symtab];
 
-    // The GIR string table is a valid ELF string table (gir.h).
+    // The GIR string table is a valid ELF string table (gir.h); our own names follow it.
     sh_off[sec_strtab] = o.len as u64;
     if M.strtab.len != 0 { obytes(o, M.strtab); }
     else { o1(o, 0); }
+    if xstrtab.len != 0 { obytes(o, xstrtab); }
     sh_size[sec_strtab] = o.len as u64 - sh_off[sec_strtab];
 
     sh_off[sec_shstrtab] = o.len as u64;
@@ -761,7 +829,7 @@ fn write_elf(o: u8[>..]&) {
         } else if e == sec_symtab {
             typ = SHT_SYMTAB;
             link = sec_strtab as! u32;
-            info = n_local_syms + pool_syms.len as! u32 + cd_own.len as! u32;
+            info = n_local_syms + pool_syms.len as! u32 + cd_own.len as! u32 + map_syms.len as! u32;
             align = 8;
             entsize = 24;
         } else if e == sec_strtab || e == sec_shstrtab {

@@ -119,6 +119,11 @@ int main(int argc, char **argv) {
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
     llvm::InitializeNativeTargetAsmParser();   // module-level asm (libstdc++'s <iostream>)
+    LLVMInitializeAArch64TargetInfo();         // --target=aarch64-linux-gnu (milestone F1)
+    LLVMInitializeAArch64Target();
+    LLVMInitializeAArch64TargetMC();
+    LLVMInitializeAArch64AsmPrinter();
+    LLVMInitializeAArch64AsmParser();
 
     // Run the clang driver to get the cc1 job, exactly as `clang -c` would
     // (createInvocation is meant for tools and forces -fsyntax-only).

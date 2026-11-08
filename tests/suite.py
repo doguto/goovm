@@ -40,7 +40,14 @@ consumer-typeset).
 
 usage: tests/suite.py [--goovm PATH] [--corpus a,b] [--variants O0,g,mem2reg]
                       [-j 3] [--work DIR] [--fallback] [--report FILE] [--json FILE]
-                      [--rebaseline] [--emit-bc] [--time-run N] [filter ...]
+                      [--rebaseline] [--emit-bc] [--time-run N] [--target aarch64] [filter ...]
+
+--target aarch64 (milestone F1): every compile (the baselines, the bitcode,
+goovm-cc) gets --target=aarch64-linux-gnu, links use lld, and the programs
+run under qemu-aarch64 (QEMU_LD_PREFIX=/usr/aarch64-linux-gnu). The corpora
+take the directories the llvm-test-suite adds for AArch64 instead of the
+x86-64 ones: UnitTests/Vector/AArch64 and UnitTests/AArch64 instead of
+UnitTests/Vector/SSE, Regression/C/SSE and UnitTests/X86 (C++).
 """
 import argparse
 import concurrent.futures as cf
@@ -62,6 +69,23 @@ CXX_EXTS = (".cpp", ".cc", ".cxx", ".C")
 
 def is_cxx(src):
     return os.path.splitext(src)[1] in CXX_EXTS
+
+
+# The target (--target): compile and link flags, and how programs run.
+TARGET = "x86_64"
+TFLAGS = []
+LFLAGS = []
+RUNNER = []
+
+
+def set_target(t):
+    global TARGET
+    TARGET = t
+    if t == "aarch64":
+        TFLAGS[:] = ["--target=aarch64-linux-gnu"]
+        LFLAGS[:] = ["--target=aarch64-linux-gnu", "-fuse-ld=lld"]
+        RUNNER[:] = ["qemu-aarch64"]
+        os.environ.setdefault("QEMU_LD_PREFIX", "/usr/aarch64-linux-gnu")
 VARIANTS = ["O0", "g", "mem2reg"]
 # Opt-in variants: "cc" builds each file with goovm-cc (clang front end in-process
 # + the Goose back-end) instead of clang -emit-llvm + goovm-llc.
@@ -112,6 +136,8 @@ class Test:
              self.hash_output, self.fp_rel, self.fp_abs, self.exit0]
         if self.cxxflags != self.cflags:
             k.append(self.cxxflags)
+        if TARGET != "x86_64":
+            k.append(TARGET)
         h = hashlib.sha1(json.dumps(k).encode())
         return h.hexdigest()[:16]
 
@@ -235,6 +261,12 @@ def unittest_tests(suite):
     t += singlesource("unittests", os.path.join(u, "Threads"), common + ["-pthread"], ["-pthread"])
     vcommon = common + ["-Wno-error=incompatible-pointer-types"]
     t += singlesource("unittests", os.path.join(u, "Vector"), vcommon)
+    if TARGET == "aarch64":
+        # the AArch64 directories (Vector/AArch64: the NEON intrinsics test, self-checking;
+        # AArch64: function multi-versioning, with the aarch64- prefix of its CMakeLists)
+        t += singlesource("unittests", os.path.join(u, "Vector/AArch64"), vcommon + ["-std=c99"])
+        t += singlesource("unittests", os.path.join(u, "AArch64"), common + ["-std=c99"], prefix="aarch64-")
+        return t
     t += singlesource("unittests", os.path.join(u, "Vector/SSE"),
                       vcommon + ["-msse2", "-ffp-contract=off", "-DFMA_DISABLED=1"], ["-lm"], fp_rel=0.016)
     return t
@@ -245,7 +277,8 @@ def regression_tests(suite):
     _D0["regression"] = r
     common = ["-Wno-implicit-int", "-Wno-error=incompatible-pointer-types"]
     t = singlesource("regression", r, common, ["-lm"])
-    t += singlesource("regression", os.path.join(r, "SSE"), common + ["-msse2"], ["-lm"])
+    if TARGET == "x86_64":
+        t += singlesource("regression", os.path.join(r, "SSE"), common + ["-msse2"], ["-lm"])
     return t
 
 
@@ -389,7 +422,8 @@ def unittest_cxx_tests(suite):
     t += singlesource("unittests-cxx", j(u, "Vectorizer"), common + ["-std=gnu++17"], exts=CXX_EXT)
     t += singlesource("unittests-cxx", j(u, "Vectorizer/VPlanNativePath"),
                       common + ["-mllvm", "-enable-vplan-native-path", "-fno-vectorize"], exts=CXX_EXT)
-    t += singlesource("unittests-cxx", j(u, "X86"), common, exts=CXX_EXT)
+    if TARGET == "x86_64":
+        t += singlesource("unittests-cxx", j(u, "X86"), common, exts=CXX_EXT)
     return t
 
 
@@ -516,7 +550,7 @@ def run_and_verify(t, exe, wd, args, timeout):
     t0 = time.time()
     with open(out, "wb") as fo:
         try:
-            p = subprocess.run([exe] + t.args, stdout=fo, stderr=fo, stdin=stdin, cwd=rd, timeout=timeout)
+            p = subprocess.run(RUNNER + [exe] + t.args, stdout=fo, stderr=fo, stdin=stdin, cwd=rd, timeout=timeout)
             code = p.returncode
         except subprocess.TimeoutExpired:
             code = None
@@ -563,7 +597,7 @@ def time_exe(t, exe, wd, n):
     for _ in range(n):
         stdin = open(os.path.join(rd, t.stdin), "rb") if t.stdin else subprocess.DEVNULL
         t0 = time.perf_counter()
-        subprocess.run([exe] + t.args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=stdin, cwd=rd)
+        subprocess.run(RUNNER + [exe] + t.args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=stdin, cwd=rd)
         dt = time.perf_counter() - t0
         if t.stdin:
             stdin.close()
@@ -588,11 +622,11 @@ def build_baseline(t, wd, args, level="O0"):
     objs = []
     for i, s in enumerate(t.srcs):
         o = os.path.join(wd, obj_name(s, i) + (".base.o" if level == "O0" else f".base-{level}.o"))
-        r = sh([compiler(t, s, args), "-" + level] + t.flags(s) + ["-c", s, "-o", o])
+        r = sh([compiler(t, s, args)] + TFLAGS + ["-" + level] + t.flags(s) + ["-c", s, "-o", o])
         if r.returncode:
             raise Fail("build", f"clang -{level} failed on {os.path.basename(s)}:\n{r.stderr.decode(errors='replace')[-800:]}")
         objs.append(o)
-    r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
+    r = sh([linker(t, args)] + LFLAGS + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise Fail("build", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -601,18 +635,18 @@ def build_baseline(t, wd, args, level="O0"):
 def emit_bc(t, s, i, wd, variant, args):
     base = os.path.join(wd, obj_name(s, i) + "." + variant)
     bc = base + ".bc"
-    cc = compiler(t, s, args)
+    cc = [compiler(t, s, args)] + TFLAGS
     if variant in ("O0", "O1"):
-        cmd = [cc, "-O0"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+        cmd = cc + ["-O0"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     elif variant in ("g", "O1-g"):
-        cmd = [cc, "-O0", "-g"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+        cmd = cc + ["-O0", "-g"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     elif variant == "O2ir":
-        cmd = [cc, "-O2"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+        cmd = cc + ["-O2"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     elif variant == "O2nv":
-        cmd = [cc, "-O2", "-fno-vectorize", "-fno-slp-vectorize"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+        cmd = cc + ["-O2", "-fno-vectorize", "-fno-slp-vectorize"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     else:
         raw = base + ".raw.bc"
-        r = sh([cc, "-O0", "-Xclang", "-disable-O0-optnone"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", raw])
+        r = sh(cc + ["-O0", "-Xclang", "-disable-O0-optnone"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", raw])
         if r.returncode:
             raise Fail("error", f"clang -emit-llvm failed on {os.path.basename(s)}")
         cmd = [args.opt, "-passes=mem2reg", raw, "-o", bc]
@@ -642,7 +676,7 @@ def build_goovm_cc(t, wd, variant, args, info):
         o = os.path.join(wd, obj_name(s, i) + "." + variant + ".o")
         cmd = ([args.cc, "--backend=goose"] + (["--fallback"] if args.fallback else [])
                + (["-O1"] if variant == "cc-O1" else ["-O0"])
-               + (["-g"] if variant == "cc-g" else []) + t.flags(s) + ["-c", s, "-o", o])
+               + (["-g"] if variant == "cc-g" else []) + TFLAGS + t.flags(s) + ["-c", s, "-o", o])
         r = sh(cmd, timeout=600)
         err = r.stderr.decode(errors="replace")
         if r.returncode == 2:
@@ -655,7 +689,7 @@ def build_goovm_cc(t, wd, variant, args, info):
         if variant == "cc-g":
             verify_dwarf(o, s, args, info)
         objs.append(o)
-    r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
+    r = sh([linker(t, args)] + LFLAGS + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise Fail("fail", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -683,7 +717,7 @@ def build_goovm(t, wd, variant, args, info):
         if variant in ("g", "O1-g"):
             verify_dwarf(o, s, args, info)
         objs.append(o)
-    r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
+    r = sh([linker(t, args)] + LFLAGS + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise Fail("fail", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -916,8 +950,11 @@ def main():
                     help="with --time-run, also time clang builds at these levels (e.g. O1,O2)")
     ap.add_argument("--report", default="")
     ap.add_argument("--json", default="")
+    ap.add_argument("--target", default="x86_64", choices=["x86_64", "aarch64"],
+                    help="aarch64: compile for aarch64-linux-gnu and run under qemu-aarch64")
     ap.add_argument("filter", nargs="*", help="substrings of test ids to run")
     args = ap.parse_args()
+    set_target(args.target)
     args.variants = [v for v in args.variants.split(",") if v]
     args.time_ref = [v for v in args.time_ref.split(",") if v and v != "O0"]
     corpora = [c for c in args.corpus.split(",") if c]

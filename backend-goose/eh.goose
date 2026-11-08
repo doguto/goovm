@@ -143,7 +143,7 @@ fn eh_cie(pers: u32) -> u32 {
     } else {
         o1(s_eh, 7);
         o1(s_eh, 0x9B);   // personality: indirect pcrel sdata4
-        xrel(sec_eh, s_eh.len as u64, g_sym[pers], R_X86_64_PC32, 0);
+        xrel(sec_eh, s_eh.len as u64, g_sym[pers], r_pc32(), 0);
         o4(s_eh, 0);
         o1(s_eh, 0x1B);   // LSDA pointers
         o1(s_eh, 0x1B);   // FDE pointers
@@ -167,13 +167,13 @@ fn eh_fde(start: u32, size: u32, sec: u32, prolen: u32, pers: u32, lsda_sec: u32
     let at: i64 = s_eh.len;
     o4(s_eh, 0);                               // length
     o4(s_eh, (at + 4) as! u32 - cie);          // CIE pointer
-    xrel(sec_eh, (at + 8) as u64, sec_sym(sec), R_X86_64_PC32, (start - osecs[sec].start) as! i64);
+    xrel(sec_eh, (at + 8) as u64, sec_sym(sec), r_pc32(), (start - osecs[sec].start) as! i64);
     o4(s_eh, 0);                               // pc_begin
     o4(s_eh, size);                            // pc_range
     if pers == GIR_NONE { o1(s_eh, 0); }
     else {
         o1(s_eh, 4);
-        xrel(sec_eh, s_eh.len as u64, sec_sym(lsda_sec), R_X86_64_PC32, lsda_off);
+        xrel(sec_eh, s_eh.len as u64, sec_sym(lsda_sec), r_pc32(), lsda_off);
         o4(s_eh, 0);
     }
     // push rbp; mov rbp, rsp
@@ -307,7 +307,7 @@ fn eh_lsda(e: u32, sec: u32, prolen: u32, fsize: u32) -> u32 {
         while k > 0 {
             let g = M.opnds[E.ttypes + k - 1];
             if g != GIR_NONE {
-                xrel(sec, (base + s_lsda.len - lbase) as! u64, g_sym[g], R_X86_64_PC32, 0);
+                xrel(sec, (base + s_lsda.len - lbase) as! u64, g_sym[g], r_pc32(), 0);
             }
             o4(s_lsda, 0);
             k--;
@@ -331,10 +331,125 @@ fn eh_func_start() {
 fn eh_func_end(fi: u32, start: u32, size: u32, prolen: u32, sec: u32) {
     let e = f_eh[fi];
     if e == GIR_NONE || f_sites.len == 0 {
-        eh_fde(start, size, sec, prolen, GIR_NONE, 0, 0);
+        if tgt_a64 { a_eh_fde(start, size, sec, prolen, GIR_NONE, 0, 0); }
+        else { eh_fde(start, size, sec, prolen, GIR_NONE, 0, 0); }
         return;
     }
     let ls = cs_lsda[sec];
     let off = eh_lsda(e, ls, prolen, size);
-    eh_fde(start, size, sec, prolen, M.ehs[e].personality, ls, off);
+    if tgt_a64 { a_eh_fde(start, size, sec, prolen, M.ehs[e].personality, ls, off); }
+    else { eh_fde(start, size, sec, prolen, M.ehs[e].personality, ls, off); }
+}
+
+// ------------------------------------------------------------- AArch64 (F1)
+//
+// The frame (a64cg.goose): sub sp, sp, #F (or stp x29, x30, [sp, #-F]!),
+// the frame record at the bottom of the frame ([sp] = x29, x30), mov x29,
+// sp, then the callee-saved registers stored above the record; the body
+// addresses the frame through x29 (CFA = x29 + F); the epilogue restores
+// them, and the CFA goes back to sp before x29 is reloaded. The events are
+// recorded as the code is emitted, prologue-relative or body-relative.
+struct ACfi { pos: u32, kind: u32, reg: u32, off: i32 }
+let AE_CFA_OFF = 1;     // DW_CFA_def_cfa_offset off
+let AE_CFA = 2;         // DW_CFA_def_cfa reg, off
+let AE_SAVE = 3;        // reg saved at CFA + off
+let AE_RESTORE = 4;     // DW_CFA_restore reg
+let AE_ARGS = 5;        // DW_CFA_GNU_args_size off
+var a_cfi_pro: ACfi[>..] = [];
+var a_cfi_body: ACfi[>..] = [];
+var a_cie_plain: u32 = 0xFFFFFFFF;
+var a_cie_pers: PCie[>..] = [];
+// A body event (kind CE_ARGS from the call lowering: GNU_args_size a).
+fn a_cfi_ev(pos: u32, kind: u32, a: u32, b: u32) {
+    if kind == CE_ARGS { a_cfi_body.push(ACfi { pos: pos, kind: AE_ARGS, reg: 0, off: a as! i32 }); }
+    else { a_cfi_body.push(ACfi { pos: pos, kind: kind, reg: a, off: b as! i32 }); }
+}
+// DWARF register number: x0..x30 0..30, sp 31, v0..v31 64..95.
+checkfree fn a_dw_reg(r: u32) -> u32 { if r >= 32 { r + 32 } else { r } }
+fn a_eh_cie(pers: u32) -> u32 {
+    if pers == GIR_NONE && a_cie_plain != GIR_NONE { return a_cie_plain; }
+    for c in a_cie_pers { if c.pers == pers { return c.off; } }
+    let at: i64 = s_eh.len;
+    o4(s_eh, 0);
+    o4(s_eh, 0);
+    o1(s_eh, 1);
+    if pers == GIR_NONE { obytes(s_eh, "zR"); } else { obytes(s_eh, "zPLR"); }
+    o1(s_eh, 0);
+    o1(s_eh, 1);     // code alignment factor
+    o1(s_eh, 0x78);  // data alignment factor -8
+    o1(s_eh, 30);    // return address column: x30
+    if pers == GIR_NONE {
+        o1(s_eh, 1);
+        o1(s_eh, 0x1B);
+    } else {
+        o1(s_eh, 7);
+        o1(s_eh, 0x9B);
+        xrel(sec_eh, s_eh.len as u64, g_sym[pers], r_pc32(), 0);
+        o4(s_eh, 0);
+        o1(s_eh, 0x1B);
+        o1(s_eh, 0x1B);
+    }
+    o1(s_eh, 0x0C);  // DW_CFA_def_cfa sp, 0
+    o1(s_eh, 31);
+    o1(s_eh, 0);
+    eh_close(at);
+    let off = at as! u32;
+    if pers == GIR_NONE { a_cie_plain = off; } else { a_cie_pers.push(PCie { pers: pers, off: off }); }
+    return off;
+}
+fn a_cfi_one(e: ACfi) {
+    if e.kind == AE_CFA_OFF {
+        o1(s_eh, 0x0E);
+        uleb(s_eh, e.off as! u64);
+    } else if e.kind == AE_CFA {
+        o1(s_eh, 0x0C);
+        uleb(s_eh, a_dw_reg(e.reg));
+        uleb(s_eh, e.off as! u64);
+    } else if e.kind == AE_SAVE {
+        let r = a_dw_reg(e.reg);
+        let n: u64 = ((0 - e.off) / 8) as! u64;
+        if r < 64 {
+            o1(s_eh, 0x80 | r);
+            uleb(s_eh, n);
+        } else {
+            o1(s_eh, 0x05);   // DW_CFA_offset_extended
+            uleb(s_eh, r);
+            uleb(s_eh, n);
+        }
+    } else if e.kind == AE_RESTORE {
+        let r = a_dw_reg(e.reg);
+        if r < 64 { o1(s_eh, 0xC0 | r); }
+        else {
+            o1(s_eh, 0x06);   // DW_CFA_restore_extended
+            uleb(s_eh, r);
+        }
+    } else {
+        o1(s_eh, 0x2E);       // DW_CFA_GNU_args_size
+        uleb(s_eh, e.off as! u64);
+    }
+}
+fn a_eh_fde(start: u32, size: u32, sec: u32, prolen: u32, pers: u32, lsda_sec: u32, lsda_off: u32) {
+    let cie = a_eh_cie(pers);
+    let at: i64 = s_eh.len;
+    o4(s_eh, 0);
+    o4(s_eh, (at + 4) as! u32 - cie);
+    xrel(sec_eh, (at + 8) as u64, sec_sym(sec), r_pc32(), (start - osecs[sec].start) as! i64);
+    o4(s_eh, 0);
+    o4(s_eh, size);
+    if pers == GIR_NONE { o1(s_eh, 0); }
+    else {
+        o1(s_eh, 4);
+        xrel(sec_eh, s_eh.len as u64, sec_sym(lsda_sec), r_pc32(), lsda_off);
+        o4(s_eh, 0);
+    }
+    var loc: u32 = 0;
+    for e in a_cfi_pro {
+        loc = cfa_advance(loc, e.pos);
+        a_cfi_one(e);
+    }
+    for e in a_cfi_body {
+        loc = cfa_advance(loc, prolen + e.pos);
+        a_cfi_one(e);
+    }
+    eh_close(at);
 }
