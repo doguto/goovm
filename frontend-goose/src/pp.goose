@@ -100,6 +100,11 @@ var opt_gnu: bool = true;      // GNU mode (vs. strict ISO)
 var opt_c99: bool = true;
 var opt_std_c11: bool = true;  // C11 or later
 var opt_optimize: i64 = 0;     // -O level (1 = -O1.., 2 = -Os/-Oz marker handled separately)
+// C++ (D1): -x c++ or a C++ file extension
+var opt_cxx: bool = false;
+var opt_cxx_std: i64 = 17;     // 98 (also c++03), 11, 14, 17, 20, 23
+var opt_exceptions: bool = true;
+var opt_rtti: bool = true;
 
 // Well-known identifiers.
 var id_defined: u32 = 0;

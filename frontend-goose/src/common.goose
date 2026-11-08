@@ -74,13 +74,18 @@ let TK_EQUALEQUAL = 64;
 let TK_COMMA = 65;
 let TK_HASH = 66;
 let TK_HASHHASH = 67;
-let TK_NUM_KINDS = 68;
+// C++ (D1): lexed only in C++ mode
+let TK_COLONCOLON = 68;
+let TK_PERIODSTAR = 69;
+let TK_ARROWSTAR = 70;
+let TK_SPACESHIP = 71;     // <=> (C++20)
+let TK_NUM_KINDS = 72;
 
 // Spellings of the punctuators, indexed by kind - TK_L_SQUARE.
 let PUNCT_SPELL = ["[", "]", "(", ")", "{", "}", ".", "...", "&", "&&", "&=", "*", "*=",
     "+", "++", "+=", "-", "->", "--", "-=", "~", "!", "!=", "/", "/=", "%", "%=",
     "<", "<<", "<=", "<<=", ">", ">>", ">=", ">>=", "^", "^=", "|", "||", "|=",
-    "?", ":", ";", "=", "==", ",", "#", "##"];
+    "?", ":", ";", "=", "==", ",", "#", "##", "::", ".*", "->*", "<=>"];
 
 // Token flags.
 let F_LSPACE = 1;     // whitespace before the token
@@ -90,6 +95,7 @@ let F_MACRO = 8;      // produced by a macro expansion
 let F_DIGRAPH = 16;   // punctuator spelled as a digraph
 let F_SYSHDR = 32;    // lexed from a system header
 let F_EMPTYMAC = 64;  // an empty macro expansion preceded it (clang LeadingEmptyMacro)
+let F_RAWSTR = 128;   // C++: a raw string literal (its text is not spliced)
 
 struct Tok {
     kind: u8,
@@ -154,6 +160,8 @@ struct Ident {
 }
 let ID_POISONED = 1;
 let ID_BUILTIN = 2;     // a builtin function name the parser knows (__builtin_va_arg ...)
+let ID_CXXOP = 4;       // C++: an alternative token (and, or, not ...): never a macro; the
+                        // parser and #if see the operator (cxxop_kind)
 
 var idents: Ident[>..] = [];
 var idtab: u32[>..<] = [];    // open addressing: ident id + 1, 0 = empty
@@ -264,6 +272,17 @@ fn intern(s: const u8[:]) -> u32 {
     let id = ident_lookup(off, s.len, h);
     hk_notexist = 0;
     return id;
+}
+
+// C++ (D1): the alternative tokens, as (identifier, token kind) pairs.
+var cxxops: u32[>..] = [];
+fn cxxop_kind(id: u32) -> i64 {
+    var i = 0;
+    while i + 1 < cxxops.len {
+        if cxxops[i] == id { return cxxops[i + 1] as i64; }
+        i += 2;
+    }
+    return TK_IDENT;
 }
 
 fn ident_text(id: i64) -> const u8[:] {
