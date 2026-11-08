@@ -549,6 +549,7 @@ fn main() {
                     write_stdout(o);
                 }
             } else {
+                if opt_optimize > 0 { gen::m_header[0].r0 = 1; }   // -O1..: the back-end's middle-end (GIR opt_level)
                 let obj = gen::codegen();
                 let t4 = clock_ns();
                 var path: u8[>..] = [];

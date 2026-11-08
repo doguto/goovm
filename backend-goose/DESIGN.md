@@ -7,6 +7,17 @@ without `-g`, and the same IR after `opt -passes=mem2reg`. It is written in
 Goose and called from `goovm-llc` and `goovm-cc` (C++) and from `goosecc`
 (Goose) through two `export fn`s (`gir_codegen`, `gir_codegen_ex`).
 
+Milestone E1 added an optimizing mode. When the GIR header's `opt_level`
+is 1 or more (`goovm-llc -O1`, `goovm-cc -O1`, `goosecc -O1`), a middle-end
+written in Goose optimizes the tables before code generation (§15:
+mem2reg and SROA, instruction simplification, dominator CSE with load
+forwarding, SimplifyCFG with jump threading and if-conversion, inlining,
+tail recursion elimination, loop rotation, LICM with scalar promotion of
+globals, induction variable widening, DCE), and the values that live across blocks get a
+register for their whole live range from a global allocator (§16), with
+the -O0 block-local allocator working around them. At `opt_level` 0 none
+of it runs and the objects are byte-identical to the previous milestone's.
+
 Milestone C1 brought floating-point-heavy code to the speed of clang -O0's
 (§14; `NOTES.md` §11): small aggregates returned in registers no longer go
 through memory in ways that miss store-to-load forwarding, conversions break
@@ -44,6 +55,18 @@ frequent instructions, which got allocator-aware lowerings (§6).
 | `elf.goose` | output sections (incl. comdat sections and groups), symbols, data layout, relocations and the ELF writer |
 | `eh.goose` | `.eh_frame` (CIEs, FDEs, CFI from the prologue/epilogue events) and the LSDAs in `.gcc_except_table` |
 | `dwarf.goose` | DWARF 5: line-table rows and scope ranges recorded during code generation, then `.debug_info`/`abbrev`/`str`/`str_offsets`/`addr`/`line`/`line_str`/`rnglists` |
+| `opt.goose` | **middle-end** (E1, §15): the working form (OIR), loading and storing functions, canonical constants, the module driver (`opt_module`) and the pass pipeline (`opt_function`) |
+| `opt_cfg.goose` | CFG, reverse post-order, dominators and dominator tree, dominance frontiers, natural loops, unreachable blocks |
+| `opt_ssa.goose` | use lists, mem2reg, trivial PHIs, DCE |
+| `opt_sroa.goose` | scalar replacement of aggregates |
+| `opt_fold.goose` | instruction simplification: folding, identities, strength reduction, division by constants, compares, casts, GEPs |
+| `opt_gvn.goose` | dominator CSE with load forwarding and local dead-store elimination |
+| `opt_scfg.goose` | SimplifyCFG: constant branches, block merging, empty-block forwarding, jump threading over PHIs, if-conversion to selects |
+| `opt_inline.goose` | call graph, function order, inlining, tail recursion elimination |
+| `opt_licm.goose` | preheaders, loop-invariant code motion, GEP splitting, loop rotation, scalar promotion of globals, layout loop rotation |
+| `opt_iv.goose` | sign-extension distribution and induction-variable widening |
+| `opt_verify.goose`, `opt_dump.goose` | `GOOVM_OPT=verify` (SSA and CFG invariants after optimization) and `GOOVM_OPT=dump` (text dump of the optimized tables) |
+| `rag.goose` | **global register allocation** (E1, §16): liveness, live segments, clobbers, assignment, and the hooks the code generator calls |
 | `CMakeLists.txt` | runs `goose --standalone --header cg.h -o cg.c cg.goose` and builds the C |
 
 `goose` compiles the whole program from `cg.goose` (an `import` includes a
@@ -57,6 +80,8 @@ gir_codegen(tables):
   reset module state; register classes of all types (t_rc)
   dbg_init(); make_sections() (with comdat, .eh_frame, except and debug
   sections); layout_globals()
+  opt_module()       only at opt_level >= 1 (§15): M is replaced by the
+                     optimized tables
   gen_functions(): per code section, per function: gen_function(fi)
   resolve_blockaddrs(); resolve_aliases(); dbg_write(); write_elf()
 
@@ -64,6 +89,8 @@ gen_function(f):
   ra_prepass()       uses, last use, local/global, call-spanning values,
                      memory writes between a load and its use, register
                      hints, the lowering kind of every instruction
+  rg_alloc()         only at opt_level >= 1 (§16): registers for the values
+                     that live across blocks
   frame setup        callee-saved save area (as many as call-spanning values,
                      at most 5), va save area, allocas, argument homes
   body               per block: register file reset, gen_inst per instruction
@@ -566,3 +593,262 @@ with any of the other forms), and in deep recursion the `mov`/`lea` forms
 are as slow as `leave` (fibo 1.14x clang -O0 with them, 0.94x with `add`).
 The frame size is known when the epilogue is emitted (after the body);
 `emit_prologue` asserts that it has not changed.
+
+## 15. The middle-end (opt_level >= 1)
+
+`opt_module` (`opt.goose`) runs at the start of `gir_codegen` when the
+header's `opt_level` is at least 1. It reads the input tables (M), writes
+new tables (`x_insts`, `x_blocks`, `x_funcs`, `x_opnds`, `x_consts`,
+`x_asms`, `x_dies`, `x_dattrs`) and points M's fields at them; the rest of
+the back-end does not know that the middle-end ran. Globals, types,
+strings, data and relocations are not touched. The output arrays only
+grow (M holds views of them, and Goose refuses to shrink an array a global
+may view): a second module in the same process appends a new region
+(`xb_*`), which costs nothing for the tools (one module per process).
+
+**Function order.** Functions are optimized callees first: a post-order
+of the direct call graph from every function (`opt_order`; calls inside a
+cycle in any order). The inliner then copies a callee that is already
+optimized out of the output tables, and its size there is the cost model's
+input.
+
+**Working form (OIR).** One function at a time is loaded into flat arrays:
+the instruction records (`o_ins`, GIR's 24-byte `Inst` with the INST
+operands renumbered to local ids), the operand runs (`o_ops`), a doubly
+linked instruction list per block (`o_nxt`/`o_prv`, `b_first`/`b_last`) and
+the layout order of the blocks (`b_lnext`). Deleting unlinks; replacing a
+value records a forward (`o_fwd`), which readers follow (`res`) until
+`resolve_all` rewrites all operands (a dirty flag skips the walk when
+nothing was replaced). There are no persistent use lists and no hash maps
+of instructions: passes that need uses build CSR arrays (`build_uses`),
+and the CFG analyses (successors and predecessors as CSR arrays, RPO,
+dominators by Cooper, Harvey and Kennedy, a pre-order numbered dominator
+tree for O(1) dominance queries, dominance frontiers, natural loops) are
+recomputed on demand after a pass that changed the CFG (`ensure_cfg`).
+Integer constants are canonical (a hash of (type, value) over the
+constant table), so value equality is reference equality. `oir_store`
+writes the function back in layout order, renumbering blocks and
+instructions; `in2out` maps each input instruction to its output index
+for the debug information.
+
+**Pipeline** (`opt_function`):
+
+```
+load
+sroa, mem2reg, simplify_phis       (after removing unreachable blocks)
+round                              = simplify; simplify_phis; gvn; dce; simplify_cfg
+tail_recursion -> round
+inline_calls -> round; sroa; mem2reg; round      (if anything was inlined)
+rotate_loops -> mem2reg
+round
+licm -> indvars -> licm; round                   (if anything was hoisted)
+promote_globals -> mem2reg; round
+rotate_layout
+verify (GOOVM_OPT=verify); record the size for the inliner; store
+```
+
+- **mem2reg** (`opt_ssa.goose`): allocas of the entry block whose address
+  is only loaded and stored with one scalar type become SSA values; PHIs go
+  to the iterated dominance frontier of the stores, pruned by liveness
+  (only blocks the variable is live into, as in LLVM's PromoteMemToReg);
+  renaming walks the dominator tree with an explicit stack and an undo log.
+  No PHIs in landing pads (variables live there stay in memory).
+- **SROA** (`opt_sroa.goose`): an entry-block alloca accessed only at
+  constant offsets (typed loads and stores, constant GEPs, memcpy/memmove/
+  memset of constant size, as calls by name or as the inline intrinsics) is
+  split into one alloca per slice; overlapping accesses must agree on offset
+  and type; copies are split into a load and a store per slice (bytes no
+  typed access names get integer slices), memsets into stores. mem2reg then
+  promotes the slices: structs passed around by value at -O0 become
+  registers.
+- **simplify** (`opt_fold.goose`, an instcombine-lite): constant folding
+  of the integer operations (srem with C's truncating remainder; Goose's
+  `%` is Euclidean), identities (`x+0`, `x*1`, `x&-1`, `x^x`, ...),
+  reassociation of constants (`(x+c1)+c2`), `sub x, c` to `add`,
+  multiplication and unsigned division and remainder by powers of two to
+  shifts and masks, signed division by a power of two with the rounding
+  fix-up, i32 division and remainder by other constants with magic numbers
+  (Granlund-Montgomery for unsigned, Hacker's Delight figure 10-1 for
+  signed; unsigned `x / d` with `d >= 2^31` is a compare), compares
+  (constants to the right, unsigned extremes, `(zext i1 x) ==/!= c`,
+  `(zext x)` or `(sext x)` against a constant in x's range), selects on
+  constants or with equal arms, cast chains, GEPs (constant terms folded
+  into the offset, a GEP of a GEP merged when at most two terms result,
+  scales other than 1/2/4/8 to an explicit multiply or shift), and
+  `pow(x, 2.0)` to `x * x` (what libstdc++'s `std::pow(double, int)` leaves).
+- **gvn** (`opt_gvn.goose`): EarlyCSE-style dominator CSE. The dominator
+  tree is walked in pre-order with a scoped hash table of pure instructions
+  (the key is the record plus its operand run). Loads are keyed by (address,
+  type) and forwarded from an earlier load or store while the memory
+  generation that guards them has not moved: stores and calls move the
+  generation, a block with several predecessors starts a new one, and
+  allocas whose address does not escape have generations of their own that
+  only stores into them move (calls leave them alone); such an alloca whose
+  writes are all in one block that dominates the load keeps its entries
+  across merge points (no write can come between: a path from the writing
+  block back to the load passes the entry's block again). Within a block a
+  store overwritten by a later store to the same address with no possible
+  read in between is deleted (local DSE). Functions that call setjmp or use
+  sjlj exceptions get no alias information.
+- **simplify_cfg** (`opt_scfg.goose`): branches on constants and to one
+  target become plain branches; unreachable blocks go; a block is merged
+  into its only predecessor when that one only branches to it; a block that
+  only branches on is bypassed (its predecessors go straight to its target
+  when the PHIs allow); a branch on a PHI with constant incoming values
+  (what `while (a && b)` leaves at -O0) is threaded: each such predecessor
+  jumps to the known target; small triangles and diamonds (at most four
+  cheap speculatable instructions, at most two PHIs to merge, integer or
+  pointer PHIs) become selects, which are cmovs, with the hoisted code placed
+  before the compare so that the compare sets the flags for the select.
+  Functions whose blocks are named by `blockaddress` only get the branch
+  folding (block numbers are fixed).
+- **tail_recursion** (`opt_inline.goose`): a self-call right before a
+  return (`return f(...)`, or `return x + f(...)`: an accumulator) becomes a
+  branch back to a new header whose PHIs are the arguments (and the
+  accumulator, which every other return then adds); a return of a PHI is
+  first copied into the predecessors that compute such a call. Not in
+  functions with allocas (the frame is reused), byval or variadic
+  arguments.
+- **inline_calls** (`opt_inline.goose`): the cost model is the optimized
+  callee's instruction count: up to 40 always, up to 80 when the call is in
+  a loop, up to 500 for an internal function's only call site, any size for
+  `always_inline`; a caller grows by at most 4000 instructions. Never:
+  `noinline` (exported only when it does not come with `optnone`, so a user
+  `noinline` is seen by `goovm-cc -O1` but not in clang -O0 IR, where every
+  function is `noinline optnone`), variadic functions, dynamic allocas,
+  stacksave, va_start, setjmp, sjlj, frame or return addresses, landing
+  pads and invokes, block addresses, byval parameters, self-recursion; a
+  call that is an invoke is not inlined. The callee's blocks are copied
+  between the halves of the split call block, arguments are substituted
+  (truncated for `signext`/`zeroext` parameters, whose upper bits the callee
+  may assume), returns become branches to the continuation with a PHI for
+  the value, allocas move to the caller's entry block, and the copied
+  instructions take the call's line. Internal functions all of whose calls
+  were inlined and whose address is not taken are not emitted (`FN_DEAD`;
+  kept with `-g`, whose subprograms name them).
+- **licm** (`opt_licm.goose`): each natural loop gets a preheader; pure
+  instructions whose operands are defined outside the loop move to it,
+  inner loops first. Division only by a constant that cannot trap; loads
+  only from a loop that writes no memory, and only when the load is in the
+  header or its address is an alloca or a global. A GEP whose index is
+  `invariant + variant` is split so that the invariant part is hoisted.
+- **indvars** (`opt_iv.goose`): clang computes array indices in i32 and
+  sign-extends them for every access. Signed overflow being undefined
+  (`nsw`, exported as `GIR_IF_NSW`), `sext (add nsw a, b)` becomes `add
+  (sext a), (sext b)` (and sub, mul, shl by constants), and an i32 counter
+  `i = phi [init, i + c]` whose extensions are used gets an i64 twin that
+  replaces the extensions and the loop's own compares of `i`. With the GEP
+  split, `a[i * n + j]` costs one add per iteration.
+- **rotate_loops** (`opt_licm.goose`, LLVM's LoopRotate for small headers):
+  a loop whose header holds only PHIs, at most four cheap instructions and
+  the exit test, with one latch ending in a branch to it, gets a copy of the
+  test on the entry edge (a preheader is made first if several edges enter);
+  the header is then entered only from the latch and merged into it, so the
+  loop is a guarded do-while with no jump on entry (a loop that runs once or
+  twice paid one per entry). The header's values used outside it are
+  repaired by demotion to an alloca stored in both copies, which mem2reg
+  promotes again with the PHIs the new CFG needs. Inner loops first.
+- **promote_globals** (`opt_licm.goose`, LICM's scalar promotion where
+  LLVM needs GlobalsAA): an internal global whose address is never taken in
+  the module (only direct loads and stores; no data relocation, no other
+  operand) cannot be reached through a pointer, so in a loop without calls
+  and inline asm it is demoted to an alloca: loaded in the preheader,
+  stored back on a new block on every exit edge, and promoted by mem2reg.
+  Stores are added on the exits only when a store of the loop dominates
+  every exiting block (no store on a path that had none: the global may
+  belong to another thread then).
+- **rotate_layout**: a loop whose header tests and whose single latch
+  branches back is laid out with the header after the latch, so an
+  iteration takes one taken branch (the preheader jumps to the test once).
+- **dce**: mark and sweep from the instructions with effects.
+
+**Cost.** Every pass is linear in the function or close to it (the
+dominator walk, the scoped hash table, CSR use lists); the CFG analyses
+are rebuilt only when stale; nothing allocates per instruction (all
+arrays are cleared and reused across functions). `NOTES.md` §12 has the
+measured time per instruction.
+
+**Switches.** `GOOVM_OPT` holds a list of `-pass` names that switch passes
+off for bisecting (`-m2r`, `-sroa`, `-fold`, `-gvn`, `-cfg`, `-inline`,
+`-licm`, `-iv`, `-rotate`, `-lrot`, `-tre`, `-select`, `-gprom`, `-ra` for the
+global allocator, `-all`), plus
+`verify` (check the invariants after each function: every operand
+dominates its use, PHI entries match the predecessors, one terminator per
+block, allocas in the entry block) and `dump` (print the optimized tables).
+
+**Debug information at -O1** degrades and stays valid
+(`llvm-dwarfdump --verify` passes): line rows follow the instructions that
+survive; inlined code carries the call's line (no inlined-subroutine DIEs);
+a variable whose alloca was promoted or deleted loses its location (a
+debugger shows it as optimized out; there are no location lists); a
+variable whose address survives keeps its frame location, and the value
+holding that address stays in its home (`ST_KEEP`). The CFI stays exact:
+the prologue and epilogue are generated as at -O0, with more callee-saved
+registers.
+
+**LLVM -O2 IR.** `goovm-llc -O1` on IR from `clang -O2` works as far as the
+exporter supports what LLVM's optimizers produce; the missing pieces are
+listed in `NOTES.md` §12 (mostly vectorizer output: `llvm.vector.reduce.*`,
+vectors of pointers, vector GEPs, bitcasts between vectors and integers;
+also saturating-arithmetic intrinsics and relative lookup tables).
+
+## 16. Global register allocation
+
+At `opt_level >= 1`, `rg_alloc` (`rag.goose`) runs after the pre-pass. It
+gives the values that live across blocks (`ST_GLOB`: values used in another
+block, arguments used outside the entry block) and all PHIs one register
+for their whole live range, or none; the block-local allocator of §4 then
+works around them. There is no splitting and no spilling of a pinned value:
+a value that gets no register keeps -O0's write-through home.
+
+- **Liveness**: live-in and live-out bitsets of the global values per block
+  (backward dataflow iterated to a fixed point), then the live segments of
+  each value in the linear order: instruction j is at position 2j + 2, a
+  block spans [2 first + 1, 2 last + 3); a definition starts at its
+  position and a use ends one after it, so an instruction's operands
+  interfere with its result (a lowering may still give a dying pinned
+  operand's register to a local result, `ra_reuse`).
+- **Clobbers**: calls and legacy lowerings clobber the caller-saved
+  registers (all xmm) at 2j + 3, after the operands are read and before the
+  result is written; inline asm and setjmp clobber every register; `rep
+  movs`/`stos` (large memcpy/memset) rdi and rsi. A value live across such
+  a point cannot take those registers; its own definition is exempt (a call
+  result may live in a caller-saved register). There are no callee-saved
+  xmm registers, so an FP value live across a call stays in memory.
+- **Assignment**: values in order of weight (each use weighted 8^depth; the
+  loop depth is estimated from the layout: a backward branch from block l to
+  block h marks h..l), each to the first register of its class that is free
+  over all its segments (per-register occupancy bitmaps over the
+  positions). A value's PHI partner's register (the PHI it feeds or an
+  incoming value of it) and an argument's own register come first; values
+  that cross a call take callee-saved registers, the others prefer the
+  caller-saved ones; the registers the arguments arrive in are taken last.
+  GPRs: rbx, r12-r15 (callee-saved) and rsi, rdi, r8, r9, r10; xmm4-xmm15.
+  rax, rcx, rdx, r11 and xmm0-3 are never pinned: they are the fixed
+  registers of division, shifts, returns and calls, and the lowerings'
+  scratch. Functions whose bitsets would exceed 2^26 bits get no global
+  allocation.
+- **PHIs**: the incoming values are moved to the PHIs' registers with one
+  parallel copy per edge (`phi_moves_rg`, `emit_moves`, cycles broken with
+  `xchg`); PHIs in memory are written first, constants and deferred loads
+  are materialized last. An edge whose incoming values already sit in the
+  PHIs' registers emits nothing, and a conditional branch with such an edge
+  takes the plain form (`edge_phi`).
+- **In the code generator** (guarded by `rg_on`, false at -O0): a pinned
+  value is in its register from its definition (`rg_def_start`; when a
+  legacy lowering wrote it to its home, it is loaded, `rg_def_end`) or from
+  the start of every block it is live into (`rg_block_enter`), and frees the
+  register after its last use in each block (kill lists, `rg_kills`).
+  `ra_evict` never evicts it, `ra_def` returns its register, no home is
+  written for it, and a load deferred into the next instruction refuses a
+  pinned destination its address needs. When a lowering needs more scratch
+  registers than the pinned values leave, a pinned value the current
+  instruction does not use lends its register for that one instruction
+  (`rg_borrow`: stored to a slot, reloaded at the end, `rg_restore`). The
+  function saves the callee-saved registers of pinned values plus as many
+  as the local allocator wants, at most 5 in all, and the entry block moves
+  pinned arguments to their registers with a parallel copy
+  (`rg_entry_moves`).
+- **Read-modify-write**: at -O1 `store (op (load p), x), p`, with the load
+  deferred into the operation and the operation used only by the store, is
+  one `op [p], x`.
