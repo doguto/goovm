@@ -445,11 +445,18 @@ recursive fn is_signed(q: u32) -> bool {
 
 fn rec_of(q: u32) -> i64 { types[q >> 4].extra as i64 }
 
+// C++ (D2): a class template specialization is instantiated when a
+// complete type is needed (never set for C)
+var rec_inst_hook: bool = false;
+
 recursive fn is_complete(q: u32) -> bool {
     let t = types[q >> 4];
     let k = t.kind as i64;
     if k == TY_VOID || k == TY_FUNC { return false; }
-    if k == TY_STRUCT || k == TY_UNION { return records[t.extra].flags & RF_COMPLETE != 0; }
+    if k == TY_STRUCT || k == TY_UNION {
+        if rec_inst_hook && records[t.extra].flags & RF_COMPLETE == 0 { cx::need_complete(q); }
+        return records[t.extra].flags & RF_COMPLETE != 0;
+    }
     if k == TY_ENUM { return enums[t.extra].complete; }
     if k == TY_ARRAY { return t.n >= 0 && is_complete(t.base); }
     if k == TY_VLA { return true; }

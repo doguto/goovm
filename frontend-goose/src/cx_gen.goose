@@ -142,6 +142,7 @@ fn is_this_fn(f: i64) -> bool { syms[f].kind as i64 == SK_FUNC && cxs[f].flags &
 // Node helpers (C nodes).
 
 fn n_ref_fn(f: i64, loc: u32) -> u32 {
+    inst_use(f);
     let n = node(N_DECLREF, 0, abi_type(f), f, 0, 0, loc);
     nodes[n].flags = NF_LVALUE;
     syms[f].flags = syms[f].flags | SF_USED;
@@ -2290,6 +2291,9 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
     var pi = 0;
     loop {
         var progress = false;
+        // D2: bodies of instantiated functions used by what was synthesized
+        inst_drain();
+        while inst_defs_taken < inst_defs.len { cg_extra.push(inst_defs[inst_defs_taken]); inst_defs_taken++; progress = true; }
         while vi < vtables.len { build_vtable(vtables[vi] as i64); vi++; progress = true; }
         while pi < pending_bodies.len {
             synth_body(pending_bodies[pi] as i64, pending_bodies[pi + 1] as i64);
