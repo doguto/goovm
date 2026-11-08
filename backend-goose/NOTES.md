@@ -1566,3 +1566,42 @@ not active, so there is no pinned register to borrow). One program fails at link
 `fmin`/`fmax`, which LLVM -O2 forms as `llvm.minnum`/`llvm.maxnum` and the
 exporter lowers to libm calls, and the test does not link `-lm`.
 
+### What is left
+
+1. **Live-range splitting** in the global allocator (and callee-saved
+   homes for FP values around calls): mafft's DP loops, Bullet, FP-heavy
+   code in general keep loop-invariant values in frame slots.
+2. **Inlining and SROA for C++ abstraction**: a cost model that discounts
+   arguments that are allocas or constants (LLVM's SROA and constant
+   bonuses), SROA of aggregates passed by pointer to inlined callees and of
+   sret results. Bullet (3.3x) and tramp3d-v4 (3.1x) are 1.2x and 1.1x with
+   LLVM's middle-end, so this is most of their gap.
+3. Promotion of conditionally stored globals (a dirty flag on the exits),
+   loop unrolling, `llvm.minnum`/`maxnum` inline, the vectorizers' IR in
+   the exporter (vectors of pointers, `vector.reduce`).
+4. `noinline` in clang -O0 IR: clang marks every function `noinline
+   optnone`; a front-end attribute that survives (or goovm-cc, which sees
+   the source's `noinline`) is needed for `goovm-llc -O1` to honor it
+   (torture `pr17377`).
+5. Debug information at -O1: location lists for promoted variables and
+   inlined-subroutine DIEs.
+6. Middle-end time (1 to 1.8 us per instruction): fewer rounds, CFG and
+   use-list rebuilds only where a pass changed something.
+
+### Rebuild and reproduce (E1)
+
+```bash
+S=/tmp/claude-0/-home-user-goovm/593b2907-8413-508c-8bdb-c68ef6e66f6e/scratchpad   # this session's scratch
+GOOSE=$S/work/goose-build/goose GOOSE_STDLIB=$S/src/goose/stdlib JOBS=2 backend-goose/build.sh build
+G=build/tools/goovm-llc/goovm-llc; C=build/tools/goovm-cc/goovm-cc
+tests/run.py --goovm $G -j2 --o1
+frontend-goose/build.sh /tmp/gcc && tests/run.py --goosecc /tmp/gcc/goosecc -j2 --o1
+GOOVM_OPT=verify tests/suite.py --goovm $G --cc $C --variants O1,cc-O1,O1-g,O2nv,O2ir --verify-dwarf -j2
+tests/suite.py --goovm $G --cc $C --corpus ctmark,ctmark-cxx --variants O1,cc-O1,O2nv -j 1 --time-run 3 --time-ref O1,O2
+tests/suite.py --goovm $G --corpus benchmarks,benchmarks-cxx --variants O1,O2nv -j 1 --time-run 2 --time-ref O1,O2
+# scripts of this milestone ($S/work/e1/): o0ident.py and gident.py (-O0 byte identity against the
+# base build), ctcomp.py (compile time), ctime.py (middle-end time), cq.py (codequal), ccheck.py and
+# o2agg.py (compile-only checks, the -O2 IR survey), ab.py (A/B of two builds), profprog.py (perf),
+# rt.py (run-time tables from suite.py --json), optbisect.py (GOOVM_OPT bisection of a miscompile)
+```
+
