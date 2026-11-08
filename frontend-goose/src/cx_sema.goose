@@ -629,13 +629,19 @@ recursive fn parse_var_init(s: i64, d: CD&, ctx: i64) {
     if init != 0 && has_auto(t) {
         syms[s].ty = deduce_auto(t, init);
     }
-    if init != 0 && cxs[s].flags & CF_CONSTEXPR != 0 || (init != 0 && quals(syms[s].ty) & Q_CONST != 0) {
-        // const integral variables are usable in constant expressions
-        let ok, v = const_int(init);
-        if ok && is_integer(syms[s].ty) { cvar_note(s, init); }
+    if ctx == DC_CLASS || cxs[s].flags & CF_PATTERN != 0 || dependent_ctx() {
+        // a static data member's in-class initializer: still a constant
+        if init != 0 && is_integer(syms[s].ty) && quals(syms[s].ty) & Q_CONST != 0 && cish_node(init) && !is_opq(init) {
+            cvar_note(s, assign_convert(rv(init), syms[s].ty, loc, 1));
+        }
+        return;
     }
-    if ctx == DC_CLASS || cxs[s].flags & CF_PATTERN != 0 || dependent_ctx() { return; }
     let conv = if init != 0 { init_convert(s, init, form, loc) } else { default_init(s, loc) };
+    // const integral (and enum) variables are usable in constant expressions
+    if conv != 0 && !is_opq(conv) && (is_integer(syms[s].ty) || kind_of(syms[s].ty) == TY_BOOL) && quals(syms[s].ty) & Q_CONST != 0 &&
+       nodes[conv].kind as i64 != N_INITBRACE {
+        cvar_note(s, conv);
+    }
     syms[s].flags = syms[s].flags | (if init != 0 { SF_DEFINED } else { 0 });
     let n = node(N_DECL, 0, syms[s].ty, s, conv as i64, d.loc as i64, loc);
     nscratch.push(n);

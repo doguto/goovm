@@ -128,68 +128,81 @@ fn dump_decls(out_path: const u8[:]) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// C++ type names (valid C++, fully qualified), written in prefix form
-// through alias templates the check file defines (GT_ptr<T> is T*, ...),
-// so that no declarator has to be built inside out.
+// C++ type names (valid C++98 and later, fully qualified), written in
+// prefix form through class templates the check file defines
+// (__gt_ptr<T >::t is T*, ...), so that no declarator has to be built
+// inside out.
 
 var tyn_ok: bool = true;
-let GT_DEFS = """
-template<class T> using GT_ptr = T*;
-template<class T> using GT_lref = T&;
-template<class T> using GT_rref = T&&;
-template<class T, unsigned long N> using GT_arr = T[N];
-template<class T> using GT_uarr = T[];
-template<class T> using GT_c = const T;
-template<class T> using GT_v = volatile T;
-template<class T> using GT_cv = const volatile T;
-template<class C, class T> using GT_mp = T C::*;
-template<class R, class... A> using GT_fn = R(A...);
-template<class R, class... A> using GT_fnv = R(A..., ...);
-template<class R, class... A> using GT_fnc = R(A...) const;
-""";
+
+// The check file's helpers (C++98: no alias or variadic templates).
+fn gt_defs(o: u8[>..]&) {
+    o.append("template<class __T> struct __gt_ptr { typedef __T *t; };\n");
+    o.append("template<class __T> struct __gt_lref { typedef __T &t; };\n");
+    if opt_cxx_std >= 11 { o.append("template<class __T> struct __gt_rref { typedef __T &&t; };\n"); }
+    o.append("template<class __T, unsigned long __N> struct __gt_arr { typedef __T t[__N]; };\n");
+    o.append("template<class __T> struct __gt_uarr { typedef __T t[]; };\n");
+    o.append("template<class __T> struct __gt_c { typedef const __T t; };\n");
+    o.append("template<class __T> struct __gt_v { typedef volatile __T t; };\n");
+    o.append("template<class __T> struct __gt_cv { typedef const volatile __T t; };\n");
+    o.append("template<class __C, class __T> struct __gt_mp { typedef __T __C::*t; };\n");
+    for n in 13 {
+        for kind in 3 {
+            // __gt_fnN (plain), __gt_fnvN (variadic), __gt_fncN (const member function)
+            o.append("template<class __R");
+            for i in n { format(o, ", class __A", i); }
+            o.append(if kind == 0 { "> struct __gt_fn" } else if kind == 1 { "> struct __gt_fnv" } else { "> struct __gt_fnc" });
+            format(o, n, " { typedef __R t(");
+            for i in n { if i > 0 { o.append(", "); } format(o, "__A", i); }
+            if kind == 1 { o.append(if n > 0 { ", ..." } else { "..." }); }
+            o.append(if kind == 2 { ") const; };\n" } else { "); };\n" });
+        }
+    }
+}
 
 recursive fn cx_tyname(out: u8[>..]&, t: u32) {
     let k = kind_of(t);
     let q = quals(t) & (Q_CONST | Q_VOLATILE);
     if q != 0 && k != TY_ARRAY {
-        out.append(if q == Q_CONST { "GT_c<" } else if q == Q_VOLATILE { "GT_v<" } else { "GT_cv<" });
+        out.append(if q == Q_CONST { "__gt_c< " } else if q == Q_VOLATILE { "__gt_v< " } else { "__gt_cv< " });
         cx_tyname(out, t & ~((Q_CONST | Q_VOLATILE) as! u32));
-        out.push('>');
+        out.append(" >::t");
         return;
     }
     if k == TY_POINTER || k == TY_LREF || k == TY_RREF {
-        out.append(if k == TY_LREF { "GT_lref<" } else if k == TY_RREF { "GT_rref<" } else { "GT_ptr<" });
+        out.append(if k == TY_LREF { "__gt_lref< " } else if k == TY_RREF { "__gt_rref< " } else { "__gt_ptr< " });
         cx_tyname(out, tbase(t));
-        out.push('>');
+        out.append(" >::t");
         return;
     }
     if k == TY_MEMPTR {
-        out.append("GT_mp<");
+        out.append("__gt_mp< ");
         cx_tyname(out, types[t >> 4].extra);
         out.append(", ");
         cx_tyname(out, tbase(t));
-        out.push('>');
+        out.append(" >::t");
         return;
     }
     if k == TY_ARRAY {
         let n = types[t >> 4].n;
-        if n >= 0 { out.append("GT_arr<"); } else { out.append("GT_uarr<"); }
+        if n >= 0 { out.append("__gt_arr< "); } else { out.append("__gt_uarr< "); }
         cx_tyname(out, tbase(t));
         if n >= 0 { format(out, ", ", n); }
-        out.push('>');
+        out.append(" >::t");
         return;
     }
     if k == TY_FUNC {
         let f = types[t >> 4];
-        if (f.flags as i64) & (TF_MVOLATILE | TF_MLREF | TF_MRREF) != 0 { tyn_ok = false; }
+        if (f.flags as i64) & (TF_MVOLATILE | TF_MLREF | TF_MRREF) != 0 || f.n > 12 { tyn_ok = false; }
         if (f.flags as i64) & TF_MCONST != 0 && f.flags & TF_VARIADIC != 0 { tyn_ok = false; }
-        out.append(if (f.flags as i64) & TF_MCONST != 0 { "GT_fnc<" } else if f.flags & TF_VARIADIC != 0 { "GT_fnv<" } else { "GT_fn<" });
+        out.append(if (f.flags as i64) & TF_MCONST != 0 { "__gt_fnc" } else if f.flags & TF_VARIADIC != 0 { "__gt_fnv" } else { "__gt_fn" });
+        format(out, f.n, "< ");
         cx_tyname(out, f.base);
         for i in f.n {
             out.append(", ");
             cx_tyname(out, tparams[f.extra + i]);
         }
-        out.push('>');
+        out.append(" >::t");
         return;
     }
     base_tyname(out, t);
@@ -205,6 +218,7 @@ fn base_tyname(out: u8[>..]&, t: u32) {
     if k == TY_STRUCT || k == TY_UNION || k == TY_ENUM {
         let sc = type_scope(t);
         if sc < 0 || !nameable(sc) { tyn_ok = false; out.append("int"); return; }
+        out.append(if k == TY_ENUM { "enum " } else if k == TY_UNION { "union " } else { "struct " });
         scope_qname(out, sc);
         return;
     }
@@ -225,7 +239,7 @@ fn base_tyname(out: u8[>..]&, t: u32) {
 // The layout check.
 
 fn ck_assert(expr_: const u8[:], value: i64, what: const u8[:]) {
-    ck.append("static_assert(");
+    ck.append("_Static_assert(");
     ck.append(expr_);
     format(ck, " == ", value, ", \"goosecc layout: ");
     for c in what { if c == '"' || c == '\\' { ck.push('\\'); } ck.push(c); }
@@ -238,7 +252,7 @@ fn ck_same(expr_: const u8[:], t: u32, what: const u8[:]) {
     var tn: u8[>..] = [];
     cx_tyname(tn, t);
     if !tyn_ok { return; }
-    ck.append("static_assert(__is_same(decltype(");
+    ck.append("_Static_assert(__is_same(__typeof__(");
     ck.append(expr_);
     ck.append("), ");
     ck.append(tn);
@@ -252,7 +266,7 @@ fn write_cxx_layout_check(input: const u8[:], out_path: const u8[:]) -> bool {
     ck.append("/* goosecc --layout-check (C++): generated */\n#include \"");
     ck.append(input);
     ck.append("\"\n");
-    ck.append(GT_DEFS);
+    gt_defs(ck);
     var ex: u8[>..] = [];
     for rec, r in records {
         if r == 0 || r >= crecs.len { continue; }
@@ -262,12 +276,13 @@ fn write_cxx_layout_check(input: const u8[:], out_path: const u8[:]) -> bool {
         let sc = cr.scope as i64;
         if !nameable(sc) { continue; }
         ck_name.clear();
+        ck_name.append(if rec.flags & RF_UNION != 0 { "union " } else { "struct " });
         scope_qname(ck_name, sc);
         ex.clear();
         format(ex, "sizeof(", ck_name, ")");
         ck_assert(ex, rec.size, ck_name);
         ex.clear();
-        format(ex, "alignof(", ck_name, ")");
+        format(ex, "__alignof__(", ck_name, ")");
         ck_assert(ex, rec.align as i64, ck_name);
         ex.clear();
         format(ex, "__is_polymorphic(", ck_name, ")");

@@ -809,8 +809,9 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         cx_attrs(a);
         let inner = parse_csuffixes(base, d, false);
         if dep || is_opaque(inner) {
-            // a dependent bound (or a VLA, which C++ code here does not use): opaque
-            return mk_array(inner, if n >= 0 { n } else { 0x7FFFFFFF });
+            // a dependent bound, one D1 does not evaluate, or a VLA (a GNU
+            // extension the corpora do not use in C++): opaque
+            return t_unknown;
         }
         return mk_array(inner, n);
     }

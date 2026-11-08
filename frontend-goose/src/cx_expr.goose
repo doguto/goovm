@@ -64,7 +64,9 @@ recursive fn const_int(e: u32) -> bool, i64 {
     let t = nodes[e].ty;
     if !is_integer(t) && kind_of(t) != TY_BOOL { return false, 0; }
     let r = if is_lvalue(e) { icast(e, CK_LVAL2RVAL, unqual(t)) } else { e };
-    return fold_int(r);
+    // const integral variables with constant initializers are constants
+    // (C++ [expr.const]): C's evaluator reads them with fold_cvars
+    return fold_gnu(r);
 }
 
 fn sa_checked(e: u32) -> bool { true }

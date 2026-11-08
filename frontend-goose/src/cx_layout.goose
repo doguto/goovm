@@ -221,8 +221,12 @@ fn cx_layout(r: i64) {
     let emark = empties.len;
     // opaque members (dependent, unknown): no layout
     for i in rec.first..rec.first + rec.count {
-        if is_opaque(fields[i].ty) || (!is_complete(fields[i].ty) && !(kind_of(fields[i].ty) == TY_ARRAY && types[fields[i].ty >> 4].n < 0)) {
-            if !is_ref(fields[i].ty) { mark_unknown_layout(r); return; }
+        let ft = fields[i].ty;
+        if is_ref(ft) { continue; }
+        let flex = kind_of(ft) == TY_ARRAY && types[ft >> 4].n < 0;
+        if is_opaque(ft) || (!is_complete(ft) && !flex) || (!flex && type_size(ft) < 0) {
+            mark_unknown_layout(r);
+            return;
         }
     }
     for i in cr.nbases {

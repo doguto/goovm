@@ -340,7 +340,8 @@ recursive fn mk_construct_init(t: u32, mark: i64, loc: u32) -> u32 {
 // 3 {}).
 recursive fn init_convert(s: i64, init: u32, form: i64, loc: u32) -> u32 {
     let t = syms[s].ty;
-    if is_opq(init) || is_opaque(t) { return init; }
+    if is_opaque(t) { return init; }
+    if is_opq(init) && nodes[init].kind as i64 != N_INITBRACE { return init; }
     if is_array(t) && nodes[init].kind as i64 == N_STRING {
         // char a[] = "..."
         let st = nodes[init].ty;
@@ -349,7 +350,24 @@ recursive fn init_convert(s: i64, init: u32, form: i64, loc: u32) -> u32 {
         nodes[init].flags = nodes[init].flags | NF_STRINIT;
         return init;
     }
-    if is_array(t) { return init; }
+    if is_array(t) {
+        if types[t >> 4].n < 0 && nodes[init].kind as i64 == N_INITBRACE {
+            // T a[] = { ... }: the bound is the number of elements (an element
+            // of aggregate type needs its own braces here)
+            let et = tbase(t);
+            let n = nodes[init].c as i64;
+            var ok = true;
+            if is_aggregate(et) || is_record(et) {
+                for i in n {
+                    let el = nlist[nodes[init].v + i];
+                    // a braced element, or an expression of the element's class (no brace elision)
+                    if nodes[el].kind as i64 != N_INITBRACE && !(is_record(et) && unqual(nodes[el].ty) == unqual(et)) { ok = false; }
+                }
+            }
+            if ok { syms[s].ty = with_q(mk_array(et, n), quals(t)); }
+        }
+        return init;
+    }
     if nodes[init].kind as i64 == N_INITBRACE || is_record(t) || is_ref(t) || !cish(t) || !cish_node(init) { return init; }
     if kind_of(nodes[init].ty) == TY_NULLPTR {
         if is_pointer(t) { return icast(init, CK_NULL2PTR, unqual(t)); }
