@@ -674,7 +674,7 @@ var targ_depth: i64 = 0;
 
 // One template argument, pushed to targ_scratch.
 recursive fn parse_targ() {
-    if looks_like_type_id() {
+    if looks_like_type_id() && type_id_then_gt() {
         let t = parse_type_id();
         targ_scratch.push(TArg { kind: TA_TYPE as! u8, rsv: 0, rsv2: 0, ty: t, v: 0 });
         return;

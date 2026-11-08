@@ -233,7 +233,7 @@ fn declare_typedef(name: u32, ty: u32, loc: u32, ctx: i64) -> i64 {
 // its tokens kept (class members, templates).
 recursive fn function_body(s: i64, d: CD&, in_class: bool) {
     let b0 = pc;
-    let pattern = cxs[s].flags & CF_PATTERN != 0 || dependent_ctx();
+    let pattern = cxs[s].flags & CF_PATTERN != 0 || dependent_ctx() || (d.qn.qual && d.qn.dep != 0);
     if in_class || pattern {
         skip_fn_body();
         cxs[s].body = b0 as! u32;
@@ -247,7 +247,12 @@ recursive fn function_body(s: i64, d: CD&, in_class: bool) {
         return;
     }
     syms[s].flags = syms[s].flags | SF_DEFINED;
+    // the body of a member (or namespace member) defined outside its scope
+    // sees that scope
+    let sv_scope = cur_scope;
+    if d.qn.qual && d.qn.scope >= 0 { cur_scope = d.qn.scope as i64; }
     let n = parse_function_body(s, d.params, d.nparams);
+    cur_scope = sv_scope;
     if n != 0 { nscratch.push(n); }
 }
 
@@ -338,6 +343,13 @@ recursive fn parse_simple_decl(ctx0: i64) {
     let ctx = ctx0;
     var a = Attrs { .. };
     cx_attrs(a);
+    if deduction_guide_ahead() {
+        // template<...> X(args) -> X<...>; : a deduction guide (no effect in D1)
+        if pending_tmpl >= 0 { pending_tmpl = -1; }
+        skip_to(TK_SEMI);
+        expect(TK_SEMI, "';'");
+        return;
+    }
     var ds = CDS { .. };
     parse_cds(ds, a, if ctx == DC_FRIEND { DC_CLASS } else { ctx });
     let base0 = finish_cds(ds);
@@ -369,7 +381,11 @@ recursive fn parse_simple_decl(ctx0: i64) {
         }
         var base = base0;
         if base == 0 { base = t_int; }
+        let sv_init = init_ok;
+        init_ok = (ctx == DC_NS || ctx == DC_BLOCK || ctx == DC_COND) && ds.sc != SC_TYPEDEF;
         parse_cdeclr(if base0 == 0 { t_void } else { base }, 0, d);
+        init_ok = sv_init;
+        if d.qn.kind as i64 == QK_CONV && is_func(d.ty) { d.ty = func_with_ret(d.ty, d.qn.conv); }
         cx_attrs(a);
         parse_asm_label_cx(a);
         cx_attrs(a);
@@ -427,6 +443,29 @@ recursive fn parse_simple_decl(ctx0: i64) {
     }
     if pending_tmpl >= 0 { pending_tmpl = -1; }
     expect(TK_SEMI, "';'");
+}
+
+// [explicit] X ( ... ) -> where X names a class template.
+fn deduction_guide_ahead() -> bool {
+    var j = pc;
+    if tu_toks[j].kind as i64 == TK_KW + KW_EXPLICIT {
+        j++;
+        if tu_toks[j].kind as i64 == TK_L_PAREN { return false; }
+    }
+    if tu_toks[j].kind as i64 != TK_IDENT || tu_toks[j + 1].kind as i64 != TK_L_PAREN { return false; }
+    let s = chain_nns_tmpl(unqual_lookup(tu_toks[j].val));
+    if s < 0 || tmpl_kind(s) != TT_CLASS { return false; }
+    // the matching ')' then '->'
+    var k = j + 1;
+    var depth = 0;
+    loop {
+        let kk = tu_toks[k].kind as i64;
+        if kk == TK_EOF { return false; }
+        if kk == TK_L_PAREN { depth++; }
+        if kk == TK_R_PAREN { depth--; if depth == 0 { break; } }
+        k++;
+    }
+    return tu_toks[k + 1].kind as i64 == TK_ARROW;
 }
 
 // In a block, `T f(args);` with args that are expressions declares a
@@ -697,6 +736,8 @@ fn enter_namespace(name: u32, inline_ns: bool, loc: u32) {
     cur_scope = sc;
 }
 var anon_ns = dictionary<u64, u32> {};
+var reverted_kw = dictionary<u64, u32> {};
+var any_reverted: bool = false;
 
 // Block-scope using-directives: (scope depth, namespace scope) pairs.
 var blk_using: u32[>..<] = [];
@@ -765,7 +806,7 @@ recursive fn parse_using(ctx: i64) {
     }
     // using-declarations: using a::b, c::d;
     loop {
-        accept_kw(KW_TYPENAME);
+        let tn = accept_kw(KW_TYPENAME);
         var qn = QN { .. };
         if !parse_qname(qn) { perr_expected("a name"); break; }
         let pack = accept(TK_ELLIPSIS);
@@ -791,6 +832,9 @@ recursive fn parse_using(ctx: i64) {
             }
         } else if qn.dep == 0 && !dependent_ctx() && diag_suppress == 0 && !(cur_class >= 0 && has_dep_base(cur_class)) {
             err_at(qn.loc, str("no member named '", ident_text(name as i64), "'"));
+        } else if tn && qn.dep != 0 {
+            // using typename Base<T>::type: a dependent type
+            declare_typedef(name, mk_depname(qn.dep, qn.name, -1), loc, if ctx == DC_BLOCK { DC_BLOCK } else { ctx });
         } else if cur_class >= 0 {
             // a member of a dependent base: the name is dependent in this class
             let u = csym(SK_USING, name, t_unknown, loc);
@@ -828,7 +872,10 @@ recursive fn parse_static_assert_cx() {
     let loc = tloc();
     adv();
     expect(TK_L_PAREN, "'('");
+    let sp = paren_depth;
+    paren_depth = 1;
     let e = parse_cexpr_full();
+    paren_depth = sp;
     if accept(TK_COMMA) {
         if at(TK_STRING) { while at(TK_STRING) { adv(); } } else { skip_to(TK_R_PAREN); }
     }
@@ -845,6 +892,29 @@ recursive fn parse_static_assert_cx() {
 // The translation unit.
 
 recursive fn parse_tu_cxx() {
+    // clang's revertible type-trait keywords: libstdc++ names templates
+    // __is_void, __is_pod ...; a trait keyword not followed by '(' is an
+    // identifier (and after struct/class it stays one: Parser::TryKeywordIdentFallback)
+    for t, i in tu_toks {
+        let k = t.kind as i64;
+        if (k == TK_KW + KW_TRAIT || k == TK_KW + KW_TTRANS) && i + 1 < tu_toks.len {
+            let prev = if i > 0 { tu_toks[i - 1].kind as i64 } else { 0 };
+            if tu_toks[i + 1].kind as i64 != TK_L_PAREN || prev == TK_KW + KW_STRUCT || prev == TK_KW + KW_CLASS {
+                tu_toks[i].kind = TK_IDENT;
+            }
+            if prev == TK_KW + KW_STRUCT || prev == TK_KW + KW_CLASS {
+                reverted_kw.insert(t.val as u64, 1);
+                any_reverted = true;
+            }
+        }
+    }
+    if any_reverted {
+        for t, i in tu_toks {
+            if (t.kind as i64 == TK_KW + KW_TRAIT || t.kind as i64 == TK_KW + KW_TTRANS) && reverted_kw.contains(t.val as u64) {
+                tu_toks[i].kind = TK_IDENT;
+            }
+        }
+    }
     let mark = nscratch.len;
     while !at(TK_EOF) {
         if at(TK_R_BRACE) {
@@ -862,6 +932,27 @@ recursive fn parse_tu_cxx() {
     tu_node = node_v(N_TU, 0, 0, 0, 0, count, 0, start);
 }
 
+// The function type ft returning `ret` instead.
+fn func_with_ret(ft: u32, ret: u32) -> u32 {
+    let f = types[ft >> 4];
+    fn_scratch.clear();
+    for i in f.n { fn_scratch.push(tparams[f.extra + i]); }
+    return qt(mk_type(TY_FUNC, f.flags as i64, unqual_ret(ret), 0, 0, 0) as i64, 0);
+}
+
+// clang's builtin templates: __make_integer_seq<S, T, N>,
+// __type_pack_element<N, Ts...> (opaque specializations in D1).
+fn builtin_template(name: const u8[:]) {
+    let t = tmpls.len;
+    tmpls.push(Tmpl { kind: TT_CLASS as! u8, depth: 1, rsv: 0, sym: -1, params: 0, nparams: 0, scope: 0, pos: 0, t0: 0, t1: 0,
+        pattern: -1, specs: -1, outer: -1, spec_args: -1, primary: -1, inst_scope: -1 });
+    let s = csym(SK_TEMPLATE, intern(name), 0, 0);
+    cxs[s].tmpl = t as! i32;
+    cxs[s].flags = CF_TEMPLATE;
+    tmpls[t].sym = s as! i32;
+    scope_add(0, s);
+}
+
 // The parser's start: the C++ types and the global namespace.
 fn cx_init() {
     cx_types_init();
@@ -874,6 +965,8 @@ fn cx_init() {
         if i > 0 && s.kind as i64 == SK_TAG && s.name != 0 { scope_add(0, i); }
     }
     declare_std_types();
+    builtin_template("__make_integer_seq");
+    builtin_template("__type_pack_element");
 }
 
 // std::size_t, std::nullptr_t ... come from the headers; the global

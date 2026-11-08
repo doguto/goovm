@@ -536,6 +536,7 @@ recursive fn looks_like_type_id() -> bool {
         if w == KW_DECLTYPE { return !decltype_then_cc(); }
         if w == KW_TYPENAME { return true; }
         if w == KW_CONST || w == KW_VOLATILE || w == KW_STRUCT || w == KW_CLASS || w == KW_UNION || w == KW_ENUM { return true; }
+        if w == KW_TYPEOF || w == KW_TYPEOF_UNQUAL || w == KW_TTRANS || w == KW_ATOMIC { return true; }
         if is_type_kw(w) {
             // int(3) is an expression; int() and int(*)() are types
             if tk_n(1) == TK_L_PAREN {
@@ -569,6 +570,7 @@ recursive fn looks_like_type_id() -> bool {
                 let t = qn_type(qn);
                 r = t != 0;
             }
+            if !r && qn.sym < 0 && !qn.has_targs && lenient > 0 && unknown_name_is_type(qn, DC_PARAM) { r = true; }
         }
         if r {
             if at(TK_L_BRACE) { r = false; }

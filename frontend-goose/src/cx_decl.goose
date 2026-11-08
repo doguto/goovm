@@ -320,6 +320,7 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             if !ok || qn.kind as i64 != QK_IDENT { restore(sv); break; }
             lookup_qn(qn);
             var t = qn_type(qn);
+            if t == 0 && qn.sym < 0 && qn.dep == 0 && !qn.has_targs && unknown_name_is_type(qn, ctx) { t = t_unknown; }
             if t == 0 || (qn.dep != 0 && !ds.typename_kw && !assume_type_after(qn)) {
                 restore(sv);
                 break;
@@ -445,8 +446,8 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             adv();
             expect(TK_L_PAREN, "'('");
             var ty: u32 = t_unknown;
-            if looks_like_type_id() { ty = parse_type_id(); }
-            else { let e = parse_cexpr_full(); ty = nonref(nodes[e].ty); }
+            if looks_like_type_id() && type_id_then(TK_R_PAREN, TK_R_PAREN) { ty = parse_type_id(); }
+            else { let sp = paren_depth; paren_depth++; let e = parse_cexpr_full(); paren_depth = sp; ty = nonref(nodes[e].ty); }
             expect(TK_R_PAREN, "')'");
             if w == KW_TYPEOF_UNQUAL { ty = unqual(ty); }
             ds.named = ty;
@@ -483,6 +484,26 @@ fn assume_type_after(qn: QN&) -> bool {
         return tk_n(1) == TK_IDENT || tk_n(1) == TK_KW + KW_CONST;
     }
     if k == TK_KW + KW_CONST { return true; }
+    return false;
+}
+
+// A name lookup did not find, in decl-specifier position: a type when the
+// lookup could not be complete (a class with dependent or opaque bases, a
+// template) and a declarator follows (X y; X *y; X &y; X y[).
+var lenient: i64 = 0;       // > 0: names may belong to an opaque class (no undeclared-name errors)
+fn unknown_name_is_type(qn: QN&, ctx: i64) -> bool {
+    let incomplete = dependent_ctx() || lenient > 0 || (enclosing_class(cur_scope) >= 0 && has_dep_base(enclosing_class(cur_scope))) ||
+        (qn.scope >= 0 && (scopes[qn.scope].flags & SCF_PATTERN != 0 || (scopes[qn.scope].kind as i64 == CS_CLASS && has_dep_base(qn.scope as i64))));
+    if !incomplete { return false; }
+    let k = tk();
+    if k == TK_IDENT {
+        let k1 = tk_n(1);
+        return k1 == TK_SEMI || k1 == TK_EQUAL || k1 == TK_COMMA || k1 == TK_L_SQUARE || k1 == TK_R_PAREN ||
+            k1 == TK_COLON || k1 == TK_L_BRACE || (k1 == TK_L_PAREN && ctx != DC_BLOCK);
+    }
+    if (k == TK_STAR || k == TK_AMP || k == TK_AMPAMP) && (ctx == DC_PARAM || ctx == DC_CLASS || ctx == DC_NS) { return true; }
+    if k == TK_KW + KW_CONST && ctx != DC_BLOCK { return true; }
+    if (k == TK_R_PAREN || k == TK_COMMA) && ctx == DC_PARAM { return true; }
     return false;
 }
 
@@ -667,7 +688,14 @@ recursive fn parse_cdeclr(base: u32, abstract: i64, d: CD&) {
         d.has_name = true;
         var a = Attrs { .. };
         cx_attrs(a);
+        // after a qualified declarator-id, names are looked up in its scope
+        let sv_scope = cur_scope;
+        if d.qn.qual && d.qn.scope >= 0 { cur_scope = d.qn.scope as i64; }
+        // a member of an opaque class: its names are unknown here
+        if d.qn.qual && d.qn.dep != 0 { lenient++; }
         d.ty = parse_csuffixes(t, d, true);
+        if d.qn.qual && d.qn.dep != 0 { lenient--; }
+        cur_scope = sv_scope;
         return;
     }
     if abstract == 0 {
@@ -734,7 +762,10 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         var n: i64 = -1;
         var dep = false;
         if !at(TK_R_SQUARE) {
+            let sp = paren_depth;
+            paren_depth++;
             let e = parse_cexpr_full();
+            paren_depth = sp;
             let ty = nodes[e].ty;
             if is_opaque(ty) { dep = true; }
             else {
@@ -753,9 +784,9 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         return mk_array(inner, n);
     }
     if at(TK_L_PAREN) {
-        if !first || d.has_name || !d.has_name {
-            // a parameter list (initializers are not parsed as suffixes: see
-            // parse_init_declarator, which decides before calling us)
+        if first && d.has_name && init_ok && !looks_like_params() {
+            // T x(args): a direct-initializer, not a parameter list
+            return base;
         }
         var variadic = false;
         let start, count = parse_cparams(variadic);
@@ -815,6 +846,70 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         return ft;
     }
     return base;
+}
+
+// Can a declarator's '(' start an initializer here (namespace or block
+// scope, a condition)? Set by parse_simple_decl.
+var init_ok: bool = false;
+
+// At '(' after a declarator-id: a parameter-declaration-clause (vs. an
+// expression list)? C++ [dcl.ambig.res]: what can be a parameter list is
+// one (T x(); declares a function).
+recursive fn looks_like_params() -> bool {
+    let k1 = tk_n(1);
+    if k1 == TK_R_PAREN || k1 == TK_ELLIPSIS { return true; }
+    if k1 >= TK_KW {
+        let w = k1 - TK_KW;
+        if w == KW_REGISTER || w == KW_CONST || w == KW_VOLATILE || w == KW_TYPENAME || w == KW_STRUCT || w == KW_CLASS ||
+           w == KW_UNION || w == KW_ENUM || w == KW_ATTRIBUTE || w == KW_AUTO { return true; }
+        if w == KW_DECLTYPE || w == KW_TYPEOF || w == KW_TYPEOF_UNQUAL || w == KW_TTRANS || w == KW_ATOMIC { return true; }
+        if is_type_kw(w) {
+            // int(3) is an expression; int, int x, int* and int (*f)(...) are parameters
+            let k2 = tk_n(2);
+            if k2 == TK_L_PAREN {
+                let k3 = tk_n(3);
+                if k3 == TK_STAR || k3 == TK_AMP || k3 == TK_AMPAMP || k3 == TK_CARET || k3 == TK_R_PAREN ||
+                    (k3 >= TK_KW && is_type_kw(k3 - TK_KW)) { return true; }
+                // int (X::*pm)
+                let sv = save();
+                adv(); adv(); adv();
+                let mp = memptr_ahead();
+                restore(sv);
+                return mp;
+            }
+            return true;
+        }
+        return false;
+    }
+    if k1 == TK_L_SQUARE && tk_n(2) == TK_L_SQUARE { return true; }
+    if k1 != TK_IDENT && k1 != TK_COLONCOLON { return false; }
+    let sv = save();
+    adv();
+    let r = looks_like_type_id();
+    restore(sv);
+    return r;
+}
+
+// Is the type-id at pc followed by token k1 or k2 (a tentative parse)?
+recursive fn type_id_then(k1: i64, k2: i64) -> bool {
+    let sv = save();
+    diag_suppress++;
+    let t = parse_type_id();
+    diag_suppress--;
+    let r = at(k1) || at(k2) || at(TK_ELLIPSIS);
+    restore(sv);
+    return r;
+}
+
+// ... followed by the end of a template argument (',' '>' '>>' '...').
+recursive fn type_id_then_gt() -> bool {
+    let sv = save();
+    diag_suppress++;
+    let t = parse_type_id();
+    diag_suppress--;
+    let r = at(TK_COMMA) || at_gt() || at(TK_ELLIPSIS);
+    restore(sv);
+    return r;
 }
 
 // The parameter type as part of the function type: top-level cv removed.
@@ -922,7 +1017,10 @@ recursive fn parse_decltype() -> u32 {
         return qt(mk_type(TY_AUTO, 0, 0, 1, 0, 0) as i64, 0);
     }
     unevaluated++;
+    let sp = paren_depth;
+    paren_depth++;
     let e = parse_cexpr_full();
+    paren_depth = sp;
     unevaluated--;
     expect(TK_R_PAREN, "')'");
     let ty = nodes[e].ty;

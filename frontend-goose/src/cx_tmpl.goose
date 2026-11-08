@@ -313,6 +313,14 @@ recursive fn specialization(tsym: i64, args: i32) -> u32 {
     if k == TT_PARAM { return mk_depspec(tsym, args); }
     if k != TT_CLASS { return t_unknown; }
     if args == own_args(t) && tmpls[t].pattern >= 0 { return records[tmpls[t].pattern].ty << 4; }
+    // the pattern of a partial specialization written with the same
+    // arguments (an out-of-line member: X<T*>::f)
+    var l = tmpls[t].specs;
+    while l >= 0 {
+        let pt = ulinks[l].v as i64;
+        if tmpls[pt].spec_args == args && tmpls[pt].pattern >= 0 { return records[tmpls[pt].pattern].ty << 4; }
+        l = ulinks[l].next;
+    }
     let g = spec_map.get(((t as u64) << 32) | (args as u64));
     if g { return g; }
     return mk_depspec(tsym, args);

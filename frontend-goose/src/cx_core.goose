@@ -496,7 +496,9 @@ fn mk_rref(t: u32) -> u32 {
 }
 fn mk_memptr(member: u32, cls: u32) -> u32 { qt(mk_type(TY_MEMPTR, 0, member, 0, unqual(cls), 0) as i64, 0) }
 fn mk_tparam(depth: i64, index: i64, name: u32, pack: bool) -> u32 {
-    return qt(mk_type(TY_TPARAM, if pack { TF_PACK } else { 0 }, 0, (depth << 16) | index, name, 0) as i64, 0);
+    // the name is not part of the type: template<class T> and template<class U>
+    // declare the same parameter
+    return qt(mk_type(TY_TPARAM, if pack { TF_PACK } else { 0 }, 0, (depth << 16) | index, 0, 0) as i64, 0);
 }
 fn mk_depspec(tsym: i64, args: i32) -> u32 { qt(mk_type(TY_DEPSPEC, 0, 0, args as i64, tsym as! u32, 0) as i64, 0) }
 fn mk_depname(q: u32, name: u32, args: i32) -> u32 { qt(mk_type(TY_DEPNAME, 0, q, args as i64, name, 0) as i64, 0) }
@@ -566,7 +568,9 @@ fn resolve(s: i64) -> i64 {
     var x = s;
     var n = 0;
     while x >= 0 && syms[x].kind == SK_USING && n < 16 {
-        x = cxs[x].target as i64;
+        let t = cxs[x].target as i64;
+        if t < 0 { return x; }      // a dependent using-declaration: opaque
+        x = t;
         n++;
     }
     return x;

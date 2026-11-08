@@ -341,12 +341,21 @@ recursive fn mk_construct_init(t: u32, mark: i64, loc: u32) -> u32 {
 recursive fn init_convert(s: i64, init: u32, form: i64, loc: u32) -> u32 {
     let t = syms[s].ty;
     if is_opq(init) || is_opaque(t) { return init; }
+    if is_array(t) && nodes[init].kind as i64 == N_STRING {
+        // char a[] = "..."
+        let st = nodes[init].ty;
+        if types[t >> 4].n < 0 { syms[s].ty = with_q(mk_array(tbase(t), types[st >> 4].n), quals(t)); }
+        nodes[init].ty = unqual(syms[s].ty);
+        nodes[init].flags = nodes[init].flags | NF_STRINIT;
+        return init;
+    }
+    if is_array(t) { return init; }
     if nodes[init].kind as i64 == N_INITBRACE || is_record(t) || is_ref(t) || !cish(t) || !cish_node(init) { return init; }
     if kind_of(nodes[init].ty) == TY_NULLPTR {
         if is_pointer(t) { return icast(init, CK_NULL2PTR, unqual(t)); }
         return init;
     }
-    return assign_convert(init, t, loc, 1);
+    return assign_convert(rv(init), t, loc, 1);
 }
 
 fn default_init(s: i64, loc: u32) -> u32 { return 0; }

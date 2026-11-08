@@ -42,6 +42,7 @@ recursive fn stmt_is_decl() -> bool {
         if w == KW_STRUCT || w == KW_CLASS || w == KW_UNION || w == KW_ENUM { return true; }
         if w == KW_ATTRIBUTE || w == KW_ALIGNAS { return true; }
         if w == KW_EXTENSION { let sv = save(); adv(); let r = stmt_is_decl(); restore(sv); return r; }
+        if w == KW_TYPEOF || w == KW_TYPEOF_UNQUAL || w == KW_TTRANS || w == KW_ATOMIC { return decl_after_name(); }
         if w == KW_TYPENAME || w == KW_DECLTYPE || is_type_kw(w) {
             // int x; vs. int(3); unsigned(x) + 1; decltype(x)::y z;
             if tk_n(1) == TK_L_PAREN && (w != KW_DECLTYPE && w != KW_TYPENAME) {

@@ -88,7 +88,7 @@ recursive fn parse_cexpr_noGT_init() -> u32 { parse_cond_cx() }
 
 recursive fn parse_expr_cx() -> u32 {
     var l = parse_assign_cx();
-    while at(TK_COMMA) {
+    while at(TK_COMMA) && tk_n(1) != TK_ELLIPSIS {
         let loc = tloc();
         adv();
         let r = parse_assign_cx();
@@ -166,6 +166,7 @@ recursive fn parse_bin(minp: i64) -> u32 {
         let k = tk();
         let p = bin_prec_cx(k);
         if p == 0 || p < minp { break; }
+        if tk_n(1) == TK_ELLIPSIS { break; }    // a fold-expression: (e op ...)
         let loc = tloc();
         adv();
         let r = parse_bin(p + 1);
@@ -292,7 +293,10 @@ recursive fn parse_unary_cx() -> u32 {
         adv();
         expect(TK_L_PAREN, "'('");
         unevaluated++;
+        let sp = paren_depth;
+        paren_depth++;
         let e = parse_expr_cx();
+        paren_depth = sp;
         unevaluated--;
         expect(TK_R_PAREN, "')'");
         if is_opq(e) || dependent_ctx() { return dep_node(t_bool, loc); }
@@ -563,7 +567,10 @@ recursive fn parse_primary_cx() -> u32 {
         if w == KW_TYPEID {
             adv();
             expect(TK_L_PAREN, "'('");
-            if looks_like_type_id() { let t = parse_type_id(); } else { let e = parse_expr_cx(); }
+            let sp = paren_depth;
+            paren_depth++;
+            if looks_like_type_id() && type_id_then(TK_R_PAREN, TK_R_PAREN) { let t = parse_type_id(); } else { let e = parse_expr_cx(); }
+            paren_depth = sp;
             expect(TK_R_PAREN, "')'");
             return typeid_node(loc);
         }
@@ -764,10 +771,12 @@ recursive fn parse_trait() -> u32 {
     adv();
     if !at(TK_L_PAREN) { return opaque_node(loc); }
     adv();
+    let sp = paren_depth;
+    paren_depth++;
     let mark = trait_args.len;
     var any_dep = false;
     while !at(TK_R_PAREN) && !at(TK_EOF) {
-        if looks_like_type_id() {
+        if looks_like_type_id() && type_id_then(TK_COMMA, TK_R_PAREN) {
             let t = parse_type_id();
             trait_args.push(t);
             if is_opaque(t) { any_dep = true; }
@@ -779,6 +788,7 @@ recursive fn parse_trait() -> u32 {
         accept(TK_ELLIPSIS);
         if !accept(TK_COMMA) { break; }
     }
+    paren_depth = sp;
     expect(TK_R_PAREN, "')'");
     let rt = if name == "__array_rank" || name == "__array_extent" || name == "__datasizeof" { t_ulong } else { t_bool };
     if any_dep || dependent_ctx() {
@@ -868,7 +878,7 @@ recursive fn parse_id_expr() -> u32 {
             }
         }
         if cur_class >= 0 && (has_dep_base(cur_class) || scopes[cur_class].flags & SCF_PATTERN != 0) { return opaque_node(loc); }
-        if dependent_ctx() || diag_suppress > 0 { return opaque_node(loc); }
+        if dependent_ctx() || diag_suppress > 0 || lenient > 0 { return opaque_node(loc); }
         if qn.scope >= 0 && (scopes[qn.scope].flags & SCF_PATTERN != 0 || has_dep_base(qn.scope as i64)) { return opaque_node(loc); }
         err_at(qn.loc, str("use of undeclared identifier '", ident_text(qn.name as i64), "'"));
         return opaque_node(loc);
