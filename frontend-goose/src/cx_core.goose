@@ -586,6 +586,8 @@ fn resolve(s: i64) -> i64 {
         x = t;
         n++;
     }
+    // D2: a bound pack: its element while expanded (cx_pack)
+    if x >= 0 && cxs[x].flags2 & CF2_PACKBIND != 0 { return pk_use(x); }
     return x;
 }
 

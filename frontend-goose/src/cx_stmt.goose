@@ -709,10 +709,7 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
     let lmark = label_syms.len;
     block_fn_depth++;
     push_scope();
-    for i in nparams {
-        let p = nlist[params + i] as i64;
-        if syms[p].name != 0 { bind_sym(p, false); }
-    }
+    bind_params(params, nparams);
     var is_try = false;
     if at_kw(KW_TRY) { adv(); is_try = true; }
     var inits: u32 = 0;

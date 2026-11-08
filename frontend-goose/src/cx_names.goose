@@ -669,7 +669,30 @@ recursive fn parse_targs() -> i32 {
     loop {
         if at_gt() { break; }
         if at(TK_EOF) { break; }
+        let p0 = pc;
+        let pm = pk_refs.len;
         parse_targ();
+        if at(TK_ELLIPSIS) {
+            let ok, n = pk_count(pm);
+            if inst_debug() { write_stderr(str("targ ... refs=", pk_refs.len - pm, " ok=", ok, " n=", n, "\n")); }
+            if ok {
+                // D2: a pack expansion of bound packs: the element once per element
+                adv();
+                let p1 = pc;
+                targ_scratch.pop();
+                for i in n {
+                    pc = p0;
+                    let am = pk_activate(pm, i);
+                    parse_targ();
+                    pk_active.resize(am);
+                }
+                pc = p1;
+                pk_refs.resize(pm);
+                if !accept(TK_COMMA) { break; }
+                continue;
+            }
+            pk_refs.resize(pm);
+        }
         if accept(TK_ELLIPSIS) {
             // a pack expansion
             let a = targ_scratch[targ_scratch.len - 1];

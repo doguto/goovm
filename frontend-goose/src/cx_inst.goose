@@ -381,8 +381,13 @@ fn tparam_scope(t: i64, binds: i32) -> i64 {
 fn bound_param_sym(p: TParam, ok: bool, a: TArg) -> i64 {
     var s: i64 = -1;
     if p.pack || (ok && a.kind as i64 == TA_PACK) {
-        s = csym(SK_TYPEDEF, p.name, t_unknown, 0);
-        syms[s].sc = SC_TYPEDEF;
+        if p.kind as i64 == TPK_VALUE {
+            s = csym(SK_NTTP, p.name, t_unknown, 0);
+            cxs[s].flags = CF_TPARAM;
+        } else {
+            s = csym(SK_TYPEDEF, p.name, t_unknown, 0);
+            syms[s].sc = SC_TYPEDEF;
+        }
         cxs[s].flags2 = CF2_PACKBIND;
         syms[s].v = if ok && a.kind as i64 == TA_PACK { a.v } else { -1 };
     } else if p.kind as i64 == TPK_TYPE {

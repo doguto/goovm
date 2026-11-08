@@ -385,9 +385,29 @@ recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u
         var a = TArg { kind: 0, rsv: 0, rsv2: 0, ty: 0, v: 0 };
         if ok { a = tl_arg(args as i64, i); }
         if p.pack {
-            // a pack binds the rest (as an opaque type if it is used)
-            let s = csym(SK_TYPEDEF, p.name, t_unknown, 0);
-            syms[s].sc = SC_TYPEDEF;
+            // a pack binds the rest (D2: a bound pack when they are known)
+            var pa = TArg { kind: 0, rsv: 0, rsv2: 0, ty: 0, v: 0 };
+            var known = !args_dependent(args);
+            if ok && a.kind as i64 == TA_PACK { pa = a; }
+            else if known {
+                let m2 = targ_scratch.len;
+                var j = i;
+                while j < na {
+                    let x = tl_arg(args as i64, j);
+                    if (x.kind as i64 == TA_TYPE || x.kind as i64 == TA_VALUE) && (x.ty == 0 || is_opaque(x.ty)) { known = false; }
+                    targ_scratch.push(x);
+                    j++;
+                }
+                let pl = targ_intern(m2);
+                pa = TArg { kind: TA_PACK as! u8, rsv: 0, rsv2: 0, ty: 0, v: pl as i64 };
+            }
+            if !known {
+                let s = csym(SK_TYPEDEF, p.name, t_unknown, 0);
+                syms[s].sc = SC_TYPEDEF;
+                bind_sym(s, false);
+                continue;
+            }
+            let s = bound_param_sym(p, true, pa);
             bind_sym(s, false);
             continue;
         }

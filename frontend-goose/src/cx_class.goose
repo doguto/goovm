@@ -284,6 +284,8 @@ recursive fn parse_class_body(r: i64, w: i64) {
                 break;
             }
             var bt: u32 = 0;
+            let p0 = pc;
+            let pm = pk_refs.len;
             if at_kw(KW_DECLTYPE) {
                 bt = parse_decltype();
             } else {
@@ -297,6 +299,35 @@ recursive fn parse_class_body(r: i64, w: i64) {
                     }
                     bt = t_unknown;
                 }
+            }
+            if at(TK_ELLIPSIS) {
+                let ok, n = pk_count(pm);
+                if ok {
+                    // D2: bases expanded from bound packs
+                    adv();
+                    let p1 = pc;
+                    let sm = pk_save(pm);
+                    for i in n {
+                        pc = p0;
+                        gt_pos = -1;
+                        let am = pk_activate_saved(sm, i);
+                        var b2: u32 = 0;
+                        if at_kw(KW_DECLTYPE) { b2 = parse_decltype(); }
+                        else {
+                            var qn2 = QN { .. };
+                            if parse_qname(qn2) { lookup_qn(qn2); b2 = qn_type(qn2); }
+                            if b2 == 0 { b2 = t_unknown; }
+                        }
+                        pk_active.resize(am);
+                        need_complete(b2);
+                        cbscratch.push(Base { ty: b2, flags: bf, access: acc, rsv: 0, offset: 0 });
+                    }
+                    pk_saved.resize(sm);
+                    pc = p1;
+                    if !accept(TK_COMMA) { break; }
+                    continue;
+                }
+                pk_refs.resize(pm);
             }
             if accept(TK_ELLIPSIS) { bt = mk_packexp(bt); }
             need_complete(bt);
