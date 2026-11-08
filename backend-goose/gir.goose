@@ -263,6 +263,7 @@ let ORD_SEQ_CST = 7;
 
 // ABI words.
 let ABI_BYVAL = 0x80000000;
+let ABI_SRET = 0x40000000;
 
 checkfree fn abi_size(w: u32) -> u32 { w & 0x00FFFFFF }
 checkfree fn abi_align(w: u32) -> u32 { (1 as u32) << ((w >> 24) & 0x1F) }

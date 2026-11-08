@@ -642,8 +642,14 @@ fn a_block_start() {
     a_tmp = 0;
     a_flags_id = RV_NONE;
     a_paddr_id = RV_NONE;
+    a_carry = false;
 }
+var a_carry = false;     // the instruction's registers stay locked into the next one (a folded GEP)
 fn a_end_inst() {
+    if a_carry {
+        a_carry = false;
+        return;
+    }
     for id in dying {
         let r: u32 = vi[id].reg;
         if r < 64 && a_rval[r] == id {

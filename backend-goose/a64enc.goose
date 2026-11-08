@@ -14,7 +14,13 @@ let AX1 = 1;
 let AX2 = 2;
 let AX3 = 3;
 let AX4 = 4;
+let AX5 = 5;
+let AX6 = 6;
+let AX7 = 7;
 let AX8 = 8;
+let AX9 = 9;
+let AX10 = 10;
+let AX11 = 11;
 let AX16 = 16;   // IP0: the encoder's scratch (never allocated)
 let AX17 = 17;   // IP1: the encoder's scratch (never allocated)
 let AX18 = 18;   // the platform register: not used
@@ -129,7 +135,7 @@ let AI_ADDS = 0x31000000;
 let AI_SUB = 0x51000000;
 let AI_SUBS = 0x71000000;
 checkfree fn a_addsub_imm(base: u32, w64: bool, rd: u32, rn: u32, imm: u32, sh12: bool) {
-    a4(base | sfb(w64) | (if sh12 { 0x400000 } else { 0 }) | ((imm & 0xFFF) << 10) | ((rn & 31) << 5) | (rd & 31));
+    a4(base | sfb(w64) | (if sh12 { 0x400000 as u32 } else { 0 }) | ((imm & 0xFFF) << 10) | ((rn & 31) << 5) | (rd & 31));
 }
 // add/sub (shifted register): shift 0 lsl, 1 lsr, 2 asr.
 let AR_ADD = 0x0B000000;
@@ -214,7 +220,8 @@ fn a_bitmask(v0: u64, w64: bool) -> u32 {
         imms = ones - 1;
     } else {
         // high bits of imms encode the element size: e=32: 0b0xxxxx, 16: 0b10xxxx, 8: 0b110xxx, 4: 0b1110xx, 2: 0b11110x
-        let pre: u32 = (0x3F as u32 & ~(2 * e - 1)) & 0x3F;
+        let msk: u32 = ~(2 * e - 1);
+        let pre: u32 = msk & 0x3F;
         imms = pre | (ones - 1);
     }
     return (n << 12) | (immr << 6) | imms;
@@ -480,7 +487,7 @@ checkfree fn a_ls_simm9(k: u32, s: u32, rt: u32, rn: u32, off: i64) {
 // [rn, rm, lsl #s?] (sh: scale by the access size) or extended (opt: 3 lsl, 6 sxtw, 2 uxtw).
 checkfree fn a_ls_reg(k: u32, s: u32, rt: u32, rn: u32, rm: u32, opt: u32, sh: bool) {
     let b = (a_ls_base(k, s) & ~0x01000000) | 0x00200800;
-    a4(b | ((rm & 31) << 16) | (opt << 13) | (if sh { 0x1000 } else { 0 }) | ((rn & 31) << 5) | (rt & 31));
+    a4(b | ((rm & 31) << 16) | (opt << 13) | (if sh { 0x1000 as u32 } else { 0 }) | ((rn & 31) << 5) | (rt & 31));
 }
 // A load or store at [rn + off] for any offset; uses x16 for offsets out of reach
 // (rn must not be x16 then; rt may be x16 only for loads... callers keep it out).
@@ -672,20 +679,20 @@ checkfree fn a_vmov(q: bool, vd: u32, vn: u32) {
 checkfree fn a_vzero(q: bool, vd: u32) { a4((if q { 0x6F00E400 } else { 0x2F00E400 }) | (vd & 31)); }
 // Three registers, same type: 0 Q U 01110 size 1 Rm opcode 1 Rn Rd
 checkfree fn a_v3(q: bool, u: u32, size: u32, opc: u32, vd: u32, vn: u32, vm: u32) {
-    a4(0x0E200400 | (if q { 0x40000000 } else { 0 }) | (u << 29) | (size << 22) | ((vm & 31) << 16) | (opc << 11)
+    a4(0x0E200400 | (if q { 0x40000000 as u32 } else { 0 }) | (u << 29) | (size << 22) | ((vm & 31) << 16) | (opc << 11)
        | ((vn & 31) << 5) | (vd & 31));
 }
 // Two-register miscellaneous: 0 Q U 01110 size 10000 opcode 10 Rn Rd
 checkfree fn a_v2(q: bool, u: u32, size: u32, opc: u32, vd: u32, vn: u32) {
-    a4(0x0E200800 | (if q { 0x40000000 } else { 0 }) | (u << 29) | (size << 22) | (opc << 12) | ((vn & 31) << 5) | (vd & 31));
+    a4(0x0E200800 | (if q { 0x40000000 as u32 } else { 0 }) | (u << 29) | (size << 22) | (opc << 12) | ((vn & 31) << 5) | (vd & 31));
 }
 // Shift by immediate: 0 Q U 011110 immh:immb opcode 1 Rn Rd (immhb = immh:immb, 7 bits)
 checkfree fn a_vsh(q: bool, u: u32, immhb: u32, opc: u32, vd: u32, vn: u32) {
-    a4(0x0F000400 | (if q { 0x40000000 } else { 0 }) | (u << 29) | (immhb << 16) | (opc << 11) | ((vn & 31) << 5) | (vd & 31));
+    a4(0x0F000400 | (if q { 0x40000000 as u32 } else { 0 }) | (u << 29) | (immhb << 16) | (opc << 11) | ((vn & 31) << 5) | (vd & 31));
 }
 // Copy: dup (element) 0, dup (general) 1, smov 5, umov 7, ins (general) 3 (with imm5)
 checkfree fn a_vcopy(q: bool, imm4: u32, imm5: u32, vd: u32, rn: u32) {
-    a4(0x0E000400 | (if q { 0x40000000 } else { 0 }) | (imm5 << 16) | (imm4 << 11) | ((rn & 31) << 5) | (vd & 31));
+    a4(0x0E000400 | (if q { 0x40000000 as u32 } else { 0 }) | (imm5 << 16) | (imm4 << 11) | ((rn & 31) << 5) | (vd & 31));
 }
 // ins vd.T[i], vn.T[j] (element)
 checkfree fn a_vins_elt(imm5: u32, imm4: u32, vd: u32, vn: u32) {
@@ -705,15 +712,15 @@ checkfree fn a_dup_gp(q: bool, s: u32, vd: u32, rn: u32) { a_vcopy(q, 1, a_imm5(
 checkfree fn a_dup_elt(q: bool, s: u32, vd: u32, vn: u32, idx: u32) { a_vcopy(q, 0, a_imm5(s, idx), vd, vn); }
 // tbl vd.(8|16)b, {vn.16b}, vm (len 1)
 checkfree fn a_tbl1(q: bool, vd: u32, vn: u32, vm: u32) {
-    a4(0x0E000000 | (if q { 0x40000000 } else { 0 }) | ((vm & 31) << 16) | ((vn & 31) << 5) | (vd & 31));
+    a4(0x0E000000 | (if q { 0x40000000 as u32 } else { 0 }) | ((vm & 31) << 16) | ((vn & 31) << 5) | (vd & 31));
 }
 // tbl vd, {vn, vn+1}, vm (two table registers)
 checkfree fn a_tbl2(q: bool, vd: u32, vn: u32, vm: u32) {
-    a4(0x0E002000 | (if q { 0x40000000 } else { 0 }) | ((vm & 31) << 16) | ((vn & 31) << 5) | (vd & 31));
+    a4(0x0E002000 | (if q { 0x40000000 as u32 } else { 0 }) | ((vm & 31) << 16) | ((vn & 31) << 5) | (vd & 31));
 }
 // across lanes: addv 0x31B, (u) maxv 0x0A, minv 0x1A...: 0 Q U 01110 size 11000 opcode 10 Rn Rd
 checkfree fn a_vacross(q: bool, u: u32, size: u32, opc: u32, vd: u32, vn: u32) {
-    a4(0x0E300800 | (if q { 0x40000000 } else { 0 }) | (u << 29) | (size << 22) | (opc << 12) | ((vn & 31) << 5) | (vd & 31));
+    a4(0x0E300800 | (if q { 0x40000000 as u32 } else { 0 }) | (u << 29) | (size << 22) | (opc << 12) | ((vn & 31) << 5) | (vd & 31));
 }
 // ld1 {vt.16b}, [xn] / st1
 checkfree fn a_ld1(q: bool, vt: u32, rn: u32) { a4((if q { 0x4C407000 } else { 0x0C407000 }) | ((rn & 31) << 5) | (vt & 31)); }

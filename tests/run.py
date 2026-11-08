@@ -21,6 +21,10 @@ Optional extra variants:
   --goosecc PATH instead of the goovm-llc variants, compile the C programs with goosecc -c
                  (variants goosecc and goosecc-g, i.e. with -g); no LLVM involved; with it the
                  programs of tests/cxx_d1/ (goosecc's C++ subset, milestone D1) run too
+  --target aarch64  (milestone F1) everything for aarch64-linux-gnu: clang and goosecc with
+                 --target=aarch64-linux-gnu, linked by clang with lld, run under qemu-aarch64
+                 (QEMU_LD_PREFIX=/usr/aarch64-linux-gnu); tests/ll (x86-64 IR) is skipped,
+                 tests/a64 (AArch64-only programs: NEON, ACLE, inline asm) runs instead
 
 usage: tests/run.py [--goovm PATH] [-j N] [--work DIR] [--keep] [filter ...]
 Exit status 0 iff every comparison passed.
@@ -52,9 +56,14 @@ def step(cmd, what):
     return r
 
 
+RUNNER = []          # e.g. ["qemu-aarch64"] for --target aarch64
+TFLAGS = []          # compiler flags of the target
+LFLAGS = []          # link flags of the target
+
+
 def execute(exe):
     try:
-        r = run([exe], timeout=20)
+        r = run(RUNNER + [exe], timeout=60 if RUNNER else 20)
     except subprocess.TimeoutExpired:
         return (b"<timeout>", -999)
     return (r.stdout, r.returncode)
@@ -94,7 +103,7 @@ def test_one(p, args):
 
     def compare(variant, objs):
         exe = os.path.join(wd, variant + ".exe")
-        step([link] + objs + ["-o", exe, "-lm"], "link")
+        step([link] + LFLAGS + objs + ["-o", exe, "-lm"], "link")
         got = execute(exe)
         if got != expect:
             raise Fail(f"output mismatch: expected exit {expect[1]}, got {got[1]}\n"
@@ -105,10 +114,10 @@ def test_one(p, args):
         refs = []
         for i, s in enumerate(p.srcs):
             o = os.path.join(wd, f"ref{i}.o")
-            step([compiler(s, args), "-O0", "-w", "-c", s, "-o", o], "reference build")
+            step([compiler(s, args)] + TFLAGS + ["-O0", "-w", "-c", s, "-o", o], "reference build")
             refs.append(o)
         ref = os.path.join(wd, "ref")
-        step([link] + refs + ["-o", ref, "-lm"], "reference link")
+        step([link] + LFLAGS + refs + ["-o", ref, "-lm"], "reference link")
         expect = execute(ref)
 
         if args.goosecc:
@@ -118,7 +127,7 @@ def test_one(p, args):
                     objs = []
                     for i, s in enumerate(p.srcs):
                         obj = os.path.join(wd, f"{variant}{i}.o")
-                        r = run([args.goosecc, "-c", "-w"] + flags + [s, "-o", obj])
+                        r = run([args.goosecc, "-c", "-w"] + TFLAGS + flags + [s, "-o", obj])
                         if r.returncode != 0:
                             raise Fail(f"goosecc exit {r.returncode}: {r.stderr.decode(errors='replace').strip()[:2000]}")
                         objs.append(obj)
@@ -138,10 +147,10 @@ def test_one(p, args):
                 return base + ".bc"
             if variant in ("O0", "O1", "O1-g"):
                 g = ["-g"] if variant == "O1-g" else []
-                step([cc, "-O0", "-w"] + g + ["-c", "-emit-llvm", s, "-o", base + ".bc"], "clang -emit-llvm")
+                step([cc] + TFLAGS + ["-O0", "-w"] + g + ["-c", "-emit-llvm", s, "-o", base + ".bc"], "clang -emit-llvm")
                 return base + ".bc"
             raw = base + ".noopt.bc"
-            step([cc, "-O0", "-w", "-Xclang", "-disable-O0-optnone", "-c", "-emit-llvm", s, "-o", raw],
+            step([cc] + TFLAGS + ["-O0", "-w", "-Xclang", "-disable-O0-optnone", "-c", "-emit-llvm", s, "-o", raw],
                  "clang -emit-llvm")
             passes = "mem2reg" if variant == "mem2reg" else args.opt_passes
             step([args.opt, f"-passes={passes}", raw, "-o", base + ".bc"], "opt")
@@ -199,8 +208,10 @@ def programs():
     for f in sorted(os.listdir(os.path.join(HERE, "cxx_d1"))):
         if f.endswith(".cpp"):
             out.append(Prog("cxx_d1/" + f[:-4], [os.path.join(HERE, "cxx_d1", f)]))
-    for kind in ("mixed", "ll"):
+    for kind in ("mixed", "ll", "a64"):
         md = os.path.join(HERE, kind)
+        if not os.path.isdir(md):
+            continue
         for d in sorted(os.listdir(md)):
             srcs = sorted(os.path.join(md, d, f) for f in os.listdir(os.path.join(md, d))
                           if f.endswith((".c", ".cpp", ".ll")))
@@ -220,11 +231,17 @@ def main():
     ap.add_argument("--o1", action="store_true", help="also the O1 and O1-g variants (goovm-llc -O1)")
     ap.add_argument("--tpde", default="")
     ap.add_argument("--goosecc", default="")
+    ap.add_argument("--target", default="x86_64", choices=["x86_64", "aarch64"])
     ap.add_argument("-j", type=int, default=2)
     ap.add_argument("--work", default="")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("filter", nargs="*")
     args = ap.parse_args()
+    if args.target == "aarch64":
+        TFLAGS[:] = ["--target=aarch64-linux-gnu"]
+        LFLAGS[:] = ["--target=aarch64-linux-gnu", "-fuse-ld=lld"]
+        RUNNER[:] = ["qemu-aarch64"]
+        os.environ.setdefault("QEMU_LD_PREFIX", "/usr/aarch64-linux-gnu")
     if args.goosecc:
         args.goosecc = os.path.abspath(args.goosecc)
     elif not os.path.exists(args.goovm):
@@ -239,6 +256,11 @@ def main():
         progs = [p for p in progs if (not p.cxx or p.name.startswith("cxx_d1/")) and not any(is_ll(s) for s in p.srcs)]
     else:
         progs = [p for p in progs if not p.name.startswith("cxx_d1/")]
+    # x86-64 IR (tests/ll) on x86-64 only; AArch64 programs (tests/a64) on AArch64 only
+    if args.target == "aarch64":
+        progs = [p for p in progs if not p.name.startswith("ll/")]
+    else:
+        progs = [p for p in progs if not p.name.startswith("a64/")]
     if args.filter:
         progs = [p for p in progs if any(f in p.name for f in args.filter)]
 

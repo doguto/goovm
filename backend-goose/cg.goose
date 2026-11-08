@@ -38,6 +38,13 @@ import opt_licm;
 import opt_iv;
 import opt_verify;
 import opt_dump;
+import a64enc;
+import a64ra;
+import a64abi;
+import a64low;
+import a64mem;
+import a64atom;
+import a64cg;
 
 var M: Module;
 var opt_on = false;          // opt_level >= 1 (the middle-end ran; global register allocation)
@@ -1077,12 +1084,31 @@ fn codegen() -> const u8[:] {
     f_eh.clear();
     f_eh.resize(M.funcs.len, GIR_NONE);
     for E, e in M.ehs { f_eh[E.func] = e as! u32; }
+    // the target (F1)
+    tgt_a64 = M.header.len != 0 && M.header[0].r1 == GIR_TARGET_AARCH64;
+    map_syms.clear();
+    xstrtab.clear();
+    lib_name.clear();
+    lib_len.clear();
+    a_baddr.clear();
+    a_cie_plain = GIR_NONE;
+    a_cie_pers.clear();
+    if tgt_a64 {
+        map_name_x = xstr_add("$x");
+        map_name_d = xstr_add("$d");
+    }
     build_type_rc();
+    if tgt_a64 { a_build_trc(); }
     dbg_init();
     make_sections();
     layout_globals();
-    gen_functions();
-    resolve_blockaddrs();
+    if tgt_a64 {
+        a_gen_functions();
+        a_resolve_blockaddrs();
+    } else {
+        gen_functions();
+        resolve_blockaddrs();
+    }
     resolve_aliases();
     if dbg_on { dbg_write(); }
     write_elf(obj);
