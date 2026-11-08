@@ -293,7 +293,10 @@ recursive fn lookup_nns_unqual(name: u32) -> i64 {
     while sc >= 0 {
         let k = scopes[sc].kind as i64;
         var s: i64 = -1;
-        if k == CS_CLASS { s = chain_nns(class_lookup(sc, name)); }
+        if k == CS_CLASS {
+            s = chain_nns(class_lookup(sc, name));
+            if s < 0 && scopes[sc].tps >= 0 { s = chain_nns(scope_find(scopes[sc].tps as i64, name)); }
+        }
         else if k == CS_NS { s = chain_nns(ns_lookup(sc, name, false)); }
         if s >= 0 { return s; }
         sc = scopes[sc].parent as i64;
@@ -485,6 +488,12 @@ recursive fn qual_component(qn: QN&, id: u32, args: i32, has_args: bool) {
         qual_from_type(qn, t);
         return;
     }
+    if has_args && cxs[s].flags & CF_INJECTED != 0 && cxs[s].tmpl >= 0 {
+        // X<args>:: through the injected-class-name of X's specialization
+        let t = specialization(tmpls[cxs[s].tmpl].sym as i64, args);
+        qual_from_type(qn, t);
+        return;
+    }
     qual_from_type(qn, syms[s].ty);
 }
 
@@ -613,6 +622,12 @@ recursive fn lookup_qn(qn: QN&) {
     if name == 0 { qn.sym = -1; return; }
     if qn.scope >= 0 {
         qn.sym = qual_lookup(qn.scope as i64, name) as! i32;
+        if qn.sym < 0 && scopes[qn.scope].kind as i64 == CS_CLASS && has_dep_base(qn.scope as i64) {
+            // a member of a class whose bases are not known (yet): a dependent name
+            qn.dep = scope_class_type(qn.scope as i64);
+            if qn.dep == 0 { qn.dep = t_unknown; }
+            qn.scope = -1;
+        }
     } else {
         qn.sym = unqual_lookup(name) as! i32;
     }
@@ -654,7 +669,30 @@ recursive fn parse_targs() -> i32 {
     loop {
         if at_gt() { break; }
         if at(TK_EOF) { break; }
+        let p0 = pc;
+        let pm = pk_refs.len;
         parse_targ();
+        if at(TK_ELLIPSIS) {
+            let ok, n = pk_count(pm);
+            if inst_debug() { write_stderr(str("targ ... refs=", pk_refs.len - pm, " ok=", ok, " n=", n, "\n")); }
+            if ok {
+                // D2: a pack expansion of bound packs: the element once per element
+                adv();
+                let p1 = pc;
+                targ_scratch.pop();
+                for i in n {
+                    pc = p0;
+                    let am = pk_activate(pm, i);
+                    parse_targ();
+                    pk_active.resize(am);
+                }
+                pc = p1;
+                pk_refs.resize(pm);
+                if !accept(TK_COMMA) { break; }
+                continue;
+            }
+            pk_refs.resize(pm);
+        }
         if accept(TK_ELLIPSIS) {
             // a pack expansion
             let a = targ_scratch[targ_scratch.len - 1];
