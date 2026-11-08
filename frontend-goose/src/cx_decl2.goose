@@ -263,6 +263,7 @@ fn set_fn_flags(s: i64, d: CD&, ds: CDS&, ctor: bool, member: bool) {
     if d.deleted { f = f | CF_DELETED; }
     if d.defaulted { f = f | CF_DEFAULTED; }
     if d.noexcept { f = f | CF_NOEXCEPT; }
+    if d.excspec != 0 { note_excspec(s, d.excspec as i64, d.excpos as i64); }
     if d.virt == 1 { f = f | CF_OVERRIDE; }
     if d.virt == 2 { f = f | CF_FINAL; }
     cxs[s].flags = f;

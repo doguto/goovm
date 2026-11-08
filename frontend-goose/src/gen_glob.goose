@@ -16,6 +16,7 @@ import .types;
 import .ast;
 import .sema;
 import .parse;
+import .cx_gen_defs;
 
 // Per global: the symbol (-1 for others), and 0 declared, 1 queued, 2 emitted.
 struct GlobGen { sym: i64, state: u8 }
@@ -159,6 +160,7 @@ fn defined_on_use(s: i64) -> bool {
 fn fn_emitted_def(s: i64) -> bool {
     let sy = syms[s];
     if sy.def < 0 { return false; }
+    if opt_cxx && cxl_link(s) != LK_DEFAULT { return true; }
     if sy.sc == SC_STATIC { return true; }
     if sy.flags & SF_INLINE == 0 { return true; }
     if sy.flags & SF_GNU_EXTERN_INLINE != 0 { return sym_has_attr(s, AM_ALWAYS_INLINE); }
@@ -203,7 +205,10 @@ fn link_flags(s: i64, defined: bool) -> u32 {
     let internal = is_internal_sym(s) || !has_linkage(s) || fn_local_inline(s);
     if internal { f = f | GF_INTERNAL | GF_LOCALREF; }
     if syms[s].flags & SF_WEAK != 0 { f = f | GF_WEAK; }
-    let vis = sym_visibility(s);
+    // D3: linkonce_odr and weak_odr C++ definitions are weak
+    if opt_cxx && defined && !internal && cxl_link(s) != LK_DEFAULT { f = f | GF_WEAK; }
+    var vis = sym_visibility(s);
+    if opt_cxx && cxl_has(s, CXL_HIDDEN) { vis = 1; }
     if vis == 1 { f = f | GF_HIDDEN; }
     if vis == 2 { f = f | GF_PROTECTED; }
     if defined && !opt_pic { f = f | GF_LOCALREF; }

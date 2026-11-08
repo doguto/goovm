@@ -191,7 +191,7 @@ def programs():
     for f in sorted(os.listdir(os.path.join(HERE, "cxx"))):
         if f.endswith(".cpp"):
             out.append(Prog("cxx/" + f[:-4], [os.path.join(HERE, "cxx", f)]))
-    for sub in ("cxx_d1", "cxx_d2"):
+    for sub in ("cxx_d1", "cxx_d2", "cxx_gen"):
         for f in sorted(os.listdir(os.path.join(HERE, sub))):
             if f.endswith(".cpp"):
                 out.append(Prog(sub + "/" + f[:-4], [os.path.join(HERE, sub, f)]))
@@ -231,9 +231,9 @@ def main():
     progs = programs()
     if args.goosecc:
         # goosecc compiles C, and the C++ of tests/cxx_d1 and tests/cxx_d2
-        progs = [p for p in progs if (not p.cxx or p.name.startswith(("cxx_d1/", "cxx_d2/"))) and not any(is_ll(s) for s in p.srcs)]
+        progs = [p for p in progs if (not p.cxx or p.name.startswith(("cxx_d1/", "cxx_d2/", "cxx_gen/"))) and not any(is_ll(s) for s in p.srcs)]
     else:
-        progs = [p for p in progs if not p.name.startswith(("cxx_d1/", "cxx_d2/"))]
+        progs = [p for p in progs if not p.name.startswith(("cxx_d1/", "cxx_d2/", "cxx_gen/"))]
     if args.filter:
         progs = [p for p in progs if any(f in p.name for f in args.filter)]
 
