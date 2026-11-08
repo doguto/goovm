@@ -1504,3 +1504,36 @@ rest). The middle-end runs about 15 passes over each function, several of
 them more than once (four rounds of simplify/GVN/DCE/SimplifyCFG), and
 rebuilds the CFG analyses and use lists after each pass that changes the
 CFG; loop rotation rebuilds them after every rotated loop.
+
+### Compile time: goovm-cc -O1 against clang -O1 and -O2
+
+Every compile command of CTMark (632 files, 316 C++; the -O0 configuration
+with the level replaced), each file alone and single-threaded, best of 2
+wall-clock runs (`e1/ctcomp.py`). The in-process phases: LLVM's
+`Optimizer` + `CodeGenPasses` from `-ftime-trace` of `clang -O1 -c` /
+`-O2 -c`, against goovm-cc -O1's export + Goose middle-end + Goose code
+generation (`--time`):
+
+| program | files (C++) | clang -O1 | clang -O2 | goovm-cc -O0 | goovm-cc -O1 | clang -O1 / goovm-cc -O1 | LLVM -O1 opt+CG | Goose export+opt+CG (middle-end) | LLVM -O1 / Goose |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 7zip | 212 (180) | 47.87 | 52.04 | 33.08 | 33.54 | 1.43x | 16.36 | 0.65 (0.42) | 25.0x |
+| Bullet | 121 (121) | 20.47 | 23.26 | 12.02 | 12.47 | 1.64x | 10.01 | 0.49 (0.34) | 20.4x |
+| ClamAV | 98 (0) | 10.50 | 12.76 | 3.75 | 4.05 | 2.59x | 7.00 | 0.35 (0.24) | 20.3x |
+| SPASS | 51 (0) | 9.48 | 10.95 | 2.96 | 3.14 | 3.02x | 7.11 | 0.32 (0.25) | 22.4x |
+| consumer-typeset | 51 (0) | 6.70 | 7.44 | 2.14 | 2.30 | 2.91x | 4.83 | 0.26 (0.18) | 18.6x |
+| kimwitu++ | 14 (14) | 9.41 | 10.24 | 4.28 | 4.40 | 2.14x | 6.38 | 0.17 (0.11) | 37.6x |
+| lencod | 55 (0) | 9.33 | 12.24 | 2.73 | 2.96 | 3.15x | 7.04 | 0.30 (0.22) | 23.8x |
+| mafft | 27 (0) | 5.26 | 7.61 | 1.35 | 1.48 | 3.55x | 4.12 | 0.17 (0.13) | 24.1x |
+| sqlite3 | 2 (0) | 6.58 | 8.56 | 0.40 | 0.69 | 9.52x | 6.08 | 0.26 (0.20) | 23.6x |
+| tramp3d-v4 | 1 (1) | 12.69 | 14.89 | 2.69 | 3.11 | 4.08x | 12.26 | 0.35 (0.25) | 35.0x |
+| **total** | 632 (316) | 138.29 | 160.00 | 65.41 | 68.16 | **2.03x** | 81.20 | 3.31 (2.34) | **24.5x** |
+
+- End to end, `goovm-cc -O1` compiles CTMark 2.03x faster than `clang -O1`
+  (2.35x than `clang -O2`): 2.6x to 9.5x on the C programs, 1.4x to 4.1x on
+  C++, where clang's front end is most of the time. `-O1` costs goovm-cc 4%
+  over its `-O0` (68.2 s against 65.4 s).
+- The Goose middle-end and code generation (with the export) take 3.31 s
+  where LLVM's -O1 optimizer and code generator take 81.2 s: **24.5x**
+  faster (31x against -O2); the target was 5x. The middle-end is 2.34 s of
+  the 3.31 s.
+
