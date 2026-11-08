@@ -257,6 +257,7 @@ let CF_OVERRIDE = 16777216;
 let CF_FINAL = 33554432;
 let CF_DEFINED_IN_CLASS = 67108864;  // a member function defined in its class (implicitly inline)
 let CF_HAS_BODY_LATER = 134217728;   // the body is parsed after the class is complete
+let CF_MAINDECL = 1073741824;        // some declaration of it is written in the main file (its name's spelling)
 
 let AC_PUBLIC = 0;
 let AC_PROTECTED = 1;
@@ -546,12 +547,12 @@ fn cx_types_init() {
     t_nullptr = np << 4;
     // char16_t, char32_t, char8_t, wchar_t: distinct types with the
     // representation of uint_least16_t, uint_least32_t, unsigned char, int
-    // (TY_* kinds would change the C side; D1 gives them aliases of
-    // canonical types instead, see DESIGN.md 13.3)
-    t_char16 = t_ushort;
-    t_char32 = t_uint;
-    t_char8 = t_uchar;
-    t_wchar_cxx = t_int;
+    // distinct types with the kinds (and so the arithmetic) of their
+    // underlying types: they overload and mangle differently
+    t_char16 = mk_basic(TY_USHORT, 2, 2) << 4;
+    t_char32 = mk_basic(TY_UINT, 4, 4) << 4;
+    t_char8 = mk_basic(TY_UCHAR, 1, 1) << 4;
+    t_wchar_cxx = mk_basic(TY_INT, 4, 4) << 4;
     scopes.push(Scope { kind: CS_NS, flags: 0, rsv: 0, parent: -1, sym: -1, name: 0, using_ns: -1, inl: -1, rec: -1 });
     cur_scope = 0;
 }
@@ -579,6 +580,9 @@ fn resolve(s: i64) -> i64 {
 // Is symbol s visible under the two-phase limit?
 fn visible(s: i64) -> bool {
     if vis_limit == 0x7FFFFFFF { return true; }
+    // block-scope bindings (template parameters bound for a substitution
+    // among them) are always visible: the limit is for namespace members
+    if syms[s].scope > 0 { return true; }
     return cxs[s].pos as i64 <= vis_limit || cxs[s].flags & CF_MEMBER != 0;
 }
 

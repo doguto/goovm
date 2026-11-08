@@ -296,17 +296,9 @@ fn own_args(t: i64) -> i32 {
     return targ_intern(mark);
 }
 
-fn args_dependent(args: i32) -> bool {
-    let n = tl_count(args as i64);
-    for i in n {
-        let a = tl_arg(args as i64, i);
-        if a.kind as i64 == TA_TYPE && is_opaque(a.ty) { return true; }
-        if a.kind as i64 == TA_VALUE && a.ty != 0 && (kind_of(a.ty) == TY_DEPEXPR || kind_of(a.ty) == TY_PACKEXP || kind_of(a.ty) == TY_TPARAM) { return true; }
-        if a.kind as i64 == TA_TEMPLATE && a.v < 0 { return true; }
-        if a.kind as i64 == TA_TEMPLATE && a.v >= 0 && cxs[a.v].flags & CF_TPARAM != 0 { return true; }
-    }
-    return false;
-}
+// Does the argument list involve a template parameter (an uninstantiated
+// specialization with concrete arguments is opaque, not dependent)?
+fn args_dependent(args: i32) -> bool { args_dependent_strict(args as i64) }
 
 // The type template tsym names with arguments `args`.
 recursive fn specialization(tsym: i64, args: i32) -> u32 {
@@ -317,6 +309,12 @@ recursive fn specialization(tsym: i64, args: i32) -> u32 {
     if k == TT_PARAM { return mk_depspec(tsym, args); }
     if k != TT_CLASS { return t_unknown; }
     if args == own_args(t) && tmpls[t].pattern >= 0 { return records[tmpls[t].pattern].ty << 4; }
+    let full = complete_args(t, args);
+    if full != args {
+        let g0 = spec_map.get(((t as u64) << 32) | (full as u64));
+        if g0 { return g0; }
+        return mk_depspec(tsym, full);
+    }
     // the pattern of a partial specialization written with the same
     // arguments (an out-of-line member: X<T*>::f)
     var l = tmpls[t].specs;
@@ -334,8 +332,20 @@ recursive fn specialization(tsym: i64, args: i32) -> u32 {
 // parameters bound to the arguments, at its point of definition.
 var alias_depth: i64 = 0;
 recursive fn alias_subst(t: i64, args: i32) -> u32 {
-    if tmpls[t].t1 == 0 || alias_depth > 32 { return t_unknown; }
-    let n = tmpls[t].nparams as i64;
+    if tmpls[t].t1 == 0 { return t_unknown; }
+    let full = complete_args(t, args);
+    return subst_parse(t, full, tmpls[t].t0 as i64, 0, 0);
+}
+
+// Parses, at the tokens from `tok`, a type-id (what 0) or a constant
+// expression (what 1, its value in subst_val) with template t's
+// parameters bound to `args`, in the template's scope and as of its point
+// of definition (two-phase lookup).
+var subst_val: i64 = 0;
+var subst_ok: bool = false;
+recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u32 {
+    if alias_depth > 32 { return t_unknown; }
+    let n = if upto > 0 { upto } else { tmpls[t].nparams as i64 };
     let na = tl_count(args as i64);
     let sv = save();
     let s_scope = cur_scope;
@@ -343,9 +353,11 @@ recursive fn alias_subst(t: i64, args: i32) -> u32 {
     let s_vis = vis_limit;
     let s_class = cur_class;
     let s_pending = pending_tmpl;
+    let s_tdepth = tmpl_depth;
     alias_depth++;
     push_scope();
     local_floor = scope_depth;
+    // enclosing templates' parameters stay dependent: only this template's are bound
     for i in n {
         let p = tps[tmpls[t].params as i64 + i];
         if p.name == 0 { continue; }
@@ -359,21 +371,16 @@ recursive fn alias_subst(t: i64, args: i32) -> u32 {
             bind_sym(s, false);
             continue;
         }
-        if !ok && p.def0 != 0 {
-            // default arguments of alias templates: rare; opaque
-            let s = csym(SK_TYPEDEF, p.name, t_unknown, 0);
-            syms[s].sc = SC_TYPEDEF;
-            bind_sym(s, false);
-            continue;
-        }
         if p.kind as i64 == TPK_TYPE {
             let s = csym(SK_TYPEDEF, p.name, if ok && a.kind as i64 == TA_TYPE { a.ty } else { t_unknown }, 0);
             syms[s].sc = SC_TYPEDEF;
             bind_sym(s, false);
         } else if p.kind as i64 == TPK_VALUE {
             let s = csym(SK_NTTP, p.name, p.ty, 0);
-            syms[s].v = if ok && a.kind as i64 == TA_VALUE && a.ty != 0 && !is_opaque(a.ty) { a.v } else { 0 };
-            cxs[s].flags = if ok && a.kind as i64 == TA_VALUE && a.ty != 0 && !is_opaque(a.ty) { CF_TPARAM | CF_SUBST } else { CF_TPARAM };
+            let known = ok && a.kind as i64 == TA_VALUE && a.ty != 0 && !is_opaque(a.ty);
+            syms[s].v = if known { a.v } else { 0 };
+            cxs[s].flags = if known { CF_TPARAM | CF_SUBST } else { CF_TPARAM };
+            if known { syms[s].ty = a.ty; }
             bind_sym(s, false);
         } else {
             let s = csym(SK_TEMPLATE, p.name, 0, 0);
@@ -387,14 +394,27 @@ recursive fn alias_subst(t: i64, args: i32) -> u32 {
     cur_scope = tmpls[t].scope as i64;
     cur_class = -1;
     pending_tmpl = -1;
-    if !args_dependent(args) { vis_limit = tmpls[t].pos as i64; }
-    pc = tmpls[t].t0 as i64;
+    if !args_dependent(args) { vis_limit = tmpls[t].pos as i64; tmpl_depth = 0; }
+    pc = tok;
     gt_pos = -1;
     diag_suppress++;
-    let ty = parse_type_id();
+    var ty: u32 = 0;
+    subst_ok = false;
+    if what == 0 {
+        ty = parse_type_id();
+    } else {
+        targ_depth++;
+        let e = parse_cexpr_noGT();
+        targ_depth--;
+        ty = nodes[e].ty;
+        let ok2, v = const_int(e);
+        subst_ok = ok2;
+        subst_val = v;
+    }
     diag_suppress--;
     pop_scope();
     alias_depth--;
+    tmpl_depth = s_tdepth;
     local_floor = s_floor;
     vis_limit = s_vis;
     cur_scope = s_scope;
@@ -402,6 +422,39 @@ recursive fn alias_subst(t: i64, args: i32) -> u32 {
     pending_tmpl = s_pending;
     restore(sv);
     return ty;
+}
+
+// The argument list completed with the template's default arguments
+// (when all given arguments are concrete; a dependent list is kept).
+recursive fn complete_args(t: i64, args: i32) -> i32 {
+    let n = tmpls[t].nparams as i64;
+    let na = tl_count(args as i64);
+    if na >= n || args_dependent(args) { return args; }
+    var cur = args;
+    var i = na;
+    while i < n {
+        let p = tps[tmpls[t].params as i64 + i];
+        if p.pack || p.def0 == 0 { break; }
+        var arg = TArg { kind: 0, rsv: 0, rsv2: 0, ty: 0, v: 0 };
+        if p.kind as i64 == TPK_TYPE {
+            let ty = subst_parse(t, cur, p.def0 as i64, 0, i);
+            arg = TArg { kind: TA_TYPE as! u8, rsv: 0, rsv2: 0, ty: ty, v: 0 };
+        } else if p.kind as i64 == TPK_VALUE {
+            let ty = subst_parse(t, cur, p.def0 as i64, 1, i);
+            if !subst_ok { break; }
+            arg = TArg { kind: TA_VALUE as! u8, rsv: 0, rsv2: 0, ty: unqual(nonref(p.ty)), v: subst_val };
+            if is_opaque(arg.ty) { arg.ty = unqual(nonref(ty)); }
+        } else {
+            break;
+        }
+        // the list so far plus this argument
+        let mark = targ_scratch.len;
+        for j in tl_count(cur as i64) { targ_scratch.push(tl_arg(cur as i64, j)); }
+        targ_scratch.push(arg);
+        cur = targ_intern(mark);
+        i++;
+    }
+    return cur;
 }
 let CF_SUBST = 268435456;   // a non-type template parameter bound to a value (syms[s].v)
 
@@ -444,10 +497,11 @@ recursive fn begin_class_specialization(qn: QN&, is_union: bool, loc: u32) -> i6
     }
     pending_tmpl = -1;
     // an explicit specialization: a real class
-    spec_map.insert(((t as u64) << 32) | (qn.targs as u64), records[r].ty << 4);
+    let full = complete_args(t, qn.targs);
+    spec_map.insert(((t as u64) << 32) | (full as u64), records[r].ty << 4);
     cxs[cs].flags = cxs[cs].flags | CF_SPEC;
     cxs[cs].tmpl = t as! i32;
-    cxs[cs].targs = qn.targs;
+    cxs[cs].targs = full;
     let inj = scope_find(sc, qn.name);
     if inj >= 0 { cxs[inj].tmpl = t as! i32; }
     if dependent_ctx() {

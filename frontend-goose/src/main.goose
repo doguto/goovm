@@ -56,6 +56,8 @@ import .cx_sema;
 import .cx_over;
 import .cx_stmt;
 import .cx_layout;
+import .cx_mangle;
+import .cx_check;
 import cg from "../../backend-goose";
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
@@ -334,6 +336,7 @@ fn options() {
         else if s == "--dump-ast" { opt_mode = 3; }
         else if s == "-c" { if opt_mode == 0 { opt_mode = 4; } }
         else if s == "--emit-gir" { opt_mode = 5; }
+        else if s == "--dump-decls" { opt_mode = 6; }
         else if s == "-g" || starts_with(s, "-g") && s != "-g0" && !starts_with(s, "-gno") { gen::opt_debug = true; dbg_types = true; dbg_g = true; }
         else if s == "-g0" { gen::opt_debug = false; dbg_types = false; dbg_g = false; }
         else if s == "-fPIC" || s == "-fpic" { gen::opt_pic = true; gen::opt_pie = false; opt_pic_mode = if s == "-fPIC" { 2 } else { 3 }; }
@@ -506,8 +509,22 @@ fn main() {
         if opt_cxx { cx::parse_tu_cxx(); } else { parse_tu(); }
         if opt_state_hash > 0 { pt_state_hash(opt_state_hash == 2); }
         hc_report();
-        if opt_cxx && (opt_mode == 2 || opt_mode == 3) && n_errors == 0 {
-            write_stderr("goosecc: error: --layout-check and --dump-ast are C only (C++: --cxx-layout-check)\n");
+        if opt_cxx && opt_mode == 6 && n_errors == 0 {
+            if !cx::dump_decls(names[out_off..out_off + out_len]) { fatal("cannot write the declarations"); }
+        }
+        if opt_cxx && opt_mode == 2 && n_errors == 0 {
+            var abs: u8[>..] = [];
+            if opt_input()[0] != '/' {
+                if !env("PWD", abs) { fatal("cannot determine the current directory (PWD)"); }
+                abs.push('/');
+            }
+            abs.append(opt_input());
+            if out_len == 0 { fatal("--layout-check needs -o file"); }
+            if !cx::write_cxx_layout_check(abs, names[out_off..out_off + out_len]) { fatal("cannot write the layout check file"); }
+            exit(0);
+        }
+        if opt_cxx && opt_mode == 3 && n_errors == 0 {
+            write_stderr("goosecc: error: --dump-ast is C only\n");
             exit(1);
         }
         if opt_cxx && (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {

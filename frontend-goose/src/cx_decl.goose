@@ -48,6 +48,9 @@ recursive fn cx_attr_string() -> u32, u32 {
     return off, len;
 }
 
+var abi_tag_off: u32 = 0;       // the last abi_tag("...") parsed (strbytes)
+var abi_tag_len: u32 = 0;
+
 fn attr_ident_name(i: i64) -> const u8[:] {
     let t = tu_toks[i];
     var s: const u8[:] = "";
@@ -86,6 +89,9 @@ recursive fn cx_attr_one(a: Attrs&) {
     else if name == "may_alias" { a.misc = a.misc | AM_MAY_ALIAS; }
     else if name == "fallthrough" { a.misc = a.misc | AM_FALLTHROUGH; }
     else if name == "nodebug" { a.misc = a.misc | AM_NODEBUG; }
+    else if name == "abi_tag" {
+        if at(TK_L_PAREN) { let o, l = cx_attr_string(); abi_tag_off = o; abi_tag_len = l; }
+    }
     else if name == "section" {
         if at(TK_L_PAREN) { let o, l = cx_attr_string(); a.sec_off = o; a.sec_len = l; }
     } else if name == "alias" {

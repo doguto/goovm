@@ -1116,6 +1116,8 @@ fn pp_set_lang() {
     opt_trigraphs = !opt_gnu;
 }
 
+var main_file_idx: i64 = -1;     // the main file (files index)
+
 // Starts preprocessing `path`.
 fn pp_start(path: const u8[:]) -> bool {
     pp_set_lang();
@@ -1124,6 +1126,7 @@ fn pp_start(path: const u8[:]) -> bool {
     var mp: u8[>..] = [];
     if env("GOOSECC_TEST_MAIN_PAD", mp) { for c in mp { if c >= '0' && c <= '9' { main_pad = main_pad * 10 + (c - '0') as i64; } } }
     let f = lookup_file();
+    main_file_idx = f;
     if f < 0 {
         write_stderr(str("goosecc: error: no such file or directory: '", path, "'\n"));
         return false;

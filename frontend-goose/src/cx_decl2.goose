@@ -21,6 +21,7 @@ import .cx_decl;
 import .cx_class;
 import .cx_tmpl;
 import .cx_layout;
+import .cx_mangle;
 
 var extern_c: bool = false;     // inside extern "C"
 var fdefs_extra: u32[>..] = [];  // N_FUNCDEF of member functions parsed out of their place (local classes)
@@ -54,9 +55,16 @@ fn same_signature(a: u32, b: u32) -> bool {
     for i in ta.n {
         let pa = tparams[ta.extra + i];
         let pb = tparams[tb.extra + i];
-        if pa != pb && !(is_opaque(pa) && is_opaque(pb)) { return false; }
+        if pa != pb && !(has_unknown(pa) && has_unknown(pb)) { return false; }
     }
     return true;
+}
+
+recursive fn has_unknown(t: u32) -> bool {
+    let k = kind_of(t);
+    if k == TY_UNKNOWN || k == TY_DEPEXPR { return true; }
+    if k == TY_POINTER || k == TY_LREF || k == TY_RREF || k == TY_ARRAY { return has_unknown(tbase(t)); }
+    return false;
 }
 
 // A function of the same name and signature declared in scope sc, or -1.
@@ -141,6 +149,12 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
         bind_sym(s, false);
     }
     set_fn_flags(s, d, ds, ctor, is_member || cxs[s].flags & CF_MEMBER != 0);
+    note_main_decl(s, d);
+    if d.qn.has_targs {
+        // an explicit specialization of a function template (f<int>(...)):
+        // a template entity in D1 (not lowered, not in the oracles)
+        cxs[s].flags = cxs[s].flags | CF_SPEC | CF_PATTERN;
+    }
     if ctx == DC_FRIEND && cxs[s].flags & CF_MEMBER == 0 { cxs[s].flags = cxs[s].flags | CF_FRIEND; }
     if extern_c && !is_member && cxs[s].flags & CF_MEMBER == 0 { cxs[s].flags = cxs[s].flags | CF_EXTERN_C; }
     if dependent_ctx() || (target >= 0 && scopes[target].flags & SCF_PATTERN != 0) { cxs[s].flags = cxs[s].flags | CF_PATTERN; }
@@ -187,6 +201,22 @@ fn set_fn_flags(s: i64, d: CD&, ds: CDS&, ctor: bool, member: bool) {
     if ds.is_inline || ds.is_constexpr { syms[s].flags = syms[s].flags | SF_INLINE; }
     if !member && ds.sc == SC_STATIC { syms[s].sc = SC_STATIC as! u8; }
     if ds.noreturn { syms[s].flags = syms[s].flags | SF_NORETURN; }
+}
+
+// Notes a declaration whose name is written in the main file (the
+// declaration oracle lists those, as libclang's isWrittenInMainFile).
+fn note_main_decl(s: i64, d: CD&) {
+    if !d.has_name { return; }
+    let t = tu_toks[d.qn.start];
+    // libclang's isWrittenInMainFile: not from a macro expansion or argument
+    // a name substituted for a macro parameter keeps its spelling; the
+    // token after it then comes from the macro's body
+    let nx = tu_toks[d.qn.start as i64 + 1];
+    let from_arg = !d.qn.qual && (nx.flags & F_MACRO != 0 || nx.xloc != nx.spell) && nx.kind as i64 != TK_EOF;
+    if t.flags & F_MACRO == 0 && t.xloc == t.spell && !from_arg && file_of(t.spell as i64) == main_file_idx {
+        cxs[s].flags = cxs[s].flags | CF_MAINDECL;
+    }
+    if cxs[s].pos as i64 > d.qn.start as i64 && syms[s].kind as i64 != SK_FUNC { cxs[s].pos = d.qn.start; }
 }
 
 // Keeps the parameters of a function's latest declaration (with the
@@ -436,7 +466,7 @@ recursive fn parse_simple_decl(ctx0: i64) {
             }
         } else {
             let s = declare_var(d, ds, a, ctx);
-            if s >= 0 { parse_var_init(s, d, ctx); }
+            if s >= 0 { note_main_decl(s, d); parse_var_init(s, d, ctx); }
         }
         first = false;
         if !accept(TK_COMMA) { break; }
@@ -673,8 +703,12 @@ recursive fn parse_namespace() {
         if nest > 0 && at_kw(KW_INLINE) { this_inline = true; adv(); }
         var name: u32 = 0;
         if at(TK_IDENT) { name = tu_toks[pc].val; adv(); }
+        abi_tag_len = 0;
         cx_attrs(a);
         enter_namespace(name, this_inline, loc);
+        if abi_tag_len > 0 && !ns_abi_tag.contains(cur_scope as u64) {
+            ns_abi_tag.insert(cur_scope as u64, ((abi_tag_off as u64) << 32) | (abi_tag_len as u64));
+        }
         nest++;
         inline_ns = false;
         if at(TK_COLONCOLON) { adv(); continue; }
