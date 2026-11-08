@@ -1539,3 +1539,30 @@ generation (`--time`):
   faster (31x against -O2); the target was 5x. The middle-end is 2.34 s of
   the 3.31 s.
 
+### What the exporter rejects in LLVM -O2 IR
+
+E1 made the exporter accept `fastcc`, `llvm.usub.sat`/`llvm.uadd.sat` on
+scalars, relative lookup tables (`GIR_DR_PCREL32`) and `llvm.load.relative`.
+Compiling every source file of the corpora (2,651) with `clang -O2
+-emit-llvm` and `goovm-llc -O1` (`e1/ccheck.py --o2`, aggregated by
+`e1/o2agg.py`), 165 files are still rejected, nearly all for the
+vectorizers' output:
+
+| reason | files |
+|---|---:|
+| vectors of pointers (`<2 x ptr>`, SLP-vectorized pointer pairs) | 72 |
+| `llvm.vector.reduce.add` | 49 |
+| bitcast between a vector and an integer of another lane layout (`<8 x i1>` to `i8`, ...) | 22 |
+| other `llvm.vector.reduce.*` (smax, xor, umin, or, mul) | 12 |
+| bit manipulation or funnel shifts on vectors, saturating arithmetic on vectors | 7 |
+| `llvm.fptosi.sat`, vector GEP, an initializer expression | 3 |
+
+With `-fno-vectorize -fno-slp-vectorize` (the O2nv variant) 7 files remain:
+two vector/integer bitcasts (SSE intrinsics), two reductions and a vector
+GEP in the vectorizer unit tests, `llvm.fptosi.sat.i8` and an assertion in
+the -O0 allocator on lencod's `macroblock.c` (a lowering that needs more
+registers than are free; the function is too large for the global
+allocator). One program fails at link time: torture `pr39501` uses
+`fmin`/`fmax`, which LLVM -O2 forms as `llvm.minnum`/`llvm.maxnum` and the
+exporter lowers to libm calls, and the test does not link `-lm`.
+
