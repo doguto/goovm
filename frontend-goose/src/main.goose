@@ -58,6 +58,7 @@ import .cx_stmt;
 import .cx_layout;
 import .cx_mangle;
 import .cx_check;
+import .cx_gen;
 import cg from "../../backend-goose";
 
 let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
@@ -497,7 +498,7 @@ fn main() {
         // (the parse cache's entries refer to them: pcache.goose)
         types_init();
         parse_init();
-        if opt_cxx { cx::cx_init(); }
+        if opt_cxx { cx::cx_init(); cx::cg_on = opt_mode == 4 || opt_mode == 5; }
         // the parse cache holds C's parser state only
         pt_track = hc_on && !opt_cxx;
         pt_setup_opts();
@@ -528,8 +529,8 @@ fn main() {
             exit(1);
         }
         if opt_cxx && (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
-            write_stderr("goosecc: error: C++ code generation is not supported yet\n");
-            exit(1);
+            // D1: the C++ AST's lowered C form (cx_gen.goose)
+            if !cx::cg_finish(opt_input()) { exit(1); }
         }
         if (opt_mode == 4 || opt_mode == 5) && n_errors == 0 {
             let t2 = clock_ns();

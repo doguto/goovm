@@ -109,6 +109,17 @@ fn mangle_sym(s: i64) -> bool {
 }
 var mg_name_end: i64 = 0;
 
+// prefix + the mangling of type t (_ZTV, _ZTI, _ZTS + class) into mg.
+fn mangle_special(prefix: const u8[:], t: u32) -> bool {
+    mg.clear();
+    msubs.clear();
+    mg_tags.clear();
+    mg_fail = false;
+    mg.append(prefix);
+    mangle_type(t);
+    return !mg_fail;
+}
+
 // Does mangling t meet an ABI tag (a global variable of such a type is
 // mangled, to carry it)?
 fn type_has_tags(t: u32) -> bool {
@@ -226,7 +237,7 @@ recursive fn mangle_tmpl_prefix(tsym: i64, parent: i64) {
 fn unqualified(s: i64) {
     let fl = cxs[s].flags;
     if fl & CF_CTOR != 0 { mg.append("C1"); return; }
-    if fl & CF_DTOR != 0 { mg.append("D1"); return; }
+    if fl & CF_DTOR != 0 { mg.append(if fl & 2147483648 != 0 { "D0" } else { "D1" }); return; }
     if fl & CF_CONV != 0 {
         mg.append("cv");
         mangle_type(types[syms[s].ty >> 4].base);

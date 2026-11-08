@@ -716,15 +716,18 @@ recursive fn parse_braced() -> u32 {
     let sp = paren_depth;
     paren_depth++;
     let mark = nscratch.len;
+    var desig = false;
     while !at(TK_R_BRACE) && !at(TK_EOF) {
         if at(TK_PERIOD) && tk_n(1) == TK_IDENT {
             // a designator (C++20 / GNU): .x = v
             adv();
             adv();
             accept(TK_EQUAL);
+            desig = true;
         } else if at(TK_L_SQUARE) && tk_n(1) != TK_L_SQUARE {
             skip_group();
             accept(TK_EQUAL);
+            desig = true;
         }
         var e: u32 = 0;
         if at(TK_L_BRACE) { e = parse_braced(); } else { e = parse_assign_cx(); }
@@ -737,6 +740,7 @@ recursive fn parse_braced() -> u32 {
     let count = nscratch.len - mark;
     let start = commit_list(mark);
     let n = node_v(N_INITBRACE, 0, t_unknown, 0, 0, count, loc, start);
+    if desig { nodes[n].op = 3; }
     return n;
 }
 
@@ -872,6 +876,11 @@ recursive fn parse_id_expr() -> u32 {
             // lookup may still find it (D1 does not perform ADL)
             if !qn.qual {
                 let mark = parse_args();
+                if cg_on && !dependent_ctx() {
+                    // code generation: C's builtins (__builtin_alloca ...)
+                    let b = cg_builtin_call(qn.name, mark, loc);
+                    if b != 0 { nscratch.resize(mark); return b; }
+                }
                 nscratch.resize(mark);
                 if !dependent_ctx() && diag_suppress == 0 && !adl_could_find(mark) {
                     err_at(qn.loc, str("use of undeclared identifier '", ident_text(qn.name as i64), "'"));

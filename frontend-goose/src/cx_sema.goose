@@ -93,7 +93,7 @@ fn nonref_decay(t: u32) -> u32 {
 }
 
 // The contextual conversion to bool (C++ [conv]p4).
-fn to_bool(e: u32) -> u32 {
+recursive fn to_bool(e: u32) -> u32 {
     if is_opq(e) { return e; }
     let r = rv(e);
     let t = nodes[r].ty;
@@ -122,6 +122,10 @@ recursive fn mk_assign_cx(op: i64, l: u32, r: u32, loc: u32, tok: i64) -> u32 {
         rr = icast(r, CK_NULL2PTR, unqual(tl));
     }
     if !cish_node(l) || !cish_node(rr) { return dep_node(tl, loc); }
+    if cg_on && op == 0 && is_pointer(tl) {
+        let c = cg_ptr_conv(rv(rr), unqual(tl), loc);
+        if c != 0 { rr = c; }
+    }
     let n = mk_assign(op, l, rr, loc);
     // C++: an assignment is an lvalue (the left operand)
     nodes[n].flags = nodes[n].flags | NF_LVALUE;
@@ -298,6 +302,7 @@ recursive fn mk_index_cx(base: u32, idx: u32, loc: u32) -> u32 {
 
 fn mk_this(loc: u32) -> u32 {
     if this_type == 0 { return dep_node(t_unknown, loc); }
+    if cg_on && cg_this >= 0 { return cg_this_ref(loc); }
     let n = node(N_THIS, 0, this_type, 0, 0, 0, loc);
     if is_opaque(tbase(this_type)) || is_dep(tbase(this_type)) { nodes[n].flags = NF_DEP; }
     return n;
@@ -503,9 +508,10 @@ recursive fn parse_new() -> u32 {
         has_init = true;
         init = parse_braced();
     }
-    if is_opaque(t) || placement || (count != 0 && is_opq(count)) || (init != 0 && is_opq(init)) {
+    if is_opaque(t) || placement || (count != 0 && is_opq(count)) || (init != 0 && is_opq(init) && !(cg_on && nodes[init].kind as i64 == N_INITBRACE)) {
         return dep_node(if is_opaque(t) { t_unknown } else { mk_ptr(t) }, loc);
     }
+    if cg_on { return cg_new(t, count, init, has_init, loc); }
     let n = node(N_NEW, if count != 0 { 1 } else { 0 }, mk_ptr(t), init as i64, count as i64, if has_init { 1 } else { 0 }, loc);
     return n;
 }
@@ -518,6 +524,7 @@ recursive fn parse_delete() -> u32 {
     if at(TK_L_SQUARE) && tk_n(1) == TK_R_SQUARE { adv(); adv(); arr = true; }
     let e = parse_cast_cx();
     if is_opq(e) { return dep_node(t_void, loc); }
+    if cg_on { return cg_delete(rv(e), arr, loc); }
     return node(N_DELETE, if arr { 1 } else { 0 }, t_void, rv(e) as i64, 0, 0, loc);
 }
 
@@ -641,6 +648,10 @@ recursive fn parse_var_init(s: i64, d: CD&, ctx: i64) {
     if conv != 0 && !is_opq(conv) && (is_integer(syms[s].ty) || kind_of(syms[s].ty) == TY_BOOL) && quals(syms[s].ty) & Q_CONST != 0 &&
        nodes[conv].kind as i64 != N_INITBRACE {
         cvar_note(s, conv);
+    }
+    if cg_on && (ctx == DC_BLOCK || ctx == DC_NS || ctx == DC_COND) {
+        cg_decl(s, init, conv, form, loc, d.loc, ctx);
+        return;
     }
     syms[s].flags = syms[s].flags | (if init != 0 { SF_DEFINED } else { 0 });
     let n = node(N_DECL, 0, syms[s].ty, s, conv as i64, d.loc as i64, loc);

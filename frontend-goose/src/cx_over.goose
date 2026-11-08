@@ -157,7 +157,8 @@ fn best_candidate(s0: i64, mark: i64, has_obj: bool) -> i64 {
     while s >= 0 {
         let f = resolve(s);
         if f >= 0 && visible(s) && syms[f].kind as i64 == SK_TEMPLATE { any_tmpl = true; }
-        if f >= 0 && visible(s) && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & (CF_PATTERN | CF_DELETED) == 0 {
+        // (a function met again through a using-declaration is the same candidate)
+        if f >= 0 && f != best && visible(s) && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & (CF_PATTERN | CF_DELETED) == 0 {
             let ft = types[syms[f].ty >> 4];
             let np = ft.n;
             let variadic = ft.flags & TF_VARIADIC != 0;
@@ -281,6 +282,7 @@ fn typed_result(ret: u32, loc: u32) -> u32 {
 // A call of the chosen function f (obj: the object for a member function,
 // 0 none).
 recursive fn build_call(f: i64, obj: u32, mark: i64, loc: u32, qualified: bool) -> u32 {
+    if cg_on { return cg_call(f, obj, mark, loc, qualified); }
     let ft = syms[f].ty;
     let member = cxs[f].flags & CF_MEMBER != 0 && cxs[f].flags & CF_STATIC == 0;
     if !member && cish_call(ft, mark) && !has_defaults_needed(f, mark) {
@@ -313,18 +315,40 @@ fn funcref_addr(e: u32, loc: u32) -> u32 {
 // Operators on classes (D1: opaque unless a non-template candidate is
 // found and selected; see build_call).
 
-recursive fn overloaded_binop(op: i64, l: u32, r: u32, loc: u32) -> u32 { return 0; }
-recursive fn overloaded_assign(op: i64, l: u32, r: u32, loc: u32, tok: i64) -> u32 { return 0; }
-recursive fn overloaded_unop(op: i64, e: u32, loc: u32, post: bool) -> u32 { return 0; }
-recursive fn overloaded_subscript(b: u32, i: u32, loc: u32) -> u32 { return 0; }
-recursive fn overloaded_arrow(b: u32, loc: u32) -> u32 { return 0; }
-recursive fn conv_to_bool(e: u32) -> u32 { return dep_node(t_bool, nodes[e].loc); }
+recursive fn overloaded_binop(op: i64, l: u32, r: u32, loc: u32) -> u32 {
+    if cg_on { return cg_operator(op, l, r, loc, false); }
+    return 0;
+}
+recursive fn overloaded_assign(op: i64, l: u32, r: u32, loc: u32, tok: i64) -> u32 {
+    if cg_on { return cg_assign(op, l, r, loc, tok); }
+    return 0;
+}
+recursive fn overloaded_unop(op: i64, e: u32, loc: u32, post: bool) -> u32 {
+    if cg_on { return cg_operator(op, e, 0, loc, post); }
+    return 0;
+}
+recursive fn overloaded_subscript(b: u32, i: u32, loc: u32) -> u32 {
+    if cg_on { return cg_operator(OP_SUBSCRIPT, b, i, loc, false); }
+    return 0;
+}
+recursive fn overloaded_arrow(b: u32, loc: u32) -> u32 {
+    if cg_on { return cg_operator(OP_ARROW, b, 0, loc, false); }
+    return 0;
+}
+recursive fn conv_to_bool(e: u32) -> u32 {
+    if cg_on && !is_opq(e) {
+        let c = user_conv(e, t_bool, nodes[e].loc);
+        if c != 0 && !is_opq(c) { return to_bool(c); }
+    }
+    return dep_node(t_bool, nodes[e].loc);
+}
 recursive fn cast_to_class(t: u32, e: u32, loc: u32) -> u32 { return 0; }
 
 // T(args) / T{args} of class type: a prvalue of T.
 recursive fn construct_class(t: u32, mark: i64, loc: u32, braces: bool) -> u32 {
-    let n = node(N_CTOR, 0, unqual(t), 0, 0, (nscratch.len - mark) as i64, loc);
-    return n;
+    let count = nscratch.len - mark;
+    let start = commit_list(mark);
+    return node_v(N_CTOR, 0, unqual(t), 0, 0, count, loc, start);
 }
 
 // T x(args).

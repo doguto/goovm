@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Correctness harness for goosecc (milestone B2): the corpora of suite.py,
-every source file compiled by goosecc instead of clang + goovm-llc.
+every source file compiled by goosecc instead of clang + goovm-llc (C++
+sources too, since D1: the C++ corpora unittests-cxx, regression-cxx ...).
 
 For every test of the selected corpora:
 
@@ -38,7 +39,7 @@ def build_goosecc(t, wd, variant, args, info):
     objs = []
     for i, s in enumerate(t.srcs):
         o = os.path.join(wd, suite.obj_name(s, i) + "." + variant + ".gc.o")
-        cmd = [args.goosecc, "-c", "-O0"] + (["-g"] if variant == "g" else []) + t.cflags + [s, "-o", o]
+        cmd = [args.goosecc, "-c", "-O0"] + (["-g"] if variant == "g" else []) + t.flags(s) + [s, "-o", o]
         r = suite.sh(cmd, timeout=600)
         err = r.stderr.decode(errors="replace")
         if r.returncode != 0:
@@ -46,7 +47,7 @@ def build_goosecc(t, wd, variant, args, info):
             first = lines[0] if lines else f"exit {r.returncode}"
             raise suite.Fail("error", f"goosecc exit {r.returncode} on {os.path.basename(s)}: {first[:300]}")
         objs.append(o)
-    r = suite.sh([args.clang] + objs + t.ldflags + ["-o", exe])
+    r = suite.sh([suite.linker(t, args)] + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise suite.Fail("fail", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -151,6 +152,7 @@ def main():
     ap.add_argument("--corpus", default=",".join(suite.CORPORA))
     ap.add_argument("--variants", default="O0")
     ap.add_argument("--clang", default="clang-20")
+    ap.add_argument("--clangxx", default="clang++-20")
     ap.add_argument("-j", type=int, default=3)
     ap.add_argument("--work", default=os.path.join(ROOT, "build-suite-goosecc"))
     ap.add_argument("--keep", action="store_true", help="keep build products of passing tests")

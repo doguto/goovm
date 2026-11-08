@@ -263,6 +263,7 @@ fn declare_typedef(name: u32, ty: u32, loc: u32, ctx: i64) -> i64 {
 // its tokens kept (class members, templates).
 recursive fn function_body(s: i64, d: CD&, in_class: bool) {
     let b0 = pc;
+    if in_class { cxs[s].flags = cxs[s].flags | CF_DEFINED_IN_CLASS; }
     let pattern = cxs[s].flags & CF_PATTERN != 0 || dependent_ctx() || (d.qn.qual && d.qn.dep != 0);
     if in_class || pattern {
         skip_fn_body();
@@ -578,7 +579,9 @@ fn anon_union_obj(t: u32, ctx: i64) {
 }
 
 // A variable (or static data member, or its out-of-line definition).
+var decl_is_extern: bool = false;    // the variable declaration being parsed says extern (code generation)
 recursive fn declare_var(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
+    decl_is_extern = ds.sc == SC_EXTERN;
     var ty = apply_type_attrs(d.ty, a, d.loc);
     let name = d.qn.name;
     if pending_tmpl >= 0 {
@@ -989,6 +992,7 @@ fn builtin_template(name: const u8[:]) {
 
 // The parser's start: the C++ types and the global namespace.
 fn cx_init() {
+    id_this = intern("this");
     cx_types_init();
     names_init();
     cx_grow();

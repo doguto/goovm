@@ -414,6 +414,14 @@ fn discard_cx(e: u32) -> u32 {
 // The value of a return statement converted to the function's return type.
 recursive fn return_convert(x: u32, loc: u32) -> u32 {
     let rt = ret_type;
+    if cg_on && rt != 0 && !is_opaque(rt) && !is_void(rt) {
+        if is_ref(rt) || is_record(rt) || nodes[x].kind as i64 == N_INITBRACE { return cg_return(x, rt, loc); }
+        if !is_opq(x) && is_record(nodes[x].ty) { return conv_value(x, unqual(rt), loc); }
+        if is_pointer(rt) && !is_opq(x) {
+            let c = cg_ptr_conv(rv(x), unqual(rt), loc);
+            if c != 0 { return c; }
+        }
+    }
     if is_opq(x) || rt == 0 || is_opaque(rt) || is_ref(rt) || is_record(rt) || nodes[x].kind as i64 == N_INITBRACE { return x; }
     if is_void(rt) { return x; }
     if !cish(rt) || !cish_node(x) { return x; }
@@ -638,6 +646,15 @@ recursive fn parse_stmt_expr_body() -> u32 {
             if !dep && is_lvalue(e) && cish_node(e) { nodes[last].a = rv(e); ty = nodes[nodes[last].a].ty; }
         }
     }
+    if cg_on && !dep && c > 0 && is_record(ty) && !is_opaque(ty) && class_trivial_copy(rec_of(ty)) {
+        // code generation: a class value
+        let last = nlist[nodes[body].v + c - 1];
+        let v = conv_value(nodes[last].a, unqual(ty), loc);
+        if !is_opq(v) {
+            nodes[last].a = v;
+            return node(N_STMTEXPR, 0, unqual(ty), body as i64, 0, 0, loc);
+        }
+    }
     if dep || !cish(ty) && !is_void(ty) { return dep_node(ty, loc); }
     return node(N_STMTEXPR, 0, ty, body as i64, 0, 0, loc);
 }
@@ -665,6 +682,8 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
     ret_type = types[syms[s].ty >> 4].base;
     let member = cxs[s].flags & CF_MEMBER != 0 && cxs[s].flags & CF_STATIC == 0;
     this_type = 0;
+    let sv_cgthis = cg_this;
+    cg_this = -1;
     if member {
         let sc = cxs[s].dscope as i64;
         let ct = scope_class_type(sc);
@@ -672,6 +691,7 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
             var q = 0;
             if cxs[s].flags & CF_CONST != 0 { q = Q_CONST; }
             this_type = mk_ptr(with_q(ct, q));
+            if cg_on { cg_this = make_this(s, this_type, loc); }
         }
     }
     let lmark = label_syms.len;
@@ -721,6 +741,8 @@ recursive fn parse_function_body(s: i64, params: i64, nparams: i64) -> u32 {
         let bstart = commit_list(bm);
         body = node_v(N_COMPOUND, 0, 0, 0, 0, 1, loc, bstart);
     }
+    if cg_on && cg_this >= 0 && body != 0 { body = cg_wrap_body(s, body, inits, loc); }
+    cg_this = sv_cgthis;
     pop_scope();
     block_fn_depth--;
     for j in lmark..label_syms.len {
@@ -758,10 +780,21 @@ recursive fn parse_ctor_inits(s: i64) -> u32 {
         else {
             var qn = QN { .. };
             if !parse_qname(qn) { perr_expected("a member or base name"); break; }
-            lookup_qn(qn);
-            let t = qn_type(qn);
-            if t != 0 { bt = t; }
-            else if qn.sym >= 0 { target = resolve(qn.sym as i64); }
+            // a member's name is looked up in the class (before the
+            // parameters, which may have the same name)
+            var ms: i64 = -1;
+            if !qn.qual && qn.kind as i64 == QK_IDENT && !qn.has_targs && cxs[s].dscope >= 0 {
+                var m = scope_find(cxs[s].dscope as i64, qn.name);
+                while m >= 0 && syms[m].kind as i64 != SK_FIELD { m = cxs[m].nnext as i64; }
+                ms = m;
+            }
+            if ms >= 0 { target = ms; }
+            else {
+                lookup_qn(qn);
+                let t = qn_type(qn);
+                if t != 0 { bt = t; }
+                else if qn.sym >= 0 { target = resolve(qn.sym as i64); }
+            }
         }
         var args: u32 = 0;
         if at(TK_L_PAREN) {
