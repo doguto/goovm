@@ -66,8 +66,15 @@ fn fn_inline(s: i64) -> bool {
     if fl & (CF_DEFINED_IN_CLASS | CF_IMPLICIT | CF_CONSTEXPR) != 0 { return true; }
     if syms[s].flags & SF_INLINE != 0 { return true; }
     if fl & CF_SPEC != 0 { return true; }
+    // template instantiations: specializations of function templates,
+    // members of class template instantiations
+    if cxs[s].flags2 & (CF2_FSPEC | CF2_LAZY_BODY) != 0 { return true; }
+    if in_instantiation(cxs[s].dscope as i64) { return true; }
     return false;
 }
+
+// Is scope sc (in) a class instantiated from a template?
+fn in_instantiation(sc: i64) -> bool { sc > 0 && sc < scopes.len && scopes[sc].flags & SCF_INST != 0 }
 
 fn set_link(s: i64, lk: i64, flags: i64) {
     cxl_grow();
@@ -106,6 +113,7 @@ fn key_function(r: i64) -> i64 {
 // key function elsewhere).
 fn vt_kind(r: i64) -> i64 {
     if class_internal(r) { return 0; }
+    if in_instantiation(crecs[r].scope as i64) { return 1; }
     let kf = key_function(r);
     if kf < 0 { return 1; }
     // the key function's definition (its declaration may be a redeclaration)
@@ -180,7 +188,8 @@ fn name_syms() {
             }
         } else {
             if internal && syms[s].sc as i64 != SC_EXTERN { syms[s].sc = SC_STATIC as! u8; }
-            else if syms[s].flags & SF_INLINE != 0 && syms[s].sc as i64 != SC_EXTERN { set_link(s, LK_LINKONCE, CXL_COMDAT); }
+            else if (syms[s].flags & SF_INLINE != 0 || (fl & CF_MEMBER != 0 && in_instantiation(cxs[s].dscope as i64))) &&
+                    syms[s].sc as i64 != SC_EXTERN { set_link(s, LK_LINKONCE, CXL_COMDAT); }
         }
         if internal && syms[s].sc as i64 != SC_EXTERN { syms[s].sc = SC_STATIC as! u8; }
     }
