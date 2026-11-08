@@ -509,7 +509,31 @@ value), `typeid`, and lifetime-extended temporaries.
 oracles, the cache checks and `suite_goosecc.py` (1,804 tests, `-O0` and
 `-g`) pass as before.
 
-SPEED_SECTION
+**Speed** (`frontend-goose/tests/bench_cxx.py -n 3`: the 316 files of the
+CTMark C++ programs, each alone, single-threaded, best of 3, sums in
+milliseconds; the machine was shared with another job, load average about
+2.2):
+
+| program | files | goosecc -E | -E, warm cache | clang++ -E | goosecc -fsyntax-only | warm cache | clang++ -fsyntax-only |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 7zip | 180 | 2,439 | 597 | 8,909 | 3,360 | 2,166 | 28,281 |
+| Bullet | 121 | 983 | 327 | 4,552 | 1,318 | 894 | 10,386 |
+| kimwitu++ | 14 | 195 | 78 | 653 | 336 | 279 | 3,760 |
+| tramp3d-v4 | 1 | 43 | 24 | 109 | 89 | 84 | 2,064 |
+| **total** | 316 | **3,660** | **1,026** | 14,223 | **5,103** | **3,423** | 44,491 |
+
+- `-E` (identical output): **3.9 times faster than clang++-20** without the
+  header cache, 13.9 times with a warm one.
+- `-fsyntax-only`: 8.7 times faster without the cache, 13.0 times with it.
+  This compares unequal work: D1 does not instantiate templates or check
+  their bodies, which is most of clang's time on tramp3d-v4 (2.1 s against
+  89 ms) and much of it on the others. The comparison will mean more once
+  D2 instantiates templates.
+- C is not slower: goosecc -c on the 324 CTMark C files that compile,
+  interleaved with the build before D1, best of 3: 1.891 s against 1.865 s
+  without the header cache (+1.4%), 1.434 s against 1.426 s warm (+0.6%);
+  a one-line file 1.16 ms against 1.08 ms (the start-up of the larger
+  program).
 
 ### Start-up, parse cache, clang's folding (G1)
 

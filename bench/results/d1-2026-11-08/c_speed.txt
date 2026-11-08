@@ -1,0 +1,5 @@
+CTMark C files: 324, best of 3, seconds
+  off   base 1.865  d1 1.891  d1/base 1.0138
+  warm  base 1.426  d1 1.434  d1/base 1.0057
+  one-line file base: 1.083 ms
+  one-line file d1: 1.163 ms
