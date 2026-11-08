@@ -604,6 +604,8 @@ struct CD {
     nparams: i64 = 0,
     fquals: u8 = 0,         // TF_MCONST ... of that function declarator
     noexcept: bool = false,
+    excspec: u8 = 0,        // D3: 0 none, 1 non-throwing, 2 noexcept(false), 3 throw(types) (excpos: its '(')
+    excpos: u32 = 0,
     pack: bool = false,     // a declarator-id after `...`
     is_fn: bool = false,
     loc: u32 = 0,
@@ -839,17 +841,25 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
         if at(TK_AMP) { fq = fq | TF_MLREF; adv(); }
         else if at(TK_AMPAMP) { fq = fq | TF_MRREF; adv(); }
         var noexc = false;
+        var exck: u8 = 0;
+        var excp: u32 = 0;
         loop {
             if at_kw(KW_NOEXCEPT) {
                 adv();
                 noexc = true;
-                if at(TK_L_PAREN) { skip_group(); }
+                exck = 1;
+                if at(TK_L_PAREN) {
+                    if tk_n(1) == TK_KW + KW_FALSE && tk_n(2) == TK_R_PAREN { noexc = false; exck = 2; }
+                    skip_group();
+                }
                 continue;
             }
             if at_kw(KW_THROW) {
                 adv();
                 if at(TK_L_PAREN) {
                     noexc = tk_n(1) == TK_R_PAREN;
+                    exck = if noexc { 1 } else { 3 };
+                    excp = pc as! u32;
                     skip_group();
                 }
                 continue;
@@ -870,6 +880,8 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
             d.nparams = count;
             d.fquals = fq as! u8;
             d.noexcept = noexc;
+            d.excspec = exck;
+            d.excpos = excp;
             d.is_fn = true;
         }
         fn_scratch.clear();

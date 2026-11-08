@@ -54,10 +54,14 @@ import .cx_sema;
 import .cx_over;
 import .cx_layout;
 import .cx_mangle;
+import .cx_gen_defs;
+import .cx_gen_link;
+import .cx_gen_eh;
 
 let CF_DTOR_DELETING = 2147483648;  // the deleting destructor (D0) of a class with a virtual destructor
 
 var cg_on: bool = false;        // C++ code generation: semantic actions build lowered C nodes
+var cg_base_variant = false;    // calls of constructors and destructors are of the base-object variant (C2/D2)
 var cg_this: i64 = -1;          // the `this` parameter of the member function being parsed
 var fn_this = dictionary<u64, u32> {};      // member function -> its `this` parameter symbol
 var id_this: u32 = 0;
@@ -382,6 +386,45 @@ recursive fn ctor_value(c: u32, loc: u32) -> u32 {
     return node(N_STMTEXPR, 0, unqual(t), body as i64, 0, 0, loc);
 }
 
+// The construction of class object dst (an lvalue) from e (an expression
+// of its class, a constructor call, arguments in braces): an expression
+// (void), or 0 when D3 cannot.
+recursive fn init_into(dst: u32, e: u32, loc: u32) -> u32 {
+    let t = nodes[dst].ty;
+    let k = nodes[e].kind as i64;
+    if k == N_INITBRACE && c_initializable(t) {
+        let bi = brace_init(t, e, loc);
+        if bi == 0 { return 0; }
+        return node(N_ASSIGN, 0, unqual(t), dst as i64, compound_value(bi, unqual(t), loc) as i64, 0, loc);
+    }
+    let mark = nscratch.len;
+    if k == N_CTOR || k == N_INITBRACE { for i in nodes[e].c as i64 { nscratch.push(nlist[nodes[e].v + i]); } }
+    else { nscratch.push(e); }
+    let zero = (k == N_CTOR || k == N_INITBRACE) && nodes[e].c == 0 && is_record(t) && !has_user_ctor(rec_of(t));
+    let st = construct_at(dst, mark, loc);
+    if st == 0 { return 0; }
+    if zero {
+        // T(): value-initialization zeroes a class without a user-provided constructor
+        let m = nscratch.len;
+        nscratch.push(n_expr_stmt(node(N_ASSIGN, 0, unqual(t), dst as i64, node(N_ZEROINIT, 0, unqual(t), 0, 0, 0, loc) as i64, 0, loc)));
+        nscratch.push(st);
+        let b = n_block(m, loc);
+        return node(N_STMTEXPR, 0, t_void, b as i64, 0, 0, loc);
+    }
+    return stmt_expr(st, loc);
+}
+
+// Statement st as an expression (void).
+fn stmt_expr(st: u32, loc: u32) -> u32 {
+    let k = nodes[st].kind as i64;
+    if k == N_EXPR { return nodes[st].a; }
+    if k == N_NULL { return node(N_ICAST, CK_TOVOID, t_void, int_node(0, t_int, loc) as i64, 0, 0, loc); }
+    let m = nscratch.len;
+    nscratch.push(st);
+    let b = n_block(m, loc);
+    return node(N_STMTEXPR, 0, t_void, b as i64, 0, 0, loc);
+}
+
 fn compound_value(init: u32, t: u32, loc: u32) -> u32 {
     let s = csym(SK_VAR, 0, t, loc);
     syms[s].flags = SF_COMPLIT;
@@ -536,7 +579,9 @@ recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u3
         if fp == 0 { nscratch.resize(mark); return opaque_node(loc); }
         call = n_call_ptr(fp, mark, loc);
     } else {
-        call = n_call(f, mark, loc);
+        var cf = f;
+        if cxs[f].flags & (CF_CTOR | CF_DTOR) != 0 && !cg_base_variant { cf = complete_sym(f); }
+        call = n_call(cf, mark, loc);
     }
     // a member pointer result keeps its C++ type (lowered with the rest in cg_finish)
     if kind_of(ft.base) == TY_MEMPTR { nodes[call].ty = unqual(ft.base); }
@@ -1247,9 +1292,14 @@ recursive fn ctor_prologue(r: i64, th: i64, inits: u32, loc: u32) -> bool {
             let obj = n_deref(rv(n_var(th, loc)), loc);
             let mark = nscratch.len;
             push_init_args(nodes[mi].b);
+            let sv = cg_base_variant;
+            cg_base_variant = true;
             let st = construct_at(obj, mark, loc);
+            cg_base_variant = sv;
             if st == 0 { return false; }
             stmt_buf.push(st);
+            let d = destroy_stmt(n_deref(rv(n_var(th, loc)), loc), loc);
+            if d != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT | XP_EHONLY, 0, d as i64, 0, 0, loc)); }
             return true;
         }
     }
@@ -1262,9 +1312,15 @@ recursive fn ctor_prologue(r: i64, th: i64, inits: u32, loc: u32) -> bool {
         if obj == 0 { return false; }
         let mark = nscratch.len;
         if mi != 0 { push_init_args(nodes[mi].b); }
+        let sv = cg_base_variant;
+        cg_base_variant = true;
         let st = construct_at(obj, mark, loc);
+        cg_base_variant = sv;
         if st == 0 { return false; }
         stmt_buf.push(st);
+        // destroyed if what follows throws
+        let ds = base_destroy(th, b.ty, loc);
+        if ds != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT | XP_EHONLY, 0, ds as i64, 0, 0, loc)); }
     }
     if cr.flags & CR_DYNAMIC != 0 {
         let vs = vptr_store(r, th, loc);
@@ -1294,6 +1350,7 @@ recursive fn ctor_prologue(r: i64, th: i64, inits: u32, loc: u32) -> bool {
                 let lp = arr_loop(lv, false, loc);
                 if lp == 0 { return false; }
                 stmt_buf.push(lp);
+                member_eh_cleanup(th, r, i, loc);
                 continue;
             }
             if args == 0 { continue; }
@@ -1327,6 +1384,7 @@ recursive fn ctor_prologue(r: i64, th: i64, inits: u32, loc: u32) -> bool {
             let st = construct_at(lv, mark, loc);
             if st == 0 { return false; }
             stmt_buf.push(st);
+            member_eh_cleanup(th, r, i, loc);
             continue;
         }
         if args == 0 { continue; }
@@ -1407,46 +1465,75 @@ recursive fn nsdmi_value(m: i64, sc: i64, th: i64) -> u32 {
     return e;
 }
 
-// The epilogue of a destructor of r: members in reverse order, then bases.
-recursive fn dtor_epilogue(r: i64, th: i64, loc: u32) -> bool {
-    let rec = records[r];
-    var i = (rec.first + rec.count) as i64 - 1;
-    while i >= rec.first as i64 {
-        let f = fields[i];
-        if f.name != 0 && is_record(f.ty) && !is_opaque(f.ty) {
-            let st = destroy_stmt(this_member(th, r, i, loc), loc);
-            if st != 0 { stmt_buf.push(st); }
-        } else if f.name != 0 && is_array(f.ty) {
-            let bt = base_elem_t(f.ty);
-            if is_record(bt) && !is_opaque(bt) && class_dtor(rec_of(bt)) >= 0 {
-                let lp = arr_loop(this_member(th, r, i, loc), true, loc);
-                if lp == 0 { return false; }
-                stmt_buf.push(lp);
-            }
+// The destruction of base class subobject bt of *this (the base-object
+// variant, D2), or 0.
+fn base_destroy(th: i64, bt: u32, loc: u32) -> u32 {
+    if !is_record(bt) || is_opaque(bt) || class_dtor(rec_of(bt)) < 0 { return 0; }
+    let obj = this_base(th, bt, loc);
+    if obj == 0 { return 0; }
+    let sv = cg_base_variant;
+    cg_base_variant = true;
+    let st = destroy_stmt(obj, loc);
+    cg_base_variant = sv;
+    return st;
+}
+
+// The destruction of member fi of *this (class r), or 0.
+fn member_destroy(th: i64, r: i64, fi: i64, loc: u32) -> u32 {
+    let f = fields[fi];
+    if f.name == 0 { return 0; }
+    if is_record(f.ty) && !is_opaque(f.ty) { return destroy_stmt(this_member(th, r, fi, loc), loc); }
+    if is_array(f.ty) {
+        let bt = base_elem_t(f.ty);
+        if is_record(bt) && !is_opaque(bt) && class_dtor(rec_of(bt)) >= 0 {
+            let lp = arr_loop(this_member(th, r, fi, loc), true, loc);
+            if lp == 0 { return mark_bad_stmt(loc); }
+            return lp;
         }
-        i--;
     }
+    return 0;
+}
+
+// A constructed member's destruction if the rest of the constructor throws.
+fn member_eh_cleanup(th: i64, r: i64, fi: i64, loc: u32) {
+    let d = member_destroy(th, r, fi, loc);
+    if d != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT | XP_EHONLY, 0, d as i64, 0, 0, loc)); }
+}
+
+// The destruction of r's members (in reverse order) and bases (in reverse)
+// as cleanups at the start of a destructor's body: pushed in construction
+// order, so that they run after the body on every exit, innermost first.
+recursive fn dtor_cleanups(r: i64, th: i64, loc: u32) -> bool {
     let cr = crecs[r];
-    var b = cr.nbases as i64 - 1;
-    while b >= 0 {
-        let bb = cbases[cr.bases + b];
+    for i in cr.nbases {
+        let bb = cbases[cr.bases + i];
         if bb.flags & BF_VIRTUAL != 0 { return false; }
-        if is_record(bb.ty) {
-            let obj = this_base(th, bb.ty, loc);
-            if obj == 0 { return false; }
-            let st = destroy_stmt(obj, loc);
-            if st != 0 { stmt_buf.push(st); }
-        }
-        b--;
+        let ds = base_destroy(th, bb.ty, loc);
+        if ds != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT, 0, ds as i64, 0, 0, loc)); }
+    }
+    let rec = records[r];
+    for i in rec.first..rec.first + rec.count {
+        let d = member_destroy(th, r, i as i64, loc);
+        if d != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT, 0, d as i64, 0, 0, loc)); }
     }
     return true;
 }
 
 // The body of member function s (parsed: body) with its constructor
-// prologue or destructor epilogue (cx_stmt.parse_function_body).
-recursive fn cg_wrap_body(s: i64, body: u32, inits: u32, loc: u32) -> u32 {
+// prologue or destructor cleanups (cx_stmt.parse_function_body). A
+// function-try-block (handlers nscratch[hmark..], hmark >= 0) encloses the
+// prologue and the destructor's cleanups too.
+recursive fn cg_wrap_body(s: i64, body: u32, inits: u32, loc: u32) -> u32 { return cg_wrap_body_try(s, body, inits, loc, -1); }
+
+recursive fn cg_wrap_body_try(s: i64, body: u32, inits: u32, loc: u32, hmark: i64) -> u32 {
     let fl = cxs[s].flags;
-    if fl & (CF_CTOR | CF_DTOR) == 0 || cg_this < 0 { return body; }
+    if fl & (CF_CTOR | CF_DTOR) == 0 || cg_this < 0 {
+        if hmark < 0 { return body; }
+        let t = cg_try(body, hmark, loc);
+        let m = nscratch.len;
+        nscratch.push(t);
+        return n_block(m, loc);
+    }
     let r = rec_of(scope_class_type(cxs[s].dscope as i64));
     let sm = stmt_buf.len;
     var ok = true;
@@ -1457,25 +1544,20 @@ recursive fn cg_wrap_body(s: i64, body: u32, inits: u32, loc: u32) -> u32 {
             let vs = vptr_store(r, cg_this, loc);
             if vs == 0 { ok = false; } else { stmt_buf.push(vs); }
         }
+        if !dtor_cleanups(r, cg_this, loc) { ok = false; }
     }
+    // the handlers stay below the statements while these are collected
     let mark = nscratch.len;
-    if fl & CF_CTOR != 0 {
-        for i in sm..stmt_buf.len { nscratch.push(stmt_buf[i]); }
-        stmt_buf.resize(sm);
-        nscratch.push(body);
-    } else {
-        for i in sm..stmt_buf.len { nscratch.push(stmt_buf[i]); }
-        stmt_buf.resize(sm);
-        // a return in the body would skip the epilogue
-        if has_return(body) { ok = false; }
-        nscratch.push(body);
-        let em = stmt_buf.len;
-        if !dtor_epilogue(r, cg_this, loc) { ok = false; }
-        for i in em..stmt_buf.len { nscratch.push(stmt_buf[i]); }
-        stmt_buf.resize(em);
-    }
+    for i in sm..stmt_buf.len { nscratch.push(stmt_buf[i]); }
+    stmt_buf.resize(sm);
+    nscratch.push(body);
     if !ok { nscratch.push(mark_bad_stmt(loc)); }
-    return n_block(mark, loc);
+    let inner = n_block(mark, loc);
+    if hmark < 0 { return inner; }
+    let t = cg_try(inner, hmark, loc);
+    let m2 = nscratch.len;
+    nscratch.push(t);
+    return n_block(m2, loc);
 }
 
 // ---------------------------------------------------------------------------
@@ -1632,7 +1714,7 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
     if ctx == DC_COND && cst != 0 { nscratch.push(mark_bad_stmt(loc)); return; }
     if local {
         if cst != 0 { nscratch.push(cst); }
-        if has_dtor { note_dtor_cleanup(s); }
+        if has_dtor { push_dtor_cleanup(s, loc); }
     } else if !static_local && !is_extern {
         if cst != 0 { gi_push(cst, prio); }
         if has_dtor { gi_push(atexit_stmt(s, loc), prio); }
@@ -1709,8 +1791,24 @@ fn arr_dtor_fn(t: u32, loc: u32) -> i64 {
     return f;
 }
 
-// Registers the destructor of a local class object (or array of them) as
-// its cleanup.
+// The destructor of a local class object (or array of them) as a cleanup
+// for the rest of its block (after its construction).
+fn push_dtor_cleanup(s: i64, loc: u32) {
+    let t = syms[s].ty;
+    var f: i64 = -1;
+    if is_array(t) {
+        let et = base_elem_t(t);
+        if !is_record(et) || is_opaque(et) || class_dtor(rec_of(et)) < 0 { return; }
+        f = arr_dtor_fn(t, syms[s].loc);
+    } else {
+        if !is_record(t) || is_opaque(t) { return; }
+        let d = class_dtor(rec_of(t));
+        if d < 0 { return; }
+        f = complete_sym(d);
+    }
+    nscratch.push(node(N_XPUSH, XP_CALL, 0, s, 0, f, loc));
+}
+
 fn note_dtor_cleanup(s: i64) {
     let t = syms[s].ty;
     if is_array(t) {
@@ -1732,7 +1830,7 @@ fn note_dtor_cleanup(s: i64) {
 var atexit_fn: i64 = -1;
 var dso_handle: i64 = -1;
 fn atexit_stmt(s: i64, loc: u32) -> u32 {
-    let d = if is_array(syms[s].ty) { arr_dtor_fn(syms[s].ty, loc) } else { class_dtor(rec_of(syms[s].ty)) };
+    let d = if is_array(syms[s].ty) { arr_dtor_fn(syms[s].ty, loc) } else { complete_sym(class_dtor(rec_of(syms[s].ty))) };
     if atexit_fn < 0 {
         let vfp = mk_ptr(fn_type1(t_void, t_voidptr));
         fn_scratch.clear();
@@ -2076,15 +2174,15 @@ fn vtable_slot(r: i64, f: i64) -> i64 {
     return -1;
 }
 
-// The vtable variable of class r (its initializer is built in cg_finish).
+// The vtable variable of class r (its linkage and initializer are decided
+// in cg_finish, when the key function's definition is known).
 fn vtable_sym(r: i64) -> i64 {
     let g = vtable_syms.get(r as u64);
     if g { return g as i64; }
     let first, count = vtable_slots(r);
     if count < 0 { return -1; }
-    let vt = mk_array(t_voidptr, 2 + count);
+    let vt = mk_array(with_q(t_voidptr, Q_CONST), 2 + count);
     let s = csym(SK_VAR, intern("__vtable"), vt, records[r].loc);
-    syms[s].sc = SC_STATIC as! u8;
     syms[s].flags = SF_FILESCOPE | SF_DEFINED;
     cxs[s].flags = CF_IMPLICIT;
     if !mangle_special("_ZTV", records[r].ty << 4) { return -1; }
@@ -2095,10 +2193,12 @@ fn vtable_sym(r: i64) -> i64 {
 }
 
 var typeinfos = dictionary<u64, u32> {};
+var ti_names = dictionary<u64, u32> {};
+var ti_classes: u32[>..] = [];
 var ext_syms = dictionary<u64, u32> {};
 
 // An external variable (array of void *) named `name` (the type_info
-// classes' vtables).
+// classes' vtables, the runtime's typeinfo of fundamental types).
 fn ext_array(name: const u8[:]) -> i64 {
     let id = intern(name);
     let g = ext_syms.get(id as u64);
@@ -2120,79 +2220,157 @@ fn void_addr_of(s: i64, idx: i64, loc: u32) -> u32 {
 
 fn int_as_ptr(v: i64, loc: u32) -> u32 { node(N_ICAST, CK_INT2PTR, t_voidptr, int_node(v, t_long, loc) as i64, 0, 0, loc) }
 
-// The type_info object of class r (_ZTI), with its name (_ZTS).
-recursive fn typeinfo_sym(r: i64) -> i64 {
+// The kind of class r's type_info: 0 __class_type_info, 1 __si_class_type_info
+// (one public non-virtual base at offset 0), 2 __vmi_class_type_info.
+fn ti_kind(r: i64) -> i64 {
+    let cr = crecs[r];
+    if cr.nbases == 0 { return 0; }
+    let b = cbases[cr.bases];
+    if cr.nbases == 1 && b.flags & BF_VIRTUAL == 0 && b.offset == 0 && b.access as i64 == 0 { return 1; }
+    return 2;
+}
+
+// The type_info object of class r (_ZTI), with its name (_ZTS): the
+// symbols now, their linkage and contents in cg_finish (finish_typeinfo).
+fn typeinfo_sym(r: i64) -> i64 {
     let g = typeinfos.get(r as u64);
     if g { return g as i64; }
     let cls = records[r].ty << 4;
     let loc = records[r].loc;
-    // the name: the mangled type
     if !mangle_special("", cls) { return -1; }
+    let name_len = mg.len;
+    let nt = mk_array(t_char | (Q_CONST as! u32), name_len + 1);
+    let ns = csym(SK_VAR, intern("__typeinfo_name"), nt, loc);
+    syms[ns].flags = SF_FILESCOPE | SF_DEFINED;
+    cxs[ns].flags = CF_IMPLICIT;
+    mangle_special("_ZTS", cls);
+    set_label(ns, mg);
+    let k = ti_kind(r);
+    let n = if k == 0 { 2 } else if k == 1 { 3 } else { 3 + 2 * (crecs[r].nbases as i64) };
+    let tt = mk_array(with_q(t_voidptr, Q_CONST), n);
+    let s = csym(SK_VAR, intern("__typeinfo"), tt, loc);
+    syms[s].flags = SF_FILESCOPE | SF_DEFINED;
+    cxs[s].flags = CF_IMPLICIT;
+    mangle_special("_ZTI", cls);
+    set_label(s, mg);
+    typeinfos.insert(r as u64, s as! u32);
+    ti_names.insert(r as u64, ns as! u32);
+    ti_classes.push(r as! u32);
+    return s;
+}
+
+// The linkage and contents of class r's type_info and name.
+fn finish_typeinfo(r: i64) {
+    var s: i64 = -1;
+    var ns: i64 = -1;
+    let g1 = typeinfos.get(r as u64);
+    if g1 { s = g1 as i64; }
+    let g2 = ti_names.get(r as u64);
+    if g2 { ns = g2 as i64; }
+    if s < 0 || ns < 0 { return; }
+    let cls = records[r].ty << 4;
+    let loc = records[r].loc;
+    let dynamic = crecs[r].flags & CR_DYNAMIC != 0;
+    var link = vt_kind(r);
+    if !dynamic && link != 0 { link = 1; }
+    set_data_link(ns, link, false);
+    set_data_link(s, link, true);
+    if link == 3 { return; }
+    // the name: the mangled type
+    mangle_special("", cls);
     let name_len = mg.len;
     let soff = strbytes.len;
     strbytes.append(mg);
     strbytes.push(0);
     let si = strs.len;
     strs.push(StrLit { start: soff as! u32, len: (name_len + 1) as! u32, elem: t_char });
-    let nt = mk_array(t_char | (Q_CONST as! u32), name_len + 1);
-    let ns = csym(SK_VAR, intern("__typeinfo_name"), nt, loc);
-    syms[ns].sc = SC_STATIC as! u8;
-    syms[ns].flags = SF_FILESCOPE | SF_DEFINED;
-    cxs[ns].flags = CF_IMPLICIT;
-    mangle_special("_ZTS", cls);
-    set_label(ns, mg);
-    let sn = node(N_STRING, 0, nt, si, 0, 0, loc);
+    let sn = node(N_STRING, 0, syms[ns].ty, si, 0, 0, loc);
     nodes[sn].flags = NF_LVALUE | NF_STRINIT;
-    cg_extra.push(node(N_DECL, 0, nt, ns, sn as i64, loc as i64, loc));
-    // the bases: none, one public non-virtual at offset 0, or several
+    cg_extra.push(node(N_DECL, 0, syms[ns].ty, ns, sn as i64, loc as i64, loc));
     let cr = crecs[r];
+    let kind = ti_kind(r);
     let mark = nscratch.len;
-    var kind = 0;
-    if cr.nbases == 1 && cbases[cr.bases].flags & BF_VIRTUAL == 0 && cbases[cr.bases].offset == 0 && cbases[cr.bases].access as i64 == 0 { kind = 1; }
-    else if cr.nbases > 0 { kind = 2; }
     let vt = ext_array(if kind == 0 { "_ZTVN10__cxxabiv117__class_type_infoE" } else if kind == 1 { "_ZTVN10__cxxabiv120__si_class_type_infoE" }
                        else { "_ZTVN10__cxxabiv121__vmi_class_type_infoE" });
     nscratch.push(void_addr_of(vt, 2, loc));
     nscratch.push(void_addr_of(ns, 0, loc));
     if kind == 1 {
         let bt = typeinfo_sym(rec_of(cbases[cr.bases].ty));
-        if bt < 0 { nscratch.resize(mark); return -1; }
         nscratch.push(void_addr_of(bt, 0, loc));
     } else if kind == 2 {
-        // flags (u32), base count (u32), then per base: type_info *, offset << 8 | public 2 | virtual 1
-        nscratch.push(int_as_ptr((cr.nbases as i64) << 32, loc));
+        // flags (u32: non-diamond repeat 1, diamond 2), base count (u32), then
+        // per base: type_info *, offset << 8 | public 2 | virtual 1
+        nscratch.push(int_as_ptr(((cr.nbases as i64) << 32) | vmi_flags(r), loc));
         for i in cr.nbases {
             let b = cbases[cr.bases + i];
-            if !is_record(b.ty) || b.flags & BF_VIRTUAL != 0 { nscratch.resize(mark); return -1; }
             let bt = typeinfo_sym(rec_of(b.ty));
-            if bt < 0 { nscratch.resize(mark); return -1; }
             nscratch.push(void_addr_of(bt, 0, loc));
-            nscratch.push(int_as_ptr((b.offset << 8) | (if b.access as i64 == 0 { 2 } else { 0 }), loc));
+            var off = b.offset;
+            if b.flags & BF_VIRTUAL != 0 { off = vbase_offset_offset(r, rec_of(b.ty)); }
+            nscratch.push(int_as_ptr((off << 8) | (if b.access as i64 == 0 { 2 } else { 0 }) | (if b.flags & BF_VIRTUAL != 0 { 1 } else { 0 }), loc));
         }
     }
     let n = nscratch.len - mark;
-    let tt = mk_array(t_voidptr, n);
-    let s = csym(SK_VAR, intern("__typeinfo"), tt, loc);
-    syms[s].sc = SC_STATIC as! u8;
-    syms[s].flags = SF_FILESCOPE | SF_DEFINED;
-    cxs[s].flags = CF_IMPLICIT;
-    mangle_special("_ZTI", cls);
-    set_label(s, mg);
     let start = commit_list(mark);
-    let il = node_v(N_INITLIST, 0, tt, 0, 0, n, loc, start);
-    cg_extra.push(node(N_DECL, 0, tt, s, il as i64, loc as i64, loc));
-    typeinfos.insert(r as u64, s as! u32);
-    return s;
+    let il = node_v(N_INITLIST, 0, syms[s].ty, 0, 0, n, loc, start);
+    cg_extra.push(node(N_DECL, 0, syms[s].ty, s, il as i64, loc as i64, loc));
+}
+
+// The vmi flags of class r (clang's ComputeVMIClassTypeInfoFlags): 1 when
+// a base class is repeated other than as one virtual base (non-diamond
+// repeat), 2 when a virtual base is reached more than once (diamond).
+fn vmi_flags(r: i64) -> i64 {
+    let mark = rec_scratch.len;
+    var f: i64 = 0;
+    let cr = crecs[r];
+    for i in cr.nbases {
+        let b = cbases[cr.bases + i];
+        if is_record(b.ty) { f = f | vmi_flags_base(rec_of(b.ty), b.flags & BF_VIRTUAL != 0, mark); }
+    }
+    rec_scratch.resize(mark);
+    return f;
+}
+var rec_scratch: u32[>..<] = [];
+
+fn vmi_seen(br: i64, tag: u32, mark: i64) -> bool {
+    for j in mark..rec_scratch.len { if rec_scratch[j] == ((br as! u32) | tag) { return true; } }
+    return false;
+}
+
+recursive fn vmi_flags_base(br: i64, virt: bool, mark: i64) -> i64 {
+    var f: i64 = 0;
+    let V: u32 = 0x80000000;
+    if virt {
+        if vmi_seen(br, V, mark) { f = f | 2; }
+        else {
+            rec_scratch.push((br as! u32) | V);
+            if vmi_seen(br, 0, mark) { f = f | 1; }
+        }
+    } else {
+        if vmi_seen(br, 0, mark) { f = f | 1; }
+        else {
+            rec_scratch.push(br as! u32);
+            if vmi_seen(br, V, mark) { f = f | 1; }
+        }
+    }
+    let cr = crecs[br];
+    for i in cr.nbases {
+        let b = cbases[cr.bases + i];
+        if is_record(b.ty) { f = f | vmi_flags_base(rec_of(b.ty), b.flags & BF_VIRTUAL != 0, mark); }
+    }
+    return f;
 }
 
 // The initializer of the vtable of class r.
 fn build_vtable(r: i64) {
     let s = vtable_sym(r);
     let loc = records[r].loc;
+    set_class_data_link(s, r, true, true);
+    if syms[s].sc as i64 == SC_EXTERN { return; }
     let first, count = vtable_slots(r);
     let mark = nscratch.len;
     nscratch.push(node(N_ZEROINIT, 0, t_voidptr, 0, 0, 0, loc));      // offset to top
-    let ti = typeinfo_sym(r);
+    let ti = if opt_rtti { typeinfo_sym(r) } else { -1 };
     if ti < 0 { nscratch.push(int_as_ptr(0, loc)); } else { nscratch.push(void_addr_of(ti, 0, loc)); }
     for i in count {
         var f = vslots[first + i] as i64;
@@ -2202,6 +2380,8 @@ fn build_vtable(r: i64) {
                 cxs[pure_virtual].flags = CF_EXTERN_C;
             }
             f = pure_virtual;
+        } else if cxs[f].flags & CF_DTOR != 0 && cxs[f].flags & CF_DTOR_DELETING == 0 {
+            f = complete_sym(f);
         }
         let fr = icast(n_ref_fn(f, loc), CK_FUNC2PTR, mk_ptr(abi_type(f)));
         nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, fr as i64, 0, 0, loc));
@@ -2211,6 +2391,7 @@ fn build_vtable(r: i64) {
     let il = node_v(N_INITLIST, 0, syms[s].ty, 0, 0, n, loc, start);
     cg_extra.push(node(N_DECL, 0, syms[s].ty, s, il as i64, loc as i64, loc));
 }
+
 var pure_virtual: i64 = -1;
 
 fn fn_type0(ret: u32) -> u32 {
@@ -2258,12 +2439,12 @@ recursive fn synth_body(f: i64, kind: i64) {
             let vs = vptr_store(r, th, loc);
             if vs == 0 { ok = false; } else { stmt_buf.push(vs); }
         }
-        if !dtor_epilogue(r, th, loc) { ok = false; }
+        if !dtor_cleanups(r, th, loc) { ok = false; }
     } else {
         // the deleting destructor
         let d = class_dtor(r);
         let am = nscratch.len;
-        let c = lower_call(d, n_deref(rv(n_var(th, loc)), loc), am, loc, false);
+        let c = lower_call(d, n_deref(rv(n_var(th, loc)), loc), am, loc, false);   // (the complete variant)
         stmt_buf.push(n_expr_stmt(c));
         let df = global_alloc_fn(OP_DELETE);
         if df < 0 { ok = false; }
@@ -2285,9 +2466,16 @@ recursive fn synth_body(f: i64, kind: i64) {
 
 // Called after parsing in code generation mode; false on errors.
 recursive fn cg_finish(main_file: const u8[:]) -> bool {
-    // implicit members and vtables (each may ask for more)
+    // the vtables of the classes whose key function is defined here
+    for r in crecs.len {
+        if crecs[r].flags & CR_DYNAMIC == 0 || crecs[r].flags & (CR_PATTERN | CR_LAYOUT) != CR_LAYOUT { continue; }
+        if records[r].flags & RF_COMPLETE == 0 { continue; }
+        if vt_kind(r) == 2 { vtable_sym(r); }
+    }
+    // implicit members, vtables and typeinfo (each may ask for more)
     var vi = 0;
     var pi = 0;
+    var ti = 0;
     loop {
         var progress = false;
         while vi < vtables.len { build_vtable(vtables[vi] as i64); vi++; progress = true; }
@@ -2296,6 +2484,7 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
             pi += 2;
             progress = true;
         }
+        while ti < ti_classes.len { finish_typeinfo(ti_classes[ti] as i64); ti++; progress = true; }
         if !progress { break; }
     }
     // the dynamic initialization of globals: a function per init_priority
@@ -2318,6 +2507,7 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
     tu_node = node_v(N_TU, 0, 0, 0, 0, count, 0, start);
     // names and linkage
     name_syms();
+    note_nothrow_all();
     // what is emitted: checked and rewritten for C's lowering
     if !check_reachable() { return false; }
     // types: references become pointers, member functions take `this`
@@ -2355,43 +2545,6 @@ fn gi_function(main_file: const u8[:], prio: i64) {
     cg_extra.push(n);
 }
 
-// Mangled names as asm labels; inline functions internal.
-fn name_syms() {
-    cx_grow();
-    for s in 1..syms.len {
-        let k = syms[s].kind as i64;
-        if k != SK_FUNC && k != SK_VAR { continue; }
-        let fl = cxs[s].flags;
-        if fl & (CF_PATTERN | CF_TEMPLATE | CF_TPARAM) != 0 { continue; }
-        if syms[s].attr != 0 && sym_attrs[syms[s].attr].asm_len != 0 { continue; }
-        if k == SK_VAR {
-            if syms[s].flags & SF_COMPLIT != 0 || syms[s].name == 0 { continue; }
-            if fl & CF_MEMBER != 0 { syms[s].sc = 0; syms[s].flags = syms[s].flags | SF_FILESCOPE; }
-            if syms[s].flags & SF_FILESCOPE == 0 { continue; }
-            // a static local: C's lowering names it
-            if syms[s].scope > 0 && fl & CF_MEMBER == 0 { continue; }
-        }
-        let internal = internal_linkage(s) || (cxs[s].dscope > 0 && in_anon_ns(cxs[s].dscope as i64));
-        if mangle_sym(s) {
-            if syms[s].name == 0 || !same_text(mg, ident_text(syms[s].name as i64)) { set_label(s, mg); }
-        } else {
-            // a name D1 cannot mangle (local classes ...): an internal one
-            var nm: u8[>..] = [];
-            format(nm, "_ZL__goosecc_", s);
-            set_label(s, nm);
-            syms[s].sc = SC_STATIC as! u8;
-        }
-        if k == SK_FUNC {
-            let inline = fl & (CF_DEFINED_IN_CLASS | CF_IMPLICIT | CF_CONSTEXPR) != 0 || syms[s].flags & SF_INLINE != 0;
-            if fl & CF_MEMBER != 0 { syms[s].sc = if inline { SC_STATIC as! u8 } else { 0 }; }
-            else if inline && fl & CF_EXTERN_C == 0 { syms[s].sc = SC_STATIC as! u8; }
-        }
-        if internal && syms[s].sc as i64 != SC_EXTERN { syms[s].sc = SC_STATIC as! u8; }
-    }
-}
-
-fn same_text(a: const u8[:], b: const u8[:]) -> bool { a == b }
-
 // The types of symbols for C's lowering.
 fn lower_sym_types() {
     for s in 1..syms.len {
@@ -2416,8 +2569,12 @@ var wk: u32[>..<] = [];
 var var_decls = dictionary<u64, u32> {};   // file-scope variable -> its N_DECL
 var n_bad: i64 = 0;
 
-fn reach_fn(f: i64) {
-    if syms[f].def < 0 { return; }
+recursive fn reach_fn(f: i64) {
+    if syms[f].def < 0 {
+        let b = complete_base.get(f as u64);
+        if b { reach_fn(b as i64); }
+        return;
+    }
     let d = syms[f].def as u32;
     if nodes[d].kind as i64 != N_FUNCDEF { return; }
     wk.push(d);
@@ -2589,6 +2746,14 @@ fn visit(n: u32) {
     } else if (k == N_ICAST || k == N_CAST) && nd.op as i64 >= CK_DERIVED2BASE {
         bad(n);
         return;
+    } else if k == N_XTEMP {
+        if nd.c != 0 { reach_fn(nd.c as i64); }
+        let s = nd.b as i64;
+        if !c_type_ok(lower_ty(syms[s].ty)) { bad(n); return; }
+    } else if k == N_XPUSH {
+        if (nd.op as i64) & XP_CALL != 0 { reach_fn(nd.c as i64); }
+    } else if k == N_XCATCH {
+        if nd.c != 0 { reach_var(nd.c as i64); }
     } else if k == N_DECL {
         let s = nd.a as i64;
         if syms[s].attr != 0 && sym_attrs[syms[s].attr].cleanup >= 0 { reach_fn(sym_attrs[syms[s].attr].cleanup as i64); }
@@ -2646,6 +2811,10 @@ fn push_kids(n: u32) {
     if k == N_INITLIST { kids_list(nd.v, nd.c); kid(nd.b); return; }
     if k == N_BUILTIN || k == N_COMPOUND || k == N_ASM { kids_list(nd.v, nd.c); return; }
     if k == N_DECL || k == N_LABEL || k == N_ASMOP { kid(nd.b); return; }
+    if k == N_XTEMP { kid(nd.a); return; }
+    if k == N_XPUSH { if (nd.op as i64) & XP_STMT != 0 { kid(nd.a); } return; }
+    if k == N_XTRY { kid(nd.a); kids_list(nd.v, nd.c); return; }
+    if k == N_XCATCH { kid(nd.b); kid(nd.v as! u32); return; }
 }
 
 // Does statement n contain a return (not in a nested statement expression's
