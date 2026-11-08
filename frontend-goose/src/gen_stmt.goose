@@ -15,6 +15,8 @@ import .ast;
 import .sema;
 import .parse;
 import .dtype;
+import .cx_gen_defs;
+import .cx_eh;
 
 var f_global: u32 = 0;
 // The targets of break and continue: the block, and the cleanup depth there.
@@ -22,8 +24,9 @@ struct Target { blk: u32, depth: u32 }
 var brk_to: Target[>..<] = [];
 var cont_to: Target[>..<] = [];
 
-// Cleanups: kind 1 = stackrestore(saved), kind 2 = call fn(&var)
-struct Cleanup { kind: u8, val: u32, sym: i64, fsym: i64 }
+// Cleanups: kind 1 = stackrestore(saved), kind 2 = call fn(&var); C++
+// adds kinds 3.. and flags (cx_eh.goose); ent: its EH entry (-1 none)
+struct Cleanup { kind: u8, val: u32, sym: i64, fsym: i64, flags: u8 = 0, node: u32 = 0, ent: i32 = -1 }
 var cleanups: Cleanup[>..<] = [];
 var cleanup_marks: u32[>..<] = [];
 
@@ -62,6 +65,7 @@ fn pop_cleanup_scope(emit_them: bool) {
     let mark = cleanup_marks.pop() as i64;
     if emit_them && has_insert() { run_cleanups(mark); }
     cleanups.resize(mark);
+    if opt_cxx { eh_retop(); }
 }
 
 // Emits the cleanups above depth `mark`, innermost first.
@@ -69,7 +73,9 @@ fn run_cleanups(mark: i64) {
     var i = cleanups.len - 1;
     while i >= mark {
         let c = cleanups[i];
-        if c.kind == 1 {
+        if opt_cxx {
+            emit_cleanup(c, eh_below(i));
+        } else if c.kind == 1 {
             emit(GIR_STACKRESTORE, GIR_T_VOID, 0, 0, 0, c.val, 0, 0);
         } else {
             let fg = func_global(c.fsym);
@@ -88,7 +94,9 @@ fn run_call_cleanups() {
     var i = cleanups.len - 1;
     while i >= 0 {
         let c = cleanups[i];
-        if c.kind == 2 {
+        if opt_cxx {
+            if c.kind != 1 { emit_cleanup(c, eh_below(i)); }
+        } else if c.kind == 2 {
             let fg = func_global(c.fsym);
             let addr = var_addr(c.sym);
             let s = m_opnds.len as! u32;
@@ -156,7 +164,7 @@ var fwd_cl: Cleanup[>..<] = [];
 
 fn fwd_goto(l: i64) {
     var any = false;
-    for c in cleanups { if c.kind == 2 { any = true; } }
+    for c in cleanups { if c.kind == 2 || (c.kind >= 3 && c.kind < 5) { any = true; } }
     if !any { br(label_block(l)); return; }
     let t = new_block();
     fwd_gotos.push(FwdGoto { blk: t, label: l as! u32, first: fwd_cl.len as! u32, count: cleanups.len as! u32 });
@@ -176,7 +184,12 @@ fn fwd_goto_blocks(l: i64, b: u32) {
         var i = (fg.first + fg.count) as i64 - 1;
         while i >= fg.first as i64 + depth {
             let c = fwd_cl[i];
-            if c.kind == 1 {
+            if opt_cxx {
+                var below: i64 = -1;
+                var j = i - 1;
+                while j >= fg.first as i64 && below < 0 { if fwd_cl[j].ent >= 0 { below = fwd_cl[j].ent as i64; } j--; }
+                emit_cleanup(c, below);
+            } else if c.kind == 1 {
                 emit(GIR_STACKRESTORE, GIR_T_VOID, 0, 0, 0, c.val, 0, 0);
             } else {
                 let fgl = func_global(c.fsym);
@@ -259,6 +272,13 @@ recursive fn gen_stmt1(n: u32) {
     }
     if k == N_EXPR {
         if !has_insert() && !contains_label(n) { return; }
+        if opt_cxx {
+            // a full-expression: its temporaries die at its end
+            push_cleanup_scope();
+            ex_ignore(nd.a);
+            pop_stmt_scope();
+            return;
+        }
         ex_ignore(nd.a);
         return;
     }
@@ -289,9 +309,11 @@ recursive fn gen_stmt1(n: u32) {
     }
     if k == N_GOTO {
         // a jump back to before a VLA (or a cleanup variable) leaves its scope
-        let d = fmap.get(fk(FM_LABEL, nd.a));
-        if d && (d as i64) < cleanups.len { run_cleanups(d as i64); }
-        if !d && opt_cxx && cleanups.len > 0 { fwd_goto(nd.a as i64); return; }
+        let dg = fmap.get(fk(FM_LABEL, nd.a));
+        var d: i64 = -1;
+        if dg { d = dg as i64; }
+        if d >= 0 && d < cleanups.len { run_cleanups(d); }
+        if d < 0 && opt_cxx && cleanups.len > 0 { fwd_goto(nd.a as i64); return; }
         br(label_block(nd.a as i64));
         return;
     }
@@ -319,7 +341,18 @@ recursive fn gen_stmt1(n: u32) {
         br(ct.blk);
         return;
     }
-    if k == N_RETURN { gen_return(n); return; }
+    if k == N_RETURN {
+        if opt_cxx {
+            push_cleanup_scope();
+            gen_return(n);
+            pop_stmt_scope();
+            return;
+        }
+        gen_return(n);
+        return;
+    }
+    if k == N_XPUSH { gen_xpush(n); return; }
+    if k == N_XTRY { gen_xtry(n); return; }
     if k == N_ASM { gen_asm(n); return; }
     if k == N_FUNCDEF { return; }
     bug("gen_stmt", n);
@@ -368,7 +401,7 @@ recursive fn gen_if1(n: u32) {
     let lc = dbg_loopcond;
     dbg_loopcond = false;
     if fk { dbg_dead++; }
-    ex_cond(nd.a, tb, eb);
+    cond_br(nd.a, tb, eb);
     if fk { dbg_dead--; }
     dbg_loopcond = lc;
     if dbg_on() { pop_loc(saved); }
@@ -423,7 +456,7 @@ recursive fn gen_while(n: u32) {
     start_block(cond);
     let lc = dbg_loopcond;
     dbg_loopcond = true;
-    ex_cond(nd.a, body, end);
+    cond_br(nd.a, body, end);
     dbg_loopcond = lc;
     start_block(body);
     push_loop(end, cond);
@@ -446,7 +479,7 @@ recursive fn gen_do(n: u32) {
     start_block(cond);
     let lc = dbg_loopcond;
     dbg_loopcond = true;
-    ex_cond(nd.b, body, end);
+    cond_br(nd.b, body, end);
     dbg_loopcond = lc;
     start_block(end);
 }
@@ -474,7 +507,7 @@ recursive fn gen_for(n: u32) {
     set_loc(nd.loc);
     let lc = dbg_loopcond;
     dbg_loopcond = true;
-    if nd.b != 0 { ex_cond(nd.b, body, end); } else { br(body); }
+    if nd.b != 0 { cond_br(nd.b, body, end); } else { br(body); }
     dbg_loopcond = lc;
     start_block(body);
     push_loop(end, if nd.c != 0 { inc } else { cond });
@@ -483,7 +516,7 @@ recursive fn gen_for(n: u32) {
     start_block(inc);
     if nd.c != 0 {
         set_loc(begin_loc(nd.c));
-        ex_ignore(nd.c);
+        if opt_cxx { push_cleanup_scope(); ex_ignore(nd.c); pop_stmt_scope(); } else { ex_ignore(nd.c); }
     }
     if dbg { dbg_scope_leave(); }
     set_loc(nd.loc);
@@ -504,7 +537,8 @@ recursive fn gen_switch(n: u32) {
         dbg_dead++;
         sw_ft = true;
     }
-    let v = ex_val(nd.a);
+    var v: u32 = 0;
+    if opt_cxx { push_cleanup_scope(); v = ex_val(nd.a); pop_stmt_scope(); } else { v = ex_val(nd.a); }
     let t = vtype(v);
     let end = new_block();
     var dflt = end;
@@ -835,7 +869,13 @@ recursive fn gen_local_decl(n: u32) {
         // it can emit (and retains their types), no enumerator
         if quiet { dbg_init_casts(nd.b); }
         if quiet { dbg_no_enum = true; }
-        init_object(p, q, nd.b);
+        if opt_cxx {
+            push_cleanup_scope();
+            init_object(p, q, nd.b);
+            pop_stmt_scope();
+        } else {
+            init_object(p, q, nd.b);
+        }
         if quiet { dbg_no_enum = false; }
         if dbg_on() { pop_loc(saved); }
         if quals(q) & Q_CONST != 0 && is_pointer(q) {
@@ -845,7 +885,8 @@ recursive fn gen_local_decl(n: u32) {
     }
     let a = sy.attr;
     if a != 0 && sym_attrs[a].cleanup >= 0 {
-        cleanups.push(Cleanup { kind: 2, val: 0, sym: s, fsym: sym_attrs[a].cleanup as i64 });
+        if opt_cxx { push_cl(Cleanup { kind: 2, val: 0, sym: s, fsym: sym_attrs[a].cleanup as i64 }); }
+        else { cleanups.push(Cleanup { kind: 2, val: 0, sym: s, fsym: sym_attrs[a].cleanup as i64 }); }
     }
 }
 
@@ -1342,6 +1383,7 @@ fn gen_function0(fd: u32) {
     cleanup_marks.clear();
     fwd_gotos.clear();
     fwd_cl.clear();
+    if opt_cxx { eh_fn_begin(); }
     if f_ret.kind == AK_SRET || f_ret.kind == AK_IGNORE { nrvo_mark(fd, f_ret_q); } else if f_nrvo.count > 0 { f_nrvo.clear(); }
     dbg_function_begin(s, nd.loc);
     dbg_fn_begin();
@@ -1441,6 +1483,8 @@ fn gen_function0(fd: u32) {
     // the prologue has no location; the body starts at its '{'
     set_loc(nodes[nd.b].loc);
     push_cleanup_scope();
+    // D3: a noexcept function's body is a terminate scope
+    if opt_cxx && eh_on() && cxl_has(s, CXL_NOEXCEPT) { push_cl(Cleanup { kind: CL_TERM, val: 0, sym: -1, fsym: -1 }); }
     gen_stmt(nd.b);
     pop_cleanup_scope(true);
     if has_insert() {
@@ -1453,6 +1497,7 @@ fn gen_function0(fd: u32) {
         else { emit_term(GIR_RET, c_zero(ret_t), 0, 0); }
     }
     finish_igoto();
+    if opt_cxx { eh_fn_end(); }
     var flags = f_flags;
     if fty.flags & TF_VARIADIC != 0 { flags = flags | FN_VARARG; }
     if is_internal_sym(s) || fn_local_inline(s) { flags = flags | FN_INTERNAL; }
@@ -1472,6 +1517,7 @@ fn gen_function0(fd: u32) {
         return;
     }
     let fi = fn_finish(g, flags, f_nargs, f_args_run, f_ret_ty, dbg);
+    if opt_cxx { eh_fn_table(fi); }
     dbg_fn_end(s, fi);
     f_sym = -1;
 }

@@ -50,6 +50,8 @@ let N_XEXN = 104;
 // ty) in a function whose result is a class passed by invisible reference.
 let N_XRETSLOT = 105;
 
+var n_xtemps: i64 = 0;  // N_XTEMP nodes with a destructor made so far (the lowering looks for them in conditions only then)
+
 // ---------------------------------------------------------------------------
 // The C++ linkage of symbols, for the lowering (cxl[s], grown with syms).
 

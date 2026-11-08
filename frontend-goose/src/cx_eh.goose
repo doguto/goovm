@@ -164,12 +164,13 @@ fn cleanup_code(c: Cleanup, below: i64) {
     var skip = NONE;
     if c.flags & CLF_COND != 0 {
         // a conditional temporary: if (flag) { flag = false; destroy }
-        let v = ins_load(GIR_T_I1, c.val, false);
+        let b = ins_load(GIR_T_I8, c.val, false);
+        let v = emit(GIR_ICMP, GIR_T_I1, GIR_NE, 0, GIR_T_I8, b, c_i8(0), 0);
         let d = new_block();
         skip = new_block();
         condbr(v, d, skip);
         start_block(d);
-        ins_store(GIR_T_I1, c_false(), c.val, false);
+        ins_store(GIR_T_I8, c_i8(0), c.val, false);
     }
     if c.kind == 2 {
         let fg = func_global(c.fsym);
@@ -232,7 +233,11 @@ fn eh_lpad() -> u32 {
         } else if E.kind == EK_TERM {
             catch_all = true;
         } else {
-            eh_ents[x].used = 1;
+            if E.used == 0 {
+                // the handlers are reachable: their blocks
+                eh_ents[x].used = 1;
+                for h in E.nh { eh_hs[E.h0 + h].blk = new_block(); }
+            }
             for h in E.nh {
                 let ti = eh_hs[E.h0 + h].ti;
                 if ti < 0 { catch_all = true; break; }
@@ -398,12 +403,40 @@ fn set_comdat(g: u32, c: u32) {
     m_gcomdat[g] = c;
 }
 
-// The comdats of the C++ symbols' globals (at the end of the unit).
+// The aliases of C++ symbols (a complete-object constructor or destructor
+// that is its base-object variant): emitted with their target.
+fn cx_aliases() {
+    ensure_glob_tables();
+    ensure_sym_tables();
+    for s in cxl.len {
+        let t = cxl[s].alias;
+        if t < 0 { continue; }
+        let tg = sym_gen[t].glob;
+        if tg == NONE || glob_gen[tg].state != 2 || m_globals[tg].flags & GF_DEFINED == 0 { continue; }
+        let g = global_by_name(link_name(s), true);
+        ensure_glob_tables();
+        m_globals[g].kind = G_ALIAS;
+        m_globals[g].func = tg;
+        m_globals[g].aux = 0;
+        m_globals[g].flags = (m_globals[tg].flags & (GF_WEAK | GF_HIDDEN | GF_INTERNAL | GF_LOCALREF)) | GF_DEFINED;
+        m_globals[g].align = m_globals[tg].align;
+        glob_gen[g].state = 2;
+    }
+}
+
+// The comdats of the C++ symbols' globals (at the end of the unit), and
+// clang's .data.rel.ro for vtables and typeinfo outside comdats.
 fn cx_comdats() {
     ensure_glob_tables();
     for g in m_globals.len {
         let s = glob_gen[g].sym;
         if s < 0 || s >= cxl.len { continue; }
+        if (cxl[s].flags as i64) & CXL_RELRO != 0 && m_globals[g].flags & GF_DEFINED != 0 && m_globals[g].kind == G_VAR {
+            m_globals[g].flags = m_globals[g].flags | GF_CONST;
+            if (cxl[s].flags as i64) & CXL_COMDAT == 0 && m_globals[g].flags & GF_RELOCS != 0 {
+                m_globals[g].section = get_section(".data.rel.ro", SF_WRITE, 1);
+            }
+        }
         if (cxl[s].flags as i64) & CXL_COMDAT == 0 { continue; }
         if m_globals[g].flags & GF_DEFINED == 0 || m_globals[g].kind == G_ALIAS { continue; }
         let key = if cxl[s].comdat != 0 { cxl[s].comdat } else { link_name(s) };
@@ -438,4 +471,159 @@ fn emit_terminate_fn() {
     emit_term(GIR_UNREACHABLE, 0, 0, 0);
     fn_finish(g, 4 << FN_ALIGN_SHIFT, 1, run, GIR_T_VOID, 0);
     set_comdat(g, comdat_named("__clang_call_terminate", g));
+}
+
+// ------------------------------------------------------------ statements
+
+// N_XPUSH: a cleanup for the rest of the enclosing block.
+fn gen_xpush(n: u32) {
+    let nd = nodes[n];
+    let op = nd.op as i64;
+    var fl: u8 = 0;
+    if op & XP_EHONLY != 0 {
+        if !eh_on() { return; }
+        fl = CLF_EHONLY as! u8;
+    }
+    if op & XP_TERMINATE != 0 {
+        if eh_on() { push_cl(Cleanup { kind: CL_TERM, val: 0, sym: -1, fsym: -1 }); }
+        return;
+    }
+    if op & XP_CALL != 0 {
+        push_cl(Cleanup { kind: 2, val: 0, sym: nd.a as i64, fsym: nd.c as i64, flags: fl });
+    } else {
+        push_cl(Cleanup { kind: CL_STMT, val: 0, sym: -1, fsym: -1, flags: fl, node: nd.a });
+    }
+}
+
+// try { body } handlers.
+recursive fn gen_xtry(n: u32) {
+    let nd = nodes[n];
+    if !eh_on() { gen_stmt(nd.a); return; }
+    let h0 = eh_hs.len;
+    for i in nd.c {
+        let h = nlist[nd.v + i];
+        let ti = if nodes[h].c != 0 { nodes[h].c as i64 } else { -1 };
+        eh_hs.push(EhHandler { blk: NONE, ti: ti });
+    }
+    push_cleanup_scope();
+    push_cl(Cleanup { kind: CL_TRY, val: 0, sym: -1, fsym: -1, node: n });
+    let e = eh_top;
+    eh_ents[e].h0 = h0 as! u32;
+    eh_ents[e].nh = nd.c;
+    gen_stmt(nd.a);
+    pop_cleanup_scope(true);
+    if eh_ents[e].used == 0 { return; }
+    let cont = new_block();
+    if has_insert() { br(cont); }
+    for i in nd.c {
+        start_block(eh_hs[h0 + i].blk);
+        gen_handler(nlist[nd.v + i]);
+        if has_insert() { br(cont); }
+    }
+    start_block(cont);
+}
+
+var cur_xexn: u32 = NONE;       // the slot of the enclosing handler's adjusted exception pointer
+
+recursive fn gen_handler(h: u32) {
+    let hd = nodes[h];
+    set_loc(hd.loc);
+    let saved = cur_xexn;
+    cur_xexn = alloca(8, 8);
+    push_cleanup_scope();
+    let exn = ins_load(GIR_T_PTR, exn_slot(), false);
+    let init = hd.v as! u32;
+    if (hd.op as i64) & XC_COPY != 0 {
+        // a class copied by its constructor (in a terminate scope), then begin_catch
+        let p = libcall1("__cxa_get_exception_ptr", GIR_T_PTR, exn);
+        ins_store(GIR_T_PTR, p, cur_xexn, false);
+        push_cleanup_scope();
+        push_cl(Cleanup { kind: CL_TERM, val: 0, sym: -1, fsym: -1 });
+        if init != 0 { gen_stmt(init); }
+        pop_cleanup_scope(true);
+        libcall1("__cxa_begin_catch", GIR_T_PTR, exn);
+        push_cl(Cleanup { kind: CL_ENDCATCH, val: 0, sym: -1, fsym: -1 });
+    } else {
+        let p = libcall1("__cxa_begin_catch", GIR_T_PTR, exn);
+        ins_store(GIR_T_PTR, p, cur_xexn, false);
+        push_cl(Cleanup { kind: CL_ENDCATCH, val: 0, sym: -1, fsym: -1 });
+        if init != 0 { gen_stmt(init); }
+    }
+    gen_stmt(hd.b);
+    if (hd.op as i64) & XC_RETHROW != 0 && has_insert() {
+        // the end of a constructor's or destructor's function-try-block handler rethrows
+        let s = m_opnds.len as! u32;
+        call_eh(GIR_T_VOID, IF_NORETURN, gref(libfn("__cxa_rethrow")), s, 0, true);
+        emit_term(GIR_UNREACHABLE, 0, 0, 0);
+    }
+    pop_cleanup_scope(true);
+    cur_xexn = saved;
+}
+
+// N_XEXN: the handler's adjusted exception pointer.
+fn ex_xexn() -> u32 {
+    if cur_xexn == NONE { return c_null(); }
+    return ins_load(GIR_T_PTR, cur_xexn, false);
+}
+
+// N_XTEMP: the temporary's address (constructed, its destructor pushed).
+recursive fn ex_xtemp(n: u32) -> u32 {
+    let nd = nodes[n];
+    let s = nd.b as i64;
+    ensure_sym_tables();
+    let p = alloca(type_size(nd.ty), type_align(nd.ty));
+    sym_gen[s].addr = p;
+    var flag = NONE;
+    if nd.c != 0 && (nd.op as i64) & XT_COND != 0 {
+        flag = alloca(1, 1);
+        entry_store(GIR_T_I8, c_i8(0), flag);
+    }
+    if nd.a != 0 { ex_ignore(nd.a); }
+    if nd.c != 0 && has_insert() {
+        var fl: u8 = 0;
+        if (nd.op as i64) & XT_EXTENDED != 0 { fl = fl | (CLF_EXT as! u8); }
+        if flag != NONE {
+            fl = fl | (CLF_COND as! u8);
+            ins_store(GIR_T_I8, c_i8(1), flag, false);
+        }
+        push_cl(Cleanup { kind: 2, val: flag, sym: s, fsym: nd.c as i64, flags: fl });
+    }
+    return p;
+}
+
+// ------------------------------------------------------------ conditions
+
+// Branches on condition e; a condition with temporaries is evaluated, its
+// temporaries destroyed, then branched on.
+recursive fn cond_br(e: u32, t: u32, f: u32) {
+    if opt_cxx && n_xtemps > 0 && xt_in(e) {
+        push_cleanup_scope();
+        let v = ex_bool(e);
+        pop_stmt_scope();
+        if has_insert() { condbr(v, t, f); }
+        return;
+    }
+    ex_cond(e, t, f);
+}
+
+// Does expression n contain a temporary with a destructor?
+recursive fn xt_in(n: u32) -> bool {
+    if n == 0 { return false; }
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_XTEMP { return nd.c != 0 || xt_in(nd.a); }
+    if k == N_UNARY || k == N_CAST || k == N_ICAST || k == N_MEMBER || k == N_COMPLIT || k == N_VAARG || k == N_SWIZZLE { return xt_in(nd.a); }
+    if k == N_BINARY || k == N_ASSIGN || k == N_INDEX { return xt_in(nd.a) || xt_in(nd.b); }
+    if k == N_COND { return xt_in(nd.a) || xt_in(nd.b) || xt_in(nd.c); }
+    if k == N_CALL {
+        if xt_in(nd.a) { return true; }
+        for i in nd.c { if xt_in(nlist[nd.v + i]) { return true; } }
+        return false;
+    }
+    if k == N_INITLIST || k == N_BUILTIN {
+        for i in nd.c { if xt_in(nlist[nd.v + i]) { return true; } }
+        return false;
+    }
+    if k == N_STMTEXPR { return true; }
+    return false;
 }

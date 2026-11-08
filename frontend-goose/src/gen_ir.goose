@@ -368,6 +368,12 @@ fn alloca(size: i64, align: i64) -> u32 {
     return ATAG + (k as! u32);
 }
 
+// D3: a store at the top of the entry block, among the allocas (stores
+// constant v of type t to alloca p; the flags of conditional cleanups).
+fn entry_store(t: u32, v: u32, p: u32) {
+    f_allocas.push(Inst { op: GIR_STORE, sub: 0, flags: 0, ty: GIR_T_VOID, aux: t as! u16, a: v, b: p, c: 0, dbg: 0 });
+}
+
 // Grows m_data by n zero bytes (M, the back-end's view, forbids resize).
 let ZERO_PAGE: const u8[4096] = [0; 4096];
 fn data_grow(n: i64) {
@@ -431,7 +437,16 @@ fn fn_finish(g: u32, flags: u32, nargs: u32, args: u32, ret_ty: u32, dbg: u32) -
     let na = f_allocas.len as! u32;
     for id, k in f_border { f_blocks[id].pos = k as! u32; }
     prefault_insts(m_insts, (f_allocas.len + f_insts.len) * 24);
-    for I in f_allocas { m_insts.push(I); }
+    for I in f_allocas {
+        if I.op == GIR_STORE {
+            // D3: an entry-block store (the flag of a conditional C++ cleanup)
+            var J = I;
+            J.b = remap(I.b, first, na);
+            m_insts.push(J);
+        } else {
+            m_insts.push(I);
+        }
+    }
     for I in f_insts {
         var J = I;
         let m: u32 = if I.op < 83 { OPM[I.op] } else { 0 };
