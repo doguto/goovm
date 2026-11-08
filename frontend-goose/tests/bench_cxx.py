@@ -33,8 +33,10 @@ def best(cmd, n, env):
 
 
 def program(path):
-    p = path.split("/CTMark/")[-1]
-    return p.split("/")[0]
+    for name in ("7zip", "Bullet", "kimwitu++", "tramp3d-v4"):
+        if "/" + name + "/" in path or path.endswith("/" + name + ".cpp"):
+            return name
+    return os.path.basename(os.path.dirname(path))
 
 
 def main():
@@ -44,8 +46,11 @@ def main():
     ap.add_argument("-n", type=int, default=3)
     ap.add_argument("--md", default="")
     ap.add_argument("--json", default="")
+    ap.add_argument("--limit", type=int, default=0, help="only the first N files (a quick try)")
     args = ap.parse_args()
     files = list(corpus_mod.corpus(["cxx-ctmark"]))
+    if args.limit:
+        files = files[:args.limit]
     cache = tempfile.mkdtemp(prefix="goosecc-bench-cxx-")
     env = dict(os.environ)
     envc = dict(os.environ, GOOSECC_CACHE=cache)
