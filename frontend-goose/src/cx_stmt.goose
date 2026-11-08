@@ -95,6 +95,17 @@ recursive fn declarator_follows() -> bool {
         var ok = true;
         // a parenthesized declarator: ptr-ops, then a name or a nested group
         while at(TK_STAR) || at(TK_AMP) || at(TK_AMPAMP) || at_kw(KW_CONST) || at_kw(KW_VOLATILE) { adv(); }
+        // a member pointer declarator: ( C :: * name ), ( N :: C :: * name )
+        if at(TK_IDENT) && tk_n(1) == TK_COLONCOLON {
+            let sv2 = save();
+            while at(TK_IDENT) && tk_n(1) == TK_COLONCOLON { adv(); adv(); }
+            if at(TK_STAR) {
+                adv();
+                while at_kw(KW_CONST) || at_kw(KW_VOLATILE) { adv(); }
+                if at(TK_IDENT) && tk_n(1) == TK_R_PAREN { restore(sv); return true; }
+            }
+            restore(sv2);
+        }
         if at(TK_IDENT) && tk_n(1) != TK_COLONCOLON {
             adv();
             while at(TK_L_SQUARE) { skip_group(); }
@@ -416,6 +427,7 @@ recursive fn return_convert(x: u32, loc: u32) -> u32 {
     let rt = ret_type;
     if cg_on && rt != 0 && !is_opaque(rt) && !is_void(rt) {
         if is_ref(rt) || is_record(rt) || nodes[x].kind as i64 == N_INITBRACE { return cg_return(x, rt, loc); }
+        if kind_of(rt) == TY_MEMPTR { return conv_value(x, unqual(rt), loc); }
         if !is_opq(x) && is_record(nodes[x].ty) { return conv_value(x, unqual(rt), loc); }
         if is_pointer(rt) && !is_opq(x) {
             let c = cg_ptr_conv(rv(x), unqual(rt), loc);

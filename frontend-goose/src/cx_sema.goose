@@ -41,6 +41,7 @@ recursive fn cish(t: u32) -> bool {
         return cish(tbase(t));
     }
     if k == TY_FUNC { return true; }
+    if k == TY_MEMPTR { return cg_on; }     // code generation: copied, stored and initialized as C values
     return (k >= TY_VOID && k <= TY_COMPLEX) || k == TY_ENUM || k == TY_VECTOR || k == TY_EXTVECTOR;
 }
 fn cish_ptr(t: u32) -> bool {
@@ -58,6 +59,8 @@ recursive fn mk_binop(op_cx: i64, op_c: i64, l0: u32, r0: u32, loc: u32) -> u32 
     var l = l0;
     var r = r0;
     if is_opq(l) || is_opq(r) { return dep_node(t_unknown, loc); }
+    // (.* is the only binary operator without an OP_ code: C's bin_op maps it to B_REM)
+    if cg_on && (op_cx == OP_ARROWSTAR || op_cx == 0) { return cg_memptr_access(l, r, op_cx == OP_ARROWSTAR, loc); }
     if op_cx == OP_ARROWSTAR || op_cx == 0 && op_c == 0 { return dep_node(t_unknown, loc); }
     let tl = nodes[l].ty;
     let tr = nodes[r].ty;
@@ -68,6 +71,7 @@ recursive fn mk_binop(op_cx: i64, op_c: i64, l0: u32, r0: u32, loc: u32) -> u32 
         return dep_node(t_unknown, loc);
     }
     if kind_of(tl) == TY_NULLPTR && kind_of(tr) == TY_NULLPTR { return dep_node(t_bool, loc); }
+    if kind_of(tl) == TY_MEMPTR || kind_of(tr) == TY_MEMPTR { return dep_node(t_unknown, loc); }
     if kind_of(tl) == TY_NULLPTR && is_pointer(nonref_decay(tr)) { l = icast(l, CK_NULL2PTR, nonref_decay(tr)); }
     if kind_of(tr) == TY_NULLPTR && is_pointer(nonref_decay(tl)) { r = icast(r, CK_NULL2PTR, nonref_decay(tl)); }
     if !cish_node(l) || !cish_node(r) { return dep_node(t_unknown, loc); }
@@ -106,6 +110,7 @@ recursive fn to_bool(e: u32) -> u32 {
     if is_real_float(t) { return icast(r, CK_FLOAT2BOOL, t_bool); }
     if is_pointer(t) { return icast(r, CK_PTR2BOOL, t_bool); }
     if kind_of(t) == TY_NULLPTR { return int_node(0, t_bool, nodes[e].loc); }
+    if cg_on && kind_of(t) == TY_MEMPTR { return cg_memptr_bool(r); }
     if is_record(t) { return conv_to_bool(e); }
     return r;
 }
@@ -126,6 +131,15 @@ recursive fn mk_assign_cx(op: i64, l: u32, r: u32, loc: u32, tok: i64) -> u32 {
         rr = icast(r, CK_NULL2PTR, unqual(tl));
     }
     if !cish_node(l) || !cish_node(rr) { return dep_node(tl, loc); }
+    if kind_of(tl) == TY_MEMPTR {
+        // code generation: a member pointer stored as a C value
+        if op != 0 { return dep_node(tl, loc); }
+        let v = conv_value(rr, unqual(tl), loc);
+        if is_opq(v) { return dep_node(tl, loc); }
+        let n = node(N_ASSIGN, 0, unqual(tl), l as i64, v as i64, 0, loc);
+        nodes[n].flags = NF_LVALUE;
+        return n;
+    }
     if cg_on && op == 0 && is_pointer(tl) {
         let c = cg_ptr_conv(rv(rr), unqual(tl), loc);
         if c != 0 { rr = c; }
@@ -229,6 +243,10 @@ recursive fn mk_incdec_cx(e: u32, op: i64, loc: u32, pre: bool) -> u32 {
 }
 
 recursive fn mk_addr_cx(e: u32, loc: u32) -> u32 {
+    if cg_on {
+        let mp = cg_member_addr(e, loc);
+        if mp != 0 { return mp; }
+    }
     if nodes[e].kind as i64 == N_FUNCREF { return funcref_addr(e, loc); }
     if is_opq(e) { return dep_node(t_unknown, loc); }
     if is_record(nodes[e].ty) {
@@ -361,7 +379,9 @@ recursive fn mk_name_ref(qn: QN&, s0: i64, loc: u32) -> u32 {
             return mk_member_ref(th, true, s, -1, loc);
         }
         // X::m outside a member function: sizeof(X::m), &X::m
-        return dep_node(nonref(syms[s].ty), loc);
+        let n = dep_node(nonref(syms[s].ty), loc);
+        if cg_on && qn.qual { nodes[n].op = 6; nodes[n].a = s as! u32; }
+        return n;
     }
     return opaque_node(loc);
 }

@@ -71,6 +71,12 @@ recursive fn lower_ty(t: u32) -> u32 {
     let k = kind_of(t);
     if k == TY_LREF || k == TY_RREF { return mk_ptr(lower_ty(tbase(t))); }
     if k == TY_NULLPTR { return t_voidptr; }
+    if k == TY_MEMPTR {
+        // Itanium: a data member pointer is the offset (null: -1), a member
+        // function pointer the pair { ptr, adj }
+        if is_func(tbase(t)) { return with_q(mfp_type(), quals(t)); }
+        return with_q(t_long, quals(t));
+    }
     if k == TY_POINTER {
         let b = tbase(t);
         let lb = lower_ty(b);
@@ -284,6 +290,18 @@ recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
         let bi = brace_init(t, e, loc);
         if bi == 0 { return opaque_node(loc); }
         return bi;
+    }
+    if kind_of(t) == TY_MEMPTR {
+        // a member pointer of the same type (D1 does not convert them), or null
+        let et = unqual(nodes[e].ty);
+        if et == unqual(t) { return if is_lvalue(e) { rv(e) } else { e }; }
+        if kind_of(et) == TY_NULLPTR || is_null_const(e) { return memptr_null(t, loc); }
+        // to a member of a derived class: the same value when the base is at offset 0
+        if kind_of(et) == TY_MEMPTR && tbase(et) == tbase(t) && base_offset(types[t >> 4].extra, types[et >> 4].extra) == 0 {
+            let v = if is_lvalue(e) { rv(e) } else { e };
+            return node(N_ICAST, CK_NOOP, unqual(t), v as i64, 0, 0, loc);
+        }
+        return opaque_node(loc);
     }
     if is_record(nodes[e].ty) {
         // a conversion function
@@ -520,6 +538,8 @@ recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u3
     } else {
         call = n_call(f, mark, loc);
     }
+    // a member pointer result keeps its C++ type (lowered with the rest in cg_finish)
+    if kind_of(ft.base) == TY_MEMPTR { nodes[call].ty = unqual(ft.base); }
     return wrap_ref_result(call, ft.base);
 }
 
@@ -652,6 +672,198 @@ fn cg_elvis_lvalue(c: u32, b: u32, loc: u32) -> u32 {
     let body = n_block(mark, loc);
     let se = node(N_STMTEXPR, 0, pt, body as i64, 0, 0, loc);
     return n_deref(se, loc);
+}
+
+// ---------------------------------------------------------------------------
+// Member pointers (Itanium C++ ABI 2.3).
+
+var mfp_rec: i64 = -1;
+fn mfp_type() -> u32 {
+    if mfp_rec < 0 {
+        let r = new_record(intern("__member_fn_ptr"), false, 0);
+        records[r].first = fields.len as! u32;
+        fields.push(Field { name: intern("ptr"), ty: t_long, offset: 0, bitpos: 0, width: -1, attr_align: 0, flags: 0, rsv: 0, rsv2: 0, loc: 0 });
+        fields.push(Field { name: intern("adj"), ty: t_long, offset: 8, bitpos: 64, width: -1, attr_align: 0, flags: 0, rsv: 0, rsv2: 0, loc: 0 });
+        records[r].count = 2;
+        layout_record(r);
+        crec_grow();
+        mfp_rec = r;
+    }
+    return records[mfp_rec].ty << 4;
+}
+
+// The null member pointer of type t: { 0, 0 } (functions), -1 (data).
+fn memptr_null(t: u32, loc: u32) -> u32 {
+    if is_func(tbase(t)) { return node(N_ZEROINIT, 0, unqual(t), 0, 0, 0, loc); }
+    let n = int_node(-1, t_long, loc);
+    nodes[n].ty = unqual(t);
+    return n;
+}
+
+// A member pointer as a condition: ptr != 0 (functions), != -1 (data).
+fn cg_memptr_bool(v: u32) -> u32 {
+    let loc = nodes[v].loc;
+    let mt = types[nodes[v].ty >> 4];
+    if is_func(mt.base) {
+        mfp_type();
+        let s = csym(SK_VAR, intern("__mfp"), mfp_type(), loc);
+        syms[s].scope = 1;
+        let mark = nscratch.len;
+        nscratch.push(node(N_DECL, 0, mfp_type(), s, v as i64, loc as i64, loc));
+        nscratch.push(n_expr_stmt(icast(rv(mfp_field(n_var(s, loc), 0, loc)), CK_INT2BOOL, t_bool)));
+        let body = n_block(mark, loc);
+        return node(N_STMTEXPR, 0, t_bool, body as i64, 0, 0, loc);
+    }
+    return node(N_BINARY, B_NE, t_bool, v as i64, int_node(-1, t_long, loc) as i64, 0, loc);
+}
+
+fn mfp_field(v: u32, i: i64, loc: u32) -> u32 {
+    let n = node(N_MEMBER, 0, t_long, v as i64, records[mfp_rec].first as i64 + i, 0, loc);
+    nodes[n].flags = nodes[v].flags & NF_LVALUE;
+    return n;
+}
+
+// &C::m for a member (s0: the found chain, cls: C): a member pointer value, or 0.
+recursive fn cg_member_addr(e: u32, loc: u32) -> u32 {
+    let k = nodes[e].kind as i64;
+    if k == N_CXX && nodes[e].op == 6 {
+        // a data member: its offset in its class
+        let s = nodes[e].a as i64;
+        let fi = field_index(s);
+        if fi < 0 || fields[fi].width >= 0 { return 0; }
+        let cls = scope_class_type(cxs[s].dscope as i64);
+        let n = int_node(fields[fi].offset, t_long, loc);
+        nodes[n].ty = mk_memptr(fields[fi].ty, cls);
+        return n;
+    }
+    if k != N_FUNCREF || nodes[e].op == 0 { return 0; }
+    // a member function: the single non-static one of the set
+    var s = nodes[e].a as i64;
+    var f: i64 = -1;
+    var count = 0;
+    while s >= 0 {
+        let x = resolve(s);
+        if x >= 0 && (syms[x].kind as i64 == SK_FUNC || syms[x].kind as i64 == SK_TEMPLATE) { f = x; count++; }
+        s = cxs[s].nnext as i64;
+    }
+    if count != 1 || syms[f].kind as i64 != SK_FUNC || !is_this_fn(f) { return 0; }
+    let cls = scope_class_type(cxs[f].dscope as i64);
+    let mt = mk_memptr(syms[f].ty, cls);
+    var ptr: u32 = 0;
+    if cxs[f].flags & CF_VIRTUAL != 0 {
+        let slot = vtable_slot(rec_of(cls), f);
+        if slot < 0 { return 0; }
+        ptr = int_node(1 + slot * 8, t_long, loc);
+    } else {
+        ptr = node(N_ICAST, CK_PTR2INT, t_long, icast(n_ref_fn(f, loc), CK_FUNC2PTR, mk_ptr(abi_type(f))) as i64, 0, 0, loc);
+    }
+    let mark = nscratch.len;
+    nscratch.push(ptr);
+    nscratch.push(int_node(0, t_long, loc));
+    let start = commit_list(mark);
+    let mty = mfp_type();
+    let il = node_v(N_INITLIST, 0, mty, 0, 0, 2, loc, start);
+    let v = compound_value(il, mty, loc);
+    nodes[v].ty = mt;
+    return v;
+}
+
+// obj.*mp / ptr->*mp.
+recursive fn cg_memptr_access(l: u32, mp: u32, arrow: bool, loc: u32) -> u32 {
+    if is_opq(l) || is_opq(mp) || kind_of(nodes[mp].ty) != TY_MEMPTR { return dep_node(t_unknown, loc); }
+    var obj = l;
+    if arrow { obj = mk_deref_cx(l, loc); }
+    if is_opq(obj) || !is_record(nodes[obj].ty) { return dep_node(t_unknown, loc); }
+    let mt = types[nodes[mp].ty >> 4];
+    let cls = mt.extra;
+    if unqual(nodes[obj].ty) != unqual(cls) {
+        let b = derived_to_base_lv(obj, unqual(cls), loc);
+        if b == 0 { return dep_node(t_unknown, loc); }
+        obj = b;
+    }
+    if !is_lvalue(obj) { obj = materialize(obj, loc); }
+    if is_func(mt.base) {
+        // bound to a call: N_CXX op 5, a = object, b = the member pointer
+        let n = node(N_CXX, 5, mt.base, obj as i64, mp as i64, 0, loc);
+        return n;
+    }
+    // *(T *)((char *)&obj + mp)
+    let cp = node(N_ICAST, CK_BITCAST, mk_ptr(t_char), n_addr(obj, loc) as i64, 0, 0, loc);
+    let add = node(N_BINARY, B_PTRADD, mk_ptr(t_char), cp as i64, rv(mp) as i64, 0, loc);
+    let t = with_q(mt.base, quals(nodes[obj].ty) & (Q_CONST | Q_VOLATILE));
+    let tp = node(N_ICAST, CK_BITCAST, mk_ptr(t), add as i64, 0, 0, loc);
+    return n_deref(tp, loc);
+}
+
+// (obj.*pmf)(args): this = (char *)&obj + adj; the function is ptr, or,
+// when ptr is odd, the vtable entry at ptr - 1.
+recursive fn cg_memfn_call(b: u32, mark: i64, loc: u32) -> u32 {
+    let obj = nodes[b].a;
+    let mp = nodes[b].b;
+    let ft = nodes[b].ty;
+    let f = types[ft >> 4];
+    if !by_value_ok(f.base) || is_ref(f.base) { nscratch.resize(mark); return opaque_node(loc); }
+    let nargs = nscratch.len - mark;
+    if nargs != f.n && f.flags & TF_VARIADIC == 0 { nscratch.resize(mark); return opaque_node(loc); }
+    let cls = types[nodes[mp].ty >> 4].extra;
+    let mty = mfp_type();
+    // the C function type: this first
+    var q: i64 = 0;
+    if (f.flags as i64) & TF_MCONST != 0 { q = Q_CONST; }
+    let lf = types[lower_ty(ft) >> 4];
+    let am = abi_scratch.len;
+    abi_scratch.push(mk_ptr(with_q(unqual(cls), q)));
+    for i in lf.n { abi_scratch.push(tparams[lf.extra + i]); }
+    fn_scratch.clear();
+    for i in am..abi_scratch.len { fn_scratch.push(abi_scratch[i]); }
+    abi_scratch.resize(am);
+    let cft = qt(mk_type(TY_FUNC, (lf.flags as i64) & TF_VARIADIC, lf.base, 0, 0, 0) as i64, 0);
+    let fpt = mk_ptr(cft);
+    // ({ struct mfp m = mp; char *t = (char *)&obj + m.adj;
+    //    fp = m.ptr & 1 ? *(F *)(*(char **)t + m.ptr - 1) : (F)m.ptr; fp(t, args) })
+    let ms = csym(SK_VAR, intern("__mfp"), mty, loc);
+    syms[ms].scope = 1;
+    let ts = csym(SK_VAR, intern("__this"), mk_ptr(t_char), loc);
+    syms[ts].scope = 1;
+    // the converted arguments (kept in stmt_buf while the rest is built)
+    let sb = stmt_buf.len;
+    for i in nargs {
+        let a = nscratch[mark + i];
+        var c: u32 = 0;
+        if i < f.n { c = conv_arg(a, tparams[f.extra + i], loc); }
+        else if is_opq(a) || !cish_node(a) { c = opaque_node(loc); }
+        else { c = default_promote(rv(a)); }
+        if is_opq(c) { stmt_buf.resize(sb); nscratch.resize(mark); return opaque_node(loc); }
+        stmt_buf.push(c);
+    }
+    nscratch.resize(mark);
+    let bmark = nscratch.len;
+    let mv = if is_lvalue(mp) { rv(mp) } else { mp };
+    nscratch.push(node(N_DECL, 0, mty, ms, mv as i64, loc as i64, loc));
+    let adj = rv(mfp_field(n_var(ms, loc), 1, loc));
+    let cp = node(N_ICAST, CK_BITCAST, mk_ptr(t_char), n_addr(obj, loc) as i64, 0, 0, loc);
+    let tv = node(N_BINARY, B_PTRADD, mk_ptr(t_char), cp as i64, adj as i64, 0, loc);
+    nscratch.push(node(N_DECL, 0, mk_ptr(t_char), ts, tv as i64, loc as i64, loc));
+    let ptrv = rv(mfp_field(n_var(ms, loc), 0, loc));
+    let odd = node(N_BINARY, B_AND, t_long, ptrv as i64, int_node(1, t_long, loc) as i64, 0, loc);
+    let test = icast(odd, CK_INT2BOOL, t_bool);
+    // virtual: *(F *)(*(char **)t + ptr - 1)
+    let vtp = rv(n_deref(node(N_ICAST, CK_BITCAST, mk_ptr(mk_ptr(t_char)), rv(n_var(ts, loc)) as i64, 0, 0, loc), loc));
+    let off = node(N_BINARY, B_SUB, t_long, rv(mfp_field(n_var(ms, loc), 0, loc)) as i64, int_node(1, t_long, loc) as i64, 0, loc);
+    let ep = node(N_BINARY, B_PTRADD, mk_ptr(t_char), vtp as i64, off as i64, 0, loc);
+    let vf = rv(n_deref(node(N_ICAST, CK_BITCAST, mk_ptr(fpt), ep as i64, 0, 0, loc), loc));
+    let nf = node(N_ICAST, CK_INT2PTR, fpt, rv(mfp_field(n_var(ms, loc), 0, loc)) as i64, 0, 0, loc);
+    let fp = node(N_COND, 0, fpt, test as i64, vf as i64, nf as i64, loc);
+    let am2 = nscratch.len;
+    nscratch.push(node(N_ICAST, CK_BITCAST, mk_ptr(with_q(unqual(cls), q)), rv(n_var(ts, loc)) as i64, 0, 0, loc));
+    for i in sb..stmt_buf.len { nscratch.push(stmt_buf[i]); }
+    stmt_buf.resize(sb);
+    let call = n_call_ptr(fp, am2, loc);
+    let res = wrap_ref_result(call, f.base);
+    nscratch.push(n_expr_stmt(res));
+    let body = n_block(bmark, loc);
+    let t = nodes[res].ty;
+    return node(N_STMTEXPR, 0, if is_void(t) { t_void } else { unqual(t) }, body as i64, 0, 0, loc);
 }
 
 // ---------------------------------------------------------------------------
@@ -1293,8 +1505,9 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
     if static_local { syms[s].flags = syms[s].flags & ~SF_FILESCOPE; }
     let fs = syms[s].flags & SF_FILESCOPE != 0;
     if !decl_is_extern && syms[s].sc as i64 == SC_EXTERN { syms[s].sc = 0; }
-    let is_extern = syms[s].sc as i64 == SC_EXTERN;
-    let local = !fs && !is_extern && !static_local;
+    // (extern with an initializer is a definition)
+    let is_extern = syms[s].sc as i64 == SC_EXTERN && init == 0;
+    let local = !fs && syms[s].sc as i64 != SC_EXTERN && !static_local;
     var cst: u32 = 0;
     var has_dtor = false;
     if is_ref(t) {
@@ -1375,6 +1588,8 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
         let bi = brace_init(t, init, loc);
         conv = if bi != 0 { bi } else { opaque_node(loc) };
         if bi != 0 && is_array(t) && types[t >> 4].n < 0 { syms[s].ty = with_q(nodes[bi].ty, quals(t)); }
+    } else if init != 0 && kind_of(t) == TY_MEMPTR && !is_opq(init) {
+        conv = conv_value(init, unqual(t), loc);
     } else if init != 0 && conv != 0 && is_pointer(t) && !is_opq(init) {
         let c = cg_ptr_conv(rv(init), unqual(t), loc);
         if c != 0 { conv = c; }

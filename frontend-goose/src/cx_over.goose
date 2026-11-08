@@ -248,6 +248,7 @@ recursive fn mk_call_cx(callee: u32, mark: i64, loc: u32) -> u32 {
         if f < 0 { return opaque_node(loc); }
         return build_call(f, obj, mark, loc, nodes[callee].op != 0);
     }
+    if cg_on && ck == N_CXX && nodes[callee].op == 5 { return cg_memfn_call(callee, mark, loc); }
     if is_opq(callee) { return opaque_node(loc); }
     let t = nodes[callee].ty;
     if is_record(t) {
@@ -404,7 +405,7 @@ recursive fn init_convert(s: i64, init: u32, form: i64, loc: u32) -> u32 {
         }
         return init;
     }
-    if nodes[init].kind as i64 == N_INITBRACE || is_record(t) || is_ref(t) || !cish(t) || !cish_node(init) { return init; }
+    if nodes[init].kind as i64 == N_INITBRACE || is_record(t) || is_ref(t) || !cish(t) || !cish_node(init) || kind_of(t) == TY_MEMPTR { return init; }
     if kind_of(nodes[init].ty) == TY_NULLPTR {
         if is_pointer(t) { return icast(init, CK_NULL2PTR, unqual(t)); }
         return init;
