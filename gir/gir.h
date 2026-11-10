@@ -410,9 +410,10 @@ enum GirA64 {
 #define GIR_IF_CALL_NOWRITE  0x8000u  /* the call writes no memory (LLVM readonly/readnone, */
                                       /*   memory(read)); not on invokes or variadic calls */
 #define GIR_IF_CALL_NOREAD   0x0040u  /* with NOWRITE: it reads none either (memory(none)) */
+#define GIR_IF_CALL_NOBUILTIN 0x0010u /* nobuiltin (-fno-builtin): not a library function */
 #define GIR_IF_CALL_PURE     0x0020u  /* nounwind and willreturn: with NOWRITE, a call      */
                                       /*   whose result is unused may be deleted           */
-                                      /* (0x0020 and 0x0040 are cmpxchg's failure ordering */
+                                      /* (0x0010..0x0040 are cmpxchg's failure ordering    */
                                       /*   bits on other instructions)                     */
 
 /* ABI words of CALL arguments and Func arguments. 0 = passed by value as

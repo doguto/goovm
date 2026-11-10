@@ -732,7 +732,9 @@ fn promote_globals() -> bool {
 }
 // Whether a block that dominates b (b included) stores to global g.
 fn gp_pre_store(b0: u32, g: u32) -> bool {
-    let gref: u32 = (3 as u32) << 30 | g;
+    return pre_store_ptr(b0, (3 as u32) << 30 | g);
+}
+fn pre_store_ptr(b0: u32, gref: u32) -> bool {
     var b = b0;
     var n = 0;
     while b != NIL && n < 1000 {
@@ -748,6 +750,223 @@ fn gp_pre_store(b0: u32, g: u32) -> bool {
     }
     return false;
 }
+// ------------------------------------------------- memory promotion (E2)
+// LLVM's LICM scalar promotion with alias analysis: a location p (a
+// loop-invariant pointer, typically a global or a field through an invariant
+// pointer) that the loop loads and stores with one type, when no other memory
+// access of the loop may alias it (opt_aa.goose: TBAA, bases, offsets) and no
+// call may read or write it, lives in an alloca in the loop (mem2reg makes it
+// a register): loaded in the preheader, stored back on the exits. The load
+// in the preheader needs p to be addressable there (an in-bounds constant
+// offset of an alloca or a global, or an access of p in the header, which
+// runs whenever the preheader does); the stores on the exits need a store
+// that runs whenever the loop is left (one that dominates the exiting
+// blocks, or one before the loop).
+var pm_ptr: u32[>..] = [];      // candidates: pointer, type, TBAA node, flags (1 stored, 2 bad, 4 header access)
+var pm_ty: u32[>..] = [];
+var pm_tag: u32[>..] = [];
+var pm_fl: u32[>..] = [];
+var pm_mem: u32[>..] = [];      // the loop's memory instructions
+fn promote_mem() -> bool {
+    if o_pinned { return false; }
+    ensure_cfg();
+    aa_prepare();
+    if lc_mark.len < cfg_nb { lc_mark.resize(cfg_nb, 0); }
+    lc_hdr.clear();
+    for h in rpo {
+        if h == 0 || b_fl[h] & BF_LP != 0 { continue; }
+        for k in p_start[h]..p_start[h + 1] {
+            let p = p_list[k];
+            if rpo_num[p] != NIL && dominates(h, p) {
+                lc_hdr.push(h);
+                break;
+            }
+        }
+    }
+    var made = false;
+    for h in lc_hdr {
+        if licm_preheader(h) { made = true; }
+    }
+    if made {
+        ensure_cfg();
+        if lc_mark.len < cfg_nb { lc_mark.resize(cfg_nb, 0); }
+    }
+    var any = false;
+    // inner loops first
+    var q: i64 = lc_hdr.len - 1;
+    while q >= 0 {
+        let h = lc_hdr[q];
+        q--;
+        if pm_loop(h) {
+            any = true;
+            ensure_cfg();
+            if lc_mark.len < cfg_nb { lc_mark.resize(cfg_nb, 0); }
+        }
+    }
+    return any;
+}
+fn pm_find(p: u32) -> i64 {
+    for k in 0..pm_ptr.len { if pm_ptr[k] == p { return k; } }
+    return -1;
+}
+fn pm_loop(h: u32) -> bool {
+    lc_epoch++;
+    let ep = lc_epoch;
+    tmp_stack.clear();
+    lc_mark[h] = ep;
+    var pre: u32 = NIL;
+    var npre = 0;
+    for k in p_start[h]..p_start[h + 1] {
+        let p = p_list[k];
+        if rpo_num[p] == NIL { return false; }
+        if !dominates(h, p) {
+            pre = p;
+            npre++;
+            continue;
+        }
+        if lc_mark[p] != ep {
+            lc_mark[p] = ep;
+            tmp_stack.push(p);
+        }
+    }
+    while tmp_stack.len != 0 {
+        let b = tmp_stack.pop();
+        for k in p_start[b]..p_start[b + 1] {
+            let qq = p_list[k];
+            if rpo_num[qq] == NIL || lc_mark[qq] == ep { continue; }
+            lc_mark[qq] = ep;
+            tmp_stack.push(qq);
+        }
+    }
+    if npre != 1 || s_start[pre + 1] - s_start[pre] != 1 || block_invoke(pre) != NIL { return false; }
+    gp_exit.clear();
+    for b in rpo {
+        if lc_mark[b] != ep { continue; }
+        for k in s_start[b]..s_start[b + 1] {
+            let x = s_list[k];
+            if lc_mark[x] == ep { continue; }
+            if b_fl[x] & BF_LP != 0 || block_invoke(b) != NIL { return false; }
+            let tb = b_last[b];
+            if o_ins[tb].op == GIR_CONDBR && o_ins[tb].b == o_ins[tb].c { return false; }
+            if o_ins[tb].op != GIR_BR && o_ins[tb].op != GIR_CONDBR { return false; }
+            gp_exit.push(b);
+            gp_exit.push(x);
+        }
+    }
+    if gp_exit.len == 0 { return false; }
+    // memory instructions and candidates
+    pm_ptr.clear();
+    pm_ty.clear();
+    pm_tag.clear();
+    pm_fl.clear();
+    pm_mem.clear();
+    for b in rpo {
+        if lc_mark[b] != ep { continue; }
+        var i = b_first[b];
+        while i != NIL {
+            let I = o_ins[i];
+            let op: u32 = I.op;
+            if op == GIR_LOAD || op == GIR_STORE {
+                if I.flags & (IF_VOLATILE | IF_ORD_MASK) != 0 { return false; }
+                pm_mem.push(i);
+                let p = if op == GIR_LOAD { res(I.a) } else { res(I.b) };
+                let t: u32 = if op == GIR_LOAD { I.ty } else { I.aux };
+                let tag = if op == GIR_LOAD { I.b } else { I.c };
+                let inv = !is_inst(p) || o_blk[p] == NIL || lc_mark[o_blk[p]] != ep;
+                let isal = is_inst(p) && o_ins[p].op == GIR_ALLOCA;
+                if inv && !isal && gir_kind(p) != GIR_V_CONST {
+                    var k = pm_find(p);
+                    if k < 0 {
+                        pm_ptr.push(p);
+                        pm_ty.push(t);
+                        pm_tag.push(tag);
+                        pm_fl.push(0);
+                        k = pm_ptr.len - 1;
+                    }
+                    if pm_ty[k] != t || !promotable_type(t) { pm_fl[k] |= 2; }
+                    if pm_tag[k] != tag { pm_tag[k] = 0; }
+                    if op == GIR_STORE {
+                        pm_fl[k] |= 1;
+                        if gp_dom_exits(b) { pm_fl[k] |= 8; }
+                        if res(I.a) == p { pm_fl[k] |= 2; }
+                    }
+                    if b == h { pm_fl[k] |= 4; }
+                }
+            } else if op == GIR_CALL || op == GIR_MEMCPY || op == GIR_MEMSET {
+                pm_mem.push(i);
+            } else if writes_mem(I) {
+                return false;
+            }
+            i = o_nxt[i];
+        }
+    }
+    if pm_ptr.len == 0 || pm_mem.len > 512 { return false; }
+    var n: i64 = 0;
+    var any_st = false;
+    for k in 0..pm_ptr.len {
+        let p = pm_ptr[k];
+        let t = pm_ty[k];
+        if pm_fl[k] & 2 != 0 { continue; }
+        let sz = store_of(t);
+        let tag = pm_tag[k];
+        var ok = true;
+        for m in pm_mem {
+            let I = o_ins[m];
+            let op: u32 = I.op;
+            if op == GIR_LOAD || op == GIR_STORE {
+                let q = if op == GIR_LOAD { res(I.a) } else { res(I.b) };
+                if q == p { continue; }
+                let qt: u32 = if op == GIR_LOAD { I.ty } else { I.aux };
+                let qtag = if op == GIR_LOAD { I.b } else { I.c };
+                if aa_alias(q, store_of(qt), qtag, p, sz, tag) { ok = false; break; }
+                // (the stored value being p itself: p escapes through memory)
+                if op == GIR_STORE && res(I.a) == p { ok = false; break; }
+            } else if op == GIR_CALL {
+                if aa_call_mod(m, p) || aa_call_ref(m, p) { ok = false; break; }
+                for a in 0..I.c { if res(o_ops[I.b + 2 * a]) == p { ok = false; } }
+                if !ok { break; }
+            } else {
+                if aa_clobbers(m, p, sz, tag) { ok = false; break; }
+                if op == GIR_MEMCPY && aa_alias(res(I.b), I.c, 0, p, sz, tag) { ok = false; break; }
+            }
+        }
+        if !ok { continue; }
+        // addressable in the preheader; stores safe on the exits
+        if pm_fl[k] & 4 == 0 && !always_addr(p, sz) { continue; }
+        if pm_fl[k] & 1 != 0 && pm_fl[k] & 8 == 0 && !pre_store_ptr(pre, p) { continue; }
+        pm_ptr[n] = p;
+        pm_ty[n] = t;
+        pm_fl[n] = pm_fl[k];
+        n++;
+        if pm_fl[k] & 1 != 0 { any_st = true; }
+    }
+    if n == 0 { return false; }
+    let dbg = o_ins[b_last[pre]].dbg;
+    gp_eblk.clear();
+    if any_st {
+        var e: i64 = 0;
+        while e < gp_exit.len {
+            let b = gp_exit[e];
+            let x = gp_exit[e + 1];
+            e += 2;
+            let nb = new_block();
+            let br = new_inst(Inst { op: GIR_BR as! u8, sub: 0, flags: 0, ty: GIR_T_VOID, aux: 0, a: x, b: 0, c: 0, dbg: dbg });
+            link_end(nb, br);
+            let bt = b_last[b];
+            if o_ins[bt].op == GIR_BR { o_ins[bt].a = nb; }
+            else if o_ins[bt].b == x { o_ins[bt].b = nb; }
+            else { o_ins[bt].c = nb; }
+            phi_rename_pred(x, b, nb);
+            b_lnext[nb] = b_lnext[b];
+            b_lnext[b] = nb;
+            gp_eblk.push(nb);
+        }
+        o_cfg_ok = false;
+    }
+    for k in 0..n { gp_promote_ptr(pm_ptr[k], pm_ty[k], ep, pre, pm_fl[k] & 1 != 0); }
+    return true;
+}
+
 // Whether block b dominates every exiting block of the loop (gp_exit).
 fn gp_dom_exits(b: u32) -> bool {
     var e: i64 = 0;
@@ -893,7 +1112,9 @@ fn gp_loop(h: u32) -> bool {
     return true;
 }
 fn gp_promote(g: u32, t: u32, ep: u32, pre: u32, stores: bool) {
-    let gref: u32 = (3 as u32) << 30 | g;
+    gp_promote_ptr((3 as u32) << 30 | g, t, ep, pre, stores);
+}
+fn gp_promote_ptr(gref: u32, t: u32, ep: u32, pre: u32, stores: bool) {
     let pt = b_last[pre];
     let a = new_inst(Inst { op: GIR_ALLOCA as! u8, sub: 0, flags: 0, ty: GIR_T_PTR, aux: 0, a: store_of(t),
                             b: M.types[t].align, c: 0, dbg: o_ins[pt].dbg });

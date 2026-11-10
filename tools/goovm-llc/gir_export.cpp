@@ -1227,6 +1227,7 @@ struct Exporter : GirDwarfHost {
         uint16_t fl = (vararg ? GIR_IF_VARARG : 0) | (al & AL_NR ? GIR_IF_NORETURN : 0);
         // call-site inlining attributes and memory effects (E2, for the optimizer)
         if (CB.getAttributes().hasFnAttr(Attribute::NoInline)) fl |= GIR_IF_NOINLINE_CALL;
+        if (T.header.opt_level && CB.isNoBuiltin()) fl |= GIR_IF_CALL_NOBUILTIN;
         if (T.header.opt_level && !(fl & GIR_IF_VARARG) && cur_invoke_lp == GIR_NONE) {
             if (CB.onlyReadsMemory()) fl |= GIR_IF_CALL_NOWRITE;
             if (CB.doesNotAccessMemory()) fl |= GIR_IF_CALL_NOWRITE | GIR_IF_CALL_NOREAD;
@@ -3574,6 +3575,20 @@ struct Exporter : GirDwarfHost {
             uint32_t flags = linkage_flags(Fn) | (defined ? GIR_GF_DEFINED : 0);
             gmap[&Fn] = add_global(sym_name(Fn), GIR_G_FUNC, flags, 16);
         }
+        // (E2) the C library functions the optimizer's library call
+        // simplification may call instead (strcat -> strlen + a copy, printf
+        // -> puts / putchar, __vsnprintf_chk -> vsnprintf, ...)
+        if (T.header.opt_level) {
+            static const char *const companions[][2] = {
+                {"strcat", "strlen"}, {"strncat", "strlen"}, {"__strcat_chk", "strlen"},
+                {"printf", "puts"}, {"printf", "putchar"}, {"__vsnprintf_chk", "vsnprintf"},
+                {"__vsprintf_chk", "vsprintf"}};
+            for (const auto &c : companions) {
+                const Function *f = M.getFunction(c[0]);
+                if (!f || f->hasLocalLinkage() || M.getNamedValue(c[1])) continue;
+                libfn(c[1]);
+            }
+        }
         for (const GlobalAlias &A : M.aliases()) {
             APInt offs(64, 0);
             const Value *base = A.getAliasee()->stripAndAccumulateConstantOffsets(DL, offs, true);
@@ -3659,6 +3674,18 @@ struct Exporter : GirDwarfHost {
         }
         if (dw_on) dw->end_module();
         tbaa_table();
+        // (E2) float versions of the exact libm functions, for the
+        // optimizer's shrinking of floor((double)f) to floorf(f)
+        if (T.header.opt_level) {
+            static const char *const shrink[][2] = {{"floor", "floorf"}, {"ceil", "ceilf"}, {"trunc", "truncf"},
+                                                     {"round", "roundf"}, {"rint", "rintf"},
+                                                     {"nearbyint", "nearbyintf"}};
+            for (const auto &c : shrink) {
+                const Function *f = M.getFunction(c[0]);
+                bool used = libfns.count(c[0]) || (f && !f->hasLocalLinkage() && !f->use_empty());
+                if (used && !M.getNamedValue(c[1])) libfn(c[1]);
+            }
+        }
         T.header.n_llvm_insts = (uint32_t)T.n_llvm_insts;
         if (!T.gcomdat.empty()) T.gcomdat.resize(T.globals.size(), GIR_NONE);
     }

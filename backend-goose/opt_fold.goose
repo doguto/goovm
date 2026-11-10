@@ -172,6 +172,11 @@ fn simp(i: u32) -> u32 {
 // pow(x, 2.0) -> x * x (LLVM's LibCallSimplifier does it at any level; what
 // libstdc++'s std::pow(double, int) leaves for a square).
 fn simp_call(i: u32) -> u32 {
+    if !opt_off("libc") {
+        let r = simp_libcall(i);
+        if o_blk[i] == NIL { fold_changed = true; }
+        if r != NIL || o_blk[i] == NIL { return r; }
+    }
     let I = o_ins[i];
     if I.flags & (IF_INVOKE | IF_VARARG) != 0 || I.c != 2 || I.ty != GIR_T_F64 || gir_kind(I.a) != GIR_V_GLOBAL {
         return NIL;

@@ -32,6 +32,7 @@ var x_asms: Asm[>..] = [];       // M.asms, then one record per stored ASM
 var x_dies: Die[>..] = [];
 var x_dattrs: DAttr[>..] = [];
 var in2out: u32[>..] = [];       // input instruction index -> output index (debug info), NIL
+var x_from: u32[>..] = [];       // per x_insts entry: the input instruction it stands for, NIL (E2)
 // Where this call's region of each output array starts (M views x_*[xb_*..]).
 var xb_i: i64 = 0;
 var xb_b: i64 = 0;
@@ -507,6 +508,7 @@ fn oir_store(fi: u32) {
             var i = b_first[b];
             while i != NIL {
                 x_insts.push(store_inst(i));
+                x_from.push(o_old[i]);
                 if o_old[i] != NIL { in2out[o_old[i]] = st_map[i]; }
                 i = o_nxt[i];
             }
@@ -655,6 +657,7 @@ fn opt_module() {
     xb_f = x_funcs.len;
     x_funcs.append(M.funcs);
     xb_i = x_insts.len;
+    while x_from.len < x_insts.len { x_from.push(NIL); }
     xb_b = x_blocks.len;
     xb_d = x_dies.len;
     xb_t = x_dattrs.len;
@@ -689,9 +692,14 @@ fn opt_module() {
     inl_scan();
     gp_scan();
     aa_module_init();
+    lb_init();
     sroa_init();
     opt_order();
     for fi in fn_order { opt_function(fi); }
+    // (E2) the is.constant tests left in an emitted function are false;
+    // the function is simplified once more without them (the inliner,
+    // done now, saw them unfolded)
+    for fi in fn_order { isconst_refine(fi); }
     // internal functions whose calls were all inlined are not emitted
     // (kept with debug information, whose subprograms name them)
     if !o_dbg && !opt_off("inline") {
@@ -714,6 +722,34 @@ fn opt_module() {
     M.asms = x_asms[xb_a..];
     M.dies = x_dies[xb_d..];
     M.dattrs = x_dattrs[xb_t..];
+}
+
+fn isconst_refine(fi: u32) {
+    let F2 = x_funcs[xb_f + fi];
+    if F2.flags & (FN_AVAILEXT | FN_OPTNONE) != 0 || fn_done[fi] == 0 { return; }
+    var any = false;
+    for k in F2.first_inst..F2.first_inst + F2.n_inst {
+        if x_insts[xb_i + k].op == GIR_ISCONST { any = true; }
+    }
+    if !any { return; }
+    o_fi = fi;
+    o_f = M.funcs[fi];
+    o_pinned = fn_pinned[fi] != 0;
+    oir_reset();
+    amap_on = false;
+    oir_load(x_insts[xb_i..], x_blocks[xb_b..], F2, true);
+    for id in 0..o_ins.len {
+        // (o_old: the output index; back to the input instruction it stands for)
+        let x = o_old[id];
+        o_old[id] = if x == NIL { NIL } else { x_from[xb_i + x] };
+        if o_ins[id].op == GIR_ISCONST {
+            let k = gir_kind(res(o_ins[id].a));
+            replace(id as! u32, mk_const(GIR_T_I1, if k == GIR_V_CONST || k == GIR_V_GLOBAL { 1 } else { 0 }, 0));
+        }
+    }
+    opt_round();
+    opt_round();
+    oir_store(fi);
 }
 
 // The is.constant tests left after all optimization (their operand did not
@@ -845,6 +881,13 @@ fn opt_function(fi: u32) {
         opt_round();
     }
     if !opt_off("gprom") && promote_globals() {
+        resolve_all();
+        ensure_cfg();
+        build_uses();
+        if mem2reg() { simplify_phis(); }
+        opt_round();
+    }
+    if !opt_off("mprom") && promote_mem() {
         resolve_all();
         ensure_cfg();
         build_uses();

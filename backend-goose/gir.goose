@@ -317,6 +317,7 @@ let IF_ALWAYSINLINE_CALL = 0x4000;  // (E2) CALL: call-site always_inline
 let IF_CALL_NOWRITE = 0x8000;       // (E2) CALL: writes no memory
 let IF_CALL_NOREAD = 0x0040;        // (E2) CALL: reads no memory
 let IF_CALL_PURE = 0x0020;          // (E2) CALL: nounwind, willreturn
+let IF_CALL_NOBUILTIN = 0x0010;     // (E2) CALL: nobuiltin
 let ORD_SEQ_CST = 7;
 
 // ABI words.
