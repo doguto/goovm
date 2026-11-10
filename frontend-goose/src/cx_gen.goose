@@ -63,6 +63,7 @@ import .cx_gen_rtti;
 import .cx_gen_new;
 import .cx_gen_stmt;
 import .cx_gen_lambda;
+import .cx_gen_tls;
 
 let CF_DTOR_DELETING = 2147483648;  // the deleting destructor (D0) of a class with a virtual destructor
 
@@ -976,8 +977,13 @@ recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u3
     let total = nscratch.len - cm;
     for i in total { nscratch[mark + i] = nscratch[cm + i]; }
     nscratch.resize(mark + total);
+    note_lambda_uses(f);
     var call: u32 = 0;
-    if virt && cxs[f].flags & CF_VIRTUAL != 0 && is_this_fn(f) {
+    if proxy_fns.contains(f as u64) {
+        // a call through a function pointer (cg_call_ptr)
+        let fp = proxy_fps.pop();
+        call = n_call_ptr(node(N_ICAST, CK_BITCAST, mk_ptr(abi_type(f)), fp as i64, 0, 0, loc), mark, loc);
+    } else if virt && cxs[f].flags & CF_VIRTUAL != 0 && is_this_fn(f) {
         let fp = vfunc_ptr(f, nscratch[mark + (if dst != 0 { 1 } else { 0 })], 0, loc);
         if fp == 0 { nscratch.resize(mark); return opaque_node(loc); }
         call = n_call_ptr(fp, mark, loc);
@@ -988,6 +994,40 @@ recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u3
     if kind_of(ft.base) == TY_MEMPTR { nodes[call].ty = unqual(ft.base); }
     if dst != 0 { return node(N_XPRV, 0, unqual(ft.base), call as i64, dst as i64, 0, loc); }
     return wrap_ref_result(call, ft.base);
+}
+
+// A call through a pointer to a function of C++ type ft (callee: the
+// pointer, or a function lvalue) with the arguments nscratch[mark..]: as
+// lower_call does it for a function of that type (a symbol standing for
+// the type), the callee the pointer.
+var proxy_fns = dictionary<u64, u8> {};
+var proxy_of = dictionary<u64, u32> {};
+var proxy_fps: u32[>..<] = [];
+recursive fn cg_call_ptr(callee: u32, ft: u32, mark: i64, loc: u32) -> u32 {
+    var fp: u32 = 0;
+    if is_func(nodes[callee].ty) {
+        if !is_lvalue(callee) { nscratch.resize(mark); return opaque_node(loc); }
+        fp = n_addr(callee, loc);
+    } else {
+        fp = rv(callee);
+    }
+    let key = unqual(ft) as u64;
+    var f: i64 = -1;
+    let g = proxy_of.get(key);
+    if g { f = g as i64; } else {
+        f = csym(SK_FUNC, intern("__call_through_pointer"), unqual(ft), loc);
+        syms[f].sc = SC_EXTERN as! u8;
+        cxs[f].flags = CF_EXTERN_C;
+        cxs[f].dscope = 0;
+        proxy_of.insert(key, f as! u32);
+        proxy_fns.insert(f as u64, 1);
+    }
+    proxy_fps.push(fp);
+    let sv = proxy_fps.len;
+    let c = lower_call(f, 0, mark, loc, false);
+    // (not called: lower_call gave up before the call)
+    if proxy_fps.len == sv { proxy_fps.pop(); }
+    return c;
 }
 
 // A class passed or returned by value must be trivial for calls (Itanium:
@@ -2366,12 +2406,24 @@ fn gi_push(st: u32, prio: i64) {
 // object (cx_sema.parse_var_init).
 recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u32, ctx: i64) {
     var conv = conv0;
+    // a static data member of a class explicitly instantiated elsewhere
+    // (extern template): defined and initialized there
+    if cxs[s].flags & CF_MEMBER != 0 && cxs[s].dscope > 0 && inst_cls.count > 0 && class_inst_state(cxs[s].dscope as i64) == 1 {
+        syms[s].sc = SC_EXTERN as! u8;
+        syms[s].flags = (syms[s].flags | SF_FILESCOPE) & ~(SF_DEFINED as! u32);
+        return;
+    }
     let t = syms[s].ty;
     let prio = cur_init_prio;
     cur_init_prio = 65535;
     if ctx == DC_NS || cxs[s].flags & CF_MEMBER != 0 { syms[s].flags = syms[s].flags | SF_FILESCOPE; }
     // a static local: no linkage (C's lowering names it function.name)
+    // (a block-scope thread_local has static storage too)
+    if ctx != DC_NS && cxs[s].flags & CF_MEMBER == 0 && block_fn_depth > 0 && syms[s].flags & SF_THREAD != 0 && syms[s].sc as i64 != SC_EXTERN {
+        syms[s].sc = SC_STATIC as! u8;
+    }
     let static_local = ctx != DC_NS && cxs[s].flags & CF_MEMBER == 0 && block_fn_depth > 0 && syms[s].sc as i64 == SC_STATIC;
+    let tls = syms[s].flags & SF_THREAD != 0;
     if static_local { syms[s].flags = syms[s].flags & ~SF_FILESCOPE; }
     let fs = syms[s].flags & SF_FILESCOPE != 0;
     if !decl_is_extern && syms[s].sc as i64 == SC_EXTERN { syms[s].sc = 0; }
@@ -2493,7 +2545,8 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
             let lhs = node(N_DECLREF, 0, lower_ty(t), s, 0, 0, loc);
             nodes[lhs].flags = NF_LVALUE;
             dyn = n_expr_stmt(node(N_ASSIGN, 0, unqual(lower_ty(t)), lhs as i64, conv as i64, 0, loc));
-            if !static_local { gi_push(dyn, prio); }
+            if !static_local && tls { tls_push(s, dyn, false, loc); }
+            else if !static_local { gi_push(dyn, prio); }
             conv = 0;
         }
     }
@@ -2505,6 +2558,25 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
     }
     nscratch.push(node(N_DECL, 0, syms[s].ty, s, conv as i64, dloc as i64, loc));
     if static_local { note_static_local(s); }
+    if static_local && tls && (dyn != 0 || cst != 0 || has_dtor) {
+        // a thread_local: once per thread, no locking:
+        // if (guard == 0) { init; __cxa_thread_atexit; guard = 1; }
+        let g = csym(SK_VAR, intern("__guard"), t_char, loc);
+        syms[g].sc = SC_STATIC as! u8;
+        syms[g].scope = syms[s].scope;
+        syms[g].flags = syms[g].flags | SF_THREAD;
+        guard_of.insert(s as u64, g as! u32);
+        nscratch.push(node(N_DECL, 0, t_char, g, 0, loc as i64, loc));
+        let mark = nscratch.len;
+        if dyn != 0 { nscratch.push(dyn); }
+        if cst != 0 { nscratch.push(cst); }
+        if has_dtor { nscratch.push(thread_atexit_stmt(s, loc)); }
+        nscratch.push(n_expr_stmt(node(N_ASSIGN, 0, t_char, n_var(g, loc) as i64, int_node(1, t_char, loc) as i64, 0, loc)));
+        let init = n_block(mark, loc);
+        let test = node(N_BINARY, B_EQ, t_int, icast(rv(n_var(g, loc)), CK_INTEGRAL, t_int) as i64, int_node(0, t_int, loc) as i64, 0, loc);
+        nscratch.push(node(N_IF, 0, 0, test as i64, init as i64, 0, loc));
+        return;
+    }
     if static_local && (dyn != 0 || cst != 0 || has_dtor) {
         // once (Itanium 3.3.2): if (guard byte == 0 && __cxa_guard_acquire(&guard)) {
         //   [EH: __cxa_guard_abort(&guard)] init; atexit; __cxa_guard_release(&guard); }
@@ -2540,6 +2612,8 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
     if local {
         if cst != 0 { nscratch.push(cst); }
         if has_dtor { push_dtor_cleanup(s, loc); }
+    } else if !static_local && !is_extern && tls {
+        if cst != 0 || has_dtor { tls_push(s, cst, has_dtor, loc); }
     } else if !static_local && !is_extern {
         if cst != 0 { gi_push(cst, prio); }
         if has_dtor { gi_push(atexit_stmt(s, loc), prio); }
@@ -2631,6 +2705,7 @@ fn push_dtor_cleanup(s: i64, loc: u32) {
         if !is_record(t) || is_opaque(t) { return; }
         let d = class_dtor(rec_of(t));
         if d < 0 { return; }
+        inst_use(d);        // (an instantiated class's destructor: its body on use)
         f = complete_sym(d);
     }
     nscratch.push(node(N_XPUSH, XP_CALL, 0, s, 0, f, loc));
@@ -2667,6 +2742,19 @@ fn atexit_stmt(s: i64, loc: u32) -> u32 {
         let ft = qt(mk_type(TY_FUNC, 0, t_int, 0, 0, 0) as i64, 0);
         atexit_fn = csym(SK_FUNC, intern("__cxa_atexit"), ft, loc);
         cxs[atexit_fn].flags = CF_EXTERN_C;
+    }
+    let dh = dso_handle_sym(loc);
+    let mark = nscratch.len;
+    let vfp = mk_ptr(fn_type1(t_void, t_voidptr));
+    nscratch.push(node(N_ICAST, CK_BITCAST, vfp, icast(n_ref_fn(d, loc), CK_FUNC2PTR, mk_ptr(abi_type(d))) as i64, 0, 0, loc));
+    nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, n_addr(n_var(s, loc), loc) as i64, 0, 0, loc));
+    nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, n_addr(n_var(dh, loc), loc) as i64, 0, 0, loc));
+    return n_expr_stmt(n_call(atexit_fn, mark, loc));
+}
+
+// __dso_handle (external, hidden).
+fn dso_handle_sym(loc: u32) -> i64 {
+    if dso_handle < 0 {
         dso_handle = csym(SK_VAR, intern("__dso_handle"), t_char, loc);
         syms[dso_handle].flags = SF_FILESCOPE;
         syms[dso_handle].sc = SC_EXTERN as! u8;
@@ -2674,12 +2762,7 @@ fn atexit_stmt(s: i64, loc: u32) -> u32 {
         let ai = get_attr(dso_handle);
         sym_attrs[ai].vis = 1;
     }
-    let mark = nscratch.len;
-    let vfp = mk_ptr(fn_type1(t_void, t_voidptr));
-    nscratch.push(node(N_ICAST, CK_BITCAST, vfp, icast(n_ref_fn(d, loc), CK_FUNC2PTR, mk_ptr(abi_type(d))) as i64, 0, 0, loc));
-    nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, n_addr(n_var(s, loc), loc) as i64, 0, 0, loc));
-    nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, n_addr(n_var(dso_handle, loc), loc) as i64, 0, 0, loc));
-    return n_expr_stmt(n_call(atexit_fn, mark, loc));
+    return dso_handle;
 }
 
 fn fn_type1(ret: u32, p: u32) -> u32 {
@@ -3472,6 +3555,7 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
                 done_prio = p;
                 gi_function(main_file, p);
             }
+            tls_finish();
         }
         // the translation unit with the extra items
         let tu = nodes[tu0];
@@ -3577,6 +3661,8 @@ var var_decls = dictionary<u64, u32> {};   // file-scope variable -> its N_DECL
 var n_bad: i64 = 0;
 
 recursive fn reach_fn(f: i64) {
+    if cxl_has(f, CXL_EXTINST) { return; }      // (an explicit instantiation's: not emitted here)
+    if syms[f].def < 0 && f < cxs.len && cxs[f].flags2 & CF2_LAZY_BODY != 0 { inst_use(f); }
     if syms[f].def < 0 {
         let b = complete_base.get(f as u64);
         if b { reach_fn(b as i64); }
@@ -3607,7 +3693,7 @@ fn check_reachable() -> bool {
         let s = nd.a as i64;
         if nd.kind as i64 == N_FUNCDEF {
             if syms[s].def as u32 != it { continue; }
-            if (syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE) || cg_has_attr(s, AM_CTOR) || cg_has_attr(s, AM_USED) { wk.push(it); }
+            if ((syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE) || cg_has_attr(s, AM_CTOR) || cg_has_attr(s, AM_USED)) && !cxl_has(s, CXL_EXTINST) { wk.push(it); }
         } else if nd.kind as i64 == N_DECL && syms[s].kind as i64 == SK_VAR {
             if syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE && syms[s].flags & SF_FILESCOPE != 0 && (nd.b != 0 || syms[s].flags & (SF_DEFINED | SF_TENTATIVE) != 0) { wk.push(it); }
         }
@@ -3797,6 +3883,12 @@ recursive fn visit(n: u32) {
             if s < cxs.len && cxs[s].flags & (CF_PATTERN | CF_DELETED) != 0 { bad(n); return; }
             reach_fn(s);
         } else if sk == SK_VAR {
+            if syms[s].flags & SF_THREAD != 0 && nd.c != 1 && tls_use_wrapper(s) {
+                // a thread_local through its wrapper (cx_gen_tls)
+                tls_use(n);
+                visit(n);
+                return;
+            }
             if syms[s].flags & SF_FILESCOPE != 0 { reach_var(s); }
             if !c_type_ok(lower_ty(syms[s].ty)) { bad(n); return; }
             if indirect_params.count > 0 && indirect_params.contains(s as u64) && !is_pointer(nd.ty) {

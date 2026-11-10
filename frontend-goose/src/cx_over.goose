@@ -485,6 +485,9 @@ recursive fn mk_call_cx(callee: u32, mark: i64, loc: u32) -> u32 {
     if (is_pointer(t) && is_func(tbase(t))) || is_func(t) {
         let ft = if is_func(t) { t } else { tbase(t) };
         if !cish_call(ft, mark) {
+            // code generation: C++ parameter and result types (references,
+            // classes by invisible reference)
+            if cg_on { return cg_call_ptr(callee, ft, mark, loc); }
             return typed_result(types[ft >> 4].base, loc);
         }
         return mk_call(callee, mark, loc);
