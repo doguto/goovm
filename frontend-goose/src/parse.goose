@@ -2302,5 +2302,6 @@ fn parse_init() {
                 flags: 0, rsv: 0, attr_align: 0, pack: 0, loc: 0, scope: 0 });
             declare_builtin_typedef(nm, rt << 4);
         }
+        declare_builtin_typedef("__mfp8", t_uchar);   // (FP8: a byte here; goosecc has no FP8 arithmetic)
     }
 }

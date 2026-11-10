@@ -29,8 +29,13 @@ breaks on the function's first instruction and single-steps it (`stepi`,
 boundary - the prologue's pushes, the body, the epilogue's pops and `ret` -
 that the backtrace is the function over the same callers as on entry.
 
+With --target aarch64 (milestone F1) both builds are for aarch64-linux-gnu
+(linked -no-pie); each program runs under qemu-aarch64's gdb stub and
+gdb-multiarch attaches to it (`target remote`) instead of `run`.
+
 usage: tests/gdb_oracle.py [--goovm PATH | --cc PATH | --goosecc PATH] [-j 3] [--work DIR] [--stops N]
-                           [--corpus c,sample,ctmark] [--types] [--unwind] [--keep] [filter ...]
+                           [--corpus c,sample,ctmark] [--types] [--unwind] [--keep]
+                           [--target aarch64] [filter ...]
 Corpora: c (tests/c/*.c), sample (a sample of llvm-test-suite programs, C and C++),
 ctmark (the CTMark C programs, with their inputs).
 Exit status 0 iff every transcript matches.
@@ -43,6 +48,8 @@ import os
 import re
 import shutil
 import subprocess
+import itertools
+import threading
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -87,7 +94,7 @@ class Poison(gdb.Breakpoint):
         if npoison[0] > cfg["poison_cap"]:
             self.enabled = False
             return False
-        sp = int(gdb.parse_and_eval("$rsp"))
+        sp = int(gdb.parse_and_eval("$sp"))
         n = len(PAT)
         while n >= 512:
             try:
@@ -101,7 +108,13 @@ for f in cfg["funcs"]:
         Poison("*" + f, internal=True)
     except gdb.error:
         pass
-out.write(ex("run " + " ".join(cfg["args"]) + ((" < " + cfg["stdin"]) if cfg.get("stdin") else "")))
+if cfg.get("port"):
+    # AArch64: the program waits in qemu-aarch64's gdb stub
+    ex("set sysroot /usr/aarch64-linux-gnu")
+    ex("target remote :%d" % cfg["port"])
+    out.write(ex("continue"))
+else:
+    out.write(ex("run " + " ".join(cfg["args"]) + ((" < " + cfg["stdin"]) if cfg.get("stdin") else "")))
 import re
 def types_of_frame():
     # ptype and print of each argument and local, print * of struct pointers
@@ -182,7 +195,12 @@ for fn in cfg["funcs"]:
     except gdb.error:
         pass
 try:
-    gdb.execute("run " + " ".join(cfg["args"]), to_string=True)
+    if cfg.get("port"):
+        gdb.execute("set sysroot /usr/aarch64-linux-gnu", to_string=True)
+        gdb.execute("target remote :%d" % cfg["port"], to_string=True)
+        gdb.execute("continue", to_string=True)
+    else:
+        gdb.execute("run " + " ".join(cfg["args"]), to_string=True)
 except gdb.error:
     pass
 def returned(c, entry):
@@ -246,7 +264,8 @@ while checked < cfg["max_checks"] and steps < cfg["max_steps"]:
                 stack = []
                 break
         insn = gdb.execute("x/i $pc", to_string=True)
-        is_call = "call" in insn.split(":", 1)[-1]
+        op = insn.split(":", 1)[-1].split()
+        is_call = bool(op) and op[0] in ("call", "callq", "bl", "blr")
         try:
             if is_call:
                 gdb.execute("nexti", to_string=True)
@@ -367,11 +386,11 @@ def compile_ref(p, wd, extra, args, tag):
     for i, s in enumerate(p.srcs):
         cc = args.clangxx if s.endswith((".cpp", ".cc")) else args.clang
         o = os.path.join(wd, f"{tag}{i}.o")
-        r = sh([cc, "-O0", "-g"] + extra + p.cflags + ["-c", s, "-o", o])
+        r = sh([cc, "-O0", "-g"] + TFLAGS + extra + p.cflags + ["-c", s, "-o", o])
         if r.returncode:
             raise RuntimeError(f"{tag}: {r.stderr.decode(errors='replace')[-400:]}")
         objs.append(o)
-    r = sh([args.clangxx if p.cxx else args.clang] + objs + p.ldflags + ["-o", exe])
+    r = sh([args.clangxx if p.cxx else args.clang] + LFLAGS + objs + p.ldflags + ["-o", exe])
     if r.returncode:
         raise RuntimeError(f"{tag} link: {r.stderr.decode(errors='replace')[-400:]}")
     return exe, objs
@@ -384,18 +403,18 @@ def compile_goovm(p, wd, args):
         cc = args.clangxx if s.endswith((".cpp", ".cc")) else args.clang
         o = os.path.join(wd, f"goovm{i}.o")
         if args.goosecc:
-            r = sh([args.goosecc, "-g", "-c"] + p.cflags + [s, "-o", o])
+            r = sh([args.goosecc, "-g", "-c"] + TFLAGS + p.cflags + [s, "-o", o])
         elif args.cc:
-            r = sh([args.cc, "--backend=goose", "-O0", "-g"] + p.cflags + ["-c", s, "-o", o])
+            r = sh([args.cc, "--backend=goose", "-O0", "-g"] + TFLAGS + p.cflags + ["-c", s, "-o", o])
         else:
             bc = os.path.join(wd, f"goovm{i}.bc")
-            r = sh([cc, "-O0", "-g"] + p.cflags + ["-c", "-emit-llvm", s, "-o", bc])
+            r = sh([cc, "-O0", "-g"] + TFLAGS + p.cflags + ["-c", "-emit-llvm", s, "-o", bc])
             if r.returncode == 0:
                 r = sh([args.goovm, bc, "-o", o])
         if r.returncode:
             raise RuntimeError(f"goovm: {r.stderr.decode(errors='replace')[-400:]}")
         objs.append(o)
-    r = sh([args.clangxx if p.cxx else args.clang] + objs + p.ldflags + ["-o", exe])
+    r = sh([args.clangxx if p.cxx else args.clang] + LFLAGS + objs + p.ldflags + ["-o", exe])
     if r.returncode:
         raise RuntimeError(f"goovm link: {r.stderr.decode(errors='replace')[-400:]}")
     return exe
@@ -443,6 +462,36 @@ def breakpoints(p, ref_objs, nlines):
     return locs[:60], funcs
 
 
+TFLAGS = []
+LFLAGS = []
+GDB = "gdb"
+_ports = itertools.count(23000 + os.getpid() % 1000 * 20)
+_plock = threading.Lock()
+
+
+def start_qemu(exe, p, stdin):
+    """AArch64: the program under qemu-aarch64's gdb stub (waiting for gdb), and its port; (None, 0) natively."""
+    if not TFLAGS:
+        return None, 0
+    with _plock:
+        port = next(_ports)
+    env = dict(os.environ, QEMU_LD_PREFIX="/usr/aarch64-linux-gnu")
+    q = subprocess.Popen(["qemu-aarch64", "-g", str(port), exe] + list(p.args), cwd=p.rundir or os.path.dirname(exe),
+                         stdin=open(stdin, "rb") if stdin else subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, env=env)
+    return q, port
+
+
+def stop_qemu(q):
+    if q is None:
+        return
+    try:
+        q.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        q.kill()
+        q.wait()
+
+
 def run_gdb(exe, locs, funcs, p, wd, tag, args):
     out = os.path.join(wd, tag + ".gdb.txt")
     cfgf = os.path.join(wd, tag + ".cfg.json")
@@ -450,9 +499,15 @@ def run_gdb(exe, locs, funcs, p, wd, tag, args):
                "poison_cap": args.poison_cap, "types": args.types, "types_max": 12,
                "stdin": os.path.join(p.rundir or wd, p.stdin) if p.stdin else ""}, open(cfgf, "w"))
     scr = os.path.join(wd, tag + ".gdb.py")
+    stdin = os.path.join(p.rundir or wd, p.stdin) if p.stdin else ""
+    qemu, port = start_qemu(exe, p, stdin)
+    cfg = json.load(open(cfgf))
+    cfg["port"] = port
+    json.dump(cfg, open(cfgf, "w"))
     open(scr, "w").write(f"CFG = {cfgf!r}\n" + GDB_SCRIPT)
-    r = sh(["gdb", "-nx", "-batch", "-x", scr, exe], timeout=600, cwd=p.rundir or wd,
+    r = sh([GDB, "-nx", "-batch", "-x", scr, exe], timeout=600, cwd=p.rundir or wd,
            stdin=subprocess.DEVNULL)
+    stop_qemu(qemu)
     if not os.path.exists(out):
         raise RuntimeError(f"gdb ({tag}) wrote no transcript: {r.stderr.decode(errors='replace')[-400:]}")
     return normalize(open(out, errors="replace").read(), p)
@@ -510,8 +565,13 @@ def unwind_test(p, args):
                "srcs": [os.path.basename(x) for x in p.srcs],
                "max_checks": 400, "max_steps": 200000}, open(cfgf, "w"))
     scr = os.path.join(wd, "unwind.py")
+    qemu, port = start_qemu(goo, p, os.path.join(p.rundir or wd, p.stdin) if p.stdin else "")
+    cfg = json.load(open(cfgf))
+    cfg["port"] = port
+    json.dump(cfg, open(cfgf, "w"))
     open(scr, "w").write(f"CFG = {cfgf!r}\n" + UNWIND_SCRIPT)
-    sh(["gdb", "-nx", "-batch", "-x", scr, goo], timeout=3000, cwd=p.rundir or wd, stdin=subprocess.DEVNULL)
+    sh([GDB, "-nx", "-batch", "-x", scr, goo], timeout=3000, cwd=p.rundir or wd, stdin=subprocess.DEVNULL)
+    stop_qemu(qemu)
     if not os.path.exists(out):
         return p.name, "error", "no unwind transcript", 0
     t = open(out).read().strip().splitlines()
@@ -573,8 +633,14 @@ def main():
     ap.add_argument("--unwind", action="store_true", help="single-step the goovm build's functions, checking bt")
     ap.add_argument("--unwind-calls", type=int, default=2)
     ap.add_argument("--json", default="")
+    ap.add_argument("--target", default="x86_64", choices=["x86_64", "aarch64"])
     ap.add_argument("filter", nargs="*")
     args = ap.parse_args()
+    if args.target == "aarch64":
+        global GDB
+        TFLAGS[:] = ["--target=aarch64-linux-gnu"]
+        LFLAGS[:] = ["--target=aarch64-linux-gnu", "-fuse-ld=lld", "-no-pie"]
+        GDB = "gdb-multiarch"
     if args.goosecc:
         args.goosecc = os.path.abspath(args.goosecc)
         args.types = True

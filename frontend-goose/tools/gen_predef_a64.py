@@ -175,6 +175,12 @@ def main():
     # the __has_* tables
     out, _, _ = run(["strings", "-n", "3", a.lib])
     words = sorted(set(w for w in out.split("\n") if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", w)))
+    # and the target builtins clang's AArch64 headers call (not all of them are strings of libclang-cpp)
+    inc = "/usr/lib/llvm-20/lib/clang/20/include"
+    for h in ("arm_acle.h", "arm_neon.h", "arm_fp16.h", "arm_bf16.h", "arm_vector_types.h"):
+        if os.path.exists(os.path.join(inc, h)):
+            words += re.findall(r"__builtin_(?:arm|neon|aarch64)_\w+", open(os.path.join(inc, h)).read())
+    words = sorted(set(words))
     print(f"{len(words)} candidate words", file=sys.stderr)
     c_tabs = [(0, "__has_builtin", "HAS_BUILTIN"), (1, "__has_feature", "HAS_FEATURE"),
               (2, "__has_extension", "HAS_EXTENSION"), (3, "__has_attribute", "HAS_ATTRIBUTE"),

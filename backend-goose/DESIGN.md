@@ -7,6 +7,14 @@ without `-g`, and the same IR after `opt -passes=mem2reg`. It is written in
 Goose and called from `goovm-llc` and `goovm-cc` (C++) and from `goosecc`
 (Goose) through two `export fn`s (`gir_codegen`, `gir_codegen_ex`).
 
+Milestone F1 added a second target, AArch64 (aarch64-linux-gnu, ELF64,
+LP64, AAPCS64), selected by the GIR header (§17): its own instruction
+selection, register allocators, calling convention, frame, unwind
+information, DWARF registers and ELF relocations in the `a64*.goose` files,
+sharing the GIR reader, the middle-end, the liveness analysis of the global
+allocator, the ELF/DWARF/`.eh_frame` writers and the LSDA builder with
+x86-64 behind target-dispatch points. x86-64 objects are unchanged.
+
 Milestone E1 added an optimizing mode. When the GIR header's `opt_level`
 is 1 or more (`goovm-llc -O1`, `goovm-cc -O1`, `goosecc -O1`), a middle-end
 written in Goose optimizes the tables before code generation (§15:
@@ -67,6 +75,15 @@ frequent instructions, which got allocator-aware lowerings (§6).
 | `opt_iv.goose` | sign-extension distribution and induction-variable widening |
 | `opt_verify.goose`, `opt_dump.goose` | `GOOVM_OPT=verify` (SSA and CFG invariants after optimization) and `GOOVM_OPT=dump` (text dump of the optimized tables) |
 | `rag.goose` | **global register allocation** (E1, §16): liveness, live segments, clobbers, assignment, and the hooks the code generator calls |
+| `a64enc.goose` | **AArch64** (F1, §17): the A64 encoder (integer, FP, SIMD, loads/stores with their offset forms, exclusives, branches with fix-ups), relocation numbers |
+| `a64ra.goose` | AArch64 register classes, homes, the block-local allocator, constants (pools, `adrp`/`add`, GOT) |
+| `a64low.goose` | AArch64 allocator-aware lowerings (integer, compares fused with branches and selects, casts, FP, loads/stores with folded addresses, GEP, funnel shifts, `fence`) |
+| `a64mem.goose` | AArch64 memory-tier lowerings: i128, fp128 libcalls, lane-wise vector operations, overflow, `is.fpclass`, aggregates |
+| `a64abi.goose` | AAPCS64: classification (HFA/HVA blocks, i128 pairs, vector legalization), calls, returns, parameters, `va_start` |
+| `a64atom.goose` | AArch64 atomics (outline-atomics helpers, LL/SC loops, 16-byte), TLS (LE/IE/TLSDESC), sjlj, inline asm binding, landing pads |
+| `a64neon.goose` | `GIR_A64`: NEON, crypto, CRC32, exclusives, barriers, system registers |
+| `a64cg.goose` | AArch64 code generation per function: kinds, PHIs, terminators, jump tables, frame, prologue/epilogue and CFI events, far branches |
+| `a64rag.goose` | AArch64 global register allocation on `rag.goose`'s analysis |
 | `CMakeLists.txt` | runs `goose --standalone --header cg.h -o cg.c cg.goose` and builds the C |
 
 `goose` compiles the whole program from `cg.goose` (an `import` includes a
@@ -852,3 +869,100 @@ a value that gets no register keeps -O0's write-through home.
 - **Read-modify-write**: at -O1 `store (op (load p), x), p`, with the load
   deferred into the operation and the operation used only by the store, is
   one `op [p], x`.
+
+## 17. AArch64 (milestone F1)
+
+`GirHeader.target == GIR_TARGET_AARCH64` (`gir/README.md`, F1 additions)
+switches `codegen()` to `a_gen_functions` (`a64cg.goose`); everything after
+the per-function code generation - sections, symbols, relocations, the
+ELF writer, `.eh_frame` and the LSDAs, DWARF - is shared, with the target
+decided at a few dispatch points (`tgt_a64` in `elf.goose`: `e_machine`,
+relocation numbers through `r_abs64`/`r_pc32`/`r_dtpoff64`, mapping
+symbols; `eh.goose`: the CIE and the CFI events; `dwarf.goose`: the frame
+base register and no location for TLS variables).
+
+**Registers.** x0..x30 are 0..30, sp/xzr 31, v0..v31 32..63 (`u64` masks).
+x16/x17 are the encoder's scratch registers (large offsets, far branches,
+PLT-like veneers are not needed: calls are `bl` with `R_AARCH64_CALL26`,
+which lld extends with thunks), x18 is never used (platform register), v31
+is the FP scratch, x29 is always the frame pointer.
+
+**Frame.** `stp x29, x30, [sp, #-F]!` (or `sub sp` + `stp` above 504
+bytes), `mov x29, sp`; the callee-saved registers the function uses are
+stored at x29+16 upwards (x19..x28, and only the low 64 bits of v8..v15, as
+AAPCS64 says), then the `va_start` save areas, the allocas (small ones
+first, so that more of them are in reach of the unsigned-offset forms),
+then the homes of values, all at positive offsets from x29. Incoming stack
+arguments are at x29 + F. The prologue is generated after the body (its
+size depends on what the body used) and placed before it. CFI: the CIE has
+code alignment 1, data alignment -8, return address column 30 and
+`def_cfa sp+0`; the FDE records `def_cfa_offset F`, `def_cfa x29` and the
+saves as events of the prologue and epilogue, so the CFA is exact at every
+instruction (checked by `tests/gdb_oracle.py --unwind --target aarch64`).
+
+**Two tiers.** As on x86-64 (§6), the frequent instructions have
+allocator-aware lowerings (`a64low.goose`, kind `K_A`): values in
+registers, compares fused with `b.cond`/`csel`/`cset`, immediates (12-bit
+arithmetic, logical bitmasks, `movz`/`movk` sequences), address modes (base
++ scaled register, base + offset, folded GEPs). The rest (`a64mem.goose`,
+`a64atom.goose`, `a64neon.goose`, kind `K_B`; calls `K_CALL`) works on
+fixed scratch registers after the caller-saved registers are flushed:
+i128 in x0:x1 pairs, fp128 through the soft-float routines, vectors of
+any shape lane by lane in memory, aggregates, atomics. The block-local
+allocator (`a64ra.goose`) is §4's design with AArch64's register file.
+
+**AAPCS64** (`a64abi.goose`). The GIR types are classified as LLVM's
+`CC_AArch64_AAPCS` does on the IR clang produces: integers and pointers in
+x0..x7, FP and short vectors in v0..v7, an array of one FP or vector type
+(clang's HFA/HVA lowering) or such a structure in consecutive V registers
+all or nothing, `i128` in an even/odd pair or 16-aligned on the stack,
+illegal vectors split, widened or promoted like LLVM's type legalization,
+everything else on the stack in 8-byte slots (16 for 16-aligned values);
+`sret` in x8; variadic calls pass the variadic arguments like fixed ones
+(Linux), and a variadic function saves the unnamed x and q argument registers
+in its frame for `va_start`. Moves
+into argument registers are a parallel copy (cycles through x16/v31).
+
+**Atomics.** As clang's default on Linux (`-moutline-atomics`), atomic
+read-modify-write operations and compare-and-swap of 1 to 16 bytes call
+`__aarch64_{swp,ldadd,ldclr,ldset,ldeor,cas}{1,2,4,8,16}_{relax,acq,rel,acq_rel}`
+from libgcc (they use LSE when the CPU has it); the operations without a
+helper (nand, min/max, FP) are `ldaxr`/`stlxr` loops; loads and stores with
+ordering are `ldar`/`stlr`, fences `dmb ish`/`ishld`.
+
+**TLS.** The model the IR gives (clang: local-exec for the executable's
+own variables, initial-exec for external ones in a PIE, general dynamic
+under -fPIC): local-exec as `tprel` `add`s on `tpidr_el0`, initial-exec
+through the GOT, general dynamic as TLSDESC (`adrp`/`ldr`/`add`/`blr` with
+the four `TLSDESC` relocations).
+
+**Global register allocation** (`a64rag.goose`) reuses `rag.goose`'s
+liveness, live segments and occupancy bitmaps. Candidates: x19..x28 and
+v8..v15 (values of at most 8 bytes) across calls and memory-tier
+lowerings, x2..x15, v2..v7 and v16..v30 otherwise; x0/x1, v0/v1, x16/x17
+and v31 are never pinned (the lowerings' fixed registers). A memory-tier
+lowering flushes the caller-saved registers first; a pinned value's home
+is never current (PHI moves change only its register), so a flush always
+stores it.
+
+**NEON and ACLE** (`a64neon.goose`): one lowering per `GIR_A64` group
+(three-same, two-misc, across-lanes, three-different, shifts by immediate,
+by element, table lookups, crypto, dot product) choosing the vector or the
+scalar (SISD) encoding from the type, with the operands in v0..v2 and the
+table of `tbl`/`tbx` in v16..v19.
+
+**Inline assembly**: the exporter binds the operands and assembles the
+AArch64 text with LLVM's MC layer (as for x86-64, §6 of `NOTES.md` A3);
+the back-end moves values in and out of the bound registers.
+
+**Branches.** Conditional branches reach ±1 MB, `tbz`/`cbz` ±32 KB: a
+function whose size bound (`a_size_bound`) exceeds the short range gets
+the far forms (an inverted short branch over a `b`). At -O0 an
+unconditional branch to the next block is still emitted, as FastISel does,
+so that the branch's line (a loop body's closing brace) has an address.
+
+**What is not done** (`NOTES.md` F1): SVE/SME; inline asm constraints of
+SVE registers; `__attribute__((target_clones))`/function multi-versioning
+(ifunc resolvers); goosecc's `arm_neon.h` (its `__builtin_neon_*` calls are
+not lowered) and goosecc's AArch64 inline assembly (goosecc has no AArch64
+assembler).
