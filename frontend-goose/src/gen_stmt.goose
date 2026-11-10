@@ -1186,7 +1186,7 @@ var f_nargs: u32 = 0;
 var f_ret_ty: u32 = 0;
 
 fn abi_word(a: Abi) -> u32 {
-    if a.kind == AK_BYVAL {
+    if a.kind == AK_BYVAL && a.tmp == 0 {
         var lg: u32 = 0;
         while ((1 as u32) << lg) < a.align { lg++; }
         return ABI_BYVAL | a.size | (lg << 24);

@@ -11,6 +11,7 @@ import .ppdir;
 import .print;
 import .predef_gen;
 import .predef_cxx_gen;
+import .predef_a64_gen;
 import .tables_gen;
 
 // ---------------------------------------------------------------------------
@@ -364,8 +365,9 @@ fn char_value(t: Tok) -> i64, bool {
     }
     if kind == 0 {
         if n == 1 {
-            // plain char is signed
+            // plain char is signed (unsigned on AArch64 unless -fsigned-char)
             let b = last & 255;
+            if char_unsigned { return b, false; }
             return if b >= 128 { b - 256 } else { b }, false;
         }
         // multi-character constant: an int
@@ -440,6 +442,10 @@ fn table_text(k: i64) -> const u8[:] {
 // the static hash tables of tables_gen.goose.
 fn table_lookup(k: i64, name: const u8[:]) -> i64 {
     if opt_cxx && k != 6 { return cxx_table_lookup(k, name); }
+    if opt_a64 && k != 6 {
+        let d = a64_delta_lookup(k, name);
+        if d >= 0 { return d; }
+    }
     let text = table_text(k);
     let h = hash_bytes(name);
     let e = match k {
@@ -479,6 +485,10 @@ fn cxx_table_lookup(k: i64, name: const u8[:]) -> i64 {
         }
         i += 4;
     }
+    if opt_a64 {
+        let d = a64_delta_lookup(k, name);
+        if d >= 0 { return d; }
+    }
     let text = table_text(k);
     let h = hash_bytes(name);
     let e = match k {
@@ -502,6 +512,61 @@ fn cxx_table_lookup(k: i64, name: const u8[:]) -> i64 {
     var v: i64 = 0;
     while j < text.len && text[j] >= '0' && text[j] <= '9' { v = v * 10 + (text[j] - '0'); j++; }
     return v;
+}
+
+// AArch64 (F1): the answers that differ from the x86-64 tables (A64_DELTA,
+// A64_CXX_DELTA: "TABLE WORD VALUE" lines), -1 for the others. The words'
+// hashes are computed at the first lookup.
+var a64_dh: u64[>..] = [];     // per delta line: hash_bytes(word) << 8 | table
+var a64_doff: u32[>..] = [];   // per delta line: its offset in the text
+fn a64_delta_lookup(k: i64, name: const u8[:]) -> i64 {
+    let text = if opt_cxx { A64_CXX_DELTA } else { A64_DELTA };
+    if a64_doff.len == 0 {
+        var i = 0;
+        while i < text.len {
+            var j = i;
+            while j < text.len && text[j] != '\n' { j++; }
+            var e = i + 2;
+            while e < j && text[e] != ' ' { e++; }
+            a64_dh.push(((hash_bytes(text[i + 2..e]) as u64) << 8) | ((text[i] - '0') as u64));
+            a64_doff.push(i as! u32);
+            i = j + 1;
+        }
+    }
+    let key = ((hash_bytes(name) as u64) << 8) | (k as! u64);
+    for h, q in a64_dh {
+        if h != key { continue; }
+        let o = a64_doff[q] as i64 + 2;
+        if o + name.len < text.len && text[o..o + name.len] == name && text[o + name.len] == ' ' {
+            var j = o + name.len + 1;
+            var v: i64 = 0;
+            while j < text.len && text[j] >= '0' && text[j] <= '9' { v = v * 10 + (text[j] - '0'); j++; }
+            return v;
+        }
+    }
+    return -1;
+}
+// The -march= delta of AArch64 (A64_MARCH) for value m, or "" (and false if
+// m is not one of the accepted values).
+fn a64_march_delta(m: const u8[:]) -> bool, const u8[:] {
+    let text = A64_MARCH;
+    var i = 0;
+    var start = -1;
+    while i < text.len {
+        var j = i;
+        while j < text.len && text[j] != '\n' { j++; }
+        if text[i] == '=' {
+            if start >= 0 { return true, text[start..i]; }
+            if text[i + 1..j] == m { start = j + 1; }
+        }
+        i = j + 1;
+    }
+    if start >= 0 { return true, text[start..]; }
+    return false, "";
+}
+fn a64_march(m: const u8[:]) -> bool {
+    let ok, d = a64_march_delta(m);
+    return ok;
 }
 
 // The standard's deltas of the __has_* tables (HAS_CXX_STD_DELTA): per
@@ -904,6 +969,9 @@ var cmd_macros: CmdMacro[>..] = [];
 var std_off: u32 = 0;      // -std= (names)
 var std_len: i64 = 0;
 fn opt_std() -> const u8[:] { names[std_off..std_off + std_len] }
+var march_off: u32 = 0;    // -march= (names; AArch64)
+var march_len: i64 = 0;
+fn opt_march() -> const u8[:] { names[march_off..march_off + march_len] }
 var opt_os: bool = false;
 var opt_pic_mode: i64 = 0;     // 0 -fPIE (clang's default), 1 -fpie, 2 -fPIC, 3 -fpic, 4 -fno-pic
 var opt_pthread: bool = false;
@@ -1019,8 +1087,14 @@ fn build_builtin_text() {
     let s = opt_std();
     let strict = s.len > 0 && s[0] != 'g';
     let c89 = !opt_cxx && std_version().len == 0;
-    let text = if opt_cxx { PREDEF_CXX_BASE } else { PREDEF_BASE };
+    let text = if opt_a64 { if opt_cxx { PREDEF_CXX_A64_BASE } else { PREDEF_A64_BASE } }
+               else { if opt_cxx { PREDEF_CXX_BASE } else { PREDEF_BASE } };
     let delta = if opt_cxx { cxx_std_delta() } else { "" };
+    var mdelta: const u8[:] = "";
+    if opt_a64 {
+        let ok, md = a64_march_delta(opt_march());
+        mdelta = md;
+    }
     var i = 0;
     while i < text.len {
         var j = i;
@@ -1029,6 +1103,10 @@ fn build_builtin_text() {
         i = j + 1;
         var keep = true;
         if opt_cxx && !cxx_predef_line(line, delta) { keep = false; }
+        if opt_a64 {
+            if !opt_unsigned_char && line == "#define __CHAR_UNSIGNED__ 1" { keep = false; }
+            if mdelta.len > 0 && !cxx_predef_line(line, mdelta) { keep = false; }
+        }
         if line == "#define __NO_INLINE__ 1" && opt_optimize > 0 { keep = false; }
         if opt_pic_mode != 0 && (starts_with(line, "#define __PIC__ ") || starts_with(line, "#define __pic__ ") ||
                                  starts_with(line, "#define __PIE__ ") || starts_with(line, "#define __pie__ ")) {
@@ -1064,11 +1142,25 @@ fn build_builtin_text() {
             k = j + 1;
         }
     }
+    if mdelta.len > 0 {
+        // the -march= delta's additions (AArch64)
+        var k = 0;
+        while k < mdelta.len {
+            var j = k;
+            while j < mdelta.len && mdelta[j] != '\n' { j++; }
+            if mdelta[k] == '+' {
+                src.append("#define ");
+                src.append(mdelta[k + 1..j]);
+                src.push('\n');
+            }
+            k = j + 1;
+        }
+    }
     if opt_optimize > 0 { src.append("#define __OPTIMIZE__ 1\n"); }
     if opt_os { src.append("#define __OPTIMIZE_SIZE__ 1\n"); }
     if strict && !opt_cxx { src.append("#define __STRICT_ANSI__ 1\n"); }
     if opt_pthread { src.append("#define _REENTRANT 1\n"); }
-    if opt_unsigned_char { src.append("#define __CHAR_UNSIGNED__ 1\n"); }
+    if opt_unsigned_char && !opt_a64 { src.append("#define __CHAR_UNSIGNED__ 1\n"); }
     for m in cmd_macros {
         if m.inc { continue; }
         let d = names[m.off..m.off + m.len];

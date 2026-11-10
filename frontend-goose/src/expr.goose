@@ -222,6 +222,8 @@ fn char_literal(t: Tok) -> u32 {
         ty = if src[t.spell + 1] == '8' { t_uchar } else { t_ushort };
     } else if c == 'U' {
         ty = t_uint;
+    } else if c == 'L' {
+        ty = t_wchar;    // (int on x86-64, unsigned int on AArch64)
     }
     var vv = v;
     if ty == t_ushort { vv = v & 65535; }
