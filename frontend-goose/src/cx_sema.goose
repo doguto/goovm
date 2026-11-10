@@ -36,9 +36,8 @@ recursive fn cish(t: u32) -> bool {
     let k = kind_of(t);
     if k == TY_POINTER { return cish_ptr(tbase(t)); }
     if k == TY_ARRAY || k == TY_VLA {
-        // code generation: arrays of classes decay to pointers C handles
-        if cg_on { return cish_ptr(tbase(t)) && (cish(tbase(t)) || is_record(tbase(t))); }
-        return cish(tbase(t));
+        // arrays of classes decay to pointers C handles
+        return cish_ptr(tbase(t)) && (cish(tbase(t)) || is_record(tbase(t)));
     }
     if k == TY_FUNC { return true; }
     if k == TY_MEMPTR { return cg_on; }     // code generation: copied, stored and initialized as C values
@@ -68,6 +67,11 @@ recursive fn mk_binop(op_cx: i64, op_c: i64, l0: u32, r0: u32, loc: u32) -> u32 
         let o = overloaded_binop(op_cx, l, r, loc);
         if o != 0 { return o; }
         if op_c == B_COMMA { return node(N_BINARY, B_COMMA, tr, discard_value(l) as i64, r as i64, 0, loc); }
+        // D2: the built-in operator, class operands converted by their conversion functions
+        let want = if op_c == B_LAND || op_c == B_LOR { t_bool } else { 0 };
+        let l2 = if is_record(tl) { builtin_conv_operand(l, want) } else { l };
+        let r2 = if is_record(tr) { builtin_conv_operand(r, want) } else { r };
+        if l2 != 0 && r2 != 0 && !is_record(nodes[l2].ty) && !is_record(nodes[r2].ty) { return mk_binop(op_cx, op_c, l2, r2, loc); }
         return dep_node(t_unknown, loc);
     }
     if kind_of(tl) == TY_NULLPTR && kind_of(tr) == TY_NULLPTR { return dep_node(t_bool, loc); }
@@ -124,6 +128,23 @@ recursive fn mk_assign_cx(op: i64, l: u32, r: u32, loc: u32, tok: i64) -> u32 {
     if is_record(tl) || is_record(nodes[r].ty) || nodes[r].kind as i64 == N_INITBRACE {
         let o = overloaded_assign(op, l, r, loc, tok);
         if o != 0 { return o; }
+        if !is_record(tl) && is_record(nodes[r].ty) {
+            // D2: a class value assigned to a scalar: its conversion function
+            let c = ics_user(r, unqual(tl), CV_COPY, false, false);
+            if c.kind as i64 == ICS_USER && c.user >= 0 {
+                let x = apply_user_conv(r, c.user as i64, tl);
+                if x != 0 && !is_opq(x) { return mk_assign_cx(op, l, x, loc, tok); }
+            }
+        }
+        if is_record(tl) && op == 0 && !cg_on && is_lvalue(l) {
+            // D2: the implicit copy or move assignment X& operator=(const X&) / (X&&)
+            let c = ics_of(r, mk_lref(with_q(unqual(tl), Q_CONST)), CV_COPY);
+            if c.kind as i64 != ICS_BAD && c.flags & IF_UNKNOWN == 0 {
+                let n = node(N_CXX, 0, tl, 0, 0, 0, loc);
+                nodes[n].flags = NF_LVALUE;
+                return n;
+            }
+        }
         return dep_node(tl, loc);
     }
     var rr = r;
@@ -399,6 +420,8 @@ recursive fn mk_unary_cx(k: i64, e: u32, loc: u32) -> u32 {
         let o = overloaded_unop(op, e, loc, false);
         if o != 0 { return o; }
         if k == TK_EXCLAIM { let b = conv_to_bool(e); if b != 0 && !is_opq(b) { return node(N_UNARY, U_NOT, t_bool, b as i64, 0, 0, loc); } }
+        let e2 = builtin_conv_operand(e, 0);
+        if e2 != 0 && !is_record(nodes[e2].ty) { return mk_unary_cx(k, e2, loc); }
         return dep_node(if k == TK_EXCLAIM { t_bool } else { t_unknown }, loc);
     }
     if k == TK_EXCLAIM {

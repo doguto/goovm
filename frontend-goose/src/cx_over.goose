@@ -573,11 +573,43 @@ fn adl_applies(s0: i64) -> bool {
     return true;
 }
 recursive fn conv_to_bool(e: u32) -> u32 {
-    if cg_on && !is_opq(e) {
-        let c = user_conv(e, t_bool, nodes[e].loc);
-        if c != 0 && !is_opq(c) { return to_bool(c); }
+    if !is_opq(e) {
+        // a contextual conversion: explicit conversion functions count
+        let c = ics_user(e, t_bool, CV_COPY | CV_BOOL_CTX, false, false);
+        if c.kind as i64 == ICS_USER && c.user >= 0 {
+            let x = apply_user_conv(e, c.user as i64, t_bool);
+            if x != 0 && !is_opq(x) { return to_bool(x); }
+        }
     }
     return dep_node(t_bool, nodes[e].loc);
+}
+
+// A class operand of a built-in operator converted by its conversion
+// function (C++ [over.built]: the one non-explicit conversion function to
+// an arithmetic, enumeration or pointer type; `want` preferred), or 0.
+recursive fn builtin_conv_operand(e: u32, want: u32) -> u32 {
+    if is_opq(e) || !is_record(nodes[e].ty) { return 0; }
+    need_complete(nodes[e].ty);
+    if want != 0 {
+        let c = ics_user(e, want, CV_COPY | (if want == t_bool { CV_BOOL_CTX } else { 0 }), false, false);
+        if c.kind as i64 == ICS_USER && c.user >= 0 { return apply_user_conv(e, c.user as i64, want); }
+    }
+    let mark = conv_fns.len;
+    collect_conv_fns(unqual(nodes[e].ty), 0);
+    var found: i64 = -1;
+    var n = 0;
+    for i in mark..conv_fns.len {
+        let f = conv_fns[i] as i64;
+        if syms[f].kind as i64 != SK_FUNC || cxs[f].flags & CF_EXPLICIT != 0 { continue; }
+        let rt = nonref(types[syms[f].ty >> 4].base);
+        let k = kind_of(rt);
+        if is_arith(rt) || k == TY_BOOL || k == TY_ENUM || k == TY_POINTER || k == TY_NULLPTR { found = f; n++; }
+    }
+    conv_fns.resize(mark);
+    if n != 1 { return 0; }
+    let ob = ics_object(e, found);
+    if ob.kind as i64 == ICS_BAD { return 0; }
+    return apply_user_conv(e, found, types[syms[found].ty >> 4].base);
 }
 recursive fn cast_to_class(t: u32, e: u32, loc: u32) -> u32 { return 0; }
 

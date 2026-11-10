@@ -544,9 +544,14 @@ recursive fn parse_primary_cx() -> u32 {
         while tu_toks[j].kind as i64 == TK_STRING { if has_udl(tu_toks[j]) { udl = true; } j++; }
         if udl { pc = j; return opaque_node(loc); }
         let s = string_literal();
-        // C++: the elements are const
+        // C++: the elements are const, of the character types of the prefixes
         let st = nodes[s].ty;
-        nodes[s].ty = mk_array(with_quals(tbase(st), Q_CONST), types[st >> 4].n);
+        var el = tbase(st);
+        if el == t_int { el = t_wchar_cxx; }
+        else if el == t_uint { el = t_char32; }
+        else if el == t_ushort { el = t_char16; }
+        else if opt_cxx_std >= 20 && string_has_u8(pc) { el = t_char8; }
+        nodes[s].ty = mk_array(with_quals(el, Q_CONST), types[st >> 4].n);
         strs[nodes[s].a].elem = strs[nodes[s].a].elem;
         return s;
     }
@@ -688,6 +693,17 @@ recursive fn parse_primary_cx() -> u32 {
     perr_expected("an expression");
     if !at(TK_EOF) && !at(TK_SEMI) && !at(TK_R_PAREN) && !at(TK_R_BRACE) && !at(TK_R_SQUARE) && !at(TK_COMMA) { adv(); }
     return opaque_node(loc);
+}
+
+// Does the string literal (adjacent ones) ending before token p have a u8 prefix?
+fn string_has_u8(p: i64) -> bool {
+    var j = p - 1;
+    while j >= 0 && tu_toks[j].kind as i64 == TK_STRING {
+        let t = tu_toks[j];
+        if t.val >= 2 && src[t.spell] == 'u' && src[t.spell + 1] == '8' { return true; }
+        j--;
+    }
+    return false;
 }
 
 fn has_udl(t: Tok) -> bool {
