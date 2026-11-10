@@ -224,12 +224,22 @@ recursive fn mk_cast_cx(t: u32, e0: u32, loc: u32, kind: i64) -> u32 {
         return n;
     }
     if kind == CAST_DYNAMIC {
+        if cg_on && !dependent_ctx() { return cg_dynamic_cast(t, e, loc); }
         // the type is known; the run-time check is code generation's
         need_complete(nonref(t));
         if is_pointer(t) { need_complete(tbase(t)); }
         let n = node(N_DYNCAST, 0, nonref(t), e as i64, 0, 0, loc);
         if is_ref(t) { nodes[n].flags = (NF_LVALUE | (if kind_of(t) == TY_RREF { NF_XVALUE } else { 0 })) as! u16; }
         return n;
+    }
+    if cg_on && (kind == CAST_STATIC || kind == CAST_C) {
+        // class templates involved are instantiated before their bases are asked
+        if is_ref(t) || is_pointer(t) { if is_record(tbase(t)) { need_complete(tbase(t)); } }
+        let et = nodes[e].ty;
+        if is_record(et) { need_complete(et); }
+        else if is_pointer(et) && is_record(tbase(et)) { need_complete(tbase(et)); }
+        let cc = cg_class_cast(t, e, loc);
+        if cc != 0 { return cc; }
     }
     let ft = nodes[e].ty;
     if is_ref(t) {
