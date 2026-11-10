@@ -1241,6 +1241,7 @@ fn builtin_template(name: const u8[:]) {
 // The parser's start: the C++ types and the global namespace.
 fn cx_init() {
     rec_inst_hook = true;
+    matrix_unknown_t = mk_depname(t_unknown, intern("__matrix_type"), -1);
     id_this = intern("this");
     cx_types_init();
     names_init();

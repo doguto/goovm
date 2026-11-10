@@ -563,7 +563,11 @@ recursive fn match_spec(pt: i64, args: i32) -> bool, i32 {
     var full = false;
     if ok { full, binds = ded_list(pt); }
     ded_end(sv);
-    if ok && full && !spec_args_check(pt, binds, args) { return false, -1; }
+    if inst_debug() { write_stderr(str("match_spec pt=", pt, " deduced=", ok, " full=", full, "\n")); }
+    if ok && full && !spec_args_check(pt, binds, args) {
+        if inst_debug() { write_stderr(str("  spec_args_check failed pt=", pt, "\n")); }
+        return false, -1;
+    }
     return ok && full, binds;
 }
 
@@ -597,9 +601,11 @@ fn pattern_as_depspec(t: u32) -> u32 {
     let cs = crecs[r].sym as i64;
     if cs < 0 || cxs[cs].tmpl < 0 { return 0; }
     let tt = cxs[cs].tmpl as i64;
-    if tmpls[tt].spec_args >= 0 || tmpls[tt].kind as i64 != TT_CLASS || tmpls[tt].pattern as i64 != r { return 0; }
+    if tmpls[tt].kind as i64 != TT_CLASS || tmpls[tt].pattern as i64 != r { return 0; }
     let ts = tmpls[tt].sym as i64;
     if ts < 0 { return 0; }
+    // a partial specialization's pattern: X<its argument patterns>
+    if tmpls[tt].spec_args >= 0 { return with_q(mk_depspec(ts, tmpls[tt].spec_args), quals(t)); }
     return with_q(mk_depspec(ts, own_args(tt)), quals(t));
 }
 

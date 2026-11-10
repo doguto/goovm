@@ -78,6 +78,10 @@ recursive fn cx_attr_one(a: Attrs&) {
         }
     } else if name == "vector_size" {
         if at(TK_L_PAREN) { a.vector_size = cx_attr_int(); }
+    } else if name == "matrix_type" {
+        // clang's matrix types (-fenable-matrix): not implemented, the type is unknown
+        a.matrix = true;
+        if at(TK_L_PAREN) { skip_to(TK_R_PAREN); accept(TK_R_PAREN); }
     } else if name == "ext_vector_type" {
         if at(TK_L_PAREN) { a.ext_vector = cx_attr_int(); }
     } else if name == "noreturn" { a.misc = a.misc | AM_NORETURN; }

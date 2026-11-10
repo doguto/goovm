@@ -63,6 +63,7 @@ struct Attrs {
     vis: u8 = 0,            // visibility("hidden") = 1, ("protected") = 2
     ctor_prio: u16 = 65535,
     dtor_prio: u16 = 65535,
+    matrix: bool = false,   // C++ (D2): matrix_type(R, C) (not implemented: the type is unknown)
 }
 
 // The string argument of an attribute: ("text") -> (offset in strbytes, length).
@@ -262,7 +263,9 @@ recursive fn parse_asm_label(a: Attrs&) {
 }
 
 // Applies the type attributes (mode, vector_size, ext_vector_type) to t.
+var matrix_unknown_t: u32 = 0;     // C++ (D2): the type a matrix_type attribute gives (unknown)
 fn apply_type_attrs(t: u32, a: Attrs&, loc: u32) -> u32 {
+    if a.matrix { return matrix_unknown_t; }
     var r = t;
     if a.mode != 0 {
         let m = a.mode as i64;

@@ -236,11 +236,17 @@ recursive fn paren_type_ahead() -> bool {
     let r = looks_like_type_id();
     var ok = false;
     if r {
-        // the type-id must end at the matching ')'
+        // the type-id must end at the matching ')', without errors
+        let wl0 = diag_watch_level;
+        let we0 = diag_watch_errors;
         diag_suppress++;
+        diag_watch_level = diag_suppress;
         let t = parse_type_id();
+        let bad = diag_watch_errors != we0;
+        diag_watch_level = wl0;
+        diag_watch_errors = we0;
         diag_suppress--;
-        ok = at(TK_R_PAREN);
+        ok = at(TK_R_PAREN) && !bad;
         if ok {
             // ( T ) followed by something that cannot start an operand is
             // not a cast: (x) + y where x is a type cannot happen, but
@@ -358,10 +364,17 @@ recursive fn paren_is_type() -> bool {
     let r = looks_like_type_id();
     var ok = false;
     if r {
+        let wl0 = diag_watch_level;
+        let we0 = diag_watch_errors;
         diag_suppress++;
+        diag_watch_level = diag_suppress;
         let t = parse_type_id();
+        let bad = diag_watch_errors != we0;
+        diag_watch_level = wl0;
+        diag_watch_errors = we0;
         diag_suppress--;
-        ok = at(TK_R_PAREN);
+        // a type-id parsed without errors up to the ')'
+        ok = at(TK_R_PAREN) && !bad;
     }
     restore(sv);
     return ok;
@@ -1055,9 +1068,13 @@ fn eval_trait(name: const u8[:], mark: i64) -> bool, i64 {
 // mark): __builtin_addressof (the address, no operator& overload) and
 // __builtin_launder. 0 for others.
 fn cxx_builtin_call(name: u32, mark: i64, loc: u32) -> u32 {
+    let nm = ident_text(name as i64);
+    if nm.len > 17 && nm[..17] == "__builtin_matrix_" {
+        // clang's matrix builtins: matrix types are not implemented (unknown)
+        return dep_node(matrix_unknown_t, loc);
+    }
     if nscratch.len - mark != 1 { return 0; }
     let a = nscratch[mark];
-    let nm = ident_text(name as i64);
     if nm == "__builtin_addressof" {
         if is_opq(a) { return dep_node(t_unknown, loc); }
         if nodes[a].kind as i64 == N_FUNCREF || !is_lvalue(a) { return 0; }
@@ -1140,6 +1157,16 @@ recursive fn parse_id_expr() -> u32 {
         if ec >= 0 && (has_dep_base(ec) || scopes[ec].flags & SCF_PATTERN != 0) { return opaque_node(loc); }
         if dependent_ctx() || diag_suppress > 0 || lenient > 0 { return opaque_node(loc); }
         if qn.scope >= 0 && (scopes[qn.scope].flags & SCF_PATTERN != 0 || has_dep_base(qn.scope as i64)) { return opaque_node(loc); }
+        if qn.qual && qn.kind as i64 == QK_OP && qn.op as i64 == OP_EQUAL && known_class_scope(qn.scope as i64) {
+            // X::operator= of a class without a user-declared one: its
+            // implicitly declared copy (and move) assignment operators
+            let r = scopes[qn.scope].rec as i64;
+            let s6 = implicit_special(r, 6);
+            if implicit_move_declared(r) { let s7 = implicit_special(r, 7); cxs[s6].nnext = s7 as! i32; }
+            let n = node(N_FUNCREF, 0, t_unknown, s6, 0, 0, loc);
+            nodes[n].op = 1;
+            return n;
+        }
         err_at(qn.loc, str("use of undeclared identifier '", qn_text(qn), "'"));
         return opaque_node(loc);
     }
@@ -1177,6 +1204,33 @@ fn adl_could_find(mark: i64) -> bool {
         let t = nodes[nscratch[i]].ty;
         if is_opq(nscratch[i]) || is_record(t) || kind_of(t) == TY_ENUM || is_opaque(t) { return true; }
         if is_pointer(t) && (is_record(tbase(t)) || kind_of(tbase(t)) == TY_ENUM) { return true; }
+    }
+    return true;
+}
+
+// Are class r's move constructor and move assignment operator implicitly
+// declared (no user-declared copy or move constructor, copy or move
+// assignment operator or destructor; C++ [class.copy.assign]p4)?
+fn implicit_move_declared(r: i64) -> bool {
+    let sc = crecs[r].scope as i64;
+    let cls = records[r].ty << 4;
+    var s = scope_find(sc, id_ctor);
+    while s >= 0 {
+        let f = resolve(s);
+        if f >= 0 && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & CF_IMPLICIT == 0 && first_param_ref(f, cls) != 0 { return false; }
+        s = cxs[s].nnext as i64;
+    }
+    s = scope_find(sc, op_ids[OP_EQUAL]);
+    while s >= 0 {
+        let f = resolve(s);
+        if f >= 0 && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & CF_IMPLICIT == 0 { return false; }
+        s = cxs[s].nnext as i64;
+    }
+    s = scope_find(sc, id_dtor);
+    while s >= 0 {
+        let f = resolve(s);
+        if f >= 0 && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & CF_IMPLICIT == 0 { return false; }
+        s = cxs[s].nnext as i64;
     }
     return true;
 }
