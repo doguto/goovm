@@ -84,7 +84,7 @@ fn def_from(j: u32, a: u32, ra: u32) -> u32 {
     let r = ra_reuse2(a, ra);
     if r == ra { return r; }
     let rd = ra_def(j);
-    mov_rr64(rd, ra);
+    if rd != ra { mov_rr64(rd, ra); }
     return rd;
 }
 
@@ -107,7 +107,13 @@ fn lower_binop_a(I: Inst, j: u32) {
     var a = I.a;
     var b = I.b;
     let comm = op == GIR_ADD || op == GIR_MUL || op == GIR_AND || op == GIR_OR || op == GIR_XOR;
-    if comm && is_const(a) && !is_const(b) {   // (clang -O0 keeps `4 * x` as written)
+    // (E2) an operand that shares the result's register is the destination
+    let sh = rg_shared(j);
+    if sh != NIL && sh == b && sh != a {
+        a = I.b;
+        b = I.a;
+    }
+    if sh == NIL && comm && is_const(a) && !is_const(b) {   // (clang -O0 keeps `4 * x` as written)
         a = I.b;
         b = I.a;
     }
@@ -151,7 +157,7 @@ fn lower_binop_a(I: Inst, j: u32) {
         return;
     }
     // register (or memory) second operand
-    if comm && ra_reuse(a) == 32 && ra_reuse(b) != 32 {
+    if sh == NIL && comm && ra_reuse(a) == 32 && ra_reuse(b) != 32 {
         let t = a;
         a = b;
         b = t;
@@ -1372,7 +1378,11 @@ fn lower_fbin_a(I: Inst, j: u32) {
     let op: u32 = I.op;
     var a = I.a;
     var b = I.b;
-    if (op == GIR_FADD || op == GIR_FMUL) && ra_xreuse(a) == 32 && ra_xreuse(b) != 32 {
+    let sh = rg_shared(j);
+    if sh != NIL && sh == b && sh != a {
+        a = I.b;
+        b = I.a;
+    } else if sh == NIL && (op == GIR_FADD || op == GIR_FMUL) && ra_xreuse(a) == 32 && ra_xreuse(b) != 32 {
         a = I.b;
         b = I.a;
     }
@@ -1386,7 +1396,7 @@ fn lower_fbin_a(I: Inst, j: u32) {
     var xd = ra_xreuse(a);
     if xd != xa {
         xd = ra_xdef(j);
-        movaps_rr(xd, xa);
+        if xd != xa { movaps_rr(xd, xa); }
     }
     if okm { sse_arith_m(sse_op(op), dbl, xd, mb); }
     else if cm { sse_arith_m(sse_op(op), dbl, xd, const_mem(gir_idx(b))); }
@@ -1523,7 +1533,11 @@ fn lower_vbin_a(I: Inst, j: u32) {
     var b = I.b;
     let comm = op == GIR_FADD || op == GIR_FMUL || op == GIR_ADD || op == GIR_MUL || op == GIR_AND
                || op == GIR_OR || op == GIR_XOR;
-    if comm && ra_xreuse(a) == 32 && ra_xreuse(b) != 32 {
+    let sh = rg_shared(j);
+    if sh != NIL && sh == b && sh != a {
+        a = I.b;
+        b = I.a;
+    } else if sh == NIL && comm && ra_xreuse(a) == 32 && ra_xreuse(b) != 32 {
         a = I.b;
         b = I.a;
     }
@@ -1532,7 +1546,7 @@ fn lower_vbin_a(I: Inst, j: u32) {
     var xd = ra_xreuse(a);
     if xd != xa {
         xd = ra_xdef(j);
-        movaps_rr(xd, xa);
+        if xd != xa { movaps_rr(xd, xa); }
     }
     if lfp {
         sse_packed(sse_op(op), lb == 64, xd, xb);

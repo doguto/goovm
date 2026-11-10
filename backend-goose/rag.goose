@@ -98,6 +98,13 @@ var rq_tmp_v: u32[>..] = [];
 var rg_iblk: u32[>..] = [];        // per instruction: its block
 var rg_lpl: u64[>..] = [];         // global values live into a landing pad (bitset)
 var rg_any_rl = false;
+// (E2) two-address sharing: an arithmetic instruction whose result and one
+// operand that dies there are both candidates may give them one register
+// (the operand's segment ends where the result's starts): `s = s + x` in a
+// loop then needs no copy for the PHI. rg_share[j] = the operand's value id,
+// rg_shby[id] = the instruction, NIL.
+var rg_share: u32[>..] = [];
+var rg_shby: u32[>..] = [];
 
 inline fn rg_bit(w: u64[>..]&, base: i64, g: u32) -> bool { (w[base + (g >> 6)] >> (g & 63)) & 1 != 0 }
 
@@ -148,11 +155,15 @@ fn rg_alloc(insts: const Inst[:], blocks: const Block[:]) {
         rg_reg.resize(nv, NOREG);
         rg_gid.resize(nv, NIL);
         rg_rl.resize(nv, 0);
+        rg_share.resize(nv, NIL);
+        rg_shby.resize(nv, NIL);
     }
     for q in 0..nv {
         rg_reg[q] = NOREG;
         rg_gid[q] = NIL;
         rg_rl[q] = 0;
+        rg_share[q] = NIL;
+        rg_shby[q] = NIL;
     }
     rg_any_rl = false;
     let F = M.funcs[f_index];
@@ -366,6 +377,26 @@ fn rg_segments(insts: const Inst[:], blocks: const Block[:]) {
         while j >= rg_bfirst[b] {
             let I = insts[j];
             let gd = rg_gid[j];
+            // (E2) the operand that may share the result's register: ends at
+            // the result's start
+            if gd != NIL && rg_share_op(I) {
+                let comm = I.op != GIR_SUB && I.op != GIR_FSUB && I.op != GIR_FDIV;
+                var sv: u32 = NIL;
+                let ga = rg_g(I.a);
+                let gb = rg_g(I.b);
+                if ga != NIL && rg_seen[ga] != b && I.b != I.a { sv = I.a; }
+                else if comm && gb != NIL && rg_seen[gb] != b && I.b != I.a { sv = I.b; }
+                if sv != NIL {
+                    let g = rg_g(sv);
+                    rg_seen[g] = b;
+                    rg_tmpe[g] = 2 * j as! u32 + 2;
+                    kl_tmp_j.push(j as! u32);
+                    kl_tmp_v.push(g);
+                    let id = rg_val[g];
+                    rg_share[j] = id;
+                    rg_shby[id] = j as! u32;
+                }
+            }
             if gd != NIL {
                 rg_weight[gd] += fq;
                 if rg_seen[gd] != b {
@@ -550,6 +581,30 @@ fn rg_note_reloads(g: u32) {
         }
     }
 }
+// The instructions whose result may share a dying operand's register.
+fn rg_share_op(I: Inst) -> bool {
+    let op: u32 = I.op;
+    let c = rc_of(I.ty);
+    if c == RC_GPR {
+        return (op == GIR_ADD || op == GIR_SUB || op == GIR_AND || op == GIR_OR || op == GIR_XOR || op == GIR_MUL)
+               && bits_of(I.ty) <= 64;
+    }
+    if c == RC_XMM { return op >= GIR_FADD && op <= GIR_FDIV; }
+    if c == RC_VX {
+        return op >= GIR_FADD && op <= GIR_FDIV || op == GIR_ADD || op == GIR_SUB || op == GIR_AND || op == GIR_OR
+               || op == GIR_XOR;
+    }
+    return false;
+}
+// The operand of instruction j that shares its register (a value reference),
+// or NIL: both pinned to one register.
+fn rg_shared(j: u32) -> u32 {
+    if !rg_on || j >= rg_share.len as! u32 { return NIL; }
+    let id = rg_share[j];
+    if id == NIL || rg_reg[j] == NOREG || rg_reg[id] != rg_reg[j] { return NIL; }
+    if id >= f_nins { return GIR_V_ARG << 30 | (id - f_nins); }
+    return f_first_inst + id;
+}
 // Whether register r is free over g's segments.
 fn rg_free(r: u32, g: u32) -> bool {
     let base: i64 = rg_pw * r as i64;
@@ -726,6 +781,8 @@ fn rg_assign() {
 fn rg_phi_hint(g: u32) -> u32 {
     if rg_hint[g] != NOREG { return rg_hint[g]; }
     let id = rg_val[g];
+    if id < f_nins && rg_share[id] != NIL && rg_reg[rg_share[id]] != NOREG { return rg_reg[rg_share[id]]; }
+    if rg_shby[id] != NIL && rg_reg[rg_shby[id]] != NOREG { return rg_reg[rg_shby[id]]; }
     if id >= f_nins { return 32; }
     let I = M.insts[f_first_inst + id];
     if I.op == GIR_PHI {
@@ -923,6 +980,11 @@ fn rg_def_store(j: u32) {
 fn rg_def_start(j: u32) {
     let r: u32 = rg_reg[j];
     let occ = r_val[r];
+    if occ < RV_TEMP && occ != j && rg_shared(j) != NIL && occ == rg_share[j] {
+        // (the operand that shares the register stays there for the lowering)
+        rg_pin |= bit(r);
+        return;
+    }
     if occ < RV_TEMP && occ != j { ra_evacuate(occ, r); }
     r_free &= ~bit(r);
     r_val[r] = RV_TEMP;
@@ -955,8 +1017,12 @@ fn rg_kills() {
             if r_val[r] == id {
                 r_val[r] = RV_NONE;
                 r_free |= bit(r);
+                rg_pin &= ~bit(r);
+            } else {
+                // (E2: a result that shared the register holds it now)
+                let o = r_val[r];
+                if !(o < RV_TEMP && o < rg_reg.len as! u32 && rg_reg[o] == r && vi[o].st & ST_PIN != 0) { rg_pin &= ~bit(r); }
             }
-            rg_pin &= ~bit(r);
             vi[id].reg = NOREG;
         }
         rg_kill_next++;
