@@ -820,7 +820,8 @@ fn opt_function(fi: u32) {
         ensure_cfg();
         rotate_layout();
     }
-    if opt_verify_on { opt_verify(); }
     inl_record();
+    if !opt_off("cgp") { sink_addrs(); }
+    if opt_verify_on { opt_verify(); }
     oir_store(fi);
 }

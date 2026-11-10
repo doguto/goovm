@@ -125,7 +125,12 @@ fn simp(i: u32) -> u32 {
         return simp_cast(i);
     }
     if op == GIR_GEP { return simp_gep(i); }
-    if op == GIR_EXTRACTVALUE { return simp_extract(i); }
+    if op == GIR_EXTRACTVALUE {
+        let x = simp_extract_ins(i);
+        if x != NIL { return x; }
+        return simp_extract(i);
+    }
+    if op == GIR_EXTRACTELT { return simp_extract_elt(i); }
     if op == GIR_CALL { return simp_call(i); }
     return NIL;
 }
@@ -144,6 +149,81 @@ fn simp_call(i: u32) -> u32 {
     if C.ty != GIR_T_F64 || C.lo != 0x4000000000000000 { return NIL; }
     let x = res(o_ops[I.b]);
     return ins_new(i, GIR_FMUL, GIR_T_F64, x, x);
+}
+
+// (E2) extractvalue through a chain of insertvalues: the inserted value at
+// the same offset and type, or what is below an insertion elsewhere; of a
+// zero constant: zero.
+fn simp_extract_ins(i: u32) -> u32 {
+    let t: u32 = o_ins[i].ty;
+    let off = o_ins[i].b;
+    let sz = store_of(t);
+    var v = res(o_ins[i].a);
+    var n = 0;
+    while n < 64 {
+        n++;
+        if gir_kind(v) == GIR_V_CONST {
+            let C = x_consts[xb_c + gir_idx(v)];
+            if C.data == GIR_NONE && cls_of(C.ty) == C_MEM { return undef_of(t); }
+            return NIL;
+        }
+        if !is_inst(v) { return NIL; }
+        let I = o_ins[v];
+        if I.op == GIR_EXTRACTVALUE && cls_of(I.ty) == C_MEM && n > 1 {
+            // (a field of a field)
+            break;
+        }
+        if I.op != GIR_INSERTVALUE { break; }
+        let io = I.c;
+        let it = otype(res(I.b));
+        let isz = store_of(it);
+        if io == off && it == t { return res(I.b); }
+        if io + isz <= off || off + sz <= io {
+            v = res(I.a);
+            continue;
+        }
+        // the inserted aggregate holds the field
+        if cls_of(it) == C_MEM && io <= off && off + sz <= io + isz {
+            let e = new_inst(Inst { op: GIR_EXTRACTVALUE as! u8, sub: 0, flags: 0, ty: t as! u16, aux: 0, a: res(I.b),
+                                    b: off - io, c: 0, dbg: o_ins[i].dbg });
+            link_before(i, e);
+            return e;
+        }
+        return NIL;
+    }
+    if v != res(o_ins[i].a) {
+        o_ins[i].a = v;
+        fold_changed = true;
+    }
+    return NIL;
+}
+// (E2) extractelement with a constant lane through a chain of
+// insertelements; of a zero constant: zero.
+fn simp_extract_elt(i: u32) -> u32 {
+    let k0, lane = ci(res(o_ins[i].b));
+    if !k0 { return NIL; }
+    var v = res(o_ins[i].a);
+    var n = 0;
+    while n < 64 {
+        n++;
+        if gir_kind(v) == GIR_V_CONST {
+            let C = x_consts[xb_c + gir_idx(v)];
+            if C.data == GIR_NONE { return undef_of(o_ins[i].ty); }
+            return NIL;
+        }
+        if !is_inst(v) { return NIL; }
+        let I = o_ins[v];
+        if I.op != GIR_INSERTELT { break; }
+        let k1, l1 = ci(res(I.c));
+        if !k1 { break; }
+        if l1 == lane { return res(I.b); }
+        v = res(I.a);
+    }
+    if v != res(o_ins[i].a) {
+        o_ins[i].a = v;
+        fold_changed = true;
+    }
+    return NIL;
 }
 
 // extractvalue (load p), off -> load (p + off), right after the aggregate

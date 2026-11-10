@@ -31,19 +31,20 @@ fn licm_op(I: Inst) -> bool {
     if op >= GIR_CTLZ && op <= GIR_BITREVERSE { return true; }
     return false;
 }
-// Whether p certainly points to addressable memory (an alloca, a global, a
-// constant-offset GEP of one).
-fn always_addr(p0: u32) -> bool {
-    var p = res(p0);
-    loop {
-        if gir_kind(p) == GIR_V_GLOBAL { return true; }
-        if !is_inst(p) { return false; }
-        let I = o_ins[p];
-        if I.op == GIR_ALLOCA { return true; }
-        if I.op != GIR_GEP || I.c != 0 { return false; }
-        p = res(I.a);
+// Whether sz bytes at p are certainly addressable memory: inside an alloca
+// or a defined global variable, at a constant offset (a load from there may
+// run speculatively).
+fn always_addr(p0: u32, sz: u32) -> bool {
+    let b, off, known = aa_decompose(p0);
+    if !known || off < 0 { return false; }
+    var size: i64 = -1;
+    if gir_kind(b) == GIR_V_GLOBAL {
+        let G = M.globals[gir_idx(b)];
+        if G.kind == G_VAR && G.flags & (GF_DEFINED | GF_COMMON) != 0 && G.flags & GF_WEAK == 0 { size = G.size; }
+    } else if is_inst(b) && o_ins[b].op == GIR_ALLOCA {
+        size = o_ins[b].a;
     }
-    return false;
+    return size >= 0 && off + sz as i64 <= size;
 }
 
 fn licm() -> bool {
@@ -259,7 +260,7 @@ fn licm_loop(h: u32) -> bool {
             let I = o_ins[i];
             var ok = false;
             if I.op == GIR_LOAD {
-                ok = !any_write && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && (b == h || always_addr(I.a));
+                ok = !any_write && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && (b == h || always_addr(I.a, store_of(I.ty)));
                 if ok {
                     let p = res(I.a);
                     let sz = store_of(I.ty);

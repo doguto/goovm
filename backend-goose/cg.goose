@@ -37,6 +37,7 @@ import opt_sroa;
 import opt_licm;
 import opt_iv;
 import opt_aa;
+import opt_cgp;
 import opt_verify;
 import opt_dump;
 import a64enc;
