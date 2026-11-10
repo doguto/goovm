@@ -731,7 +731,7 @@ def baseline_at(t, wd, args, cache, level):
     if b is None or b.get("key") != key or args.rebaseline:
         try:
             exe = build_baseline(t, wd, args, level)
-            dt = run_and_verify(t, exe, wd, args, timeout=t.timeout or 120)
+            dt = run_and_verify(t, exe, wd, args, timeout=(t.timeout or 120) * (10 if RUNNER else 1))
             b = {"key": key, "status": "pass", "time": dt}
         except Fail as e:
             b = {"key": key, "status": "build" if e.kind == "build" else "fail", "msg": e.msg[:2000]}
@@ -757,7 +757,7 @@ def do_test(t, args, baseline_cache):
     if b is None or b.get("key") != key or args.rebaseline:
         try:
             exe = build_baseline(t, wd, args)
-            dt = run_and_verify(t, exe, wd, args, timeout=t.timeout or 120)
+            dt = run_and_verify(t, exe, wd, args, timeout=(t.timeout or 120) * (10 if RUNNER else 1))
             b = {"key": key, "status": "pass", "time": dt}
         except Fail as e:
             b = {"key": key, "status": "build" if e.kind == "build" else "fail", "msg": e.msg[:2000]}

@@ -19,6 +19,8 @@
 // accelerator tables, type units, split DWARF, macros.
 #include "gir_dwarf.h"
 
+#include "llvm/TargetParser/Triple.h"
+
 #include <algorithm>
 #include <map>
 
@@ -861,6 +863,9 @@ struct GirDwarfBuilder::Impl {
                 break;
             }
             if (!G) continue;
+            // AArch64: LLVM writes no location for a thread-local variable (its
+            // object-file lowering has no debug TLS relocation)
+            if (G->isThreadLocal() && Triple(M.getTargetTriple()).isAArch64()) continue;
             uint32_t g = H.dw_global(G);
             if (g == NO || done) continue;
             std::vector<uint8_t> b;
