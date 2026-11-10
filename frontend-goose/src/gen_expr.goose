@@ -506,7 +506,7 @@ fn float_const(n: u32) -> u32 {
     if nd.c > 0 {
         // the literal's spelling, converted exactly to its type
         let text = src[nd.b..nd.b + nd.c];
-        if t == GIR_T_F80 {
+        if is_ld(t) {
             let x = strtold(text);
             return c_fp(x.lo, x.hi, t);
         }
@@ -514,7 +514,7 @@ fn float_const(n: u32) -> u32 {
         if t == GIR_T_F32 { return c_fp(strtod_bits(text, 0), 0, t); }
         if t == GIR_T_F16 { return c_fp(strtod_bits(text, 3), 0, t); }
     }
-    if t == GIR_T_F80 {
+    if is_ld(t) {
         let x = f64_to_f80(d);
         return c_fp(x.lo, x.hi, t);
     }
@@ -668,7 +668,7 @@ recursive fn cv_read(n: u32) -> bool, u32 {
     if is_real_float(nd.ty) && t != GIR_T_VOID {
         let ok, x = static_f80(n);
         if !ok { return false, 0; }
-        if t == GIR_T_F80 {
+        if is_ld(t) {
             cv_note(s, 0, false);
             return true, c_fp(x.lo, x.hi, t);
         }
@@ -848,7 +848,7 @@ fn arith(op: i64, q: u32, a: u32, b: u32) -> u32 {
         let gop = match op { B_ADD => GIR_FADD, B_SUB => GIR_FSUB, B_MUL => GIR_FMUL, B_DIV => GIR_FDIV, _ => 0 };
         if op == B_REM {
             // fmod (GNU vector or never for scalars)
-            return libcall2(if t == GIR_T_F32 { "fmodf" } else if t == GIR_T_F80 { "fmodl" } else { "fmod" }, t, a, b);
+            return libcall2(if t == GIR_T_F32 { "fmodf" } else if is_ld(t) { "fmodl" } else { "fmod" }, t, a, b);
         }
         if tkind(t) == TK_VECTOR { return emit(gop, t, 0, 0, 0, a, b, 0); }
         return ins_fbin(gop, t, a, b);
@@ -952,9 +952,88 @@ recursive fn ex_binary(n: u32) -> u32 {
         else if es != 1 { res = ins_bin(GIR_SDIV, GIR_T_I64, d, c_i64(es)); }
         return conv(res, t_long, nd.ty);
     }
+    if opt_a64 && (op == B_ADD || op == B_SUB) && contract_ty(vty(nd.ty)) { return contract_add(n); }
     let x = ex_val(nd.a);
     let y = ex_val(nd.b);
     return arith(op, nd.ty, x, y);
+}
+
+// ------------------------------------------------------------ FP contraction (F1)
+// clang contracts a product that is an operand of + or - in the same
+// expression into llvm.fmuladd (-ffp-contract=on, CodeGen's tryEmitFMulAdd:
+// the left operand first, through a negation; a - b*c multiplies by -b),
+// and LLVM fuses it on AArch64 (FMADD; half in float; not fp128). x86-64
+// computes fmuladd unfused, so goosecc contracts on AArch64 only.
+fn contract_ty(t: u32) -> bool {
+    if t == GIR_T_F16 || t == GIR_T_F32 || t == GIR_T_F64 { return true; }
+    if tkind(t) == TK_VECTOR {
+        let e = m_types[t].elems;
+        return e == GIR_T_F32 || e == GIR_T_F64;
+    }
+    return false;
+}
+// The multiplication at node m (of C type q), possibly negated: (node, negated), NONE if none.
+fn mul_node(m: u32, q: u32) -> u32, bool {
+    let nd = nodes[m];
+    if nd.kind == N_BINARY && nd.op == B_MUL && unqual(nd.ty) == unqual(q) { return m, false; }
+    if nd.kind == N_UNARY && nd.op == U_NEG {
+        let i = nodes[nd.a];
+        if i.kind == N_BINARY && i.op == B_MUL && unqual(i.ty) == unqual(q) && unqual(nd.ty) == unqual(q) { return nd.a, true; }
+    }
+    return NONE, false;
+}
+fn fp_neg(v: u32) -> u32 {
+    let t = vtype(v);
+    if tkind(t) == TK_VECTOR { return emit(GIR_FNEG, t, 0, 0, t, v, 0, 0); }
+    return ins_fneg(v);
+}
+// a * b + c, fused (half: in float, then rounded).
+fn fma_of(t: u32, a: u32, b: u32, c: u32) -> u32 {
+    if t == GIR_T_F16 {
+        let r = emit(GIR_FMA, GIR_T_F32, 0, 0, GIR_T_F32, half_to_float(a), half_to_float(b), half_to_float(c));
+        return float_to_half(r);
+    }
+    return emit(GIR_FMA, t, 0, 0, t, a, b, c);
+}
+// x + / - (the product at node m, negated if neg), the product's operands evaluated
+// here; NONE (with the product folded into *folded) when they are constants.
+recursive fn contract_rhs(sub: bool, q: u32, x: u32, m: u32, neg: bool) -> u32 {
+    let t = vty(q);
+    let ma = ex_val(nodes[m].a);
+    let mb = ex_val(nodes[m].b);
+    if is_const(ma) && is_const(mb) {
+        var y = arith(B_MUL, q, ma, mb);
+        if neg { y = fp_neg(y); }
+        return arith(if sub { B_SUB } else { B_ADD }, q, x, y);
+    }
+    let a0 = if sub != neg { fp_neg(ma) } else { ma };
+    return fma_of(t, a0, mb, x);
+}
+recursive fn contract_add(n: u32) -> u32 {
+    let nd = nodes[n];
+    let q = nd.ty;
+    let t = vty(q);
+    let sub = nd.op == B_SUB;
+    let lm, lneg = mul_node(nd.a, q);
+    var x: u32 = NONE;
+    if lm != NONE {
+        let ma = ex_val(nodes[lm].a);
+        let mb = ex_val(nodes[lm].b);
+        if !(is_const(ma) && is_const(mb)) {
+            let y = ex_val(nd.b);
+            let c = if sub { fp_neg(y) } else { y };
+            return fma_of(t, if lneg { fp_neg(ma) } else { ma }, mb, c);
+        }
+        // a constant product (folded, as clang's IRBuilder folds it): the right side may contract
+        x = arith(B_MUL, q, ma, mb);
+        if lneg { x = fp_neg(x); }
+    } else {
+        x = ex_val(nd.a);
+    }
+    let rm, rneg = mul_node(nd.b, q);
+    if rm != NONE { return contract_rhs(sub, q, x, rm, rneg); }
+    let y = ex_val(nd.b);
+    return arith(nd.op as i64, q, x, y);
 }
 
 recursive fn vec_compare(n: u32) -> u32 {
@@ -1255,6 +1334,26 @@ recursive fn ex_assign(n: u32) -> u32 {
     let op = nd.op as i64;
     if is_complex(ct) { return assign_cplx_to_real(n); }
     if quals(lq) & Q_ATOMIC != 0 { return atomic_compound(n); }
+    if opt_a64 && (op == B_ADD || op == B_SUB) && contract_ty(vty(ct)) {
+        let rm, rneg = mul_node(nd.b, ct);
+        if rm != NONE {
+            // x += b * c: fused (FP contraction, F1); the product's operands first, as clang's RHS
+            let ma = ex_val(nodes[rm].a);
+            let mb = ex_val(nodes[rm].b);
+            let l = ex_lv(nd.a);
+            let old = lv_load(l);
+            let ov = conv(old, unqual(lq), ct);
+            var r: u32 = 0;
+            if is_const(ma) && is_const(mb) {
+                var y = arith(B_MUL, ct, ma, mb);
+                if rneg { y = fp_neg(y); }
+                r = arith(op, ct, ov, y);
+            } else {
+                r = fma_of(vty(ct), if (op == B_SUB) != rneg { fp_neg(ma) } else { ma }, mb, ov);
+            }
+            return lv_store(l, conv(r, ct, unqual(lq)));
+        }
+    }
     let rhs = ex_val(nd.b);
     let l = ex_lv(nd.a);
     let old = lv_load(l);
@@ -1464,7 +1563,7 @@ fn neg_any(v: u32) -> u32 {
     return ins_bin(GIR_SUB, t, c_zero(t), v);
 }
 
-fn cplx_lib_suffix(t: u32) -> const u8[:] { if t == GIR_T_F32 { "sc3" } else if t == GIR_T_F64 { "dc3" } else { "xc3" } }
+fn cplx_lib_suffix(t: u32) -> const u8[:] { if t == GIR_T_F32 { "sc3" } else if t == GIR_T_F64 { "dc3" } else if t == GIR_T_F128 { "tc3" } else { "xc3" } }
 
 // A call of __mul?c3 / __div?c3: returns the complex result as two values.
 fn cplx_libcall(div: bool, t: u32, a: u32, b: u32, c: u32, d: u32) -> u32, u32 {
@@ -1472,18 +1571,19 @@ fn cplx_libcall(div: bool, t: u32, a: u32, b: u32, c: u32, d: u32) -> u32, u32 {
     nm.append(if div { "__div" } else { "__mul" });
     nm.append(cplx_lib_suffix(t));
     var rt: u32 = 0;
-    if t == GIR_T_F32 { rt = GIR_T_F64; }
+    if opt_a64 { rt = ty_pair(t, t, tsize(t)); }   // AAPCS64: an HFA {t, t} (F1)
+    else if t == GIR_T_F32 { rt = GIR_T_F64; }
     else if t == GIR_T_F64 { rt = ty_pair(GIR_T_F64, GIR_T_F64, 8); }
     else { rt = ty_pair(GIR_T_F80, GIR_T_F80, 16); }
     let r = libcall4(nm, rt, a, b, c, d);
-    if t == GIR_T_F32 {
+    if t == GIR_T_F32 && !opt_a64 {
         let v = ins_bitcast(r, ty_vec(2, GIR_T_F32));
         let x = emit(GIR_EXTRACTELT, GIR_T_F32, 0, 0, vtype(v), v, c_i32(0), 0);
         let y = emit(GIR_EXTRACTELT, GIR_T_F32, 0, 0, vtype(v), v, c_i32(1), 0);
         return x, y;
     }
     let x = emit(GIR_EXTRACTVALUE, t, 0, 0, 0, r, 0, 0);
-    let y = emit(GIR_EXTRACTVALUE, t, 0, 0, 0, r, if t == GIR_T_F64 { 8 } else { 16 }, 0);
+    let y = emit(GIR_EXTRACTVALUE, t, 0, 0, 0, r, tsize(t), 0);
     return x, y;
 }
 

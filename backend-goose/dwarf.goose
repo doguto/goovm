@@ -1208,6 +1208,8 @@ fn put_attr(A: DAttr) {
         put_extra(A.aux);
     } else if form == DF_GLOBAL {
         let g: i64 = A.val as! i64;
+        // AArch64: no location for a thread-local variable (as LLVM: no DTPREL in DWARF)
+        if tgt_a64 && M.globals[g].flags & GF_TLS != 0 { return; }
         ab_add(at, DW_FORM_exprloc);
         if M.globals[g].flags & GF_TLS != 0 {
             bb_uleb(10 + extra_len(A.aux));

@@ -395,6 +395,25 @@ fn types_init() {
     t_size = t_ulong;
     t_ptrdiff = t_long;
     t_wchar = t_int;
+    if opt_a64 {
+        // AArch64 (F1): wchar_t is unsigned int; va_list is struct __va_list
+        // { void *__stack, *__gr_top, *__vr_top; int __gr_offs, __vr_offs; } (AAPCS64)
+        t_wchar = t_uint;
+        let r = records.len;
+        let rt = mk_tagged(TY_STRUCT, r as! u32);
+        records.push(Record { name: intern("__va_list"), ty: rt, first: fields.len as! u32, count: 5, size: 32, align: 8,
+            flags: RF_COMPLETE, rsv: 0, attr_align: 0, pack: 0, loc: 0, scope: 0 });
+        fields.push(Field { name: intern("__stack"), ty: t_voidptr, offset: 0, bitpos: 0, width: -1, attr_align: 0, flags: 0, rsv: 0, rsv2: 0, loc: 0 });
+        fields.push(Field { name: intern("__gr_top"), ty: t_voidptr, offset: 8, bitpos: 64, width: -1, attr_align: 0, flags: 0, rsv: 0, rsv2: 0, loc: 0 });
+        fields.push(Field { name: intern("__vr_top"), ty: t_voidptr, offset: 16, bitpos: 128, width: -1, attr_align: 0, flags: 0, rsv: 0, rsv2: 0, loc: 0 });
+        fields.push(Field { name: intern("__gr_offs"), ty: t_int, offset: 24, bitpos: 192, width: -1, attr_align: 0, flags: 0, rsv: 0, rsv2: 0, loc: 0 });
+        fields.push(Field { name: intern("__vr_offs"), ty: t_int, offset: 28, bitpos: 224, width: -1, attr_align: 0, flags: 0, rsv: 0, rsv2: 0, loc: 0 });
+        types[rt].size = 32;
+        types[rt].align = 8;
+        t_valist_rec = rt << 4;
+        t_valist = t_valist_rec;
+        return;
+    }
     // struct __va_list_tag { unsigned gp_offset, fp_offset; void *overflow_arg_area, *reg_save_area; }
     let r = records.len;
     let rt = mk_tagged(TY_STRUCT, r as! u32);
@@ -429,7 +448,8 @@ fn is_vector(q: u32) -> bool { let k = kind_of(q); k == TY_VECTOR || k == TY_EXT
 fn is_aggregate(q: u32) -> bool { is_array(q) || is_record(q) }
 
 fn is_signed_kind(k: i64) -> bool {
-    return k == TY_CHAR || k == TY_SCHAR || k == TY_SHORT || k == TY_INT || k == TY_LONG || k == TY_LLONG || k == TY_INT128;
+    if k == TY_CHAR { return !char_unsigned; }
+    return k == TY_SCHAR || k == TY_SHORT || k == TY_INT || k == TY_LONG || k == TY_LLONG || k == TY_INT128;
 }
 
 // Signedness of an integer type (enums: of their underlying type).

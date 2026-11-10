@@ -96,7 +96,7 @@ recursive fn lib_builtin(name: const u8[:], n: u32, dst: u32, forced: bool) -> u
         if nargs > 1 { y = ex_val(barg(n, 1)); }
         if starts_with(name, "fabs") { return fp_unary_fold(GIR_FABS, t, x); }
         if starts_with(name, "copysign") {
-            if is_const(x) && is_const(y) && t != GIR_T_F80 {
+            if is_const(x) && is_const(y) && !is_ld(t) {
                 let ok, a = c_as_double(x);
                 let ok2, b = c_as_double(y);
                 if ok && ok2 { return c_double(libm_copysign(a, b), t); }
@@ -104,7 +104,7 @@ recursive fn lib_builtin(name: const u8[:], n: u32, dst: u32, forced: bool) -> u
             return emit(GIR_COPYSIGN, t, 0, 0, t, x, y, 0);
         }
         // floor & co.: a libm call, folded for constants (LLVM folds them)
-        if is_const(x) && t != GIR_T_F80 && (y == NONE || is_const(y)) {
+        if is_const(x) && !is_ld(t) && (y == NONE || is_const(y)) {
             let ok, a = c_as_double(x);
             var b = 0.0;
             if y != NONE { let ok2, b2 = c_as_double(y); b = b2; }
@@ -260,6 +260,7 @@ fn fp_unary_fold(op: i64, t: u32, x: u32) -> u32 {
         if t == GIR_T_F64 { return c_fp(c.lo & 0x7FFFFFFFFFFFFFFF, 0, t); }
         if t == GIR_T_F32 { return c_fp(c.lo & 0x7FFFFFFF, 0, t); }
         if t == GIR_T_F80 { return c_fp(c.lo, c.hi & 0x7FFF, t); }
+        if t == GIR_T_F128 { return c_fp(c.lo, c.hi & 0x7FFFFFFFFFFFFFFF, t); }
     }
     if t == GIR_T_F16 {
         let i = ins_bitcast(x, GIR_T_I16);
@@ -344,6 +345,7 @@ fn fp_inf_const(t: u32) -> u32 {
     if t == GIR_T_F64 { return c_fp(0x7FF0000000000000, 0, t); }
     if t == GIR_T_F32 { return c_fp(0x7F800000, 0, t); }
     if t == GIR_T_F16 { return c_fp(0x7C00, 0, t); }
+    if t == GIR_T_F128 { return c_fp(0, 0x7FFF000000000000, t); }
     return c_fp(0x8000000000000000, 0x7FFF, t);
 }
 
@@ -359,6 +361,11 @@ fn fp_nan_const(t: u32, quiet: bool, payload: u64) -> u32 {
         return c_fp(0x7F800000 | m, 0, t);
     }
     if t == GIR_T_F16 { return c_fp(if quiet { 0x7E00 } else { 0x7D00 }, 0, t); }
+    if t == GIR_T_F128 {
+        var lo = payload;
+        if !quiet && lo == 0 { lo = 1; }
+        return c_fp(lo, 0x7FFF000000000000 | (if quiet { 0x0000800000000000 } else { 0 as u64 }), t);
+    }
     var m = payload & 0x3FFFFFFFFFFFFFFF;
     if quiet { m = m | 0x4000000000000000; } else if m == 0 { m = 1; }
     return c_fp(0x8000000000000000 | m, 0x7FFF, t);
@@ -395,7 +402,7 @@ fn nan_payload(a: u32) -> u64 {
 
 fn fp_suffix_type(name: const u8[:], dflt: u32) -> u32 {
     if ends_with(name, "f") { return GIR_T_F32; }
-    if ends_with(name, "l") { return GIR_T_F80; }
+    if ends_with(name, "l") { return if opt_a64 { GIR_T_F128 } else { GIR_T_F80 }; }
     if ends_with(name, "f16") { return GIR_T_F16; }
     return dflt;
 }
@@ -439,7 +446,7 @@ recursive fn ex_builtin2(full: const u8[:], name: const u8[:], n: u32, dst: u32)
     if name == "va_copy" {
         let d = ex_val(barg(n, 0));
         let s = ex_val(barg(n, 1));
-        mem_copy(d, s, 24, false);
+        mem_copy(d, s, if opt_a64 { 32 } else { 24 }, false);
         return NONE;
     }
     if name == "setjmp" {
@@ -600,6 +607,13 @@ fn signbit_of(x: u32) -> u32 {
     if t == GIR_T_F16 {
         let i = ins_bitcast(x, GIR_T_I16);
         return ins_icmp(GIR_SLT, GIR_T_I16, i, c_int(0, GIR_T_I16));
+    }
+    if t == GIR_T_F128 {
+        // binary128: the sign is bit 127
+        let tmp = alloca(16, 16);
+        ins_store(GIR_T_F128, x, tmp, false);
+        let hi = ins_load(GIR_T_I64, gep(tmp, 8), false);
+        return ins_icmp(GIR_SLT, GIR_T_I64, hi, c_i64(0));
     }
     // f80: the sign is bit 79
     let tmp = alloca(16, 16);

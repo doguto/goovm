@@ -175,6 +175,7 @@ fn ins_fneg(v: u32) -> u32 {
         if t == GIR_T_F64 { return c_fp(c.lo ^ 0x8000000000000000, 0, t); }
         if t == GIR_T_F32 { return c_fp(c.lo ^ 0x80000000, 0, t); }
         if t == GIR_T_F80 { return c_fp(c.lo, c.hi ^ 0x8000, t); }
+        if t == GIR_T_F128 { return c_fp(c.lo, c.hi ^ 0x8000000000000000, t); }
     }
     return emit(GIR_FNEG, t, 0, 0, t, v, 0, 0);
 }
@@ -200,6 +201,7 @@ recursive fn ins_fcmp(pred: i64, t: u32, a: u32, b: u32) -> u32 {
 
 fn half_to_float(v: u32) -> u32 {
     if is_const(v) { return c_double(f16bits_to_f64(c_lo(v) as! u32), GIR_T_F32); }
+    if opt_a64 { return emit(GIR_FPEXT, GIR_T_F32, 0, 0, GIR_T_F16, v, 0, 0); }   // (AArch64 converts half itself)
     return libcall1("__extendhfsf2", GIR_T_F32, v);
 }
 fn float_to_half(v: u32) -> u32 {
@@ -208,6 +210,7 @@ fn float_to_half(v: u32) -> u32 {
         if ok { return c_double(d, GIR_T_F16); }
     }
     let t = vtype(v);
+    if opt_a64 { return emit(GIR_FPTRUNC, GIR_T_F16, 0, 0, t, v, 0, 0); }
     let nm = if t == GIR_T_F32 { "__truncsfhf2" } else if t == GIR_T_F64 { "__truncdfhf2" } else { "__truncxfhf2" };
     return libcall1(nm, GIR_T_F16, v);
 }
@@ -226,7 +229,7 @@ recursive fn fp_cast(v: u32, f: u32, t: u32) -> u32 {
             if t == GIR_T_F32 { return c_double(round_f32(d), t); }
             return c_double(d, t);
         }
-        if f == GIR_T_F80 {
+        if is_ld(f) {
             let c = m_consts[cidx(v)];
             let d2 = f80_to_f64(F80 { lo: c.lo, hi: c.hi });
             if t == GIR_T_F64 { return c_double(d2, t); }
@@ -238,7 +241,7 @@ recursive fn fp_cast(v: u32, f: u32, t: u32) -> u32 {
     return emit(if rank_t > rank_f { GIR_FPEXT } else { GIR_FPTRUNC }, t, 0, 0, f, v, 0, 0);
 }
 
-fn fp_suffix_part(t: u32) -> const u8[:] { if t == GIR_T_F32 { "sf" } else if t == GIR_T_F64 { "df" } else { "xf" } }
+fn fp_suffix_part(t: u32) -> const u8[:] { if t == GIR_T_F32 { "sf" } else if t == GIR_T_F64 { "df" } else if t == GIR_T_F128 { "tf" } else { "xf" } }
 
 // INT -> FP
 recursive fn int_to_fp(v: u32, f: u32, t: u32, signed: bool) -> u32 {
@@ -250,7 +253,7 @@ recursive fn int_to_fp(v: u32, f: u32, t: u32, signed: bool) -> u32 {
         nm.append(fp_suffix_part(t));
         return libcall1(nm, t, w);
     }
-    if is_const(v) && t != GIR_T_F80 {
+    if is_const(v) && !is_ld(t) {
         let x = c_lo(v) & mask_of(tbits(f));
         var d = 0.0;
         if signed { d = sext_of(x, tbits(f)) as f64; } else { d = u64_to_f64(x); }
