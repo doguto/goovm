@@ -31,6 +31,7 @@
 //   X:    the exit (a block of its own), with PHIs of the values used after the loop
 
 var vz_map: u32[>..] = [];      // loop instruction -> its vector value in VB, NIL
+var vz_h: u32 = 0;               // the loop
 var vz_kind: u8[>..] = [];      // loop instruction -> VZ_*
 let VZ_NONE: u8 = 0;
 let VZ_VEC: u8 = 1;             // a vector value
@@ -94,7 +95,8 @@ fn vec_loop(h: u32) -> bool {
     if !loop_collect(h) || lp_body.len != 1 || lp_pre == NIL || lp_exit == NIL || lp_exiting != h || lp_latch != h {
         return false;
     }
-    if b_fl[lp_exit] & BF_LP != 0 || o_ins[b_last[lp_pre]].op != GIR_BR { return false; }
+    if b_fl[lp_exit] & BF_LP != 0 || b_fl[h] & BF_VECD != 0 || o_ins[b_last[lp_pre]].op != GIR_BR { return false; }
+    vz_h = h;
     let T = o_ins[b_last[h]];
     if T.op != GIR_CONDBR { return false; }
     let back_true = T.b == h;
@@ -158,6 +160,12 @@ fn vec_loop(h: u32) -> bool {
             if P.ty != GIR_T_I32 && P.ty != GIR_T_I64 { return false; }
             if res(R.a) != i && res(R.b) != i || res(R.a) == i && res(R.b) == i { return false; }
             if u_start[i + 1] - u_start[i] != 1 { return false; }     // (only the op uses r)
+            // (and in the loop only r uses the op: a partial value is no
+            // scalar's value; r = r + 1 used by the body is a second IV)
+            for q in u_start[lv]..u_start[lv + 1] {
+                let u = u_list[q];
+                if u != i && o_blk[u] == h { return false; }
+            }
             vz_kind[i] = VZ_RED;
             vz_kind[lv] = VZ_REDOP;
             vz_red.push(i);
@@ -273,14 +281,12 @@ fn vec_loop(h: u32) -> bool {
             let pb = res(if B.op == GIR_LOAD { B.a } else { B.b });
             if vz_same_access(pa, pb) { continue; }
             let ba = res(o_ins[pa].a);
-            let bb = if vz_kind[pb] == VZ_ADDR { res(o_ins[pb].a) } else { pb };
+            let bb = if is_inst(pb) && vz_kind[pb] == VZ_ADDR { res(o_ins[pb].a) } else { pb };
             if ba == bb { return false; }       // (another index or offset of the same base)
             let ta = o_ins[a].c;
             let tb = if B.op == GIR_LOAD { B.b } else { B.c };
             if !aa_alias(ba, 0, ta, bb, 0, tb) { continue; }
-            if vz_kind[pb] != VZ_ADDR && !(vz_in(pb, h) && o_ins[pb].op == GIR_GEP) {
-                // (an invariant address against the stores: checked like a range of one element)
-            }
+            // (an invariant address against the stores: checked like a range of one element)
             if vz_chk.len >= 16 { return false; }
             vz_chk.push(a);
             vz_chk.push(b);
@@ -393,6 +399,7 @@ fn vz_build(h: u32, iv: u32, init: u32, n: u32, pred: u32, ivt: u32) {
     let SPH = new_block();
     let X = new_block();
     vz_splat.clear();
+    b_fl[h] |= BF_VECD;
     // layout: P, VCHK, VPH, VB, VMID, SPH, H, X, (what followed H)
     vz_link_after(P, VCHK);
     vz_link_after(VCHK, VPH);
@@ -593,13 +600,13 @@ fn vz_redop(r: u32, h: u32) -> u32 {
 }
 // The scalar value of v inside VPH (an invariant computed in the loop: its copy).
 fn vz_val(v: u32) -> u32 {
-    if is_inst(v) && v < vz_map.len as! u32 && vz_map[v] != NIL && vz_kind[v] == VZ_SCAL { return vz_map[v]; }
+    if vz_in(v, vz_h) && vz_map[v] != NIL && vz_kind[v] == VZ_SCAL { return vz_map[v]; }
     return v;
 }
 // The vector value of operand v (type t, vector type vt): the loop's vector
 // value, or the splat of an invariant (built in VPH).
 fn vz_vec(vph: u32, v: u32, t: u32, vt: u32) -> u32 {
-    if is_inst(v) && v < vz_map.len as! u32 && vz_map[v] != NIL {
+    if vz_in(v, vz_h) && vz_map[v] != NIL {
         if vz_kind[v] != VZ_SCAL { return vz_map[v]; }
         return vz_splat_of(vph, vz_map[v], t, vt);
     }
@@ -628,10 +635,18 @@ fn vz_vec(vph: u32, v: u32, t: u32, vt: u32) -> u32 {
 // with the index init and n.
 fn vz_range(b: u32, a: u32, init: u32, n: u32, ivt: u32) -> u32, u32 {
     let A = o_ins[a];
-    let p = res(if A.op == GIR_LOAD { A.a } else { A.b });
+    var p = res(if A.op == GIR_LOAD { A.a } else { A.b });
     let sz: u32 = store_of(if A.op == GIR_LOAD { A.ty } else { A.aux });
     if !is_inst(p) || o_ins[p].op != GIR_GEP || o_ins[p].c != 1 {
-        // (an invariant address: one element)
+        // (an invariant address: one element; a GEP of the loop, of constant
+        // offsets only, is rebuilt before it)
+        if is_inst(p) && o_blk[p] != b && o_ins[p].op == GIR_GEP && o_ins[p].c == 0 {
+            let G = o_ins[p];
+            let s0 = new_run(2);
+            o_ops[s0] = o_ops[G.b];
+            o_ops[s0 + 1] = o_ops[G.b + 1];
+            p = vz_new(b, GIR_GEP, GIR_T_PTR, res(G.a), s0, 0, 0);
+        }
         let s = new_run(2);
         o_ops[s] = sz;
         o_ops[s + 1] = 0;

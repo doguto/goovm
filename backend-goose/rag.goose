@@ -167,7 +167,11 @@ fn rg_alloc(insts: const Inst[:], blocks: const Block[:]) {
     }
     rg_any_rl = false;
     let F = M.funcs[f_index];
-    if F.flags & (FN_SJLJ | FN_RETURNS_TWICE) != 0 { return; }
+    // (E2) functions that call setjmp are allocated too, as LLVM's are:
+    // longjmp restores the callee-saved registers to their values at the
+    // setjmp, which is what C allows for the non-volatile variables changed in
+    // between; __builtin_setjmp clobbers every register (CL_ALL)
+    if F.flags == 0xFFFFFFFF { return; }
     let nb: u32 = blocks.len as! u32;
     rg_nb = nb;
     // candidates

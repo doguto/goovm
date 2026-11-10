@@ -968,7 +968,12 @@ fn ra_xmm(v: u32) -> u32 {
         let id = vid(v);
         let r: u32 = vi[id].reg;
         if r < 32 {
-            if r < 16 { assert(false); }    // a general-register value: a class mix-up
+            if r < 16 {
+                // a general-register value: a class mix-up
+                write_stderr(str("goovm: general register for an XMM operand: function ", f_index, " instruction ", cur_pos,
+                                 " value ", id, " type ", vtype(id), "\n"));
+                assert(false);
+            }
             r_lock |= bit(r);
             ra_note(id);
             return r - 16;

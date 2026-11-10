@@ -67,6 +67,7 @@ var b_fl: u8[>..] = [];          // BF_*
 let BF_DEAD: u8 = 1;
 let BF_LP: u8 = 2;               // landing pad (starts with LANDINGPAD; no PHIs allowed)
 let BF_ADDR: u8 = 4;             // (E2) named by a block address: kept, never merged away
+let BF_VECD: u8 = 8;             // (E2) the scalar loop left by the vectorizer: not vectorized again
 
 var o_cfg_ok = false;            // the CFG analyses (opt_cfg.goose) describe the current CFG
 var o_fwd_dirty = false;         // some o_fwd was set since the last resolve_all

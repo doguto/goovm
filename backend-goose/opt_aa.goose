@@ -207,13 +207,11 @@ fn aa_prepare() {
     aa_esc.resize(n, 0);
     aa_args_cap.clear();
     aa_args_cap.resize(o_f.n_args, 0);
-    let setjmp = o_f.flags & (FN_RETURNS_TWICE | FN_SJLJ) != 0;
     for i0 in 0..n {
         if o_blk[i0] == NIL { continue; }
         let i: u32 = i0 as! u32;
         let I = o_ins[i];
         let op: u32 = I.op;
-        if op == GIR_ALLOCA && setjmp { aa_esc[i] = 1; }
         each_slot(i) { s =>
             let v = res(vget(i, s));
             var ok = false;
