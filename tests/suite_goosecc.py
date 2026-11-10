@@ -17,7 +17,12 @@ timeout, link error), error (goosecc exited non-zero or crashed on some
 file; the first line of its message is recorded).
 
 usage: tests/suite_goosecc.py [--goosecc PATH] [--corpus a,b] [--variants O0,g] [-j 3]
-                              [--work DIR] [--report FILE] [--json FILE] [--rebaseline] [filter ...]
+                              [--work DIR] [--report FILE] [--json FILE] [--rebaseline]
+                              [--target aarch64] [filter ...]
+
+--target aarch64 (milestone F1): goosecc --target=aarch64-linux-gnu, the
+baselines and links for aarch64-linux-gnu (suite.py's), and every program run
+under qemu-aarch64 (timeouts scaled as suite.py scales them).
 """
 import argparse
 import concurrent.futures as cf
@@ -40,7 +45,7 @@ def build_goosecc(t, wd, variant, args, info):
     for i, s in enumerate(t.srcs):
         o = os.path.join(wd, suite.obj_name(s, i) + "." + variant + ".gc.o")
         cmd = ([args.goosecc, "-c", "-O1" if variant == "O1" else "-O0"] + (["-g"] if variant == "g" else [])
-               + t.flags(s) + [s, "-o", o])
+               + suite.TFLAGS + t.flags(s) + [s, "-o", o])
         r = suite.sh(cmd, timeout=600)
         err = r.stderr.decode(errors="replace")
         if r.returncode != 0:
@@ -48,7 +53,7 @@ def build_goosecc(t, wd, variant, args, info):
             first = lines[0] if lines else f"exit {r.returncode}"
             raise suite.Fail("error", f"goosecc exit {r.returncode} on {os.path.basename(s)}: {first[:300]}")
         objs.append(o)
-    r = suite.sh([suite.linker(t, args)] + objs + t.ldflags + ["-o", exe])
+    r = suite.sh([suite.linker(t, args)] + suite.LFLAGS + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise suite.Fail("fail", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -63,12 +68,20 @@ def do_test(t, args, baseline_cache):
     if b is None or b.get("key") != key or args.rebaseline:
         try:
             exe = suite.build_baseline(t, wd, args)
-            dt = suite.run_and_verify(t, exe, wd, args, timeout=t.timeout or 120)
+            dt = suite.run_and_verify(t, exe, wd, args, timeout=(t.timeout or 120) * (10 if suite.RUNNER else 1))
             b = {"key": key, "status": "pass", "time": dt}
         except suite.Fail as e:
             b = {"key": key, "status": "build" if e.kind == "build" else "fail", "msg": e.msg[:2000]}
         except Exception as e:  # noqa
             b = {"key": key, "status": "fail", "msg": f"harness: {e}"}
+        if suite.RUNNER and b["status"] == "fail":
+            # as suite.py: a program whose clang -O0 build fails under qemu but -O2 passes
+            try:
+                exe = suite.build_baseline(t, wd, args, "O2")
+                dt = suite.run_and_verify(t, exe, wd, args, timeout=(t.timeout or 120) * 10)
+                b = {"key": key, "status": "pass", "time": dt, "level": "O2", "msg": b.get("msg", "")}
+            except suite.Fail:
+                pass
     res["baseline"] = b
     if b["status"] != "pass":
         return res
@@ -170,8 +183,10 @@ def main():
     ap.add_argument("--report", default="")
     ap.add_argument("--json", default="")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--target", default="x86_64", choices=["x86_64", "aarch64"])
     ap.add_argument("filter", nargs="*", help="substrings of test ids to run")
     args = ap.parse_args()
+    suite.set_target(args.target)
     args.variants = [v for v in args.variants.split(",") if v]
     for v in args.variants:
         if v not in VARIANTS:

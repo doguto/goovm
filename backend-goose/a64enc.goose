@@ -538,7 +538,7 @@ fn a_add_off(rd: u32, rn: u32, off: i64) {
     a_addsub_ext(AR_ADD, true, rd, rn, AX16, 3, 0);
 }
 // stp/ldp of 64-bit GPRs (or d/q registers, fp = 1 d, 2 q) at [rn, #off] (signed offset form).
-checkfree fn a_ldstp(ld: bool, fp: u32, r1: u32, r2: u32, rn: u32, off: i64) {
+fn a_ldstp(ld: bool, fp: u32, r1: u32, r2: u32, rn0: u32, off0: i64) {
     var base: u32 = 0xA9000000;
     var sc: i64 = 8;
     if fp == 1 { base = 0x6D000000; }
@@ -547,6 +547,15 @@ checkfree fn a_ldstp(ld: bool, fp: u32, r1: u32, r2: u32, rn: u32, off: i64) {
         sc = 16;
     }
     if ld { base |= 0x00400000; }
+    var rn = rn0;
+    var off = off0;
+    if off % sc != 0 || off < -64 * sc || off > 63 * sc {
+        // out of the scaled 7-bit range: the address in x16 (x17 if x16 is in use)
+        let t: u32 = if rn == AX16 || (fp == 0 && (r1 == AX16 || r2 == AX16)) { AX17 } else { AX16 };
+        a_add_off(t, rn, off);
+        rn = t;
+        off = 0;
+    }
     let imm: u32 = ((off / sc) as! u32) & 0x7F;
     a4(base | (imm << 15) | ((r2 & 31) << 10) | ((rn & 31) << 5) | (r1 & 31));
 }

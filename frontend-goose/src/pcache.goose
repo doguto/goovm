@@ -758,9 +758,9 @@ fn pt_replay() -> bool {
     rp = lexp;
     for k in nlex {
         let b = m32() as i64;
-        if b >= TBL_BUILTIN_TYPES_OFF.len { pt_fail("builtin index"); }
+        if b >= TBL_BUILTIN_TYPES_OFF.len + (if opt_a64 { a64_builtin_count() } else { 0 }) { pt_fail("builtin index"); }
         let ts, te = builtin_text(b);
-        let first = lex_string_tokens(BUILTIN_TYPES[ts..te]);
+        let first = lex_string_tokens(builtin_src(b)[ts..te]);
     }
     let q3 = clock_ns();
     tm_pt_c += q3 - q2;

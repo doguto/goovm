@@ -10,6 +10,7 @@ import .types;
 import .ast;
 import .sema;
 import .builtins_gen;
+import .builtins_a64_gen;
 import .tables_gen;
 
 let BI_CALL = 1;          // a = builtin symbol, v/c = arguments
@@ -22,9 +23,51 @@ let BI_CONVERTVECTOR = 4; // __builtin_convertvector
 struct BuiltinEnt { typed: bool, custom: bool, ty: u32 }
 var bentries: BuiltinEnt[>..] = [];
 
+// AArch64 (F1): the entries of BUILTIN_TYPES_A64 (builtins_a64_gen.goose)
+// come first; their indices follow BUILTIN_TYPES's. Per line: its offset and
+// the hash of its name (computed at the first lookup).
+var a64_boff: u32[>..] = [];
+var a64_bh: u32[>..] = [];
+fn a64_builtin_find(name: const u8[:], h: u32) -> i64 {
+    let text = BUILTIN_TYPES_A64;
+    if a64_boff.len == 0 {
+        var i = 0;
+        while i < text.len {
+            var j = i;
+            while j < text.len && text[j] != '\n' { j++; }
+            var e = i;
+            while e < j && text[e] != '|' { e++; }
+            a64_boff.push(i as! u32);
+            a64_bh.push(hash_bytes(text[i..e]));
+            i = j + 1;
+        }
+    }
+    for x, q in a64_bh {
+        if x != h { continue; }
+        let o = a64_boff[q] as i64;
+        if o + name.len < text.len && text[o..o + name.len] == name && text[o + name.len] == '|' { return q; }
+    }
+    return -1;
+}
+
+fn a64_builtin_count() -> i64 {
+    if a64_boff.len == 0 { a64_builtin_find("", 0); }
+    return a64_boff.len;
+}
+
 // The builtin named by identifier id, or -1.
 fn builtin_index(id: u32) -> i64 {
     let d = idents[id];
+    let nx = TBL_BUILTIN_TYPES_OFF.len;
+    if opt_a64 {
+        let q = a64_builtin_find(src[d.off..d.off + d.len], d.hash);
+        if q >= 0 {
+            if bentries.len < nx + a64_boff.len {
+                bentries.resize(nx + a64_boff.len, BuiltinEnt { typed: false, custom: false, ty: 0 });
+            }
+            return nx + q;
+        }
+    }
     let b = tbl_find(BUILTIN_TYPES, TBL_BUILTIN_TYPES_OFF, TBL_BUILTIN_TYPES_HT, TBL_BUILTIN_TYPES_LEN,
                      src[d.off..d.off + d.len], d.hash, '|');
     if b >= 0 && bentries.len == 0 {
@@ -33,10 +76,17 @@ fn builtin_index(id: u32) -> i64 {
     return b;
 }
 
-// Builtin b's line is name|type|flags: the range of its type text.
+// The table of builtin b (BUILTIN_TYPES, or BUILTIN_TYPES_A64 for the AArch64 entries).
+fn builtin_src(b: i64) -> const u8[:] {
+    if b >= TBL_BUILTIN_TYPES_OFF.len { return BUILTIN_TYPES_A64; }
+    return BUILTIN_TYPES;
+}
+
+// Builtin b's line is name|type|flags: the range of its type text (in builtin_src(b)).
 fn builtin_text(b: i64) -> i64, i64 {
-    let text = BUILTIN_TYPES;
-    var j = TBL_BUILTIN_TYPES_OFF[b] as i64;
+    let text = builtin_src(b);
+    let nx = TBL_BUILTIN_TYPES_OFF.len;
+    var j = if b >= nx { a64_boff[b - nx] as i64 } else { TBL_BUILTIN_TYPES_OFF[b] as i64 };
     while j < text.len && text[j] != '|' && text[j] != '\n' { j++; }
     j++;
     let ts = j;
@@ -46,7 +96,7 @@ fn builtin_text(b: i64) -> i64, i64 {
 
 // The flags of builtin b: 1 = noreturn.
 fn builtin_flags(b: i64) -> u8 {
-    let text = BUILTIN_TYPES;
+    let text = builtin_src(b);
     let ts, te = builtin_text(b);
     var j = te;
     var fl: u8 = 0;
@@ -93,10 +143,14 @@ fn lex_string_tokens(s: const u8[:]) -> i64 {
 
 // The function type of builtin entry b (parsed on first use).
 recursive fn builtin_type(b: i64) -> u32 {
+    if bentries.len <= b {
+        bentries.resize(TBL_BUILTIN_TYPES_OFF.len + (if opt_a64 { a64_builtin_count() } else { 0 }),
+                        BuiltinEnt { typed: false, custom: false, ty: 0 });
+    }
     if bentries[b].typed { return bentries[b].ty; }
     bentries[b].typed = true;
     let ts, te = builtin_text(b);
-    let text = BUILTIN_TYPES[ts..te];
+    let text = builtin_src(b)[ts..te];
     if pt_rec { pt_lex.push(b as! u32); }    // G1: the parse cache lexes it again on a replay
     let first = lex_string_tokens(text);
     let save = pc;
@@ -217,6 +271,12 @@ fn builtin_call(s: i64, mark: i64, loc: u32) -> u32 {
             var c = rv(a);
             if proto && i < ft.n {
                 let pt = unqual(tparams[ft.extra + i]);
+                if opt_a64 && kind_of(pt) == TY_POINTER && unqual(tbase(pt)) == t_valist && nodes[a].kind != N_ERROR
+                   && unqual(nty(a)) == t_valist && is_lvalue(a) {
+                    // AArch64: va_start / va_copy / va_end take the va_list by reference
+                    if nodes[a].kind == N_DECLREF { syms[nodes[a].a].flags = syms[nodes[a].a].flags | SF_ADDR; }
+                    c = node(N_UNARY, U_ADDR, mk_ptr(nty(a)), a as i64, 0, 0, nodes[a].loc);
+                }
                 // va_list parameters take the decayed array
                 c = assign_convert(c, pt, nodes[a].loc, 2);
             } else if classify {

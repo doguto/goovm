@@ -24,6 +24,7 @@ var f128_loc: u32 = 0xFFFFFFFF;  // where a __float128 value was first lowered
 recursive fn vty(q: u32) -> u32 {
     let t = types[q >> 4];
     let k = t.kind as i64;
+    if opt_a64 && (k == TY_LDOUBLE || k == TY_FLOAT128) { return GIR_T_F128; }   // binary128 (F1)
     let g = KIND_GIR[k & 31];
     if g != 255 { return g as u32; }
     if k == TY_INT || k == TY_UINT { return GIR_T_I32; }
@@ -64,6 +65,12 @@ fn mty(q: u32) -> u32 {
 }
 
 fn is_bool(q: u32) -> bool { kind_of(q) == TY_BOOL }
+
+// long double (F1): x87 f80 on x86-64, binary128 (GIR_T_F128) on AArch64. The
+// constant evaluator's F80 pairs hold the target's long double bits; the
+// sign is bit 15 of hi (f80) or bit 63 (binary128).
+fn is_ld(t: u32) -> bool { t == GIR_T_F80 || t == GIR_T_F128 }
+fn ld_sign() -> u64 { if opt_a64 { 0x8000000000000000 } else { 0x8000 } }
 
 // How the lowering holds a value of C type q.
 let VK_SCALAR = 0;    // one GIR value
@@ -391,7 +398,201 @@ fn abi_of_classes(q: u32, lo: i64, hi: i64, is_ret: bool) -> Abi, i64, i64 {
     return coerce2(lt, ht, size, lt_tmp || ht_tmp), nint, nsse;
 }
 
+// ------------------------------------------------------------ AAPCS64 (F1)
+// AArch64ABIInfo (clang/lib/CodeGen/Targets/AArch64.cpp), the AAPCS kind on
+// Linux: homogeneous floating-point / short-vector aggregates of up to four
+// members as arrays of the member type; other composites of at most 16 bytes
+// as i64 / [2 x i64] / i128 (results of at most 8 bytes as an integer of their
+// size); larger composites through a pointer to a copy the caller makes
+// (AK_BYVAL with tmp = 1: no byval flag). Small integers are not extended.
+
+// isHomogeneousAggregateBaseType: a floating-point type or a 64 / 128-bit vector.
+fn a64_hfa_base(q: u32) -> bool {
+    let k = kind_of(q);
+    if k == TY_FLOAT16 || k == TY_BF16 || k == TY_FLOAT || k == TY_DOUBLE || k == TY_LDOUBLE || k == TY_FLOAT128 { return true; }
+    if k == TY_VECTOR || k == TY_EXTVECTOR {
+        let s = csize(q) * 8;
+        return s == 64 || s == 128;
+    }
+    return false;
+}
+
+var a64_hbase: u32 = 0;    // the base type found (0: none yet)
+
+// isHomogeneousAggregate: the number of members of q (0: not one), its base in a64_hbase.
+recursive fn a64_hfa_members(q0: u32) -> i64 {
+    let q = unqual(q0);
+    let k = kind_of(q);
+    if k == TY_ENUM { return 0; }
+    if k == TY_ARRAY {
+        let n = types[q >> 4].n;
+        if n <= 0 { return 0; }
+        let m = a64_hfa_members(tbase(q));
+        if m == 0 { return 0; }
+        return m * n;
+    }
+    if k == TY_STRUCT || k == TY_UNION {
+        if is_flex_record(q) { return 0; }
+        let r = rec_of(q);
+        let first = records[r].first as i64;
+        let cnt = records[r].count as i64;
+        var members: i64 = 0;
+        for i in first..first + cnt {
+            let f = fields[i];
+            if f.width >= 0 {
+                if f.width == 0 { continue; }   // (zero-length bit-fields are skipped)
+                return 0;
+            }
+            if a64_empty(f.ty) { continue; }
+            let m = a64_hfa_members(f.ty);
+            if m == 0 { return 0; }
+            if k == TY_UNION { if m > members { members = m; } } else { members += m; }
+        }
+        if a64_hbase == 0 || members == 0 { return 0; }
+        // no padding
+        if csize(a64_hbase) * members != csize(q) { return 0; }
+        return members;
+    }
+    var members: i64 = 1;
+    var bq = q;
+    if k == TY_COMPLEX {
+        members = 2;
+        bq = unqual(tbase(q));
+    }
+    if !a64_hfa_base(bq) { return 0; }
+    if a64_hbase == 0 { a64_hbase = bq; }
+    else if is_vector(a64_hbase) != is_vector(bq) || csize(a64_hbase) != csize(bq) { return 0; }
+    else if !is_vector(bq) && kind_of(a64_hbase) != kind_of(bq) && !(csize(bq) == csize(a64_hbase)) { return 0; }
+    return members;
+}
+
+// An empty record (or an array of them): isEmptyRecord with AllowArrays.
+recursive fn a64_empty(q0: u32) -> bool {
+    let q = unqual(q0);
+    let k = kind_of(q);
+    if k == TY_ARRAY { return types[q >> 4].n == 0 || a64_empty(tbase(q)); }
+    if k != TY_STRUCT && k != TY_UNION { return false; }
+    let r = rec_of(q);
+    let first = records[r].first as i64;
+    let cnt = records[r].count as i64;
+    for i in first..first + cnt {
+        let f = fields[i];
+        if f.width == 0 { continue; }
+        if f.width > 0 { return false; }
+        if !a64_empty(f.ty) { return false; }
+    }
+    return true;
+}
+
+// The HFA / HVA of q: its member count (2..4 or 1) and GIR member type, or 0.
+fn a64_hfa(q: u32) -> i64, u32 {
+    a64_hbase = 0;
+    let m = a64_hfa_members(q);
+    if m == 0 || m > 4 { return 0, 0; }
+    return m, vty(a64_hbase);
+}
+
+// The alignment of q without alignment attributes on the record (getTypeUnadjustedAlign).
+recursive fn a64_unadj_align(q0: u32) -> i64 {
+    let q = unqual(q0);
+    let k = kind_of(q);
+    if k == TY_ARRAY { return a64_unadj_align(tbase(q)); }
+    if k == TY_STRUCT || k == TY_UNION {
+        let r = rec_of(q);
+        if records[r].attr_align == 0 { return calign(q); }
+        var al: i64 = 1;
+        let first = records[r].first as i64;
+        let cnt = records[r].count as i64;
+        for i in first..first + cnt {
+            let a = calign(fields[i].ty);
+            if a > al { al = a; }
+        }
+        return al;
+    }
+    return calign(q);
+}
+
+fn a64_aggregate(q: u32) -> bool {
+    let k = kind_of(q);
+    return k == TY_STRUCT || k == TY_UNION || k == TY_ARRAY || k == TY_COMPLEX;
+}
+
+// isIllegalVectorType
+fn a64_illegal_vector(q: u32) -> bool {
+    if !is_vector(q) { return false; }
+    let n = types[q >> 4].n;
+    if n <= 0 || (n & (n - 1)) != 0 { return true; }
+    let s = csize(q) * 8;
+    return s != 64 && (s != 128 || n == 1);
+}
+
+fn a64_indirect(q: u32) -> Abi {
+    var a = byval(q);
+    a.tmp = 1;
+    a.align = calign(q) as! u32;
+    return a;
+}
+
+// The coerced part: t loaded from offset 0 of the object of `size` bytes.
+fn a64_coerce(t: u32, size: i64) -> Abi {
+    return coerce1(t, 0, size, tsize(t) as i64 > size);
+}
+
+fn a64_arg_abi(q0: u32) -> Abi {
+    var q = unqual(q0);
+    if kind_of(q) == TY_ENUM { q = unqual(enum_underlying(q)); }
+    let size = csize(q);
+    if a64_illegal_vector(q) {
+        // coerceIllegalVector
+        if size <= 4 { return a64_coerce(GIR_T_I32, size); }
+        if size == 8 { return a64_coerce(ty_vec(2, GIR_T_I32), size); }
+        if size == 16 { return a64_coerce(ty_vec(4, GIR_T_I32), size); }
+        return a64_indirect(q);
+    }
+    if !a64_aggregate(q) {
+        return Abi { kind: AK_DIRECT, ext: 0, n: 0, tmp: 0, t0: vty(q), t1: 0, off0: 0, off1: 0, size: size as! u32,
+            align: calign(q) as! u32 };
+    }
+    if a64_empty(q) || size == 0 { return abi_ignore(); }
+    let m, bt = a64_hfa(q);
+    if m > 0 { return a64_coerce(ty_array(m as! u32, bt), size); }
+    if size <= 16 {
+        let al: i64 = if a64_unadj_align(q) < 16 { 8 } else { 16 };
+        let sz = (size + al - 1) / al * al;
+        let base: u32 = if al == 8 { GIR_T_I64 } else { GIR_T_I128 };
+        if sz == al { return a64_coerce(base, size); }
+        return a64_coerce(ty_array((sz / al) as! u32, base), size);
+    }
+    return a64_indirect(q);
+}
+
+fn a64_ret_abi(q0: u32) -> Abi {
+    var q = unqual(q0);
+    if is_void(q) { return abi_ignore(); }
+    if kind_of(q) == TY_ENUM { q = unqual(enum_underlying(q)); }
+    let size = csize(q);
+    if is_vector(q) && size > 16 {
+        return Abi { kind: AK_SRET, ext: 0, n: 0, tmp: 0, t0: GIR_T_PTR, t1: 0, off0: 0, off1: 0, size: size as! u32,
+            align: calign(q) as! u32 };
+    }
+    if !a64_aggregate(q) {
+        return Abi { kind: AK_DIRECT, ext: 0, n: 0, tmp: 0, t0: vty(q), t1: 0, off0: 0, off1: 0, size: size as! u32,
+            align: calign(q) as! u32 };
+    }
+    if a64_empty(q) || size == 0 { return abi_ignore(); }
+    let m, bt = a64_hfa(q);
+    if m > 0 { return a64_coerce(ty_array(m as! u32, bt), size); }
+    if size <= 16 {
+        if size <= 8 { return a64_coerce(ty_int((size * 8) as! u32), size); }
+        if calign(q) < 16 { return a64_coerce(ty_array(2, GIR_T_I64), size); }
+        return a64_coerce(GIR_T_I128, size);
+    }
+    return Abi { kind: AK_SRET, ext: 0, n: 0, tmp: 0, t0: GIR_T_PTR, t1: 0, off0: 0, off1: 0, size: size as! u32,
+        align: calign(q) as! u32 };
+}
+
 fn ret_abi(q: u32) -> Abi {
+    if opt_a64 { return a64_ret_abi(q); }
     if is_void(q) { return abi_ignore(); }
     let lo, hi = classify(q, 0);
     if lo == CL_MEM && is_vector(q) {
@@ -422,6 +623,7 @@ fn abi_start(ret: Abi) {
 fn arg_abi(q0: u32) -> Abi {
     var q = unqual(q0);
     if kind_of(q) == TY_ARRAY || kind_of(q) == TY_VLA { q = t_voidptr; }
+    if opt_a64 { return a64_arg_abi(q); }
     let lo, hi = classify(q, 0);
     var a = abi_ignore();
     var ni: i64 = 0;
