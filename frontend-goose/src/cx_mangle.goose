@@ -503,6 +503,15 @@ recursive fn mangle_class_name(sc: i64) {
             let cs = crecs[r].sym as i64;
             if cs >= 0 && cxs[cs].flags & CF_SPEC != 0 && cxs[cs].tmpl >= 0 {
                 let ts = tmpls[cxs[cs].tmpl].sym as i64;
+                // D2: an instantiated std::allocator<T>, std::basic_string<...>,
+                // std::basic_ostream<char> ...: the abbreviations (Sa, Sb, So ...)
+                if is_std_ns(parent) {
+                    let m0 = msubs.len;
+                    if std_abbrev(ts, cxs[cs].targs as i64, records[r].ty << 4) {
+                        if msubs.len > m0 { msubs[msubs.len - 1] = MK_SCOPE | (sc as u64); }
+                        return;
+                    }
+                }
                 if is_std_ns(parent) { mg.append("St"); }
                 let j = sub_find(MK_TMPL | (ts as u64));
                 if j >= 0 { sub_emit(j); } else {
