@@ -342,6 +342,7 @@ recursive fn inst_record(r: i64) {
     let sc = crecs[r].scope as i64;
     if sc < 0 || scopes[sc].flags & SCF_INST_PENDING == 0 { return; }
     if inst_depth > 400 { return; }
+    if member_cls.contains(r as u64) { inst_member_class(r); return; }
     let cs = crecs[r].sym as i64;
     let t = cxs[cs].tmpl as i64;
     let args = cxs[cs].targs;
@@ -1123,4 +1124,46 @@ fn inst_what_text(o: u8[>..]&, s: i64) {
     o.push('\'');
     o.append(ident_text(syms[s].name as i64));
     o.push('\'');
+}
+
+// ---------------------------------------------------------------------------
+// Member classes of class templates defined out of their class
+// (template<class T> class X<T>::Inner { ... }): the instantiation's
+// member class declared by `class Inner;` is pending until it is needed
+// complete, then the pattern's out-of-line definition is parsed again as
+// its body with the enclosing arguments bound.
+
+var member_cls = dictionary<u64, u32> {};
+
+fn member_class_declared(s: i64) {
+    if !is_record(syms[s].ty) { return; }
+    let r = rec_of(syms[s].ty);
+    let sc = crecs[r].scope as i64;
+    if sc < 0 || records[r].flags & RF_COMPLETE != 0 { return; }
+    member_cls.insert(r as u64, 1);
+    scopes[sc].flags = scopes[sc].flags | SCF_INST_PENDING as! u8;
+}
+
+recursive fn inst_member_class(r: i64) {
+    let sc = crecs[r].scope as i64;
+    scopes[sc].flags = scopes[sc].flags & ~(SCF_INST_PENDING as! u8);
+    member_cls.remove(r as u64);
+    let cs = crecs[r].sym as i64;
+    if cs < 0 { return; }
+    let p = pattern_member(cs);
+    if p < 0 || cxs[p].odef < 0 { return; }
+    let hdr = cxs[p].odef as i64;
+    if tmpls[hdr].t0 == 0 { return; }
+    let pat, pargs = inst_args_of(cxs[cs].dscope as i64);
+    if pat < 0 { return; }
+    let w = tmpl_class_key(hdr);
+    inst_what = cs;
+    let st = inst_enter(true);
+    bind_header(hdr, pargs);
+    cur_scope = sc;
+    pc = class_head_end(hdr);
+    records[r].pack = pack_now();
+    parse_class_body(r, w);
+    let bad = inst_leave(st);
+    if bad { inst_dirty.insert(r as u64, 1); }
 }

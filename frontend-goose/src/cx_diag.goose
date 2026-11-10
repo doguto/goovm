@@ -166,6 +166,12 @@ recursive fn cts_scope(sc: i64) {
     if sc <= 0 { return; }
     let k = scopes[sc].kind as i64;
     if k != CS_NS && k != CS_CLASS { return; }
+    if k == CS_CLASS && scopes[sc].rec >= 0 {
+        // a class: its own qualifier comes with it
+        cts_record(scopes[sc].rec as i64);
+        cts_append("::");
+        return;
+    }
     cts_scope(scopes[sc].parent as i64);
     if k == CS_NS && (scopes[sc].name == 0 || scopes[sc].flags & SCF_ANON != 0) { cts_append("(anonymous namespace)::"); return; }
     if k == CS_NS && scopes[sc].flags & SCF_INLINE != 0 && ident_text(scopes[sc].name as i64).len > 2 &&
