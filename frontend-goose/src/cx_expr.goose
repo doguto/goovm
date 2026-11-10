@@ -630,9 +630,12 @@ recursive fn parse_primary_cx() -> u32 {
             expect(TK_L_PAREN, "'('");
             let sp = paren_depth;
             paren_depth++;
-            if looks_like_type_id() && type_id_then(TK_R_PAREN, TK_R_PAREN) { let t = parse_type_id(); } else { let e = parse_expr_cx(); }
+            var tt: u32 = 0;
+            var te: u32 = 0;
+            if looks_like_type_id() && type_id_then(TK_R_PAREN, TK_R_PAREN) { tt = parse_type_id(); } else { te = parse_expr_cx(); }
             paren_depth = sp;
             expect(TK_R_PAREN, "')'");
+            if cg_on && !dependent_ctx() && (tt != 0 || te != 0) { return cg_typeid(tt, te, loc); }
             return typeid_node(loc);
         }
         if w == KW_TRAIT { return parse_trait(); }

@@ -97,7 +97,7 @@ fn var_global(s: i64) -> u32 {
     ensure_sym_tables();
     if sym_gen[s].glob != NONE { note_use(sym_gen[s].glob); return sym_gen[s].glob; }
     var g: u32 = 0;
-    if has_linkage(s) {
+    if has_linkage(s) || (opt_cxx && syms[s].attr != 0 && sym_attrs[syms[s].attr].asm_len != 0) {
         g = global_by_name(link_name(s), false);
         ensure_glob_tables();
         if glob_gen[g].sym < 0 { glob_gen[g].sym = s; }
@@ -202,6 +202,12 @@ fn sym_has_attr(s: i64, m: u32) -> bool {
 // Linkage flags of a defined or referenced global.
 fn link_flags(s: i64, defined: bool) -> u32 {
     var f: u32 = 0;
+    if opt_cxx && cxl_link(s) != LK_DEFAULT && defined {
+        // D3: linkonce_odr / weak_odr (also static locals of inline functions)
+        f = GF_WEAK;
+        if cxl_has(s, CXL_HIDDEN) { f = f | GF_HIDDEN | GF_LOCALREF; }
+        return f;
+    }
     let internal = is_internal_sym(s) || !has_linkage(s) || fn_local_inline(s);
     if internal { f = f | GF_INTERNAL | GF_LOCALREF; }
     if syms[s].flags & SF_WEAK != 0 { f = f | GF_WEAK; }

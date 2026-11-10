@@ -244,7 +244,9 @@ fn inline_target(n: u32) -> i64 {
     let nd = nodes[n];
     let ds = direct_callee(nd.a);
     if ds < 0 || syms[ds].kind != SK_FUNC { return -1; }
-    if !sym_has_attr(ds, AM_ALWAYS_INLINE) || !sym_has_attr(ds, AM_NODEBUG) { return -1; }
+    // (C++: clang inlines every always_inline function; goosecc the free
+    // functions among them, their code at the call as for nodebug ones)
+    if !sym_has_attr(ds, AM_ALWAYS_INLINE) || !(sym_has_attr(ds, AM_NODEBUG) || opt_cxx) { return -1; }
     let def = syms[ds].def;
     if def < 0 || !fn_emitted_def(ds) || ds == f_sym { return -1; }
     let fty = types[syms[ds].ty >> 4];
@@ -279,6 +281,7 @@ recursive fn inline_viable(n: u32) -> bool {
     if k == N_FOR { return inline_viable(nd.a) && inline_viable(nd.v as! u32); }
     if k == N_CASE || k == N_DEFAULT { return inline_viable(nd.a); }
     if k == N_LABEL || k == N_GOTO || k == N_IGOTO || k == N_ASM { return false; }
+    if k >= N_XTEMP { return false; }      // C++ lowering statements (cleanups, try)
     return true;
 }
 

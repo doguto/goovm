@@ -150,8 +150,10 @@ fn lower_tu(main_file: const u8[:]) -> bool {
         if m_globals[g].kind == G_FUNC {
             let d = syms[s].def;
             if d >= 0 { gen_function(d as! u32); }
+            if opt_cxx { keep_cx_uses(s); }
         } else {
             emit_var(g);
+            if opt_cxx { keep_cx_uses(s); }
         }
         if n_errors > 0 && n_errors >= 50 { break; }
     }
