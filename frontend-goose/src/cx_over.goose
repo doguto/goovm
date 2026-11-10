@@ -510,7 +510,7 @@ recursive fn build_call(f: i64, obj: u32, mark: i64, loc: u32, qualified: bool) 
 fn has_defaults_needed(f: i64, mark: i64) -> bool { (nscratch.len - mark) < types[syms[f].ty >> 4].n }
 
 // &f for an overload set: the single function, or opaque.
-fn funcref_addr(e: u32, loc: u32) -> u32 {
+recursive fn funcref_addr(e: u32, loc: u32) -> u32 {
     var s = nodes[e].a as i64;
     var found: i64 = -1;
     var n = 0;
@@ -518,6 +518,11 @@ fn funcref_addr(e: u32, loc: u32) -> u32 {
         let f = resolve(s);
         if f >= 0 && (syms[f].kind as i64 == SK_FUNC || syms[f].kind as i64 == SK_TEMPLATE) { found = f; n++; }
         s = cxs[s].nnext as i64;
+    }
+    if n == 1 && syms[found].kind as i64 == SK_TEMPLATE && nodes[e].c != 0 && tmpl_kind(found) == TT_FUNC && !dependent_ctx() {
+        // f<args>: the specialization the explicit arguments name
+        let sp = deduce_addr(cxs[found].tmpl as i64, (nodes[e].c - 1) as! i32, 0);
+        if sp >= 0 { found = sp; }
     }
     if n != 1 || syms[found].kind as i64 != SK_FUNC || cxs[found].flags & CF_MEMBER != 0 { return dep_node(t_unknown, loc); }
     let r = node(N_DECLREF, 0, syms[found].ty, found, 0, 0, loc);

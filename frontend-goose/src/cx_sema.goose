@@ -130,7 +130,13 @@ recursive fn to_bool(e: u32) -> u32 {
 // The condition of if/while/for/?:, converted to bool.
 recursive fn cond_cx(e: u32) -> u32 { to_bool(e) }
 
-recursive fn mk_assign_cx(op: i64, l: u32, r: u32, loc: u32, tok: i64) -> u32 {
+recursive fn mk_assign_cx(op: i64, l: u32, r0: u32, loc: u32, tok: i64) -> u32 {
+    var r = r0;
+    if op == 0 && !is_opq(l) && nodes[r].kind as i64 == N_FUNCREF && is_pointer(nodes[l].ty) && is_func(tbase(nodes[l].ty)) {
+        // p = f with f overloaded: the function p's type selects
+        let a = funcref_addr_to(r, nodes[l].ty, loc);
+        if !is_opq(a) { r = a; }
+    }
     if is_opq(l) || is_opq(r) { return dep_node(t_unknown, loc); }
     let tl = nodes[l].ty;
     if is_record(tl) || is_record(nodes[r].ty) || nodes[r].kind as i64 == N_INITBRACE {
@@ -848,6 +854,15 @@ recursive fn parse_var_init(s: i64, d: CD&, ctx: i64) {
     } else if at(TK_L_BRACE) {
         form = 3;
         init = parse_braced();
+    }
+    // an overload set initializing a function pointer or reference: the
+    // function the target type selects ([over.over])
+    if init != 0 && nodes[init].kind as i64 == N_FUNCREF && !has_auto(syms[s].ty) && !dependent_ctx() {
+        let ft = nonref(syms[s].ty);
+        if is_func(ft) || (is_pointer(ft) && is_func(tbase(ft))) {
+            let a = funcref_addr_to(init, syms[s].ty, loc);
+            if !is_opq(a) { init = a; }
+        }
     }
     // auto: the initializer's type
     let t = syms[s].ty;
