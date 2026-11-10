@@ -504,9 +504,11 @@ recursive fn mk_construct(t: u32, mark: i64, loc: u32, braces: bool) -> u32 {
 // new-expression.
 recursive fn parse_new() -> u32 {
     let loc = tloc();
-    accept(TK_COLONCOLON);
+    let global = accept(TK_COLONCOLON);
     adv();      // new
     var placement = false;
+    var place: u32 = 0;
+    var place_opq = false;
     var t: u32 = 0;
     if at(TK_L_PAREN) {
         // ( placement ) or ( type-id )
@@ -519,6 +521,13 @@ recursive fn parse_new() -> u32 {
         } else { restore(sv); }
         if t == 0 {
             let mark = parse_args();
+            for i in mark..nscratch.len { if is_opq(nscratch[i]) { place_opq = true; } }
+            if cg_on && !place_opq {
+                // code generation: the placement arguments, as a list
+                let n = nscratch.len - mark;
+                let start = commit_list(mark);
+                place = node_v(N_INITBRACE, 0, 0, 0, 0, n, loc, start);
+            }
             nscratch.resize(mark);
             placement = true;
         }
@@ -564,23 +573,23 @@ recursive fn parse_new() -> u32 {
         has_init = true;
         init = parse_braced();
     }
-    if is_opaque(t) || placement || (count != 0 && is_opq(count)) || (init != 0 && is_opq(init) && !(cg_on && nodes[init].kind as i64 == N_INITBRACE)) {
+    if is_opaque(t) || (placement && (place_opq || !cg_on)) || (count != 0 && is_opq(count)) || (init != 0 && is_opq(init) && !(cg_on && nodes[init].kind as i64 == N_INITBRACE)) {
         return dep_node(if is_opaque(t) { t_unknown } else { mk_ptr(t) }, loc);
     }
-    if cg_on { return cg_new(t, count, init, has_init, loc); }
+    if cg_on { return cg_new(t, count, init, has_init, loc, place, global); }
     let n = node(N_NEW, if count != 0 { 1 } else { 0 }, mk_ptr(t), init as i64, count as i64, if has_init { 1 } else { 0 }, loc);
     return n;
 }
 
 recursive fn parse_delete() -> u32 {
     let loc = tloc();
-    accept(TK_COLONCOLON);
+    let global = accept(TK_COLONCOLON);
     adv();      // delete
     var arr = false;
     if at(TK_L_SQUARE) && tk_n(1) == TK_R_SQUARE { adv(); adv(); arr = true; }
     let e = parse_cast_cx();
     if is_opq(e) { return dep_node(t_void, loc); }
-    if cg_on { return cg_delete(rv(e), arr, loc); }
+    if cg_on { return cg_delete(rv(e), arr, loc, global); }
     return node(N_DELETE, if arr { 1 } else { 0 }, t_void, rv(e) as i64, 0, 0, loc);
 }
 

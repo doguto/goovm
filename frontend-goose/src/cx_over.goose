@@ -293,6 +293,7 @@ recursive fn mk_call_cx(callee: u32, mark: i64, loc: u32) -> u32 {
         return build_call(f, obj, mark, loc, nodes[callee].op != 0);
     }
     if cg_on && ck == N_CXX && nodes[callee].op == 5 { return cg_memfn_call(callee, mark, loc); }
+    if cg_on && ck == N_CXX && nodes[callee].op == 9 { return cg_dtor_call(callee, mark, loc); }
     if is_opq(callee) { return opaque_node(loc); }
     let t = nodes[callee].ty;
     if is_record(t) {

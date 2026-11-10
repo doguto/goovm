@@ -472,6 +472,7 @@ recursive fn parse_member_access(base: u32, arrow: bool, loc: u32) -> u32 {
             var dq = QN { .. };
             parse_qname(dq);
         }
+        if cg_on && !is_opq(base) && !dependent_ctx() { return cg_dtor_ref(base, arrow, loc); }
         return dep_node(t_unknown, loc);
     }
     if (at(TK_IDENT) || at(TK_COLONCOLON)) && csc >= 0 && !qn.tkw {

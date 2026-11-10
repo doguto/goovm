@@ -60,6 +60,7 @@ import .cx_gen_eh;
 import .cx_gen_class;
 import .cx_gen_vt;
 import .cx_gen_rtti;
+import .cx_gen_new;
 
 let CF_DTOR_DELETING = 2147483648;  // the deleting destructor (D0) of a class with a virtual destructor
 
@@ -2704,126 +2705,9 @@ fn global_alloc_fn(op: i64) -> i64 {
 }
 
 // new T / new T(args) / new T{args} / new T[n].
-recursive fn cg_new(t: u32, count: u32, init: u32, has_init: bool, loc: u32) -> u32 {
-    if is_record(t) {
-        let sc = type_scope(t);
-        if sc >= 0 && (scope_find(sc, op_ids[OP_NEW]) >= 0 || scope_find(sc, op_ids[OP_NEW_ARR]) >= 0) { return opaque_node(loc); }
-    }
-    let pt = mk_ptr(unqual(t));
-    if count != 0 {
-        // arrays of types that need no construction or destruction
-        let bt = base_elem_t(t);
-        if is_record(bt) && class_dtor(rec_of(bt)) >= 0 { return opaque_node(loc); }
-        if is_record(bt) && needs_default_init(rec_of(bt)) {
-            if has_init && !(init == 0 || nodes[init].c == 0) { return opaque_node(loc); }
-            return new_class_array(t, count, loc);
-        }
-        if has_init && !(init == 0 || nodes[init].c == 0) { return opaque_node(loc); }
-        let na = global_alloc_fn(OP_NEW_ARR);
-        if na < 0 || is_opq(count) || !is_integer(nodes[count].ty) { return opaque_node(loc); }
-        let sz = node(N_BINARY, B_MUL, t_size, assign_convert(rv(count), t_size, loc, 1) as i64, int_node(type_size(t), t_size, loc) as i64, 0, loc);
-        let mark = nscratch.len;
-        nscratch.push(sz);
-        let c = lower_call(na, 0, mark, loc, false);
-        if is_opq(c) { return c; }
-        if has_init {
-            // new T[n](): zeroed
-            let ms = libc_memset();
-            let am = nscratch.len;
-            nscratch.push(c);
-            nscratch.push(int_node(0, t_int, loc));
-            nscratch.push(node(N_BINARY, B_MUL, t_size, assign_convert(rv(count), t_size, loc, 1) as i64, int_node(type_size(t), t_size, loc) as i64, 0, loc));
-            let z = n_call(ms, am, loc);
-            return node(N_ICAST, CK_BITCAST, pt, z as i64, 0, 0, loc);
-        }
-        return node(N_ICAST, CK_BITCAST, pt, c as i64, 0, 0, loc);
-    }
-    let nf = global_alloc_fn(OP_NEW);
-    if nf < 0 { return opaque_node(loc); }
-    // ({ T *p = (T *)operator new(sizeof(T)); <init *p>; p; })
-    let mark0 = nscratch.len;
-    nscratch.push(int_node(type_size(t), t_size, loc));
-    let c = lower_call(nf, 0, mark0, loc, false);
-    if is_opq(c) { return c; }
-    let s = csym(SK_VAR, intern("__new_tmp"), pt, loc);
-    syms[s].scope = 1;
-    let mark = nscratch.len;
-    nscratch.push(node(N_DECL, 0, pt, s, node(N_ICAST, CK_BITCAST, pt, c as i64, 0, 0, loc) as i64, loc as i64, loc));
-    let obj = n_deref(rv(n_var(s, loc)), loc);
-    if is_record(t) {
-        let am = nscratch.len;
-        if init != 0 {
-            let k = nodes[init].kind as i64;
-            if k == N_CTOR || k == N_INITBRACE { for i in nodes[init].c as i64 { nscratch.push(nlist[nodes[init].v + i]); } }
-            else { nscratch.push(init); }
-        }
-        var st: u32 = 0;
-        if init != 0 && nodes[init].kind as i64 == N_INITBRACE && c_initializable(t) {
-            nscratch.resize(am);
-            let bi = brace_init(t, init, loc);
-            if bi == 0 { nscratch.resize(mark0); return opaque_node(loc); }
-            st = n_expr_stmt(node(N_ASSIGN, 0, unqual(t), obj as i64, compound_value(bi, unqual(t), loc) as i64, 0, loc));
-        } else {
-            st = construct_at(obj, am, loc);
-            if st == 0 { nscratch.resize(mark0); return opaque_node(loc); }
-            // new T() value-initializes a class without a user-provided constructor
-            if has_init && init != 0 && nodes[init].c == 0 && !has_user_ctor(rec_of(t)) {
-                nscratch.push(n_expr_stmt(node(N_ASSIGN, 0, unqual(t), obj as i64, node(N_ZEROINIT, 0, unqual(t), 0, 0, 0, loc) as i64, 0, loc)));
-            }
-        }
-        nscratch.push(st);
-    } else if has_init {
-        var v: u32 = 0;
-        if init == 0 || (nodes[init].kind as i64 == N_INITBRACE && nodes[init].c == 0) { v = node(N_ZEROINIT, 0, unqual(t), 0, 0, 0, loc); }
-        else if nodes[init].kind as i64 == N_ZEROINIT { v = init; }
-        else {
-            var e = init;
-            if nodes[e].kind as i64 == N_INITBRACE && nodes[e].c == 1 { e = nlist[nodes[e].v]; }
-            v = conv_value(e, unqual(t), loc);
-        }
-        if is_opq(v) { nscratch.resize(mark0); return opaque_node(loc); }
-        nscratch.push(n_expr_stmt(node(N_ASSIGN, 0, unqual(t), obj as i64, v as i64, 0, loc)));
-    }
-    nscratch.push(n_expr_stmt(rv(n_var(s, loc))));
-    let body = n_block(mark, loc);
-    return node(N_STMTEXPR, 0, pt, body as i64, 0, 0, loc);
+recursive fn cg_new(t: u32, count: u32, init: u32, has_init: bool, loc: u32, place: u32, global: bool) -> u32 {
+    return cg_new2(t, count, init, has_init, loc, place, global);
 }
-
-// new T[n] for a class T with a default constructor and a trivial
-// destructor: ({ long n_ = n; T *p = (T *)operator new[](n_ * sizeof(T));
-// for (long i = 0; i < n_; ++i) T::T(&p[i]); p; }).
-recursive fn new_class_array(t: u32, count: u32, loc: u32) -> u32 {
-    let na = global_alloc_fn(OP_NEW_ARR);
-    if na < 0 || is_opq(count) || !is_integer(nodes[count].ty) || is_array(t) { return opaque_node(loc); }
-    let pt = mk_ptr(unqual(t));
-    let mark = nscratch.len;
-    let ns = csym(SK_VAR, intern("__count"), t_long, loc);
-    syms[ns].scope = 1;
-    nscratch.push(node(N_DECL, 0, t_long, ns, assign_convert(rv(count), t_long, loc, 1) as i64, loc as i64, loc));
-    let am = nscratch.len;
-    let szl = assign_convert(rv(n_var(ns, loc)), t_size, loc, 1);
-    nscratch.push(node(N_BINARY, B_MUL, t_size, szl as i64, int_node(type_size(t), t_size, loc) as i64, 0, loc));
-    let c = lower_call(na, 0, am, loc, false);
-    if is_opq(c) { nscratch.resize(mark); return c; }
-    let ps = csym(SK_VAR, intern("__new_tmp"), pt, loc);
-    syms[ps].scope = 1;
-    nscratch.push(node(N_DECL, 0, pt, ps, node(N_ICAST, CK_BITCAST, pt, c as i64, 0, 0, loc) as i64, loc as i64, loc));
-    let i = csym(SK_VAR, intern("__i"), t_long, loc);
-    syms[i].scope = 1;
-    let el = node(N_INDEX, 0, unqual(t), rv(n_var(ps, loc)) as i64, rv(n_var(i, loc)) as i64, 0, loc);
-    nodes[el].flags = NF_LVALUE;
-    let cm = nscratch.len;
-    let body = construct_at(el, cm, loc);
-    if body == 0 { nscratch.resize(mark); return opaque_node(loc); }
-    let init = node(N_DECL, 0, t_long, i, int_node(0, t_long, loc) as i64, loc as i64, loc);
-    let cond = node(N_BINARY, B_LT, t_int, rv(n_var(i, loc)) as i64, rv(n_var(ns, loc)) as i64, 0, loc);
-    let inc = node(N_UNARY, U_PREINC, t_long, n_var(i, loc) as i64, 0, 0, loc);
-    nscratch.push(node_v(N_FOR, 0, 0, init as i64, cond as i64, inc as i64, loc, body as i64));
-    nscratch.push(n_expr_stmt(rv(n_var(ps, loc))));
-    let b = n_block(mark, loc);
-    return node(N_STMTEXPR, 0, pt, b as i64, 0, 0, loc);
-}
-
 var memset_fn: i64 = -1;
 fn libc_memset() -> i64 {
     if memset_fn < 0 {
@@ -2839,53 +2723,8 @@ fn libc_memset() -> i64 {
 }
 
 // delete p / delete[] p.
-recursive fn cg_delete(p0: u32, arr: bool, loc: u32) -> u32 {
-    if is_opq(p0) || !is_pointer(nodes[p0].ty) { return opaque_node(loc); }
-    let pt = unqual(nodes[p0].ty);
-    let t = tbase(pt);
-    var dtor: i64 = -1;
-    if is_record(t) {
-        if is_opaque(t) { return opaque_node(loc); }
-        let r = rec_of(t);
-        let sc = type_scope(t);
-        if sc >= 0 && (scope_find(sc, op_ids[OP_DELETE]) >= 0 || scope_find(sc, op_ids[OP_DELETE_ARR]) >= 0) { return opaque_node(loc); }
-        dtor = class_dtor(r);
-        if arr && dtor >= 0 { return opaque_node(loc); }
-    }
-    let df = global_alloc_fn(if arr { OP_DELETE_ARR } else { OP_DELETE });
-    if df < 0 { return opaque_node(loc); }
-    // ({ T *q = p; if (q) { q->~T(); operator delete(q); } })
-    let s = csym(SK_VAR, intern("__delete_tmp"), pt, loc);
-    syms[s].scope = 1;
-    let mark = nscratch.len;
-    nscratch.push(node(N_DECL, 0, pt, s, p0 as i64, loc as i64, loc));
-    let im = nscratch.len;
-    if dtor >= 0 && cxs[dtor].flags & CF_VIRTUAL != 0 {
-        // the deleting destructor, through the vtable
-        let cls = scope_class_type(cxs[dtor].dscope as i64);
-        let th = obj_addr_as(n_deref(rv(n_var(s, loc)), loc), cls, 0, loc);
-        if th == 0 { nscratch.resize(mark); return opaque_node(loc); }
-        let fp = vfunc_ptr(dtor, th, 1, loc);
-        if fp == 0 { nscratch.resize(mark); return opaque_node(loc); }
-        let am = nscratch.len;
-        nscratch.push(obj_addr_as(n_deref(rv(n_var(s, loc)), loc), cls, 0, loc));
-        nscratch.push(n_expr_stmt(n_call_ptr(fp, am, loc)));
-    } else {
-        if dtor >= 0 {
-            let am = nscratch.len;
-            let c = lower_call(dtor, n_deref(rv(n_var(s, loc)), loc), am, loc, false);
-            if is_opq(c) { nscratch.resize(mark); return opaque_node(loc); }
-            nscratch.push(n_expr_stmt(c));
-        }
-        let am = nscratch.len;
-        nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, rv(n_var(s, loc)) as i64, 0, 0, loc));
-        let c = n_call(df, am, loc);
-        nscratch.push(n_expr_stmt(c));
-    }
-    let then = n_block(im, loc);
-    nscratch.push(node(N_IF, 0, 0, icast(rv(n_var(s, loc)), CK_PTR2BOOL, t_bool) as i64, then as i64, 0, loc));
-    let body = n_block(mark, loc);
-    return node(N_STMTEXPR, 0, t_void, body as i64, 0, 0, loc);
+recursive fn cg_delete(p0: u32, arr: bool, loc: u32, global: bool) -> u32 {
+    return cg_delete2(p0, arr, loc, global);
 }
 
 // ---------------------------------------------------------------------------
@@ -3505,16 +3344,29 @@ recursive fn synth_body(f: i64, kind: i64) {
         let am = nscratch.len;
         let c = lower_call(d, n_deref(rv(n_var(th, loc)), loc), am, loc, false);   // (the complete variant)
         stmt_buf.push(n_expr_stmt(c));
-        let am2 = nscratch.len;
-        nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, rv(n_var(th, loc)) as i64, 0, 0, loc));
-        var df: i64 = -1;
-        if opt_cxx_std >= 14 {
-            df = rt_fn("_ZdlPvm", t_void, 2, t_voidptr, t_size, 0, true, false);
-            nscratch.push(int_node(type_size(cls), t_size, loc));
+        // the class's operator delete (in it or its bases), else the global
+        // one (sized since C++14; aligned for over-aligned classes)
+        let al = type_align(cls);
+        let aligned = al > NEW_ALIGN && align_val_type() != 0;
+        let chain = alloc_chain(cls, OP_DELETE, false);
+        let class_scope = chain >= 0 && cxs[chain].dscope > 0;
+        if class_scope || aligned {
+            let df, takes = usual_dealloc(chain, !class_scope && opt_cxx_std >= 14, aligned);
+            let vp = node(N_ICAST, CK_BITCAST, t_voidptr, rv(n_var(th, loc)) as i64, 0, 0, loc);
+            let dc = if df >= 0 { dealloc_call(df, takes, vp, int_node(type_size(cls), t_size, loc), al, loc) } else { opaque_node(loc) };
+            if is_opq(dc) { ok = false; } else { stmt_buf.push(n_expr_stmt(dc)); }
         } else {
-            df = rt_fn("_ZdlPv", t_void, 1, t_voidptr, 0, 0, true, false);
+            let am2 = nscratch.len;
+            nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, rv(n_var(th, loc)) as i64, 0, 0, loc));
+            var df: i64 = -1;
+            if opt_cxx_std >= 14 {
+                df = rt_fn("_ZdlPvm", t_void, 2, t_voidptr, t_size, 0, true, false);
+                nscratch.push(int_node(type_size(cls), t_size, loc));
+            } else {
+                df = rt_fn("_ZdlPv", t_void, 1, t_voidptr, 0, 0, true, false);
+            }
+            stmt_buf.push(n_expr_stmt(n_call(df, am2, loc)));
         }
-        stmt_buf.push(n_expr_stmt(n_call(df, am2, loc)));
     }
     cg_cur_vtt = sv_vtt;
     cg_complete = sv_complete;
