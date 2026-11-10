@@ -108,7 +108,7 @@ fn lower_tu(main_file: const u8[:]) -> bool {
                 work.push(g);
             }
         } else if nd.kind == N_ASM {
-            err_at(nd.loc, "goosecc: file-scope asm is not supported");
+            if !(opt_cxx && module_asm_globl(nd.a)) { err_at(nd.loc, "goosecc: file-scope asm is not supported"); }
         }
     }
     // the targets of aliases are used

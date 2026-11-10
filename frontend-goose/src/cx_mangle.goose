@@ -154,7 +154,7 @@ var mg_debug: bool = false;
 var mg_tail: u8[>..] = [];
 
 // <name> of a declaration.
-fn mangle_name(s: i64) {
+recursive fn mangle_name(s: i64) {
     let sc = cxs[s].dscope as i64;
     let k = syms[s].kind as i64;
     let member_fn = k == SK_FUNC && cxs[s].flags & CF_MEMBER != 0 && cxs[s].flags & CF_STATIC == 0;
@@ -173,7 +173,13 @@ fn mangle_name(s: i64) {
     // code generation: a member of a lambda's closure type, a local name:
     // Z <function encoding> E N [K] <closure> <name> E
     if cg_on && scopes[sc].kind as i64 == CS_CLASS && scopes[sc].rec >= 0 && closure_mangled(scopes[sc].rec as i64) {
-        mg.append(cm_buf[0..cm_enc_len]);
+        let n0 = cm_name.len;
+        let c0 = mg_stack.len;
+        mg_stack.append(cm_name);
+        mangle_local_prefix(scopes[sc].rec as i64);
+        cm_name.clear();
+        cm_name.append(mg_stack[c0..c0 + n0]);
+        mg_stack.resize(c0);
         mg.push('N');
         if member_fn && (types[syms[s].ty >> 4].flags as i64) & TF_MCONST != 0 { mg.push('K'); }
         mg.append(cm_name);
@@ -197,6 +203,7 @@ fn mangle_name(s: i64) {
         if f & TF_MLREF != 0 { mg.push('R'); }
         if f & TF_MRREF != 0 { mg.push('O'); }
     }
+    note_tags(sc);      // (the enclosing namespaces' ABI tags are carried by the name)
     mangle_prefix(sc);
     if internal_linkage(s) { mg.push('L'); }
     unqualified(s);
@@ -216,6 +223,44 @@ fn class_of_pattern(r: i64) -> i64 {
     let t = cxs[cs].tmpl as i64;
     if tmpls[t].kind as i64 != TT_CLASS || tmpls[t].pattern as i64 != r || tmpls[t].sym < 0 { return -1; }
     return t;
+}
+// Z <encoding of the function local class or closure r is in> E (nothing
+// at namespace scope), the function's components substitution candidates.
+recursive fn mangle_local_prefix(r: i64) {
+    let e = local_encl(r);
+    if e < 0 { return; }
+    mg.push('Z');
+    let k = syms[e].kind as i64;
+    let fl = cxs[e].flags;
+    if (syms[e].name == id_main && cxs[e].dscope <= 0) || (fl & CF_EXTERN_C != 0 && fl & CF_MEMBER == 0 && syms[e].sc as i64 != SC_STATIC) {
+        source_name(ident_text(syms[e].name as i64));
+        mg.push('E');
+        return;
+    }
+    let ft0 = mg_ft;
+    let fs0 = mg_fsym;
+    let ne0 = mg_name_end;
+    let st0 = mg_structor;
+    mg_structor = 1;
+    mg_ft = -1;
+    var pft: u32 = 0;
+    if k == SK_FUNC && cxs[e].flags2 & CF2_FSPEC != 0 && cxs[e].tmpl >= 0 && cxs[e].targs >= 0 {
+        let t = cxs[e].tmpl as i64;
+        let pf = tmpls[t].pattern as i64;
+        if pf >= 0 && kind_of(syms[pf].ty) == TY_FUNC { mg_ft = t; mg_fsym = e; pft = syms[pf].ty; }
+    }
+    mangle_name(e);
+    let ft = if pft != 0 { pft } else { syms[e].ty };
+    let f = types[ft >> 4];
+    if pft != 0 && fl & (CF_CTOR | CF_DTOR | CF_CONV) == 0 { mangle_type(f.base); }
+    if f.n == 0 && f.flags & TF_VARIADIC == 0 { mg.push('v'); }
+    for i in f.n { mangle_type(tparams[f.extra + i]); }
+    if f.flags & TF_VARIADIC != 0 { mg.push('z'); }
+    mg_ft = ft0;
+    mg_fsym = fs0;
+    mg_name_end = ne0;
+    mg_structor = st0;
+    mg.push('E');
 }
 var mg_ft: i64 = -1;        // the function template whose specialization's signature is mangled (-1 none)
 var mg_fsym: i64 = -1;      // ... and the specialization
@@ -293,6 +338,7 @@ recursive fn mangle_prefix(sc: i64) {
         let cs = crecs[r].sym as i64;
         if cs >= 0 && cxs[cs].flags & CF_SPEC != 0 && cxs[cs].tmpl >= 0 {
             let t = cxs[cs].tmpl as i64;
+            if std_class_abbrev(sc, tmpls[t].sym as i64, cxs[cs].targs as i64, t) { return; }
             mangle_tmpl_prefix(tmpls[t].sym as i64, scopes[sc].parent as i64);
             mangle_targs_t(cxs[cs].targs as i64, cxs[cs].tmpl as i64);
             msubs.push(MK_SCOPE | (sc as u64));
@@ -497,7 +543,15 @@ recursive fn mangle_class_name(sc: i64) {
     if i >= 0 { sub_emit(i); return; }
     // code generation: a lambda's closure type (cx_gen_lambda)
     if cg_on && scopes[sc].rec >= 0 && closure_mangled(scopes[sc].rec as i64) {
-        mg.append(cm_buf);
+        // Z <encoding> E <name> [<discriminator>]
+        let c0 = mg_stack.len;
+        mg_stack.append(cm_name);
+        let n0 = cm_name.len;
+        mg_stack.append(cm_disc);
+        let d0 = cm_disc.len;
+        mangle_local_prefix(scopes[sc].rec as i64);
+        mg.append(mg_stack[c0..c0 + n0 + d0]);
+        mg_stack.resize(c0);
         msubs.push(MK_SCOPE | (sc as u64));
         return;
     }
@@ -509,6 +563,7 @@ recursive fn mangle_class_name(sc: i64) {
             let cs = crecs[r].sym as i64;
             if cs >= 0 && cxs[cs].flags & CF_SPEC != 0 && cxs[cs].tmpl >= 0 {
                 let ts = tmpls[cxs[cs].tmpl].sym as i64;
+                if std_class_abbrev(sc, ts, cxs[cs].targs as i64, cxs[cs].tmpl as i64) { return; }
                 if is_std_ns(parent) { mg.append("St"); }
                 let j = sub_find(MK_TMPL | (ts as u64));
                 if j >= 0 { sub_emit(j); } else {
@@ -548,6 +603,25 @@ recursive fn std_abbrev(ts: i64, args: i64, t: u32) -> bool {
         if j >= 0 { sub_emit(j); } else { mg.append(if nm == "allocator" { "Sa" } else { "Sb" }); }
         mangle_targs(args);
         msubs.push(MK_TYPE | (unqual(t) as u64));
+        return true;
+    }
+    return false;
+}
+
+// A specialization (class scope sc) of std::basic_istream / basic_ostream /
+// basic_iostream<char, char_traits<char>> (Si, So, Sd: no substitution
+// candidate) or std::allocator / basic_string (Sa, Sb <args>: one), or false.
+recursive fn std_class_abbrev(sc: i64, ts: i64, args: i64, t: i64) -> bool {
+    if !is_std_ns(scopes[sc].parent as i64) { return false; }
+    let nm = ident_text(syms[ts].name as i64);
+    if (nm == "basic_istream" || nm == "basic_ostream" || nm == "basic_iostream") && char_traits_char(args) {
+        mg.append(if nm == "basic_istream" { "Si" } else if nm == "basic_ostream" { "So" } else { "Sd" });
+        return true;
+    }
+    if nm == "allocator" || nm == "basic_string" {
+        mg.append(if nm == "allocator" { "Sa" } else { "Sb" });
+        mangle_targs_t(args, t);
+        msubs.push(MK_SCOPE | (sc as u64));
         return true;
     }
     return false;

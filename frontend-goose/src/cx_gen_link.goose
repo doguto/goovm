@@ -113,6 +113,10 @@ fn key_function(r: i64) -> i64 {
 // key function elsewhere).
 fn vt_kind(r: i64) -> i64 {
     if class_internal(r) { return 0; }
+    // an explicit instantiation: declared (elsewhere), defined here (weak_odr)
+    let st = class_inst_state(crecs[r].scope as i64);
+    if st == 1 { return 3; }
+    if st == 2 { return 4; }
     if in_instantiation(crecs[r].scope as i64) { return 1; }
     let kf = key_function(r);
     if kf < 0 { return 1; }
@@ -136,6 +140,9 @@ fn set_class_data_link(s: i64, r: i64, dynamic: bool, relro: bool) {
     } else if k == 1 {
         syms[s].sc = 0;
         set_link(s, LK_LINKONCE, rf | CXL_COMDAT);
+    } else if k == 4 {
+        syms[s].sc = 0;
+        set_link(s, LK_WEAKODR, rf | CXL_COMDAT);
     } else if k == 2 {
         syms[s].sc = 0;
         set_link(s, LK_DEFAULT, rf);
@@ -182,6 +189,8 @@ fn name_one(s: i64) {
             // a static local: C's lowering names it
             if syms[s].scope > 0 && fl & CF_MEMBER == 0 { return; }
         }
+        // an instantiation's always_inline is its pattern's (the lowering expands it)
+        if k == SK_FUNC { inherit_always_inline(s); }
         var internal = internal_linkage(s) || (cxs[s].dscope > 0 && in_anon_ns(cxs[s].dscope as i64));
         let structor = k == SK_FUNC && fl & (CF_CTOR | CF_DTOR) != 0 && fl & CF_DTOR_DELETING == 0;
         mg_structor = if structor { 2 } else { 1 };
@@ -214,9 +223,112 @@ fn name_one(s: i64) {
                     syms[s].sc as i64 != SC_EXTERN { set_link(s, LK_LINKONCE, CXL_COMDAT); }
         }
         if internal && syms[s].sc as i64 != SC_EXTERN { syms[s].sc = SC_STATIC as! u8; }
+        // explicit instantiations: the library's (not emitted), or weak_odr here
+        if !internal && (k == SK_FUNC || cxs[s].flags & CF_MEMBER != 0) {
+            if extern_inst(s) {
+                cxl_grow();
+                cxl[s].link = LK_DEFAULT as! u8;
+                cxl[s].flags = (cxl[s].flags | (CXL_EXTINST as! u8)) & ~(CXL_COMDAT as! u8);
+                if k == SK_VAR { syms[s].flags = syms[s].flags & ~(SF_DEFINED as! u32); syms[s].sc = SC_EXTERN as! u8; }
+            } else if defined_inst(s) {
+                set_link(s, LK_WEAKODR, CXL_COMDAT);
+            }
+        }
     }
 }
 var names_done = false;
+
+fn inherit_always_inline(s: i64) {
+    var p: i64 = -1;
+    if cxs[s].flags2 & CF2_FSPEC != 0 && cxs[s].tmpl >= 0 { p = tmpls[cxs[s].tmpl].pattern as i64; }
+    else if cxs[s].flags & CF_MEMBER != 0 && in_instantiation(cxs[s].dscope as i64) { p = pattern_member(s); }
+    if p < 0 || syms[p].attr == 0 || sym_attrs[syms[p].attr].flags & AM_ALWAYS_INLINE == 0 { return; }
+    let ai = get_attr(s);
+    sym_attrs[ai].flags = sym_attrs[ai].flags | AM_ALWAYS_INLINE;
+}
+
+// ---------------------------------------------------------------------------
+// Explicit instantiations ([temp.explicit]). A declaration (extern
+// template) suppresses the definitions of the specialization's members (of
+// a class: its member functions, static data members, nested classes'
+// members, vtable and typeinfo): they are the library's (clang at -O0
+// emits none of them); a definition (template class X<int>;) makes them
+// weak_odr, all emitted.
+var cur_extern_inst = false;
+var inst_cls = dictionary<u64, u8> {};      // record -> 1 declaration only, 2 definition
+struct FnInst { tsym: u32, ty: u32, ext: bool }
+var inst_fns: FnInst[>..] = [];
+
+fn note_class_inst(t: u32, ext: bool) {
+    if !is_record(t) { return; }
+    let r = rec_of(t);
+    if r >= crecs.len { return; }
+    let g = inst_cls.get(r as u64);
+    if g && g == 2 { return; }
+    inst_cls.insert(r as u64, if ext { 1 } else { 2 });
+    // its members are instantiated on use; a definition: all of them
+    need_complete(t);
+}
+
+fn note_fn_inst(qn: QN&, ty: u32, ext: bool) {
+    lookup_qn(qn);
+    var s = qn.sym as i64;
+    while s >= 0 {
+        let x = resolve(s);
+        if x >= 0 && syms[x].kind as i64 == SK_TEMPLATE {
+            inst_fns.push(FnInst { tsym: x as! u32, ty: unqual(ty), ext: ext });
+        }
+        s = cxs[s].nnext as i64;
+    }
+}
+
+// The explicit instantiation state of the class containing scope sc (or
+// an enclosing class): 0 none, 1 declaration, 2 definition.
+fn class_inst_state(sc0: i64) -> i64 {
+    var sc = sc0;
+    while sc > 0 && scopes[sc].kind as i64 == CS_CLASS {
+        let r = scopes[sc].rec as i64;
+        // (a local class or closure belongs to its function, not to the enclosing class)
+        if r >= 0 && (local_cls.contains(r as u64) || lam_rec.contains(r as u64)) { return 0; }
+        if r >= 0 {
+            let g = inst_cls.get(r as u64);
+            if g { return g as i64; }
+        }
+        sc = scopes[sc].parent as i64;
+    }
+    return 0;
+}
+
+// Is function or variable s defined elsewhere by an explicit instantiation
+// (declaration) it is a member or a specialization of?
+fn extern_inst(s: i64) -> bool {
+    if s >= cxs.len { return false; }
+    // (always_inline: clang expands it even at -O0, the library need not have it)
+    if syms[s].kind as i64 == SK_FUNC && syms[s].attr != 0 && sym_attrs[syms[s].attr].flags & AM_ALWAYS_INLINE != 0 { return false; }
+    if inst_cls.count > 0 && cxs[s].flags & CF_MEMBER != 0 && cxs[s].flags & CF_IMPLICIT == 0 && cxs[s].dscope > 0 {
+        if cxs[s].flags2 & CF2_FSPEC == 0 && class_inst_state(cxs[s].dscope as i64) == 1 { return true; }
+    }
+    if inst_fns.len > 0 && cxs[s].flags2 & CF2_FSPEC != 0 && cxs[s].tmpl >= 0 {
+        let ts = tmpls[cxs[s].tmpl].sym as i64;
+        for x in inst_fns {
+            if x.tsym as i64 == ts && x.ty == unqual(syms[s].ty) { return x.ext; }
+        }
+    }
+    return false;
+}
+
+// Is it explicitly instantiated here (a definition)?
+fn defined_inst(s: i64) -> bool {
+    if s >= cxs.len { return false; }
+    if inst_cls.count > 0 && cxs[s].flags & CF_MEMBER != 0 && cxs[s].dscope > 0 && class_inst_state(cxs[s].dscope as i64) == 2 { return true; }
+    if inst_fns.len > 0 && cxs[s].flags2 & CF2_FSPEC != 0 && cxs[s].tmpl >= 0 {
+        let ts = tmpls[cxs[s].tmpl].sym as i64;
+        for x in inst_fns {
+            if x.tsym as i64 == ts && x.ty == unqual(syms[s].ty) { return !x.ext; }
+        }
+    }
+    return false;
+}
 
 // The name and linkage of a, the complete-object variant of structor s.
 fn name_complete(s: i64, a: i64) {

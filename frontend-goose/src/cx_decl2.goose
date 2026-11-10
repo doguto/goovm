@@ -109,7 +109,9 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     let tmpl = pending_tmpl;
     if inst_spec_tmpl >= 0 {
         // D2: a function template specialization's declaration
-        return make_fspec(d, ds, key, ft, ctor, is_member, loc);
+        let fsx = make_fspec(d, ds, key, ft, ctor, is_member, loc);
+        if fsx >= 0 { record_attrs(fsx, a, 0); }       // (D3: always_inline, section ... of the template)
+        return fsx;
     }
     if tmpl >= 0 && (target >= 0 || target == -2) && !d.qn.qual {
         let fs = if target == -2 { enclosing_ns(cur_scope) } else { target };
@@ -517,9 +519,13 @@ recursive fn parse_decl_cx(ctx: i64) {
     if at_kw(KW_USING) { parse_using(ctx); return; }
     if at_kw(KW_TEMPLATE) { parse_template_decl(ctx); return; }
     if at_kw(KW_EXTERN) && tk_n(1) == TK_KW + KW_TEMPLATE {
-        // extern template ...: an explicit instantiation declaration (no effect in D1)
+        // extern template ...: an explicit instantiation declaration (code
+        // generation: what it names is not emitted here, cx_gen_link)
         adv();
+        let sv_ext = cur_extern_inst;
+        cur_extern_inst = true;
         parse_template_decl(ctx);
+        cur_extern_inst = sv_ext;
         return;
     }
     if at_kw(KW_EXTERN) && tk_n(1) == TK_STRING { parse_linkage_spec(ctx); return; }
@@ -610,7 +616,8 @@ recursive fn parse_simple_decl(ctx0: i64) {
             if d.qn.name != 0 { declare_typedef(d.qn.name, apply_type_attrs(d.ty, a, dloc), dloc, ctx); }
         } else if is_func(d.ty) && (d.is_fn || !is_opaque(d.ty)) && !(ctx == DC_BLOCK && !first_paren_decl(d)) {
             if pending_inst {
-                // an explicit instantiation of a function template: nothing in D1
+                // an explicit instantiation of a function template (code generation: noted)
+                if cg_on { note_fn_inst(d.qn, d.ty, cur_extern_inst); }
                 if !accept(TK_COMMA) { break; }
                 continue;
             }

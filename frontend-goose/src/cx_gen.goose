@@ -2406,6 +2406,13 @@ fn gi_push(st: u32, prio: i64) {
 // object (cx_sema.parse_var_init).
 recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u32, ctx: i64) {
     var conv = conv0;
+    // a static data member of a class explicitly instantiated elsewhere
+    // (extern template): defined and initialized there
+    if cxs[s].flags & CF_MEMBER != 0 && cxs[s].dscope > 0 && inst_cls.count > 0 && class_inst_state(cxs[s].dscope as i64) == 1 {
+        syms[s].sc = SC_EXTERN as! u8;
+        syms[s].flags = (syms[s].flags | SF_FILESCOPE) & ~(SF_DEFINED as! u32);
+        return;
+    }
     let t = syms[s].ty;
     let prio = cur_init_prio;
     cur_init_prio = 65535;
@@ -3654,6 +3661,7 @@ var var_decls = dictionary<u64, u32> {};   // file-scope variable -> its N_DECL
 var n_bad: i64 = 0;
 
 recursive fn reach_fn(f: i64) {
+    if cxl_has(f, CXL_EXTINST) { return; }      // (an explicit instantiation's: not emitted here)
     if syms[f].def < 0 && f < cxs.len && cxs[f].flags2 & CF2_LAZY_BODY != 0 { inst_use(f); }
     if syms[f].def < 0 {
         let b = complete_base.get(f as u64);
@@ -3685,7 +3693,7 @@ fn check_reachable() -> bool {
         let s = nd.a as i64;
         if nd.kind as i64 == N_FUNCDEF {
             if syms[s].def as u32 != it { continue; }
-            if (syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE) || cg_has_attr(s, AM_CTOR) || cg_has_attr(s, AM_USED) { wk.push(it); }
+            if ((syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE) || cg_has_attr(s, AM_CTOR) || cg_has_attr(s, AM_USED)) && !cxl_has(s, CXL_EXTINST) { wk.push(it); }
         } else if nd.kind as i64 == N_DECL && syms[s].kind as i64 == SK_VAR {
             if syms[s].sc as i64 != SC_STATIC && cxl_link(s) != LK_LINKONCE && syms[s].flags & SF_FILESCOPE != 0 && (nd.b != 0 || syms[s].flags & (SF_DEFINED | SF_TENTATIVE) != 0) { wk.push(it); }
         }

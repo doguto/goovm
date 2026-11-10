@@ -139,6 +139,7 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
             let t = qn_type(qn);
             ds.tag_ty = if t == 0 { t_unknown } else { t };
             note_spec_decl(qn);
+            if cg_on && pending_inst && t != 0 { note_class_inst(t, cur_extern_inst); }
             return ds.tag_ty;
         }
         if qn.qual {

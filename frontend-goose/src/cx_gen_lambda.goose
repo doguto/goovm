@@ -448,6 +448,15 @@ var cm_buf: u8[>..] = [];
 
 fn is_lambda_fn(s: i64) -> bool { lam_fns.contains(s as u64) }
 
+// The function closure or local class r is in (-1: namespace scope or none).
+fn local_encl(r: i64) -> i64 {
+    let g = lam_rec.get(r as u64);
+    if g { return lam_infos[(g >> 40) as i64].encl; }
+    let h = local_cls.get(r as u64);
+    if h { return (h >> 16) as i64; }
+    return -1;
+}
+
 // Is function f a lambda's call operator?
 fn is_lambda_op(f: i64) -> bool {
     if f < 0 || syms[f].kind as i64 != SK_FUNC || cxs[f].op as i64 != OP_CALL || cxs[f].dscope <= 0 { return false; }
