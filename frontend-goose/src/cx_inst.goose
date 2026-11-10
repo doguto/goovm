@@ -900,6 +900,7 @@ recursive fn inst_drain() {
 // Moves what a definition parsed during an instantiation pushed to
 // nscratch (from mark) to inst_defs.
 fn take_defs(mark: i64) {
+    if ce_capturing { nscratch.resize(mark); return; }     // a body parsed for the constant evaluator
     for i in mark..nscratch.len { inst_defs.push(nscratch[i]); }
     nscratch.resize(mark);
 }

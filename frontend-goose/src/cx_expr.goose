@@ -93,7 +93,11 @@ recursive fn const_int(e: u32) -> bool, i64 {
     let r = if is_lvalue(e) { icast(e, CK_LVAL2RVAL, unqual(t)) } else { e };
     // const integral variables with constant initializers are constants
     // (C++ [expr.const]): C's evaluator reads them with fold_cvars
-    return fold_gnu(r);
+    let ok, v = fold_gnu(r);
+    if ok { return ok, v; }
+    // D2: the constant evaluator (constexpr calls, objects, loops)
+    if dependent_ctx() { return false, 0; }
+    return ce_eval_int(r);
 }
 
 fn sa_checked(e: u32) -> bool { true }
@@ -108,7 +112,11 @@ recursive fn parse_cexpr_noGT() -> u32 {
     let sp = paren_depth;
     paren_depth = 0;
     targ_depth++;
+    // (a template argument: only its value is needed, no code)
+    let cg0 = cg_on;
+    cg_on = false;
     let e = parse_cond_cx();
+    cg_on = cg0;
     targ_depth--;
     paren_depth = sp;
     return e;

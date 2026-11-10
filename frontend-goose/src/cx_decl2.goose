@@ -453,6 +453,8 @@ recursive fn function_body(s: i64, d: CD&, in_class: bool) {
     // sees that scope
     let sv_scope = cur_scope;
     if d.qn.qual && d.qn.scope >= 0 { cur_scope = d.qn.scope as i64; }
+    // D2: where a constexpr function's body is, for the constant evaluator
+    if cxs[s].flags & CF_CONSTEXPR != 0 && !ce_capturing { ce_note_body(s, b0, cur_scope); }
     let n = parse_function_body(s, d.params, d.nparams);
     cur_scope = sv_scope;
     if n != 0 { nscratch.push(n); }
@@ -1155,7 +1157,11 @@ recursive fn parse_static_assert_cx() {
     expect(TK_L_PAREN, "'('");
     let sp = paren_depth;
     paren_depth = 1;
+    // only its value is needed: a semantic-analysis tree (no code)
+    let cg0 = cg_on;
+    cg_on = false;
     let e = parse_assign_cx();
+    cg_on = cg0;
     paren_depth = sp;
     if accept(TK_COMMA) {
         if at(TK_STRING) { while at(TK_STRING) { adv(); } } else { skip_to(TK_R_PAREN); }

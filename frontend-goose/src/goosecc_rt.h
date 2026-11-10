@@ -8,6 +8,9 @@
 double goosecc_bits_to_f64(int64_t v) { double d; memcpy(&d, &v, 8); return d; }
 int64_t goosecc_f64_to_bits(double d) { int64_t v; memcpy(&v, &d, 8); return v; }
 double goosecc_round_f32(double d) { return (double)(float)d; }
+/* D2: the constant evaluator's float objects (4-byte bit patterns). */
+int64_t goosecc_f32_bits(double d) { float f = (float)d; uint32_t v; memcpy(&v, &f, 4); return (int64_t)v; }
+double goosecc_bits_f32(int64_t v) { uint32_t u = (uint32_t)v; float f; memcpy(&f, &u, 4); return (double)f; }
 
 /* B3: the identifier hash and the lexer's scans, 8 and 16 bytes at a time.
  *
