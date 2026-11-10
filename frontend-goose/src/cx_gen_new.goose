@@ -64,8 +64,6 @@ fn align_val_type() -> u32 {
 // The global operator new / new[] / delete / delete[] declarations (op),
 // implicitly declared ([basic.stc.dynamic]p2) when no header did.
 fn global_alloc_chain(op: i64) -> i64 {
-    let s = scope_find(0, op_ids[op]);
-    if s >= 0 { return s; }
     implicit_alloc_decls();
     return scope_find(0, op_ids[op]);
 }

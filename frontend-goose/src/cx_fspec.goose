@@ -381,6 +381,9 @@ recursive fn deduce_one(p0: u32, e: u32) -> i64 {
     }
     if is_opaque(a) { return -1; }
     if deduce_try(p, a) { return 1; }
+    // (D3) every template parameter of P explicitly specified: no
+    // deduction, the argument is converted ([temp.arg.explicit]p6)
+    if all_explicit(p0, 0) { return 1; }
     // a pointer: a qualification conversion of the argument
     if is_pointer(p) && is_pointer(a) {
         let pa = tbase(a);
@@ -396,6 +399,29 @@ recursive fn deduce_one(p0: u32, e: u32) -> i64 {
         if deduce_from_bases(pc0, cls, 0) { return 1; }
     }
     return 0;
+}
+
+// Are all template parameters (of the template being deduced) in type t
+// explicitly specified arguments?
+recursive fn all_explicit(t: u32, depth: i64) -> bool {
+    if depth > 16 { return false; }
+    let k = kind_of(t);
+    if k == TY_TPARAM {
+        let idx = ded_param(t);
+        if idx < 0 { return true; }
+        let a = ded_args[ded_base + idx];
+        return a.kind != 0 && a.rsv == 1;
+    }
+    if k == TY_POINTER || k == TY_LREF || k == TY_RREF || k == TY_ARRAY { return all_explicit(tbase(t), depth + 1); }
+    if k == TY_MEMPTR { return all_explicit(types[t >> 4].extra, depth + 1) && all_explicit(tbase(t), depth + 1); }
+    if k == TY_FUNC {
+        let f = types[t >> 4];
+        if !all_explicit(f.base, depth + 1) { return false; }
+        for i in f.n { if !all_explicit(tparams[f.extra + i], depth + 1) { return false; } }
+        return true;
+    }
+    if k == TY_DEPSPEC || k == TY_DEPNAME || k == TY_DEPEXPR || k == TY_PACKEXP { return false; }
+    return true;
 }
 
 // Deduction that leaves the bindings unchanged when it fails.
