@@ -1051,6 +1051,27 @@ fn eval_trait(name: const u8[:], mark: i64) -> bool, i64 {
 // ---------------------------------------------------------------------------
 // id-expressions.
 
+// C++ builtins that C's builtin table cannot type (the arguments are at
+// mark): __builtin_addressof (the address, no operator& overload) and
+// __builtin_launder. 0 for others.
+fn cxx_builtin_call(name: u32, mark: i64, loc: u32) -> u32 {
+    if nscratch.len - mark != 1 { return 0; }
+    let a = nscratch[mark];
+    let nm = ident_text(name as i64);
+    if nm == "__builtin_addressof" {
+        if is_opq(a) { return dep_node(t_unknown, loc); }
+        if nodes[a].kind as i64 == N_FUNCREF || !is_lvalue(a) { return 0; }
+        let n = node(N_UNARY, U_ADDR, mk_ptr(nodes[a].ty), a as i64, 0, 0, loc);
+        return n;
+    }
+    if nm == "__builtin_launder" {
+        if is_opq(a) { return dep_node(t_unknown, loc); }
+        if !is_pointer(nodes[a].ty) { return 0; }
+        return if cg_on { rv(a) } else { typed_result(unqual(nodes[a].ty), loc) };
+    }
+    return 0;
+}
+
 recursive fn parse_id_expr() -> u32 {
     let loc = tloc();
     var qn = QN { .. };
@@ -1093,6 +1114,8 @@ recursive fn parse_id_expr() -> u32 {
             // lookup may still find it (D1 does not perform ADL)
             if !qn.qual {
                 let mark = parse_args();
+                let bx = cxx_builtin_call(qn.name, mark, loc);
+                if bx != 0 { nscratch.resize(mark); return bx; }
                 if !dependent_ctx() {
                     // code generation: C's builtins (__builtin_alloca ...)
                     let b = cg_builtin_call(qn.name, mark, loc);

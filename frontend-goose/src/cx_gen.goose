@@ -1435,7 +1435,9 @@ fn pick_ctor(r: i64, mark: i64) -> i64 {
         let a = nscratch[mark];
         if s >= 0 {
             let f = best_candidate(s, mark, true);
-            if f >= 0 && user_provided(f) && cxs[f].flags & CF_DELETED == 0 && first_param_ref(f, cls) != 0 { return f; }
+            // (a constructor template's specialization is never a copy
+            // constructor: with the same conversions the implicit one wins)
+            if f >= 0 && user_provided(f) && cxs[f].flags & CF_DELETED == 0 && cxs[f].flags2 & CF2_FSPEC == 0 && first_param_ref(f, cls) != 0 { return f; }
         }
         let rvalue = !is_lvalue(a) || nodes[a].flags & NF_XVALUE != 0;
         let c = copy_ctor_of(r, rvalue);

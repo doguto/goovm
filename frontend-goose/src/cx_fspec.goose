@@ -81,7 +81,7 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     fspec_map.insert(key, if res >= 0 { (res + 1) as! i32 } else { res as! i32 });
     if inst_debug() {
         var o: u8[>..] = [];
-        o.append(str("fspec_decl ", ident_text(syms[tmpls[t].sym].name as i64), " t=", t, " -> ", res, " errs=", errs, " <"));
+        o.append(str("fspec_decl ", ident_text(syms[tmpls[t].sym].name as i64), " in ", if tmpls[t].scope >= 0 && scopes[tmpls[t].scope].name != 0 { ident_text(scopes[tmpls[t].scope].name as i64) } else { "-" }, " t=", t, " -> ", res, " errs=", errs, " <"));
         for i in tl_count(binds as i64) {
             let a = tl_arg(binds as i64, i);
             if a.kind as i64 == TA_TYPE { o.append(tname(a.ty)); } else { o.append(str("#", a.v)); }

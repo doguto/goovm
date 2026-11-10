@@ -848,8 +848,13 @@ var inst_defs_taken: i64 = 0;       // how many of them the translation unit alr
 var friend_scope = dictionary<u64, u32> {};   // a friend function defined in an instantiated class -> that class scope
 
 // f is used (called, its address taken, ...): its body is to be instantiated.
-fn inst_use(f: i64) {
+recursive fn inst_use(f: i64) {
     if f < 0 || f >= cxs.len || unevaluated > 0 { return; }
+    if complete_base.count > 0 {
+        // code generation's complete-object variant of a structor: its own
+        let cb = complete_base.get(f as u64);
+        if cb { inst_use(cb as i64); return; }
+    }
     if inst_debug() { write_stderr(str("inst_use ", ident_text(syms[f].name as i64), " f=", f, " fl2=", cxs[f].flags2, "\n")); }
     if cxs[f].flags & CF_CTOR != 0 { vtable_use(cxs[f].dscope as i64); }
     if cxs[f].flags2 & (CF2_LAZY_BODY | CF2_QUEUED | CF2_INST_DONE) != CF2_LAZY_BODY { return; }

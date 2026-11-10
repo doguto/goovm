@@ -370,6 +370,7 @@ fn note_main_decl(s: i64, d: CD&) {
 // Keeps the parameters of a function's latest declaration (with the
 // default arguments of earlier ones).
 fn note_params(s: i64, d: CD&) {
+    if inst_debug() { write_stderr(str("note_params ", s, " ", ident_text(syms[s].name as i64), " params=", d.params, " n=", d.nparams, "\n")); }
     if d.params < 0 { return; }
     let g = fn_params.get(s as u64);
     if g {

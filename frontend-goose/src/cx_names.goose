@@ -124,6 +124,8 @@ fn ident_is(i: i64, s: const u8[:]) -> bool {
 
 var id_override: u32 = 0;
 var id_final: u32 = 0;
+var id_bopnew: u32 = 0;
+var id_bopdel: u32 = 0;
 var id_main: u32 = 0;
 var id_std: u32 = 0;
 var id_C: u32 = 0;
@@ -213,6 +215,8 @@ fn names_init() {
     id_ctor = intern("<init>");
     id_override = intern("override");
     id_final = intern("final");
+    id_bopnew = intern("__builtin_operator_new");
+    id_bopdel = intern("__builtin_operator_delete");
     id_main = intern("main");
     id_std = intern("std");
     id_C = intern("C");
@@ -520,6 +524,16 @@ recursive fn parse_qname(qn: QN&) -> bool {
         qn.kind = QK_IDENT;
         qn.name = tu_toks[pc].val;
         adv();
+        if !qn.qual && (qn.name == id_bopnew || qn.name == id_bopdel) && at(TK_L_PAREN) {
+            // __builtin_operator_new(args): ::operator new(args), the
+            // usual overload resolution (clang)
+            qn.kind = QK_OP;
+            qn.op = (if qn.name == id_bopnew { OP_NEW } else { OP_DELETE }) as! u8;
+            qn.name = op_ids[qn.op];
+            qn.scope = 0;
+            qn.global = true;
+            qn.qual = true;
+        }
         return true;
     }
     if at_kw(KW_TEMPLATE) && qn.qual && tk_n(1) == TK_IDENT {
