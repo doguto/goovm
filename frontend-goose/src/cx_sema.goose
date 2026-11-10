@@ -375,6 +375,11 @@ recursive fn mk_name_ref(qn: QN&, s0: i64, loc: u32) -> u32 {
             nodes[n].flags = nodes[n].flags | NF_LVALUE;
             return n;
         }
+        if cg_on && lams.len > 0 {
+            // code generation: a capture in a lambda's body
+            let c = cg_lambda_var(s, loc);
+            if c != 0 { return c; }
+        }
         if kind_of(t) == TY_AUTO { return opaque_node(loc); }
         let n = node(N_DECLREF, 0, nonref(t), s, 0, 0, loc);
         nodes[n].flags = (NF_LVALUE | (if is_ref(t) { NF_REFDEREF } else { 0 })) as! u16;
