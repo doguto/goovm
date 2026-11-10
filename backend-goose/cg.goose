@@ -45,6 +45,7 @@ import a64low;
 import a64mem;
 import a64atom;
 import a64cg;
+import a64rag;
 
 var M: Module;
 var opt_on = false;          // opt_level >= 1 (the middle-end ran; global register allocation)
