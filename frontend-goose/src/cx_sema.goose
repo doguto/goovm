@@ -70,8 +70,16 @@ recursive fn mk_binop(op_cx: i64, op_c: i64, l0: u32, r0: u32, loc: u32) -> u32 
         if op_c == B_COMMA { return node(N_BINARY, B_COMMA, tr, discard_value(l) as i64, r as i64, 0, loc); }
         return dep_node(t_unknown, loc);
     }
+    if cg_on && (kind_of(nonref(tl)) == TY_ENUM || kind_of(nonref(tr)) == TY_ENUM) && op_c != B_COMMA && op_c != B_LAND && op_c != B_LOR {
+        // code generation: operators declared for enumerations
+        let o = overloaded_binop(op_cx, l, r, loc);
+        if o != 0 { return o; }
+    }
     if kind_of(tl) == TY_NULLPTR && kind_of(tr) == TY_NULLPTR { return dep_node(t_bool, loc); }
-    if kind_of(tl) == TY_MEMPTR || kind_of(tr) == TY_MEMPTR { return dep_node(t_unknown, loc); }
+    if kind_of(tl) == TY_MEMPTR || kind_of(tr) == TY_MEMPTR {
+        if cg_on { return cg_memptr_cmp(op_c, l, r, loc); }
+        return dep_node(t_unknown, loc);
+    }
     if kind_of(tl) == TY_NULLPTR && is_pointer(nonref_decay(tr)) { l = icast(l, CK_NULL2PTR, nonref_decay(tr)); }
     if kind_of(tr) == TY_NULLPTR && is_pointer(nonref_decay(tl)) { r = icast(r, CK_NULL2PTR, nonref_decay(tl)); }
     if !cish_node(l) || !cish_node(r) { return dep_node(t_unknown, loc); }
@@ -125,6 +133,11 @@ recursive fn mk_assign_cx(op: i64, l: u32, r: u32, loc: u32, tok: i64) -> u32 {
         let o = overloaded_assign(op, l, r, loc, tok);
         if o != 0 { return o; }
         return dep_node(tl, loc);
+    }
+    if cg_on && op != 0 && kind_of(nonref(tl)) == TY_ENUM {
+        // code generation: compound assignments declared for enumerations
+        let o = overloaded_assign(op, l, r, loc, tok);
+        if o != 0 { return o; }
     }
     var rr = r;
     if kind_of(nodes[r].ty) == TY_NULLPTR && (is_pointer(tl) || kind_of(tl) == TY_MEMPTR) {
@@ -200,7 +213,7 @@ recursive fn mk_cast_cx(t: u32, e: u32, loc: u32, kind: i64) -> u32 {
         if cg_on && !dependent_ctx() { return cg_dynamic_cast(t, e, loc); }
         return dep_node(nonref(t), loc);
     }
-    if cg_on && (kind == CAST_STATIC || kind == CAST_C) {
+    if cg_on && (kind == CAST_STATIC || kind == CAST_C || kind == CAST_FUNCTIONAL) {
         let cc = cg_class_cast(t, e, loc);
         if cc != 0 { return cc; }
     }
@@ -290,6 +303,12 @@ recursive fn mk_unary_cx(k: i64, e: u32, loc: u32) -> u32 {
         if o != 0 { return o; }
         if k == TK_EXCLAIM { let b = conv_to_bool(e); if b != 0 && !is_opq(b) { return node(N_UNARY, U_NOT, t_bool, b as i64, 0, 0, loc); } }
         return dep_node(if k == TK_EXCLAIM { t_bool } else { t_unknown }, loc);
+    }
+    if cg_on && kind_of(nonref(nodes[e].ty)) == TY_ENUM {
+        // code generation: operators declared for enumerations
+        let op = match k { TK_PLUS => OP_PLUS, TK_MINUS => OP_MINUS, TK_TILDE => OP_TILDE, _ => OP_EXCLAIM };
+        let o = overloaded_unop(op, e, loc, false);
+        if o != 0 { return o; }
     }
     if k == TK_EXCLAIM {
         let b = to_bool(e);

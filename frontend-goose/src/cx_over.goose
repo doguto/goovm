@@ -407,7 +407,9 @@ recursive fn cast_to_class(t: u32, e: u32, loc: u32) -> u32 { return 0; }
 recursive fn construct_class(t: u32, mark: i64, loc: u32, braces: bool) -> u32 {
     let count = nscratch.len - mark;
     let start = commit_list(mark);
-    return node_v(N_CTOR, 0, unqual(t), 0, 0, count, loc, start);
+    // code generation: T{args} of an aggregate is aggregate initialization (op 2)
+    let op = if cg_on && braces && is_complete(t) && is_aggregate_class(rec_of(t)) { 2 } else { 0 };
+    return node_v(N_CTOR, op, unqual(t), 0, 0, count, loc, start);
 }
 
 // T x(args).
