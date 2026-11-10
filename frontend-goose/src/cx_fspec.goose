@@ -45,7 +45,7 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     let sc = tmpls[t].scope as i64;
     let mark = nscratch.len;
     inst_what = tmpls[t].sym as i64;
-    let st = inst_enter();
+    let st = inst_enter(false);
     let e0 = diag_inst_errors;
     bind_header(t, binds);
     if sc >= 0 && scopes[sc].kind as i64 == CS_CLASS {
@@ -182,7 +182,7 @@ recursive fn inst_fspec_body(f: i64) {
     if tmpls[dt].t1 == 0 { return; }
     let mark = nscratch.len;
     inst_what = f;
-    let st = inst_enter();
+    let st = inst_enter(true);
     if outer >= 0 && tmpls[dt].hdr_outer >= 0 { bind_header(tmpls[dt].hdr_outer as i64, outer); }
     bind_header(dt, binds);
     let sc = tmpls[dt].scope as i64;
@@ -531,7 +531,7 @@ recursive fn var_spec(tsym: i64, args0: i32) -> i64 {
     if pat < 0 || tmpls[pat].t1 == 0 || inst_depth > 400 { return -1; }
     let mark = nscratch.len;
     inst_what = tsym;
-    let st = inst_enter();
+    let st = inst_enter(true);
     bind_header(pat, binds);
     let sc = tmpls[pat].scope as i64;
     var ctx = DC_NS;

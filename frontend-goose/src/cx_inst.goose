@@ -71,11 +71,16 @@ fn inst_debug() -> bool {
 fn inst_reporting() -> bool {
     if inst_report_mode < 0 {
         var v: u8[>..] = [];
-        inst_report_mode = if env("GOOSECC_INST_ERRORS", v) && v.len > 0 && (v[0] == '1' || v[0] == '2') { 1 } else { 0 };
+        inst_report_mode = if env("GOOSECC_INST_ERRORS", v) && v.len > 0 {
+            if v[0] == '1' || v[0] == '2' { 1 } else if v[0] == '0' { 2 } else { 0 }
+        } else { 0 };
         if v.len > 0 && v[0] == '2' { diag_show_all = true; }
     }
     return inst_report_mode == 1;
 }
+// GOOSECC_INST_ERRORS=0: errors of instantiations are suppressed (D2's
+// earlier behaviour, for comparisons)
+fn inst_hard_errors() -> bool { inst_reporting(); return inst_report_mode != 2; }
 
 // ---------------------------------------------------------------------------
 // Entering and leaving an instantiation.
@@ -117,16 +122,20 @@ struct InstSave {
     var_t: i64,
     watch: i64,
     watch_errs: i64,
+    nerr: i64,
 }
 
-fn inst_enter() -> InstSave {
+// hard: errors inside are errors of the program (class and member
+// instantiations); otherwise a substitution failure (SFINAE) suppressed and
+// counted.
+fn inst_enter(hard: bool) -> InstSave {
     let st = InstSave { sv: save(), scope: cur_scope, cls: cur_class, access: cur_access, floor: local_floor, vis: vis_limit,
         tdepth: tmpl_depth, ptmpl: pending_tmpl, pexpl: pending_explicit, pinst: pending_inst, extc: extern_c, nest: class_nest,
         func_cx: cur_func_cx, func: cur_func, this_t: this_type, ret_t: ret_type, ld: loop_depth, bd: break_depth,
         bfd: block_fn_depth, targd: targ_depth, pard: paren_depth, uneval: unevaluated, lenient0: lenient,
         errs: diag_inst_errors, what: inst_what, supp: diag_suppress, level: diag_inst_level,
         spec_t: inst_spec_tmpl, spec_b: inst_spec_binds, spec_res: inst_spec_result, spec_decl: inst_spec_decl,
-        body_now: inst_body_now, def_target: inst_def_target, var_t: inst_var_tmpl, watch: diag_watch_level, watch_errs: diag_watch_errors };
+        body_now: inst_body_now, def_target: inst_def_target, var_t: inst_var_tmpl, watch: diag_watch_level, watch_errs: diag_watch_errors, nerr: n_errors };
     diag_watch_level = -1;
     inst_var_tmpl = -1;
     inst_spec_tmpl = -1;
@@ -156,7 +165,7 @@ fn inst_enter() -> InstSave {
     lenient = 0;
     gt_pos = -1;
     inst_depth++;
-    diag_suppress = if inst_reporting() { 0 } else { 1 };
+    diag_suppress = if inst_reporting() { 0 } else if hard && inst_hard_errors() { st.supp } else { 1 };
     diag_inst_level = diag_suppress;
     return st;
 }
@@ -172,6 +181,7 @@ fn inst_leave(st: InstSave) -> bool {
     inst_var_tmpl = st.var_t;
     diag_watch_level = st.watch;
     diag_watch_errors = st.watch_errs;
+    let shown = diag_suppress == 0 && n_errors > st.nerr;
     diag_suppress = st.supp;
     diag_inst_level = st.level;
     inst_depth--;
@@ -203,7 +213,7 @@ fn inst_leave(st: InstSave) -> bool {
     // an instantiation's errors are its own, not its trigger's
     diag_inst_errors = st.errs;
     if bad { inst_errors++; }
-    if bad && inst_reporting() && st.what >= 0 {
+    if bad && (inst_reporting() || shown) && st.what >= 0 {
         var o: u8[>..] = [];
         loc_prefix(o, tloc() as i64);
         o.append("note: in instantiation of ");
@@ -347,7 +357,7 @@ recursive fn inst_record(r: i64) {
     let w = tmpl_class_key(src);
     if head_has_final(src) { mark_final(r); }
     inst_what = cs;
-    let st = inst_enter();
+    let st = inst_enter(true);
     cur_scope = sc;
     pc = class_head_end(src);
     records[r].pack = pack_now();
@@ -965,7 +975,7 @@ recursive fn inst_body(f: i64) {
         let fsg = friend_scope.get(f as u64);
         let sc = if fsg { fsg as i64 } else { cxs[f].dscope as i64 };
         inst_what = f;
-        let st = inst_enter();
+        let st = inst_enter(true);
         parse_member_body(f, sc);
         let bad = inst_leave(st);
         if bad { cxs[f].flags2 = cxs[f].flags2 | CF2_DIRTY; }
@@ -980,7 +990,7 @@ recursive fn inst_body(f: i64) {
     let pat, pargs = inst_args_of(cxs[f].dscope as i64);
     if pat < 0 { return; }
     inst_what = f;
-    let st = inst_enter();
+    let st = inst_enter(true);
     bind_header(hdr, pargs);
     cur_scope = tmpls[hdr].scope as i64;
     pc = tmpls[hdr].t0 as i64;
@@ -1009,7 +1019,7 @@ recursive fn inst_var_def(s: i64) {
     let pat, pargs = inst_args_of(cxs[s].dscope as i64);
     if pat < 0 { return; }
     let mark = nscratch.len;
-    let st = inst_enter();
+    let st = inst_enter(true);
     bind_header(hdr, pargs);
     cur_scope = tmpls[hdr].scope as i64;
     pc = tmpls[hdr].t0 as i64;
