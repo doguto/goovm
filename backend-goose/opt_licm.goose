@@ -3,15 +3,17 @@
 // all the edges that come from outside the loop), then the pure
 // instructions of the loop whose operands are all defined outside it move
 // to the preheader, inner loops first, so an invariant leaves a nest level
-// by level. Division only by a constant that cannot trap. Loads only when
-// the loop writes no memory and the load either is in the header (which
-// runs whenever the preheader does) or reads an alloca or a global (always
-// addressable).
+// by level. Division only by a constant that cannot trap. Loads (E2) when
+// no memory write of the loop may alias them (opt_aa.goose) and the load
+// either is in the header (which runs whenever the preheader does) or reads
+// an alloca or a global (always addressable).
 
 var lc_hdr: u32[>..] = [];
 var lc_mark: u32[>..] = [];
 var lc_epoch: u32 = 0;
 var lc_tmp: u32[>..] = [];
+var lc_w: u32[>..] = [];        // the memory writes of the loop being hoisted from
+let LC_MAXW: i64 = 256;
 
 // Whether instruction I may be executed in the preheader (no trap, no effect).
 fn licm_op(I: Inst) -> bool {
@@ -70,6 +72,7 @@ fn licm() -> bool {
         if licm_preheader(h) { made = true; }
     }
     if made { ensure_cfg(); }
+    aa_prepare();
     // 2. hoisting, inner loops (later headers in RPO) first
     var moved = false;
     lc_hdr.clear();
@@ -226,16 +229,27 @@ fn licm_loop(h: u32) -> bool {
     }
     if pre == NIL || s_start[pre + 1] - s_start[pre] != 1 { return false; }
     let pt = b_last[pre];
-    // does the loop write memory?
-    var writes = false;
+    // the loop's memory writes (any: one the alias analysis cannot place)
+    var any_write = false;
+    lc_w.clear();
     for b in rpo {
         if lc_mark[b] != ep { continue; }
         var i = b_first[b];
         while i != NIL {
-            if writes_mem(o_ins[i]) { writes = true; }
+            let W = o_ins[i];
+            if writes_mem(W) {
+                let op: u32 = W.op;
+                if (op == GIR_STORE || op == GIR_MEMCPY || op == GIR_MEMSET) && W.flags & (IF_VOLATILE | IF_ORD_MASK) == 0
+                   || op == GIR_CALL {
+                    lc_w.push(i);
+                } else {
+                    any_write = true;
+                }
+            }
             i = o_nxt[i];
         }
     }
+    if lc_w.len > LC_MAXW { any_write = true; }
     var moved = false;
     for b in rpo {
         if lc_mark[b] != ep { continue; }
@@ -245,7 +259,14 @@ fn licm_loop(h: u32) -> bool {
             let I = o_ins[i];
             var ok = false;
             if I.op == GIR_LOAD {
-                ok = !writes && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && (b == h || always_addr(I.a));
+                ok = !any_write && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && (b == h || always_addr(I.a));
+                if ok {
+                    let p = res(I.a);
+                    let sz = store_of(I.ty);
+                    for w in lc_w {
+                        if aa_clobbers(w, p, sz, I.b) { ok = false; break; }
+                    }
+                }
             } else {
                 ok = licm_op(I);
             }

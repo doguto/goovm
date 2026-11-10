@@ -687,6 +687,7 @@ fn opt_module() {
     opt_verify_on = find(opt_env, "verify") >= 0;
     inl_scan();
     gp_scan();
+    aa_module_init();
     sroa_init();
     opt_order();
     for fi in fn_order { opt_function(fi); }

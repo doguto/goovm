@@ -36,6 +36,7 @@ import opt_inline;
 import opt_sroa;
 import opt_licm;
 import opt_iv;
+import opt_aa;
 import opt_verify;
 import opt_dump;
 import a64enc;
@@ -544,6 +545,8 @@ fn gen_inst(gi: u32, cur: u32) {
     cur_pos = j;
     let k: u32 = vi[j].kind;
     if k == K_DONE { return; }   // (an extractvalue the call before it defined)
+    let rl = rg_on && rg_any_rl && rq_start[j] != rq_start[j + 1];
+    if rl { rg_drop_rl(j); }
     if rg_on && vi[j].st & ST_PIN != 0 && I.op != GIR_PHI { rg_def_start(j); }
     if k == K_A || k == K_CALL {
         match I.op {   // (the most frequent first: the match is a chain of compares)
@@ -606,7 +609,11 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_ISFPCLASS => lower_isfpclass_a(I, j),
             _ => ud2(),
         }
-        if rg_on && vi[j].st & ST_PIN != 0 { rg_def_end(j); }
+        if rg_on && vi[j].st & ST_PIN != 0 {
+            rg_def_end(j);
+            rg_def_store(j);
+        }
+        if rl { rg_reload_rl(j); }
         ra_end_inst();
         return;
     }
@@ -617,7 +624,11 @@ fn gen_inst(gi: u32, cur: u32) {
     ra_tierb_begin(k == K_ALL);
     gen_inst_b(I, j);
     ra_tierb_end();
-    if rg_on && vi[j].st & ST_PIN != 0 { rg_def_end(j); }
+    if rg_on && vi[j].st & ST_PIN != 0 {
+        rg_def_end(j);
+        rg_def_store(j);
+    }
+    if rl { rg_reload_rl(j); }
     ra_end_inst();
 }
 

@@ -1157,6 +1157,44 @@ struct Exporter : GirDwarfHost {
         return 0;
     }
 
+    // ----------------------------------------------------------------- TBAA
+    // (E2, opt_level >= 1) The access type of a load's or store's !tbaa tag
+    // as a node of the scalar type tree, numbered from 1 (0: no tag); the
+    // parents go to the table GirHeader.tbaa names. Struct-path tags count
+    // by their access type (conservative: LLVM also tells apart fields of
+    // one scalar type in unrelated structs).
+    std::map<const MDNode *, uint32_t> tbaa_ids;
+    std::vector<uint32_t> tbaa_parent{0};
+    uint32_t tbaa_node(const MDNode *N, int depth = 0) {
+        if (!N || depth > 64) return 0;
+        auto it = tbaa_ids.find(N);
+        if (it != tbaa_ids.end()) return it->second;
+        // a scalar type node: !{!"name", !parent, i64 offset} (old format) or
+        // !{!parent, i64 size, !"name", ...} (new format); a root: !{!"name"}
+        const MDNode *P = nullptr;
+        if (N->getNumOperands() >= 2 && isa<MDString>(N->getOperand(0))) P = dyn_cast<MDNode>(N->getOperand(1));
+        else if (N->getNumOperands() >= 3 && isa<MDNode>(N->getOperand(0))) P = dyn_cast<MDNode>(N->getOperand(0));
+        uint32_t p = P ? tbaa_node(P, depth + 1) : 0;
+        uint32_t id = (uint32_t)tbaa_parent.size();
+        tbaa_parent.push_back(p);
+        tbaa_ids[N] = id;
+        return id;
+    }
+    uint32_t tbaa_of(const Instruction &I) {
+        if (!T.header.opt_level) return 0;
+        const MDNode *tag = I.getMetadata(LLVMContext::MD_tbaa);
+        if (!tag || tag->getNumOperands() < 2) return 0;
+        // struct-path tag !{base, access, offset[, const]}; a scalar tag is its own access type
+        const MDNode *acc = isa<MDNode>(tag->getOperand(0)) ? dyn_cast<MDNode>(tag->getOperand(1)) : tag;
+        return tbaa_node(acc);
+    }
+    void tbaa_table() {
+        if (tbaa_parent.size() <= 1) return;
+        T.header.tbaa = (uint32_t)T.opnds.size();
+        T.opnds.push_back((uint32_t)tbaa_parent.size() - 1);
+        for (size_t k = 1; k < tbaa_parent.size(); k++) T.opnds.push_back(tbaa_parent[k]);
+    }
+
     // ---------------------------------------------------------------- calls
     // Argument for a call: `signext` narrower than 32 bits gets an explicit
     // SEXT to i32 (the SysV caller-extends rule as clang implements it).
@@ -1186,8 +1224,13 @@ struct Exporter : GirDwarfHost {
             T.opnds.push_back(args[i + 1]);
         }
         uint16_t fl = (vararg ? GIR_IF_VARARG : 0) | (al & AL_NR ? GIR_IF_NORETURN : 0);
-        // call-site inlining attributes (E2)
+        // call-site inlining attributes and memory effects (E2, for the optimizer)
         if (CB.getAttributes().hasFnAttr(Attribute::NoInline)) fl |= GIR_IF_NOINLINE_CALL;
+        if (T.header.opt_level && !(fl & GIR_IF_VARARG) && cur_invoke_lp == GIR_NONE) {
+            if (CB.onlyReadsMemory()) fl |= GIR_IF_CALL_NOWRITE;
+            if (CB.doesNotAccessMemory()) fl |= GIR_IF_CALL_NOWRITE | GIR_IF_CALL_NOREAD;
+            if (CB.doesNotThrow() && CB.hasFnAttr(Attribute::WillReturn)) fl |= GIR_IF_CALL_PURE;
+        }
         if (CB.getAttributes().hasFnAttr(Attribute::AlwaysInline)) fl |= GIR_IF_ALWAYSINLINE_CALL;
         if (cur_invoke_lp != GIR_NONE) {
             fl |= GIR_IF_INVOKE;
@@ -2471,7 +2514,7 @@ struct Exporter : GirDwarfHost {
                           (L.isAtomic() ? atomic_flags(L.getOrdering(), L.getSyncScopeID()) : 0);
             if (L.isAtomic() && cls(t) != GIR_C_INT && cls(t) != GIR_C_FP) fail("atomic load of this type");
             uint32_t p = ref(L.getPointerOperand());
-            vmap[&I] = emit(GIR_LOAD, t, 0, fl, 0, p, 0, 0, RA);
+            vmap[&I] = emit(GIR_LOAD, t, 0, fl, 0, p, tbaa_of(I), 0, RA);
             return;
         }
         case Instruction::Store: {
@@ -2484,7 +2527,7 @@ struct Exporter : GirDwarfHost {
             if (S.isAtomic() && cls(t) != GIR_C_INT && cls(t) != GIR_C_FP) fail("atomic store of this type");
             uint32_t v = ref(S.getValueOperand());
             uint32_t p = ref(S.getPointerOperand());
-            emit(GIR_STORE, GIR_T_VOID, 0, fl, t, v, p, 0, RA | RB);
+            emit(GIR_STORE, GIR_T_VOID, 0, fl, t, v, p, tbaa_of(I), RA | RB);
             return;
         }
         case Instruction::GetElementPtr: {
@@ -2830,6 +2873,7 @@ struct Exporter : GirDwarfHost {
                              ? abi_word(Fn.getAttributes().getParamAttrs(A.getArgNo()), A.getType(), "parameter")
                              : abi_plain(ty(A.getType()), "parameter");
             if (A.hasStructRetAttr()) sret_arg = A.getArgNo();
+            if (T.header.opt_level && A.hasNoAliasAttr() && A.getType()->isPointerTy()) w |= GIR_ABI_NOALIAS;
             args.push_back(ty(A.getType()));
             args.push_back(w);
         }
@@ -3257,6 +3301,7 @@ struct Exporter : GirDwarfHost {
             function(Fn, it->second);
         }
         if (dw_on) dw->end_module();
+        tbaa_table();
         T.header.n_llvm_insts = (uint32_t)T.n_llvm_insts;
         if (!T.gcomdat.empty()) T.gcomdat.resize(T.globals.size(), GIR_NONE);
     }

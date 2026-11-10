@@ -3,7 +3,7 @@
 // structs with static_asserts. Field names follow gir.h except where gir.h
 // uses a Goose keyword.
 
-// r0 = opt_level (E1), r1 = target (F1: GIR_TARGET_*)
+// r0 = opt_level (E1), r1 = target (F1: GIR_TARGET_*), r2 = tbaa (E2)
 struct Header { version: u32, flags: u32, tls_get_addr: u32, n_llvm_insts: u32,
                 r0: u32, r1: u32, r2: u32, r3: u32 }
 let GIR_TARGET_X86_64 = 0;
@@ -261,11 +261,15 @@ let IF_INVOKE = 0x0800;
 let IF_NSW = 0x1000;
 let IF_NOINLINE_CALL = 0x2000;      // (E2) CALL: call-site noinline
 let IF_ALWAYSINLINE_CALL = 0x4000;  // (E2) CALL: call-site always_inline
+let IF_CALL_NOWRITE = 0x8000;       // (E2) CALL: writes no memory
+let IF_CALL_NOREAD = 0x0040;        // (E2) CALL: reads no memory
+let IF_CALL_PURE = 0x0020;          // (E2) CALL: nounwind, willreturn
 let ORD_SEQ_CST = 7;
 
 // ABI words.
 let ABI_BYVAL = 0x80000000;
 let ABI_SRET = 0x40000000;
+let ABI_NOALIAS = 0x20000000;       // (E2) a noalias (restrict) pointer parameter
 
 checkfree fn abi_size(w: u32) -> u32 { w & 0x00FFFFFF }
 checkfree fn abi_align(w: u32) -> u32 { (1 as u32) << ((w >> 24) & 0x1F) }

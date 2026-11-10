@@ -3,26 +3,27 @@
 // dominator tree is walked in pre-order with a scoped hash table of the
 // pure instructions seen on the path from the entry; an instruction equal
 // to one in the table is replaced by it. Loads are keyed by (address, type)
-// and valid while no store may have changed the memory: a store or call
-// moves a memory generation, and a block entered from several predecessors
-// starts a new one. Memory is split by a simple alias analysis: the
-// allocas whose address does not escape (only loads, stores and GEPs use
-// it) have generations of their own, which only stores into them move, and
-// calls and stores through other pointers leave them alone.
+// and valid while no write since may have changed the memory (E2): the
+// memory writes of the path are logged, and the writes logged after an
+// entry are checked against it with the alias analysis (opt_aa.goose:
+// TBAA, bases and offsets, escapes, calls that write no memory). A block
+// entered from several predecessors starts a new epoch, in which the
+// entries of before are not valid, except for a private alloca all of whose
+// writes are in one block that dominates the load. Calls that read no
+// memory and write none are CSE'd like pure instructions.
 
 var gv_tab: u32[>..] = [];      // open addressing: instruction id + 1, 0 = empty
 var gv_undo: u32[>..] = [];     // slots filled, in order (scope exit clears them in reverse)
 var gv_lt: u32[>..] = [];       // loads: slot -> id + 1 of the load or store that holds the value
 var gv_lval: u32[>..] = [];     // per load-table entry (by instruction id): the value
-var gv_lgen: u32[>..] = [];     // per entry: the generation it is valid in
-var gv_lep: u32[>..] = [];      // per entry of a non-escaping alloca: the epoch (gv_ep) too
+var gv_lpos: u32[>..] = [];     // per entry: the length of the write log when it was made
+var gv_lep: u32[>..] = [];      // per entry: the epoch (gv_ep) it was made in
+var gv_wlog: u32[>..] = [];     // the memory writes on the path from the entry (dominator tree)
+let GV_SCAN: i64 = 128;         // writes checked per lookup at most
 var gv_lundo: u32[>..] = [];    // (slot, previous content) pairs
 var gv_ep: u32 = 0;             // epoch of the alloca generations: new at a merge point
 var gv_bep: u32[>..] = [];      // per block: the epoch at its end
-var gv_bgen: u32[>..] = [];     // per block: the memory generation at its end
-var gv_gen: u32 = 0;            // current generation of escaping memory
-var gv_cnt: u32 = 0;            // generation counter (monotonic: a number is never reused)
-var gv_agen: u32[>..] = [];     // per alloca (instruction id): its own generation, NIL = escapes
+var gv_cnt: u32 = 0;            // epoch counter (monotonic: a number is never reused)
 var gv_base: u32[>..] = [];     // per instruction: the alloca its address is based on, NIL
 var gv_sblk: u32[>..] = [];     // per alloca: the one block that writes it, NIL none, GV_MANY several
 var gv_cur: u32 = 0;            // the block being walked
@@ -32,13 +33,11 @@ var gv_changed = false;
 // ------------------------------------------------------------ alias info
 
 // gv_base for pointer-valued instructions (GEP chains off allocas) and
-// gv_agen for the allocas whose address does not escape.
+// gv_sblk, the one block that writes each alloca (aa_prepare first).
 fn gv_alias() {
     let n = o_ins.len;
     gv_base.clear();
     gv_base.resize(n, NIL);
-    gv_agen.clear();
-    gv_agen.resize(n, NIL);
     gv_sblk.clear();
     gv_sblk.resize(n, NIL);
     // allocas and GEPs of them (operands are defined before use in RPO, except
@@ -49,49 +48,34 @@ fn gv_alias() {
             let I = o_ins[i];
             if I.op == GIR_ALLOCA {
                 gv_base[i] = i;
-                // (with setjmp, memory changes behind the CFG's back)
-                gv_agen[i] = if o_f.flags & (FN_RETURNS_TWICE | FN_SJLJ) != 0 { NIL } else { 0 };
             } else if I.op == GIR_GEP && is_inst(res(I.a)) {
                 gv_base[i] = gv_base[res(I.a)];
             }
             i = o_nxt[i];
         }
     }
-    // escapes: an alloca-based value used other than as a load/store address
-    // or a GEP base
     for b in rpo {
         var i = b_first[b];
         while i != NIL {
             let I = o_ins[i];
             let op: u32 = I.op;
-            each_slot(i) { s =>
-                let v = res(vget(i, s));
-                if is_inst(v) && gv_base[v] != NIL {
-                    var ok = false;
-                    if op == GIR_LOAD && s == 0 { ok = true; }
-                    else if op == GIR_STORE && s == 1 { ok = true; }
-                    else if op == GIR_GEP && s == 0 { ok = true; }
-                    else if (op == GIR_MEMCPY || op == GIR_MEMSET) && s < 2 { ok = true; }
-                    if !ok { gv_agen[gv_base[v]] = NIL; }
-                    // (the block that writes it)
-                    if op == GIR_STORE && s == 1 || (op == GIR_MEMCPY || op == GIR_MEMSET) && s == 0 {
-                        let a = gv_base[v];
-                        gv_sblk[a] = if gv_sblk[a] == NIL || gv_sblk[a] == b { b } else { GV_MANY };
-                    }
-                }
-            };
+            var p: u32 = NIL;
+            if op == GIR_STORE { p = res(I.b); }
+            else if op == GIR_MEMCPY || op == GIR_MEMSET { p = res(I.a); }
+            if p != NIL && is_inst(p) && gv_base[p] != NIL {
+                let a = gv_base[p];
+                gv_sblk[a] = if gv_sblk[a] == NIL || gv_sblk[a] == b { b } else { GV_MANY };
+            }
             i = o_nxt[i];
         }
     }
 }
-// The memory generation that guards a load or store at address p, and
-// whether it is a non-escaping alloca's (then the epoch counts too).
-fn gv_mgen(p: u32) -> u32, bool {
-    if is_inst(p) {
-        let a = gv_base[p];
-        if a != NIL && gv_agen[a] != NIL { return gv_agen[a], true; }
-    }
-    return gv_gen, false;
+// The private (non-escaping) alloca p is based on, or NIL.
+fn gv_ne_base(p: u32) -> u32 {
+    if !is_inst(p) { return NIL; }
+    let a = gv_base[p];
+    if a != NIL && aa_esc[a] == 0 { return a; }
+    return NIL;
 }
 // Records load/store i (address p) as the holder of value v.
 fn gv_lput(h: u64, i: u32, p: u32, v: u32) {
@@ -99,49 +83,43 @@ fn gv_lput(h: u64, i: u32, p: u32, v: u32) {
     gv_lundo.push(gv_lt[h]);
     gv_lt[h] = i + 1;
     gv_lval[i] = v;
-    let g, al = gv_mgen(p);
-    gv_lgen[i] = g;
-    gv_lep[i] = if al { gv_ep } else { 0 };
+    gv_lpos[i] = gv_wlog.len as! u32;
+    gv_lep[i] = gv_ep;
 }
-// The value load/store entry e (id + 1) holds for address p now, or NIL.
-// A non-escaping alloca's entry also needs the epoch (no merge point since),
-// unless all writes of the alloca are in one block that dominates this one:
-// then no write happens between the entry (which is in a dominator, after
-// that block's writes, or its generation would differ) and here, because a
-// path from the writing block to here passes the entry's block again.
-fn gv_lget(e: u32, p: u32) -> u32 {
+// The value load/store entry e (id + 1) holds now for an access of ps
+// bytes at p with TBAA node pt, or NIL. Across a merge point (another
+// epoch) only a private alloca all of whose writes are in one block that
+// dominates this one keeps its entries: a path from the writing block to
+// here passes the entry's block (a dominator, after that block's writes)
+// again, and the writes of the dominator path since are in the log.
+fn gv_lget(e: u32, p: u32, ps: u32, pt: u32) -> u32 {
     if e == 0 { return NIL; }
-    let g, al = gv_mgen(p);
-    if gv_lgen[e - 1] != g { return NIL; }
-    if al && gv_lep[e - 1] != gv_ep {
-        let w = gv_sblk[gv_base[p]];
+    let x = e - 1;
+    if gv_lep[x] != gv_ep {
+        let a = gv_ne_base(p);
+        if a == NIL { return NIL; }
+        let w = gv_sblk[a];
         if w == NIL || w == GV_MANY || !dominates(w, gv_cur) { return NIL; }
     }
-    return gv_lval[e - 1];
+    let s: i64 = gv_lpos[x];
+    if gv_wlog.len - s > GV_SCAN { return NIL; }
+    for k in s..gv_wlog.len {
+        if aa_clobbers(gv_wlog[k], p, ps, pt) { return NIL; }
+    }
+    return gv_lval[x];
 }
 fn gv_bump() -> u32 {
     gv_cnt++;
     return gv_cnt;
 }
-// The instruction writes memory: move the generations it may affect.
+// The instruction writes memory: it goes to the write log.
 fn gv_clobber(i: u32) {
-    let I = o_ins[i];
-    let op: u32 = I.op;
-    var p: u32 = NIL;
-    if op == GIR_STORE { p = res(I.b); }
-    else if op == GIR_MEMCPY || op == GIR_MEMSET { p = res(I.a); }
-    if p != NIL && is_inst(p) {
-        let a = gv_base[p];
-        if a != NIL && gv_agen[a] != NIL {
-            gv_agen[a] = gv_bump();
-            return;
-        }
-    }
-    gv_gen = gv_bump();
+    gv_wlog.push(i);
 }
 fn writes_mem(I: Inst) -> bool {
     let op: u32 = I.op;
-    if op == GIR_STORE || op == GIR_CALL || op == GIR_MEMCPY || op == GIR_MEMSET || op == GIR_VASTART { return true; }
+    if op == GIR_CALL { return I.flags & IF_CALL_NOWRITE == 0; }
+    if op == GIR_STORE || op == GIR_MEMCPY || op == GIR_MEMSET || op == GIR_VASTART { return true; }
     if op == GIR_CMPXCHG || op == GIR_ATOMICRMW || op == GIR_FENCE || op == GIR_ASM { return true; }
     if op == GIR_SJLJ_SETJMP || op == GIR_SJLJ_LONGJMP || op == GIR_STACKRESTORE || op == GIR_LANDINGPAD { return true; }
     if op == GIR_LOAD { return I.flags & (IF_VOLATILE | IF_ORD_MASK) != 0; }
@@ -157,6 +135,9 @@ fn cse_op(I: Inst) -> bool {
     if op == GIR_GEP { return true; }
     if op >= GIR_FADD && op <= GIR_INSERTELT { return true; }
     if op >= GIR_CTLZ && op <= GIR_ISFPCLASS { return true; }
+    // a call of a function that neither reads nor writes memory and returns
+    if op == GIR_CALL { return I.flags & (IF_CALL_NOWRITE | IF_CALL_NOREAD | IF_CALL_PURE | IF_INVOKE)
+                                == (IF_CALL_NOWRITE | IF_CALL_NOREAD | IF_CALL_PURE); }
     return op == GIR_X86 || op == GIR_TLSADDR || op == GIR_BLOCKADDR;
 }
 inline fn commutes(op: u32) -> bool {
@@ -172,7 +153,7 @@ fn gv_ab(i: u32) -> u32, u32 {
     let m: u32 = OP_VAL[I.op];
     let a = if m & OV_A != 0 { res(I.a) } else { I.a };
     var b = if m & OV_B != 0 { res(I.b) } else { I.b };
-    if I.op == GIR_GEP { b = 0; }   // (the run: compared word by word)
+    if I.op == GIR_GEP || I.op == GIR_CALL { b = 0; }   // (the run: compared word by word)
     if commutes(I.op) && b < a { return b, a; }
     return a, b;
 }
@@ -187,6 +168,11 @@ fn gv_hash(i: u32) -> u64 {
         for k in 0..2 + 2 * I.c {
             let w = o_ops[I.b + k];
             h = hmix(h, (if k >= 2 && k % 2 == 0 { res(w) } else { w }) as u64);
+        }
+    } else if I.op == GIR_CALL {
+        for k in 0..2 * I.c {
+            let w = o_ops[I.b + k];
+            h = hmix(h, (if k % 2 == 0 { res(w) } else { w }) as u64);
         }
     }
     return h;
@@ -208,6 +194,19 @@ fn gv_equal(i: u32, j: u32) -> bool {
             var x = o_ops[I.b + k];
             var y = o_ops[J.b + k];
             if k >= 2 && k % 2 == 0 {
+                x = res(x);
+                y = res(y);
+            }
+            if x != y { return false; }
+        }
+        return true;
+    }
+    if I.op == GIR_CALL {
+        if I.c != J.c || I.flags != J.flags { return false; }
+        for k in 0..2 * I.c {
+            var x = o_ops[I.b + k];
+            var y = o_ops[J.b + k];
+            if k % 2 == 0 {
                 x = res(x);
                 y = res(y);
             }
@@ -264,56 +263,55 @@ fn gvn() -> bool {
     gv_changed = false;
     resolve_all();
     gv_grow();
+    aa_prepare();
     gv_alias();
     let n = o_ins.len;
     gv_lval.clear();
     gv_lval.resize(n, NIL);
-    gv_lgen.clear();
-    gv_lgen.resize(n, 0);
+    gv_lpos.clear();
+    gv_lpos.resize(n, 0);
     gv_lep.clear();
     gv_lep.resize(n, 0);
-    gv_bgen.clear();
-    gv_bgen.resize(cfg_nb, 0);
     gv_bep.clear();
     gv_bep.resize(cfg_nb, 0);
     gv_undo.clear();
     gv_lundo.clear();
+    gv_wlog.clear();
     gv_cnt = 1;
-    gv_gen = 1;
     gv_ep = 1;
     tmp_stack.clear();
     tmp_stack.push(0);
     tmp_pos.clear();
-    tmp_pos.resize(2 * cfg_nb, 0);
+    tmp_pos.resize(3 * cfg_nb, 0);
     while tmp_stack.len != 0 {
         let e = tmp_stack.pop();
         if e & 0x80000000 != 0 {
             let b = e & 0x7FFFFFFF;
-            let m1 = tmp_pos[2 * b];
+            let m1 = tmp_pos[3 * b];
             while gv_undo.len > m1 { gv_tab[gv_undo.pop()] = 0; }
-            let m2 = tmp_pos[2 * b + 1];
+            let m2 = tmp_pos[3 * b + 1];
             while gv_lundo.len > m2 {
                 let old = gv_lundo.pop();
                 let h = gv_lundo.pop();
                 gv_lt[h] = old;
             }
+            let m3: i64 = tmp_pos[3 * b + 2];
+            while gv_wlog.len > m3 { gv_wlog.pop(); }
             continue;
         }
         let b = e;
-        tmp_pos[2 * b] = gv_undo.len as! u32;
-        tmp_pos[2 * b + 1] = gv_lundo.len as! u32;
+        tmp_pos[3 * b] = gv_undo.len as! u32;
+        tmp_pos[3 * b + 1] = gv_lundo.len as! u32;
+        tmp_pos[3 * b + 2] = gv_wlog.len as! u32;
         // the memory state at entry: the dominator's at its end if it is the
-        // only predecessor, else unknown
+        // only predecessor, else a new epoch
         let np = p_start[b + 1] - p_start[b];
         if b != 0 && np == 1 && p_list[p_start[b]] == idom[b] {
-            gv_gen = gv_bgen[idom[b]];
             gv_ep = gv_bep[idom[b]];
         } else if b != 0 {
-            gv_gen = gv_bump();
             gv_ep = gv_bump();
         }
         gv_block(b);
-        gv_bgen[b] = gv_gen;
         gv_bep[b] = gv_ep;
         tmp_stack.push(b | 0x80000000);
         var c = dt_first[b];
@@ -328,28 +326,14 @@ fn gvn() -> bool {
 // Dead stores: the stores of the block since the last read that may see them.
 var ds_st: u32[16] = [0; 16];
 var ds_n: u32 = 0;
-// The alloca a non-escaping pointer is based on, or NIL.
-fn gv_ne_base(p: u32) -> u32 {
-    if !is_inst(p) { return NIL; }
-    let a = gv_base[p];
-    if a != NIL && gv_agen[a] != NIL { return a; }
-    return NIL;
-}
-// Pointers p and q may point to the same memory.
-fn gv_may_alias(p: u32, q: u32) -> bool {
-    if p == q { return true; }
-    let a = gv_ne_base(p);
-    let b = gv_ne_base(q);
-    if a == NIL && b == NIL { return true; }
-    return a == b;
-}
-// A read of memory at p (NIL: any escaping memory) ends the stores it may see.
-fn ds_read(p: u32) {
+// A read of ps bytes at p with TBAA node pt (p NIL: any memory but private
+// allocas) ends the stores it may see.
+fn ds_read(p: u32, ps: u32, pt: u32) {
     var n: u32 = 0;
     for k in 0..ds_n {
         let s = ds_st[k];
         let q = res(o_ins[s].b);
-        let keep = if p == NIL { gv_ne_base(q) != NIL } else { !gv_may_alias(p, q) };
+        let keep = if p == NIL { gv_ne_base(q) != NIL } else { !aa_alias(p, ps, pt, q, store_of(o_ins[s].aux), o_ins[s].c) };
         if keep {
             ds_st[n] = s;
             n++;
@@ -369,13 +353,13 @@ fn gv_block(b: u32) {
         if op == GIR_LOAD && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 {
             let p = res(I.a);
             let h = gv_lslot(p, I.ty);
-            let v = gv_lget(gv_lt[h], p);
+            let v = gv_lget(gv_lt[h], p, store_of(I.ty), I.b);
             if v != NIL {
                 replace(i, v);
                 gv_changed = true;
             } else {
                 gv_lput(h, i, p, i);
-                ds_read(p);
+                ds_read(p, store_of(I.ty), I.b);
             }
         } else if op == GIR_STORE && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 {
             gv_clobber(i);
@@ -400,10 +384,21 @@ fn gv_block(b: u32) {
             }
             ds_st[ds_n] = i;
             ds_n++;
+        } else if op == GIR_CALL && I.flags & IF_CALL_NOWRITE != 0 {
+            // (reads memory, or none: a pure call is CSE'd)
+            if I.flags & IF_CALL_NOREAD == 0 { ds_read(NIL, 0, 0); }
+            else if cse_op(I) {
+                let j = gv_find_add(i);
+                if j != NIL {
+                    replace(i, j);
+                    gv_changed = true;
+                }
+            }
         } else if writes_mem(I) {
             gv_clobber(i);
-            ds_read(NIL);
-            if op != GIR_CALL { ds_n = 0; }
+            if op == GIR_MEMCPY { ds_read(res(I.b), I.c, 0); }
+            else { ds_read(NIL, 0, 0); }
+            if op != GIR_CALL && op != GIR_MEMCPY && op != GIR_MEMSET { ds_n = 0; }
         } else if op == GIR_LOAD {
             ds_n = 0;
         } else if cse_op(I) {

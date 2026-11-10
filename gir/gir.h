@@ -181,8 +181,9 @@ enum GirOp {
     GIR_ALLOCA,        /* a = size in bytes, b = alignment (immediates);      */
                        /*   entry block only; ty = ptr                       */
     GIR_LOAD,          /* a = pointer; ty = loaded type; flags: VOLATILE,     */
-                       /*   atomic ordering                                  */
-    GIR_STORE,         /* a = value, b = pointer; aux = stored type; flags    */
+                       /*   atomic ordering; b = TBAA node (E2, 0 = none)    */
+    GIR_STORE,         /* a = value, b = pointer; aux = stored type; flags;   */
+                       /*   c = TBAA node (E2, 0 = none)                     */
     GIR_GEP,           /* a = base pointer, b = s, c = n: ops[s], ops[s+1] = */
                        /*   constant byte offset (lo, hi of an i64), then n  */
                        /*   pairs (index value, scale in bytes); result      */
@@ -335,6 +336,13 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
 #define GIR_IF_NOINLINE_CALL 0x2000u  /* call-site noinline ([[clang::noinline]],         */
                                       /*   -fno-inline's calls): never inlined           */
 #define GIR_IF_ALWAYSINLINE_CALL 0x4000u /* call-site always_inline ([[clang::always_inline]]) */
+#define GIR_IF_CALL_NOWRITE  0x8000u  /* the call writes no memory (LLVM readonly/readnone, */
+                                      /*   memory(read)); not on invokes or variadic calls */
+#define GIR_IF_CALL_NOREAD   0x0040u  /* with NOWRITE: it reads none either (memory(none)) */
+#define GIR_IF_CALL_PURE     0x0020u  /* nounwind and willreturn: with NOWRITE, a call      */
+                                      /*   whose result is unused may be deleted           */
+                                      /* (0x0020 and 0x0040 are cmpxchg's failure ordering */
+                                      /*   bits on other instructions)                     */
 
 /* ABI words of CALL arguments and Func arguments. 0 = passed by value as
  * its type says. GIR_ABI_BYVAL: the argument is a pointer whose pointee
@@ -343,6 +351,10 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
 #define GIR_ABI_BYVAL        0x80000000u
 #define GIR_ABI_SIZE(w)      ((w) & 0x00FFFFFFu)        /* byval size (< 16 MiB) */
 #define GIR_ABI_ALIGN_LOG2(w) (((w) >> 24) & 0x1Fu)     /* byval alignment       */
+#define GIR_ABI_NOALIAS      0x20000000u  /* additive (E2, opt_level >= 1, Func arguments):
+                                             a pointer parameter with LLVM's noalias (C
+                                             restrict): no other pointer of the function
+                                             that is not based on it accesses what it does */
 #define GIR_ABI_SRET         0x40000000u  /* the sret pointer: informational on x86-64
                                              (rdi), passed in x8 on AArch64 */
 
@@ -658,7 +670,13 @@ typedef struct GirHeader {
                                     level (GIR_OPT_SIZE: 1 = -Os, 2 = -Oz) */
     uint32_t target;             /* additive (milestone F1; was reserved, so 0 from older
                                     producers): GIR_TARGET_* */
-    uint32_t reserved[2];
+    uint32_t tbaa;               /* additive (milestone E2, opt_level >= 1; 0 = none): the
+                                    TBAA type tree of the TBAA nodes that LOAD.b and STORE.c
+                                    name: opnds[tbaa] = n, opnds[tbaa + k] = the parent of
+                                    node k (1..n; 0 = a root). Two accesses whose nodes have
+                                    a common root and neither of which is an ancestor of the
+                                    other do not alias (LLVM's scalar TBAA) */
+    uint32_t reserved[1];
 } GirHeader;
 #define GIR_OPT_LEVEL(x)   ((x) & 0xFFu)          /* GirHeader.opt_level (E2) */
 #define GIR_OPT_SIZE(x)    (((x) >> 8) & 3u)
