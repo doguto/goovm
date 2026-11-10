@@ -181,8 +181,9 @@ enum GirOp {
     GIR_ALLOCA,        /* a = size in bytes, b = alignment (immediates);      */
                        /*   entry block only; ty = ptr                       */
     GIR_LOAD,          /* a = pointer; ty = loaded type; flags: VOLATILE,     */
-                       /*   atomic ordering                                  */
-    GIR_STORE,         /* a = value, b = pointer; aux = stored type; flags    */
+                       /*   atomic ordering; b = TBAA node (E2, 0 = none)    */
+    GIR_STORE,         /* a = value, b = pointer; aux = stored type; flags;   */
+                       /*   c = TBAA node (E2, 0 = none)                     */
     GIR_GEP,           /* a = base pointer, b = s, c = n: ops[s], ops[s+1] = */
                        /*   constant byte offset (lo, hi of an i64), then n  */
                        /*   pairs (index value, scale in bytes); result      */
@@ -272,6 +273,13 @@ enum GirOp {
     GIR_A64,           /* AArch64 intrinsic (NEON, ACLE): sub = GirA64;      */
                        /*   ty = result type, aux = type of a; a, b, c =     */
                        /*   operands (an unused one is the constant i32 0)   */
+    /* --- version 2, optimizer (additive, milestone E2; emitted at opt_level
+     * >= 1 only) --- */
+    GIR_ISCONST,       /* a = b = c = a value of any type; ty = i1: whether  */
+                       /*   it is a constant once optimized (LLVM            */
+                       /*   llvm.is.constant, __builtin_constant_p): the     */
+                       /*   middle-end folds it after inlining; never reaches */
+                       /*   code generation                                  */
     GIR_OP_COUNT
 };
 
@@ -395,6 +403,17 @@ enum GirA64 {
 #define GIR_IF_NSW           0x1000u  /* additive (E1): ADD, SUB, MUL, SHL whose signed   */
                                       /*   overflow is undefined (LLVM nsw); a hint for  */
                                       /*   the optimizer, ignored by -O0 code generation */
+/* additive (milestone E2), CALL only, hints for the optimizer: */
+#define GIR_IF_NOINLINE_CALL 0x2000u  /* call-site noinline ([[clang::noinline]],         */
+                                      /*   -fno-inline's calls): never inlined           */
+#define GIR_IF_ALWAYSINLINE_CALL 0x4000u /* call-site always_inline ([[clang::always_inline]]) */
+#define GIR_IF_CALL_NOWRITE  0x8000u  /* the call writes no memory (LLVM readonly/readnone, */
+                                      /*   memory(read)); not on invokes or variadic calls */
+#define GIR_IF_CALL_NOREAD   0x0040u  /* with NOWRITE: it reads none either (memory(none)) */
+#define GIR_IF_CALL_PURE     0x0020u  /* nounwind and willreturn: with NOWRITE, a call      */
+                                      /*   whose result is unused may be deleted           */
+                                      /* (0x0020 and 0x0040 are cmpxchg's failure ordering */
+                                      /*   bits on other instructions)                     */
 
 /* ABI words of CALL arguments and Func arguments. 0 = passed by value as
  * its type says. GIR_ABI_BYVAL: the argument is a pointer whose pointee
@@ -403,6 +422,10 @@ enum GirA64 {
 #define GIR_ABI_BYVAL        0x80000000u
 #define GIR_ABI_SIZE(w)      ((w) & 0x00FFFFFFu)        /* byval size (< 16 MiB) */
 #define GIR_ABI_ALIGN_LOG2(w) (((w) >> 24) & 0x1Fu)     /* byval alignment       */
+#define GIR_ABI_NOALIAS      0x20000000u  /* additive (E2, opt_level >= 1, Func arguments):
+                                             a pointer parameter with LLVM's noalias (C
+                                             restrict): no other pointer of the function
+                                             that is not based on it accesses what it does */
 #define GIR_ABI_SRET         0x40000000u  /* the sret pointer: informational on x86-64
                                              (rdi), passed in x8 on AArch64 */
 
@@ -432,10 +455,25 @@ typedef struct GirBlock {
                                /*   a frame slot must not be shared between values */
 /* additive (milestone E1), hints for the optimizer (opt_level >= 1); an -O0
  * back-end ignores them */
-#define GIR_FN_NOINLINE 64u    /* do not inline calls of this function (the source said
-                                  noinline; clang -O0's implied noinline, which comes with
-                                  optnone, is not exported) */
+#define GIR_FN_NOINLINE 64u    /* do not inline calls of this function (LLVM noinline; E2:
+                                  also when it comes with optnone, which E1 did not export) */
 #define GIR_FN_ALWAYSINLINE 128u /* always_inline */
+/* additive (milestone E2): LLVM's function attributes as the optimizer honors
+ * them (backend-goose/DESIGN.md §15); an -O0 back-end ignores them */
+#define GIR_FN_OPTNONE   256u  /* optnone: the function is not optimized (-O0 code generation
+                                  for it, whatever the module's opt_level); implies noinline */
+#define GIR_FN_OPTSIZE   512u  /* optsize (clang -Os, -Oz, and __attribute__((cold))) */
+#define GIR_FN_MINSIZE  1024u  /* minsize (clang -Oz, __attribute__((minsize))) */
+#define GIR_FN_COLD     2048u  /* cold: calls of it are unlikely; .text.unlikely. at -O1+ */
+#define GIR_FN_HOT      4096u  /* hot: .text.hot. at -O1+ */
+#define GIR_FN_INLINEHINT 8192u /* inlinehint (an `inline` function) */
+#define GIR_FN_AVAILEXT 16384u /* the body of an available_externally function (exported at
+                                  opt_level >= 1 only): for inlining, never emitted; its global
+                                  is not GIR_GF_DEFINED (calls that remain call the external
+                                  symbol), but Global.func names this record */
+#define GIR_FN_MUSTPROGRESS 32768u /* mustprogress (C++): a loop without side effects ends */
+/* bits 16..23 are reserved for back-ends (backend-goose: FN_DEAD = bit 23 in the
+ * optimizer's output tables) */
 #define GIR_FN_ALIGN_SHIFT 24  /* bits 24..31: log2 of the function alignment (>= 4) */
 
 /* 40 bytes. Functions are also globals (Func.global is their entry in the
@@ -496,7 +534,9 @@ typedef struct GirGlobal {
                                  /*   (size is also set for ZERO/COMMON)   */
     uint32_t align;              /* power of two >= 1 */
     uint32_t func;               /* functions: index into funcs (GIR_NONE if */
-                                 /*   undefined); aliases: the aliased global; */
+                                 /*   undefined; E2: an undefined function may */
+                                 /*   have a GIR_FN_AVAILEXT body); aliases: the */
+                                 /*   aliased global; */
                                  /*   variables: GIR_NONE                  */
     uint32_t section;            /* GIR_NONE = the default section for its */
                                  /*   kind; else index into sections       */
@@ -697,11 +737,21 @@ typedef struct GirHeader {
                                     producers): 0 = -O0 code generation; >= 1 = the
                                     back-end runs its middle-end on the tables and
                                     allocates registers globally (backend-goose/DESIGN.md
-                                    §15, §16) */
+                                    §15, §16). E2: bits 0..7 are the level (1, 2, 3 for
+                                    -O1, -O2, -O3; -Os and -Oz are 2), bits 8..9 the size
+                                    level (GIR_OPT_SIZE: 1 = -Os, 2 = -Oz) */
     uint32_t target;             /* additive (milestone F1; was reserved, so 0 from older
                                     producers): GIR_TARGET_* */
-    uint32_t reserved[2];
+    uint32_t tbaa;               /* additive (milestone E2, opt_level >= 1; 0 = none): the
+                                    TBAA type tree of the TBAA nodes that LOAD.b and STORE.c
+                                    name: opnds[tbaa] = n, opnds[tbaa + k] = the parent of
+                                    node k (1..n; 0 = a root). Two accesses whose nodes have
+                                    a common root and neither of which is an ancestor of the
+                                    other do not alias (LLVM's scalar TBAA) */
+    uint32_t reserved[1];
 } GirHeader;
+#define GIR_OPT_LEVEL(x)   ((x) & 0xFFu)          /* GirHeader.opt_level (E2) */
+#define GIR_OPT_SIZE(x)    (((x) >> 8) & 3u)
 #define GIR_TARGET_X86_64  0u    /* x86-64 Linux, SysV ABI */
 #define GIR_TARGET_AARCH64 1u    /* AArch64 Linux (aarch64-linux-gnu), AAPCS64, LP64 */
 

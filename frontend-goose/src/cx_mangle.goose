@@ -150,6 +150,19 @@ fn mangle_name(s: i64) {
         mg_name_end = mg.len;
         return;
     }
+    // code generation: a member of a lambda's closure type, a local name:
+    // Z <function encoding> E N [K] <closure> <name> E
+    if cg_on && scopes[sc].kind as i64 == CS_CLASS && scopes[sc].rec >= 0 && closure_mangled(scopes[sc].rec as i64) {
+        mg.append(cm_buf[0..cm_enc_len]);
+        mg.push('N');
+        if member_fn && (types[syms[s].ty >> 4].flags as i64) & TF_MCONST != 0 { mg.push('K'); }
+        mg.append(cm_name);
+        msubs.push(MK_SCOPE | (sc as u64));
+        unqualified(s);
+        mg_name_end = mg.len;
+        mg.push('E');
+        return;
+    }
     mg.push('N');
     if member_fn {
         let f = types[syms[s].ty >> 4].flags as i64;
@@ -379,6 +392,12 @@ recursive fn mangle_type(t: u32) {
 recursive fn mangle_class_name(sc: i64) {
     let i = sub_find(MK_SCOPE | (sc as u64));
     if i >= 0 { sub_emit(i); return; }
+    // code generation: a lambda's closure type (cx_gen_lambda)
+    if cg_on && scopes[sc].rec >= 0 && closure_mangled(scopes[sc].rec as i64) {
+        mg.append(cm_buf);
+        msubs.push(MK_SCOPE | (sc as u64));
+        return;
+    }
     let parent = scopes[sc].parent as i64;
     if parent <= 0 || is_std_ns(parent) {
         // unscoped (::X or ::std::X): a template specialization is <unscoped-template-name> <template-args>

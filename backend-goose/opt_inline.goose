@@ -1,19 +1,38 @@
 // Inlining (opt.goose): functions are optimized callees first (a post-order
 // of the call graph), so a call is replaced by a copy of the callee's
-// optimized body out of the output tables. The cost model is the callee's
-// instruction count: small callees always, larger ones when the call is in
-// a loop, internal functions with a single call site up to a large size
-// (they are then not emitted at all), always_inline always; noinline and
-// bodies that cannot be copied (variadic, dynamic allocas, va_start,
-// setjmp, frame/return addresses, landing pads and invokes, block
-// addresses, byval parameters) never. A call that is an invoke is not
-// inlined. The caller grows by at most a few thousand instructions.
+// optimized body out of the output tables. The cost model (E2) is LLVM's
+// InlineCost on GIR instructions (LLVM's InstrCost of 5 is one
+// instruction): the callee is evaluated at the call site, with the
+// constant arguments folded through it and the branches they decide
+// pruned; loads, stores and constant GEPs of memory SROA will split (the
+// callee's allocas, the caller's allocas passed as arguments, unless the
+// callee lets the pointer escape) and no-op casts are free, a call costs
+// the call penalty; the call site's own cost is subtracted. Thresholds as
+// LLVM's (225, 250 at -O3, 75 for an optsize caller, 25 minsize, 325 for
+// an inlinehint callee, 45 for a cold one, half again for a callee of one
+// block, a large bonus for the last call of an internal function, which is
+// then not emitted); always_inline always; noinline and bodies that cannot
+// be copied (va_start, dynamic allocas, setjmp, frame/return addresses,
+// landing pads and invokes, block addresses) never. A call that is an
+// invoke is not inlined. The caller grows by at most a few thousand
+// instructions.
 
-let INL_SMALL: u32 = 40;        // always
-let INL_LOOP: u32 = 80;         // a call in a loop
-let INL_ONCE: u32 = 500;        // an internal function's only call site
+let INL_ONCE: u32 = 3000;       // LLVM's LastCallToStaticBonus (15000 / 5)
 let INL_GROWTH: u32 = 4000;     // instructions a caller may grow by
-let FN_DEAD: u32 = 0x100;       // output GirFunc flag: all calls were inlined; not emitted
+let INL_PENALTY: u32 = 5;       // LLVM's CallPenalty (25 / 5)
+var ic_st: u8[>..] = [];        // cost model, per callee instruction: IC_*
+var ic_val: u64[>..] = [];      //   its constant value (IC_CONST)
+var ic_root: u32[>..] = [];     //   IC_SROA: its root (argument k, or IC_AL | callee alloca)
+var ic_live: u8[>..] = [];      //   per callee block: reachable
+var ic_wl: u32[>..] = [];
+var ic_arg_st: u8[>..] = [];    //   per argument of the call
+var ic_arg_val: u64[>..] = [];
+var ic_sroa_ok: u8[>..] = [];   //   per root: still SROA-able (arguments first, then allocas)
+let IC_UNK: u8 = 0;
+let IC_CONST: u8 = 1;
+let IC_SROA: u8 = 2;
+let IC_AL: u32 = 0x80000000;
+let FN_DEAD: u32 = 0x800000;    // output GirFunc flag (bit 23, reserved for back-ends): all calls were inlined; not emitted
 
 var fn_done: u8[>..] = [];      // per function: stored (optimized) in the output tables
 var fn_size: u32[>..] = [];     // its size then
@@ -120,9 +139,10 @@ fn inl_record() {
     var n: u32 = 0;
     var ok = !o_pinned;
     let fl = o_f.flags;
-    if fl & (FN_VARARG | FN_VASTART | FN_SJLJ | FN_RETURNS_TWICE | GIR_FN_NOINLINE) != 0 { ok = false; }
+    if fl & (FN_VASTART | FN_SJLJ | FN_RETURNS_TWICE | FN_NOINLINE | FN_OPTNONE) != 0 { ok = false; }
     for a in 0..o_f.n_args {
-        if M.opnds[o_f.args + 2 * a + 1] & ABI_BYVAL != 0 { ok = false; }
+        let w = M.opnds[o_f.args + 2 * a + 1];
+        if w & ABI_BYVAL != 0 && abi_size(w) > 4096 { ok = false; }
     }
     for i in 0..o_ins.len {
         if o_blk[i] == NIL { continue; }
@@ -134,18 +154,13 @@ fn inl_record() {
            || op == GIR_LANDINGPAD || op == GIR_INDIRECTBR || op == GIR_BLOCKADDR {
             ok = false;
         }
-        if op == GIR_CALL {
-            if I.flags & IF_INVOKE != 0 { ok = false; }
-            if callee_of(I) == o_fi { ok = false; }
-        }
+        if op == GIR_CALL && I.flags & IF_INVOKE != 0 { ok = false; }
     }
     fn_size[o_fi] = n;
     fn_inl[o_fi] = if ok { 1 } else { 0 };
     fn_done[o_fi] = 1;
 }
 
-let GIR_FN_NOINLINE = 64;
-let GIR_FN_ALWAYSINLINE = 128;
 
 // Inlines the calls the cost model accepts (build_cfg and build_loops
 // first: loop depths). Returns whether any call was inlined.
@@ -155,18 +170,18 @@ fn inline_calls() -> bool {
     var size: u32 = 0;
     for b in rpo {
         var i = b_first[b];
+        while i != NIL { size++; i = o_nxt[i]; }
+    }
+    for b in rpo {
+        var i = b_first[b];
         while i != NIL {
             let I = o_ins[i];
-            size++;
-            if I.op == GIR_CALL && I.flags & IF_INVOKE == 0 {
+            if I.op == GIR_CALL && I.flags & (IF_INVOKE | IF_NOINLINE_CALL) == 0 {
                 let c = callee_of(I);
-                if c != NIL && c != o_fi && fn_done[c] != 0 && fn_inl[c] != 0 {
-                    let s = fn_size[c];
+                if c != NIL && c != o_fi && fn_done[c] != 0 && fn_inl[c] != 0 && inl_args_ok(i, c) {
                     let F = M.funcs[c];
-                    let once = F.flags & FN_INTERNAL != 0 && fn_calls[c] == 1 && fn_addr[c] == 0;
-                    var want = s <= INL_SMALL || F.flags & GIR_FN_ALWAYSINLINE != 0;
-                    if !want && once && s <= INL_ONCE { want = true; }
-                    if !want && lp_depth[b] != 0 && s <= INL_LOOP { want = true; }
+                    var want = F.flags & FN_ALWAYSINLINE != 0 || I.flags & IF_ALWAYSINLINE_CALL != 0;
+                    if !want { want = inl_profitable(i, c); }
                     if want { inl_cand.push(i); }
                 }
             }
@@ -179,7 +194,9 @@ fn inline_calls() -> bool {
     for c in inl_cand {
         if o_blk[c] == NIL { continue; }
         let cfi = callee_of(o_ins[c]);
-        if size + fn_size[cfi] > limit && M.funcs[cfi].flags & GIR_FN_ALWAYSINLINE == 0 { continue; }
+        if size + fn_size[cfi] > limit && M.funcs[cfi].flags & FN_ALWAYSINLINE == 0
+           && o_ins[c].flags & IF_ALWAYSINLINE_CALL == 0 { continue; }
+        if o_ins[c].flags & IF_VARARG != 0 && M.funcs[cfi].flags & FN_VARARG == 0 { continue; }
         inline_call(c, cfi);
         size += fn_size[cfi];
         fn_calls[cfi]--;
@@ -188,15 +205,292 @@ fn inline_calls() -> bool {
     return any;
 }
 
+// The arguments of call i match callee c's parameters (a variadic callee:
+// at least as many; the extra ones are dropped).
+fn inl_args_ok(i: u32, c: u32) -> bool {
+    let I = o_ins[i];
+    let F = M.funcs[c];
+    if F.flags & FN_VARARG != 0 { return I.c >= F.n_args; }
+    return I.c == F.n_args;
+}
+
+// LLVM's threshold for inlining callee c into the function being
+// optimized (in GIR instructions).
+fn inl_threshold(c: u32) -> u32 {
+    let F = M.funcs[c];
+    var t: u32 = if opt_lv >= 3 { 50 } else { 45 };
+    if F.flags & FN_INLINEHINT != 0 { t = 65; }
+    if F.flags & FN_COLD != 0 && t > 9 { t = 9; }
+    let cf = o_f.flags;
+    if cf & FN_MINSIZE != 0 && t > 5 { t = 5; }
+    else if cf & FN_OPTSIZE != 0 && t > 15 { t = 15; }
+    return t;
+}
+
+// The state of a value in the callee during the cost evaluation.
+fn ic_get(v: u32, F2: Func) -> u8, u64, u32 {
+    let k = gir_kind(v);
+    if k == GIR_V_INST {
+        let x = gir_idx(v) - F2.first_inst;
+        if x >= F2.n_inst { return IC_UNK, 0, 0; }
+        return ic_st[x], ic_val[x], ic_root[x];
+    }
+    if k == GIR_V_ARG {
+        let a = gir_idx(v);
+        if a >= ic_arg_st.len { return IC_UNK, 0, 0; }
+        return ic_arg_st[a], ic_arg_val[a], a;
+    }
+    if k == GIR_V_CONST {
+        let ok, x = ci(v);
+        if ok { return IC_CONST, x, 0; }
+    }
+    return IC_UNK, 0, 0;
+}
+// A use of v that is not a load/store address or a constant GEP base: the
+// SROA root it is based on is no longer SROA-able.
+fn ic_escape(v: u32, F2: Func) {
+    let s, x, r = ic_get(v, F2);
+    if s != IC_SROA { return; }
+    let k = if r & IC_AL != 0 { ic_arg_st.len as! u32 + (r & ~IC_AL) } else { r };
+    if k < ic_sroa_ok.len { ic_sroa_ok[k] = 0; }
+}
+fn ic_ok(r: u32) -> bool {
+    let k = if r & IC_AL != 0 { ic_arg_st.len as! u32 + (r & ~IC_AL) } else { r };
+    return k < ic_sroa_ok.len && ic_sroa_ok[k] != 0;
+}
+
+// The caller value v, if it is (a constant GEP of) an alloca of the caller.
+fn inl_is_alloca_ptr(v0: u32) -> bool {
+    var v = res(v0);
+    var n = 0;
+    while is_inst(v) && n < 8 {
+        let I = o_ins[v];
+        if I.op == GIR_ALLOCA { return true; }
+        if I.op != GIR_GEP || I.c != 0 { return false; }
+        v = res(I.a);
+        n++;
+    }
+    return false;
+}
+
+// Whether inlining call i of callee c pays by LLVM's cost model.
+fn inl_profitable(i: u32, c: u32) -> bool {
+    let F = M.funcs[c];
+    let F2 = x_funcs[xb_f + c];
+    let C = o_ins[i];
+    var thr: u32 = inl_threshold(c);
+    let once = F.flags & FN_INTERNAL != 0 && fn_calls[c] == 1 && fn_addr[c] == 0
+               && (M.gcomdat.len == 0 || M.gcomdat[F.global] == GIR_NONE);
+    // the call site: its arguments
+    ic_arg_st.clear();
+    ic_arg_val.clear();
+    ic_sroa_ok.clear();
+    for k in 0..F2.n_args {
+        let v = res(o_ops[C.b + 2 * k]);
+        let ok, x = ci(v);
+        if ok {
+            ic_arg_st.push(IC_CONST);
+            ic_arg_val.push(x);
+        } else if inl_is_alloca_ptr(v) {
+            ic_arg_st.push(IC_SROA);
+            ic_arg_val.push(0);
+        } else {
+            ic_arg_st.push(IC_UNK);
+            ic_arg_val.push(0);
+        }
+        ic_sroa_ok.push(1);
+    }
+    let n = F2.n_inst;
+    if ic_st.len < n {
+        ic_st.resize(n, 0);
+        ic_val.resize(n, 0);
+        ic_root.resize(n, 0);
+    }
+    // the callee's allocas are SROA roots too (by instruction position)
+    for x in 0..n {
+        ic_sroa_ok.push(1);
+        ic_st[x] = IC_UNK;
+    }
+    // pass 1, layout order: constants and SROA pointers
+    for x in 0..n {
+        let I = x_insts[xb_i + F2.first_inst + x];
+        let op: u32 = I.op;
+        var st: u8 = IC_UNK;
+        var val: u64 = 0;
+        var root: u32 = 0;
+        if op == GIR_ALLOCA {
+            st = IC_SROA;
+            root = IC_AL | x;
+        } else if op == GIR_GEP {
+            let sa, va, ra = ic_get(I.a, F2);
+            if sa == IC_SROA && I.c == 0 { st = IC_SROA; root = ra; }
+            else {
+                ic_escape(I.a, F2);
+                for k in 0..I.c { ic_escape(x_opnds[xb_o + I.b + 2 + 2 * k], F2); }
+            }
+        } else if op == GIR_LOAD {
+            // (the address is fine)
+        } else if op == GIR_STORE {
+            ic_escape(I.a, F2);
+        } else if op >= GIR_ADD && op <= GIR_ASHR && int_ty(I.ty) && bits_of(I.ty) <= 64 {
+            let sa, va, ra = ic_get(I.a, F2);
+            let sb, vb, rb = ic_get(I.b, F2);
+            if sa == IC_CONST && sb == IC_CONST {
+                let ok, r = fold_bin(op, bits_of(I.ty), va, vb);
+                if ok { st = IC_CONST; val = r; }
+            }
+        } else if op == GIR_ICMP && int_ty(I.aux) && bits_of(I.aux) <= 64 {
+            let sa, va, ra = ic_get(I.a, F2);
+            let sb, vb, rb = ic_get(I.b, F2);
+            if sa == IC_CONST && sb == IC_CONST {
+                st = IC_CONST;
+                val = if fold_icmp(I.sub, bits_of(I.aux), va, vb) { 1 } else { 0 };
+            } else {
+                ic_escape(I.a, F2);
+                ic_escape(I.b, F2);
+            }
+        } else if op == GIR_SELECT {
+            let sa, va, ra = ic_get(I.a, F2);
+            if sa == IC_CONST {
+                let s2, v2, r2 = ic_get(if va & 1 != 0 { I.b } else { I.c }, F2);
+                if s2 == IC_CONST { st = IC_CONST; val = v2; }
+            }
+            ic_escape(I.b, F2);
+            ic_escape(I.c, F2);
+        } else if (op == GIR_ZEXT || op == GIR_TRUNC) && int_ty(I.ty) && bits_of(I.ty) <= 64 {
+            let sa, va, ra = ic_get(I.a, F2);
+            if sa == IC_CONST { st = IC_CONST; val = va & wmask(bits_of(I.ty)); }
+        } else if op == GIR_SEXT && int_ty(I.ty) && bits_of(I.ty) <= 64 && int_ty(I.aux) {
+            let sa, va, ra = ic_get(I.a, F2);
+            if sa == IC_CONST { st = IC_CONST; val = (sx(va, bits_of(I.aux)) as! u64) & wmask(bits_of(I.ty)); }
+        } else if op == GIR_MEMCPY || op == GIR_MEMSET {
+            // (constant-size copies of SROA memory are split by SROA)
+        } else if op == GIR_PHI {
+            for k in 0..I.c { ic_escape(x_opnds[xb_o + I.b + 2 * k], F2); }
+        } else if op == GIR_CALL {
+            for k in 0..I.c { ic_escape(x_opnds[xb_o + I.b + 2 * k], F2); }
+        } else if op == GIR_RET {
+            ic_escape(I.a, F2);
+        } else {
+            let m: u32 = if op < GIR_NOPS { OP_VAL[op] } else { 7 };
+            if m & OV_A != 0 { ic_escape(I.a, F2); }
+            if m & OV_B != 0 { ic_escape(I.b, F2); }
+            if m & OV_C != 0 { ic_escape(I.c, F2); }
+        }
+        ic_st[x] = st;
+        ic_val[x] = val;
+        ic_root[x] = root;
+    }
+    // pass 2: the blocks the constants leave reachable
+    let nb = F2.n_blocks;
+    ic_live.clear();
+    ic_live.resize(nb, 0);
+    ic_wl.clear();
+    ic_live[0] = 1;
+    ic_wl.push(0);
+    var nlive: u32 = 0;
+    while ic_wl.len != 0 {
+        let b = ic_wl.pop();
+        nlive++;
+        let B = x_blocks[xb_b + F2.first_block + b];
+        if B.n_inst == 0 { continue; }
+        let T = x_insts[xb_i + B.first_inst + B.n_inst - 1];
+        let op: u32 = T.op;
+        if op == GIR_BR { ic_mark(T.a); }
+        else if op == GIR_CONDBR {
+            let s, v, r = ic_get(T.a, F2);
+            if s == IC_CONST { ic_mark(if v & 1 != 0 { T.b } else { T.c }); }
+            else {
+                ic_mark(T.b);
+                ic_mark(T.c);
+            }
+        } else if op == GIR_SWITCH {
+            let s, v, r = ic_get(T.a, F2);
+            var hit: u32 = NIL;
+            if s == IC_CONST {
+                hit = x_opnds[xb_o + T.b];
+                for k in 0..T.c {
+                    let ok, cv = ci(x_opnds[xb_o + T.b + 1 + 2 * k]);
+                    if ok && cv == v { hit = x_opnds[xb_o + T.b + 2 + 2 * k]; }
+                }
+                ic_mark(hit);
+            } else {
+                ic_mark(x_opnds[xb_o + T.b]);
+                for k in 0..T.c { ic_mark(x_opnds[xb_o + T.b + 2 + 2 * k]); }
+            }
+        } else if op == GIR_INDIRECTBR {
+            for k in 0..T.c { ic_mark(x_opnds[xb_o + T.b + k]); }
+        }
+        if B.n_inst >= 2 {
+            let P = x_insts[xb_i + B.first_inst + B.n_inst - 2];
+            if P.op == GIR_CALL && P.flags & IF_INVOKE != 0 { ic_mark(x_opnds[xb_o + P.b + 2 * P.c]); }
+        }
+    }
+    // pass 3: the cost of the reachable code
+    if nlive == 1 { thr += thr / 2; }          // LLVM's single-block bonus
+    if once { thr += INL_ONCE; }
+    let budget: u32 = thr + 1 + F2.n_args + INL_PENALTY;   // (the call site's own cost goes)
+    var cost: u32 = 0;
+    for b in 0..nb {
+        if ic_live[b] == 0 { continue; }
+        let B = x_blocks[xb_b + F2.first_block + b];
+        for gi in B.first_inst..B.first_inst + B.n_inst {
+            let x = gi - F2.first_inst;
+            let I = x_insts[xb_i + gi];
+            let op: u32 = I.op;
+            if ic_st[x] == IC_CONST { continue; }
+            if op == GIR_PHI || op == GIR_ALLOCA || op == GIR_BR || op == GIR_RET { continue; }
+            if op == GIR_BITCAST || op == GIR_PTRTOINT || op == GIR_INTTOPTR || op == GIR_TRUNC { continue; }
+            if op == GIR_GEP && ic_st[x] == IC_SROA && ic_ok(ic_root[x]) { continue; }
+            if op == GIR_LOAD {
+                let s, v, r = ic_get(I.a, F2);
+                if s == IC_SROA && ic_ok(r) { continue; }
+            }
+            if op == GIR_STORE {
+                let s, v, r = ic_get(I.b, F2);
+                if s == IC_SROA && ic_ok(r) { continue; }
+            }
+            if op == GIR_CONDBR || op == GIR_SWITCH {
+                let s, v, r = ic_get(I.a, F2);
+                if s == IC_CONST { continue; }
+            }
+            cost += if op == GIR_CALL { 1 + INL_PENALTY } else { 1 };
+            if cost > budget && !inl_trace { return false; }
+        }
+    }
+    if inl_trace {
+        let G = M.globals[o_f.global];
+        let H = M.globals[F.global];
+        write_stderr(str("inline? ", M.strtab[G.name..G.name + G.name_len], " <- ", M.strtab[H.name..H.name + H.name_len],
+                         " cost ", cost, " budget ", budget, " size ", fn_size[c], if cost <= budget { " yes" } else { " no" }, "\n"));
+    }
+    return cost <= budget;
+}
+var inl_trace = false;
+fn ic_mark(b: u32) {
+    if b == NIL || b >= ic_live.len || ic_live[b] != 0 { return; }
+    ic_live[b] = 1;
+    ic_wl.push(b);
+}
+
 // Whether the function has a direct call of a function that may be inlined.
 fn inl_any_call() -> bool {
     if o_pinned { return false; }
     for i in 0..o_ins.len {
-        if o_blk[i] == NIL || o_ins[i].op != GIR_CALL { continue; }
+        if o_blk[i] == NIL || o_ins[i].op != GIR_CALL || o_ins[i].flags & IF_NOINLINE_CALL != 0 { continue; }
         let c = callee_of(o_ins[i]);
         if c != NIL && c != o_fi && fn_done[c] != 0 && fn_inl[c] != 0 { return true; }
     }
     return false;
+}
+
+// A copy of sz bytes from src to dst before instruction at (byval
+// arguments): the inline memcpy up to 4096 bytes, else a call of memcpy
+// is not available here, so such callees are not inlined (inl_record).
+fn inl_copy(at: u32, dst: u32, src: u32, sz: u32, al: u32, dbg: u32) {
+    let x = new_inst(Inst { op: GIR_MEMCPY as! u8, sub: 0, flags: 0, ty: GIR_T_VOID as! u16, aux: 0, a: dst, b: src,
+                            c: sz, dbg: dbg });
+    link_before(at, x);
 }
 
 fn inline_call(c: u32, cfi: u32) {
@@ -207,9 +501,20 @@ fn inline_call(c: u32, cfi: u32) {
     let id0: u32 = o_ins.len as! u32;
     // arguments (a signext argument arrives as an i32: back to the parameter's type)
     amap.clear();
-    for k in 0..C.c {
+    for k in 0..F2.n_args {
         var v = res(o_ops[C.b + 2 * k]);
         let pt: u32 = x_opnds[xb_o + F2.args + 2 * k];
+        let aw: u32 = x_opnds[xb_o + F2.args + 2 * k + 1];
+        if aw & ABI_BYVAL != 0 {
+            // byval: the callee works on a copy of its own (an alloca of the
+            // caller, filled where the call was)
+            let sz = abi_size(aw);
+            let al = new_inst(Inst { op: GIR_ALLOCA as! u8, sub: 0, flags: 0, ty: GIR_T_PTR as! u16, aux: 0, a: sz,
+                                     b: abi_align(aw), c: 0, dbg: 0 });
+            link_start(0, al);
+            inl_copy(c, al, v, sz, abi_align(aw), C.dbg);
+            v = al;
+        }
         let vt = otype(v);
         if vt != pt && cls_of(vt) == C_INT && cls_of(pt) == C_INT && bits_of(vt) > bits_of(pt) {
             let x = new_inst(Inst { op: GIR_TRUNC as! u8, sub: 0, flags: 0, ty: pt as! u16, aux: vt as! u16, a: v,

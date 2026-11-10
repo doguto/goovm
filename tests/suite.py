@@ -8,16 +8,17 @@ For every test of the selected corpora:
   g          clang-20 -O0 -g -emit-llvm   -> goovm-llc -> link -> run, verify
   mem2reg    clang-20 -O0 -Xclang -disable-O0-optnone -emit-llvm, opt-20 -passes=mem2reg
              -> goovm-llc -> link -> run, verify
-  O1         clang-20 -O0 -emit-llvm      -> goovm-llc -O1 (Goose middle-end, global RA) -> link -> run
-  O1-g       clang-20 -O0 -g -emit-llvm   -> goovm-llc -O1 -> link -> run
-  O2ir       clang-20 -O2 -emit-llvm      -> goovm-llc -O1 (LLVM's middle-end, Goose back-end)
-  O2nv       the same with -fno-vectorize -fno-slp-vectorize (the exporter rejects much of the
-             vectorizers' output)
-  cc-O1      goovm-cc -O1 (opt-in, with --cc)
+  O1, O2, O3, Os, Oz (milestone E2)
+             clang-20 -O<l> -Xclang -disable-llvm-passes -emit-llvm (the IR LLVM's own
+             pipeline starts from) -> goovm-llc -O<l> (Goose middle-end, global RA) -> link -> run
+  O1-g, O2-g, O3-g, Os-g, Oz-g   the same with -g
+  O2ir       clang-20 -O2 -emit-llvm      -> goovm-llc -O2 (LLVM's middle-end, Goose back-end)
+  O2nv       the same with -fno-vectorize -fno-slp-vectorize
+  cc-O1 .. cc-Oz, cc-O1-g .. cc-Oz-g   goovm-cc -O<l> [-g] (opt-in, with --cc)
 
-The O1, O1-g, O2ir and cc-O1 variants run only the tests that pass when built
-with plain clang-20 -O1 (a second baseline, which also excludes programs whose
-undefined behaviour shows at -O1).
+An optimizing variant at level <l> runs only the tests that pass when built
+with plain clang-20 -O<l> (a second baseline per level, which also excludes
+programs whose undefined behaviour shows at that level).
 
 Verification follows the llvm-test-suite conventions:
   - SingleSource/MultiSource ("traditional output"): stdout and stderr go to one
@@ -89,13 +90,27 @@ def set_target(t):
 VARIANTS = ["O0", "g", "mem2reg"]
 # Opt-in variants: "cc" builds each file with goovm-cc (clang front end in-process
 # + the Goose back-end) instead of clang -emit-llvm + goovm-llc.
-EXTRA_VARIANTS = ["cc", "cc-g", "cc-O1"]
-# Optimizing variants (milestone E1): compared against the clang -O1 baseline.
-OPT_VARIANTS = ["O1", "O1-g", "O2ir", "O2nv"]
+LEVELS = ["O1", "O2", "O3", "Os", "Oz"]
+EXTRA_VARIANTS = ["cc", "cc-g"] + [f"cc-{lv}{g}" for lv in LEVELS for g in ("", "-g")]
+# Optimizing variants (milestones E1, E2): compared against the clang baseline at their level.
+OPT_VARIANTS = [f"{lv}{g}" for lv in LEVELS for g in ("", "-g")] + ["O2ir", "O2nv"]
 
 
 def opt_variant(v):
-    return v in OPT_VARIANTS or v == "cc-O1"
+    return variant_level(v) != "O0"
+
+
+def variant_level(v):
+    """The optimization level of a variant: O0 for the -O0 ones, else O1, O2, O3, Os or Oz."""
+    if v in ("O2ir", "O2nv"):
+        return "O2"
+    w = v[3:] if v.startswith("cc-") else v
+    w = w[:-2] if w.endswith("-g") else w
+    return w if w in LEVELS else "O0"
+
+
+def variant_g(v):
+    return v in ("g", "cc-g") or v.endswith("-g")
 
 
 class Test:
@@ -648,10 +663,13 @@ def emit_bc(t, s, i, wd, variant, args):
     base = os.path.join(wd, obj_name(s, i) + "." + variant)
     bc = base + ".bc"
     cc = [compiler(t, s, args)] + TFLAGS
-    if variant in ("O0", "O1"):
+    if variant == "O0":
         cmd = cc + ["-O0"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
-    elif variant in ("g", "O1-g"):
+    elif variant == "g":
         cmd = cc + ["-O0", "-g"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+    elif variant_level(variant) in LEVELS and variant not in ("O2ir", "O2nv"):
+        cmd = (cc + ["-" + variant_level(variant), "-Xclang", "-disable-llvm-passes"]
+               + (["-g"] if variant_g(variant) else []) + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc])
     elif variant == "O2ir":
         cmd = cc + ["-O2"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     elif variant == "O2nv":
@@ -687,8 +705,8 @@ def build_goovm_cc(t, wd, variant, args, info):
     for i, s in enumerate(t.srcs):
         o = os.path.join(wd, obj_name(s, i) + "." + variant + ".o")
         cmd = ([args.cc, "--backend=goose"] + (["--fallback"] if args.fallback else [])
-               + (["-O1"] if variant == "cc-O1" else ["-O0"])
-               + (["-g"] if variant == "cc-g" else []) + TFLAGS + t.flags(s) + ["-c", s, "-o", o])
+               + ["-" + variant_level(variant)]
+               + (["-g"] if variant_g(variant) else []) + TFLAGS + t.flags(s) + ["-c", s, "-o", o])
         r = sh(cmd, timeout=600)
         err = r.stderr.decode(errors="replace")
         if r.returncode == 2:
@@ -698,7 +716,7 @@ def build_goovm_cc(t, wd, variant, args, info):
         if "goovm-cc: falling back to LLVM:" in err:
             info.setdefault("fallback", []).append(
                 f"{os.path.basename(s)}: {err.split('goovm-cc: falling back to LLVM:', 1)[1].strip().splitlines()[0]}")
-        if variant == "cc-g":
+        if variant_g(variant):
             verify_dwarf(o, s, args, info)
         objs.append(o)
     r = sh([linker(t, args)] + LFLAGS + objs + t.ldflags + ["-o", exe])
@@ -716,7 +734,7 @@ def build_goovm(t, wd, variant, args, info):
         base, bc = emit_bc(t, s, i, wd, variant, args)
         o = base + ".o"
         cmd = ([args.goovm, "--backend=goose"] + (["--fallback"] if args.fallback else [])
-               + (["-O1"] if variant in OPT_VARIANTS else []) + [bc, "-o", o])
+               + (["-" + variant_level(variant)] if opt_variant(variant) else []) + [bc, "-o", o])
         r = sh(cmd, timeout=600)
         err = r.stderr.decode(errors="replace")
         if r.returncode == 2:
@@ -726,7 +744,7 @@ def build_goovm(t, wd, variant, args, info):
         if "goovm-llc: fallback:" in err:
             info.setdefault("fallback", []).append(
                 f"{os.path.basename(s)}: {err.split('goovm-llc: fallback:', 1)[1].strip().splitlines()[0]}")
-        if variant in ("g", "O1-g"):
+        if variant_g(variant):
             verify_dwarf(o, s, args, info)
         objs.append(o)
     r = sh([linker(t, args)] + LFLAGS + objs + t.ldflags + ["-o", exe])
@@ -790,11 +808,10 @@ def do_test(t, args, baseline_cache):
     if b["status"] != "pass" or args.baseline_only:
         return res
     tmo = max(60.0, 20 * b["time"]) if t.timeout is None else max(t.timeout, 20 * b["time"])
-    b1 = None
-    if any(opt_variant(v) for v in args.variants):
-        ck, b1 = baseline_at(t, wd, args, baseline_cache, "O1")
-        res["baseline_O1"] = b1
-        res["baseline_O1_key"] = ck
+    blv = {}
+    for lv in sorted({variant_level(v) for v in args.variants if opt_variant(v)}):
+        ck, blv[lv] = baseline_at(t, wd, args, baseline_cache, lv)
+        res.setdefault("baselines_lv", {})[ck] = blv[lv]
     if args.time_run:
         exe = os.path.join(wd, "base.exe")
         if not os.path.exists(exe):
@@ -810,7 +827,7 @@ def do_test(t, args, baseline_cache):
                 pass
     for v in args.variants:
         info = {}
-        if opt_variant(v) and b1["status"] != "pass":
+        if opt_variant(v) and blv[variant_level(v)]["status"] != "pass":
             info["status"] = "excluded"
             res[v] = info
             continue
@@ -864,8 +881,8 @@ def report(results, tests, args):
         lines.append(row)
     lines.append("")
     lines.append("pass includes fallback; fallback counts tests in which at least one file was compiled by "
-                 "LLVM's code generator (goovm-llc --fallback). The optimizing variants (O1, O1-g, O2ir, cc-O1) "
-                 "run the tests that also pass when built with plain clang-20 -O1 (\"of N\").")
+                 "LLVM's code generator (goovm-llc --fallback). An optimizing variant (O1, O2-g, cc-O3, O2ir, ...) "
+                 "runs the tests that also pass when built with plain clang-20 at its level (\"of N\").")
     if args.verify_dwarf:
         nv = sum(r.get(v, {}).get("dwarf_verified", 0) for r in results.values() for v in args.variants)
         lines.append("")
@@ -877,10 +894,10 @@ def report(results, tests, args):
         rk = {lv: ("base_run" if lv == "O0" else f"base_run_{lv}") for lv in refs}
 
         def ref_of(v):
-            # the optimizing variants against clang -O1 when it is timed
-            return "O1" if opt_variant(v) and "O1" in refs else "O0"
-        lines.append(f"## Run times (best of {args.time_run}, seconds; each variant's ratio to clang at its level: "
-                     f"-O1 for the optimizing variants when timed, else -O0)")
+            # an optimizing variant against clang at its level when that is timed
+            return variant_level(v) if variant_level(v) in refs else "O0"
+        lines.append(f"## Run times (best of {args.time_run}, seconds; each variant's ratio to clang at its level "
+                     f"when that is timed, else to clang -O0)")
         lines.append("")
         hdr = "| test |" + "".join(f" clang -{lv} |" for lv in refs) + \
               "".join(f" {v} | {v} / clang -{ref_of(v)} |" for v in args.variants)
@@ -1025,8 +1042,8 @@ def main():
             done += 1
             if "baseline" in r:
                 baseline_cache[t.id] = r["baseline"]
-            if "baseline_O1" in r:
-                baseline_cache[r["baseline_O1_key"]] = r["baseline_O1"]
+            for ck, b in r.get("baselines_lv", {}).items():
+                baseline_cache[ck] = b
             st = [f"{v}:{r[v]['status']}" for v in args.variants if v in r]
             bad = [s for s in st if not s.endswith((":pass", ":excluded"))]
             if bad or r.get("baseline", {}).get("status") not in ("pass", None):

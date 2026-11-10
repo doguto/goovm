@@ -280,7 +280,18 @@ def files_mode(args, files, flags):
             print(f"split {parity}{order}: {'ok' if same else 'DIFFERENT OUTPUT'}")
             if not same:
                 bad += 1
-    shutil.rmtree(wd, ignore_errors=True)
+                el = exp.stdout.decode(errors="replace").splitlines()
+                gl = got.stdout.decode(errors="replace").splitlines()
+                for i in range(max(len(el), len(gl))):
+                    a = el[i] if i < len(el) else "<eof>"
+                    b = gl[i] if i < len(gl) else "<eof>"
+                    if a != b:
+                        print(f"  line {i + 1}: expected {a!r}, got {b!r} (exit {exp.returncode} vs {got.returncode})")
+                        break
+    if args.keep:
+        print(f"kept {wd}")
+    else:
+        shutil.rmtree(wd, ignore_errors=True)
     return 1 if bad else 0
 
 

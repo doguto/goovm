@@ -1301,6 +1301,7 @@ fn ab_rehash() {
 
 // The DIEs to write: a lexical block without code is dropped with the
 // variables and labels in it; other DIEs go to the nearest kept ancestor.
+var dk_gone: u8[>..] = [];
 fn mark_dies() {
     let n = dtab_n();
     dk_keep.clear();
@@ -1309,8 +1310,28 @@ fn mark_dies() {
     dk_par.resize(n, GIR_NONE);
     dk_kids.clear();
     dk_kids.resize(n, 0);
+    dk_gone.clear();
+    dk_gone.resize(n, 0);
     for k in 0..n {
         let D = die_at(k);
+        if D.parent != GIR_NONE && dk_gone[D.parent] != 0 {
+            // (in the subtree of a function without code)
+            dk_keep[k] = 0;
+            dk_gone[k] = 1;
+            continue;
+        }
+        if D.tag == DW_TAG_subprogram {
+            // the definition of a function that is not emitted (an
+            // available_externally body, E2) goes with its subtree
+            for q in D.attrs..D.attrs + D.n_attrs {
+                let A = attr_at(q);
+                if A.form == DF_PC && M.funcs[A.val].flags & FN_AVAILEXT != 0 {
+                    dk_keep[k] = 0;
+                    dk_gone[k] = 1;
+                }
+            }
+            if dk_gone[k] != 0 { continue; }
+        }
         if D.parent != GIR_NONE {
             let p: i64 = D.parent;
             dk_par[k] = if dk_keep[p] != 0 { D.parent } else { dk_par[p] };
@@ -1333,7 +1354,7 @@ fn mark_dies() {
             let A = attr_at(q);
             if A.form != DW_FORM_ref4 || A.val >= n as! u64 { continue; }
             let t: i64 = A.val as! i64;
-            if dk_keep[t] == 0 && die_at(t).tag != DW_TAG_lexical_block { dk_keep[t] = 2; }
+            if dk_keep[t] == 0 && dk_gone[t] == 0 && die_at(t).tag != DW_TAG_lexical_block { dk_keep[t] = 2; }
         }
     }
     for k in 0..n {

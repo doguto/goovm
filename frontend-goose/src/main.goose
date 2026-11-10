@@ -386,11 +386,15 @@ fn options() {
         else if s == "-Wno-implicit-function-declaration" || s == "-Wno-error=implicit-function-declaration" { opt_wno_implicit_fn = true; }
         else if s == "-Wno-implicit-int" || s == "-Wno-error=implicit-int" { opt_wno_implicit_int = true; }
         else if s == "-Wall" || s == "-W" { quiet_warnings = false; }
-        else if s == "-O0" { opt_optimize = 0; }
+        else if s == "-O0" { opt_optimize = 0; opt_os = false; gen::opt_gir_level = 0; }
         else if starts_with(s, "-O") {
+            // GIR opt_level (E2): the level, the size level in bits 8..9
             opt_optimize = 1;
-            if s == "-Os" || s == "-Oz" { opt_os = true; }
+            opt_os = s == "-Os" || s == "-Oz";
+            gen::opt_gir_level = if s == "-O2" { 2 } else if s == "-Os" { 2 | 1 << 8 } else if s == "-Oz" { 2 | 2 << 8 }
+                                 else if s == "-O" || s == "-O1" || s == "-Og" { 1 } else { 3 };
         }
+        else if s == "-fno-inline" { gen::opt_no_inline = true; }
         else if s == "-fno-exceptions" { opt_exceptions = false; }
         else if s == "-fexceptions" || s == "-fcxx-exceptions" { opt_exceptions = true; }
         else if s == "-fno-cxx-exceptions" { opt_exceptions = false; }
@@ -593,7 +597,7 @@ fn main() {
                     write_stdout(o);
                 }
             } else {
-                if opt_optimize > 0 { gen::m_header[0].r0 = 1; }   // -O1..: the back-end's middle-end (GIR opt_level)
+                gen::m_header[0].r0 = gen::opt_gir_level;   // -O1..: the back-end's middle-end (GIR opt_level)
                 let obj = gen::codegen();
                 let t4 = clock_ns();
                 var path: u8[>..] = [];

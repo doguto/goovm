@@ -293,6 +293,7 @@ recursive fn mk_call_cx(callee: u32, mark: i64, loc: u32) -> u32 {
         return build_call(f, obj, mark, loc, nodes[callee].op != 0);
     }
     if cg_on && ck == N_CXX && nodes[callee].op == 5 { return cg_memfn_call(callee, mark, loc); }
+    if cg_on && ck == N_CXX && nodes[callee].op == 9 { return cg_dtor_call(callee, mark, loc); }
     if is_opq(callee) { return opaque_node(loc); }
     let t = nodes[callee].ty;
     if is_record(t) {
@@ -407,7 +408,9 @@ recursive fn cast_to_class(t: u32, e: u32, loc: u32) -> u32 { return 0; }
 recursive fn construct_class(t: u32, mark: i64, loc: u32, braces: bool) -> u32 {
     let count = nscratch.len - mark;
     let start = commit_list(mark);
-    return node_v(N_CTOR, 0, unqual(t), 0, 0, count, loc, start);
+    // code generation: T{args} of an aggregate is aggregate initialization (op 2)
+    let op = if cg_on && braces && is_complete(t) && is_aggregate_class(rec_of(t)) { 2 } else { 0 };
+    return node_v(N_CTOR, op, unqual(t), 0, 0, count, loc, start);
 }
 
 // T x(args).
