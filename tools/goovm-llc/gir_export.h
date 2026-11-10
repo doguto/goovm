@@ -54,6 +54,12 @@ struct GirUnsupported {
 // tables.
 void gir_export(const llvm::Module &m, GirTables &out, size_t size_hint = 0);
 
+// Rewrites what GIR has no form for in IR that skipped LLVM's pipeline
+// (clang -O1.. -Xclang -disable-llvm-passes, goovm-cc -O1..): the matrix
+// intrinsics, which LLVM's pipeline lowers at every level
+// (LowerMatrixIntrinsics). Call before gir_export.
+void gir_prepare(llvm::Module &m);
+
 // Prints the tables in a readable text form (for debugging and for checking
 // another back-end's reading of the format).
 void gir_dump(const GirModule &m, std::FILE *f);

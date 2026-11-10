@@ -63,6 +63,8 @@ var o_fi: u32 = 0;               // funcs index of the function being optimized
 var o_f: Func;                   // its record (input)
 var o_pinned = false;            // its blocks are named elsewhere (block addresses): no CFG changes
 var o_dbg = false;               // the module has debug information entries
+var opt_lv: u32 = 1;             // the optimization level (GIR opt_level bits 0..7: 1, 2, 3)
+var opt_sz: u32 = 0;             // the size level (bits 8..9: 1 = -Os, 2 = -Oz)
 
 // Value-operand masks per opcode: fields a, b, c, and the runs.
 let OV_A: u8 = 1;
@@ -664,6 +666,9 @@ fn opt_module() {
     undef_c.clear();
     build_type_rc();
     o_dbg = M.dies.len != 0;
+    opt_lv = M.header[0].r0 & 0xFF;
+    if opt_lv > 3 { opt_lv = 3; }
+    opt_sz = (M.header[0].r0 >> 8) & 3;
     fn_pinned.clear();
     fn_pinned.resize(M.funcs.len, 0);
     for d in M.drelocs {
@@ -680,8 +685,10 @@ fn opt_module() {
     }
     opt_off("");    // (reads GOOVM_OPT)
     opt_verify_on = find(opt_env, "verify") >= 0;
+    inl_trace = find(opt_env, "inltrace") >= 0;
     inl_scan();
     gp_scan();
+    aa_module_init();
     sroa_init();
     opt_order();
     for fi in fn_order { opt_function(fi); }
@@ -695,6 +702,7 @@ fn opt_module() {
             x_funcs[xb_f + fi].flags |= FN_DEAD;
         }
     }
+    isconst_lower();
     remap_dies();
     if opt_dump_on() { dump_module(); }
     // (field by field: the other tables stay the host's)
@@ -706,6 +714,22 @@ fn opt_module() {
     M.asms = x_asms[xb_a..];
     M.dies = x_dies[xb_d..];
     M.dattrs = x_dattrs[xb_t..];
+}
+
+// The is.constant tests left after all optimization (their operand did not
+// become a constant) are false: each becomes `or i1 0, 0` (and a test of a
+// constant `or i1 1, 0`), which code generation handles.
+fn isconst_lower() {
+    for k in xb_i..x_insts.len {
+        if x_insts[k].op != GIR_ISCONST { continue; }
+        let a = x_insts[k].a;
+        let kd = gir_kind(a);
+        let v: u64 = if kd == GIR_V_CONST || kd == GIR_V_GLOBAL { 1 } else { 0 };
+        x_insts[k].op = GIR_OR as! u8;
+        x_insts[k].a = mk_const(GIR_T_I1, v, 0);
+        x_insts[k].b = mk_const(GIR_T_I1, 0, 0);
+        x_insts[k].c = 0;
+    }
 }
 
 // The order functions are optimized in: callees before callers (a
@@ -756,6 +780,12 @@ fn opt_function(fi: u32) {
     oir_reset();
     amap_on = false;
     oir_load(M.insts, M.blocks, o_f, true);
+    if o_f.flags & FN_OPTNONE != 0 {
+        // optnone: not optimized (and -O0 code generation, cg.goose fn_opt)
+        inl_record();
+        oir_store(fi);
+        return;
+    }
     if !opt_off("m2r") {
         ensure_cfg();
         if remove_unreachable() { ensure_cfg(); }
@@ -767,6 +797,7 @@ fn opt_function(fi: u32) {
         if mem2reg() { simplify_phis(); }
     }
     opt_round();
+    if !opt_off("ldel") && loop_delete() { opt_round(); }
     if !opt_off("tre") && tail_recursion() { opt_round(); }
     if !opt_off("inline") && inl_any_call() {
         ensure_cfg();
@@ -784,6 +815,7 @@ fn opt_function(fi: u32) {
             }
             if mem2reg() { simplify_phis(); }
             opt_round();
+            if !opt_off("ldel") && loop_delete() { opt_round(); }
         }
     }
     if !opt_off("lrot") && rotate_loops() {
@@ -793,6 +825,21 @@ fn opt_function(fi: u32) {
         if mem2reg() { simplify_phis(); }
     }
     opt_round();
+    if !opt_off("unroll") && loop_unroll() {
+        resolve_all();
+        ensure_cfg();
+        simplify_phis();
+        opt_round();
+        if !opt_off("sroa") {
+            build_uses();
+            if sroa() {
+                resolve_all();
+                build_uses();
+                if mem2reg() { simplify_phis(); }
+                opt_round();
+            }
+        }
+    }
     if !opt_off("licm") && licm() {
         if !opt_off("iv") && indvars() { licm(); }
         opt_round();
@@ -808,7 +855,8 @@ fn opt_function(fi: u32) {
         ensure_cfg();
         rotate_layout();
     }
-    if opt_verify_on { opt_verify(); }
     inl_record();
+    if !opt_off("cgp") { sink_addrs(); }
+    if opt_verify_on { opt_verify(); }
     oir_store(fi);
 }

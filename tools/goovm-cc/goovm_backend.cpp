@@ -30,6 +30,8 @@ int goovm_compile_module(llvm::Module &mod, std::vector<uint8_t> &obj, std::stri
     auto t0 = clk::now();
     GirTables tables;
     try {
+        if (opt_level) gir_prepare(mod);
+        tables.header.opt_level = opt_level;
         gir_export(mod, tables);
     } catch (const GirUnsupported &u) {
         err = u.msg;
