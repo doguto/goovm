@@ -280,8 +280,18 @@ enum GirOp {
                        /*   llvm.is.constant, __builtin_constant_p): the     */
                        /*   middle-end folds it after inlining; never reaches */
                        /*   code generation                                  */
+    GIR_OBJSIZE,       /* a = b = c = a pointer; ty = i64 or i32; sub =      */
+                       /*   GIR_OBJSIZE_* : the bytes from the pointer to    */
+                       /*   the end of its object (LLVM llvm.objectsize,     */
+                       /*   __builtin_object_size): the middle-end folds it  */
+                       /*   once the object is known, else it is unknown (-1, */
+                       /*   0 for MIN); never reaches code generation        */
     GIR_OP_COUNT
 };
+
+#define GIR_OBJSIZE_MIN      1u   /* the minimum (unknown: 0), else the maximum (-1) */
+#define GIR_OBJSIZE_NULLUNK  2u   /* null is of unknown size (else 0 bytes)          */
+#define GIR_OBJSIZE_DYNAMIC  4u   /* may be computed at run time                     */
 
 enum GirPred {         /* ICMP predicates */
     GIR_EQ = 0, GIR_NE, GIR_UGT, GIR_UGE, GIR_ULT, GIR_ULE,

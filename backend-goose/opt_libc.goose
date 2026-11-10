@@ -70,7 +70,12 @@ let LB_TRUNC: u32 = 44;
 let LB_ROUND: u32 = 45;
 let LB_RINT: u32 = 46;
 let LB_NEARBYINT: u32 = 47;
-let LB_N: u32 = 54;
+// (allocation functions, for GIR_OBJSIZE: LLVM's MemoryBuiltins table)
+let LB_MALLOC: u32 = 54;         // malloc, valloc, operator new (n)
+let LB_CALLOC: u32 = 55;         // calloc (n, m)
+let LB_REALLOC: u32 = 56;        // realloc, reallocf (p, n)
+let LB_ALIGNED: u32 = 57;        // aligned_alloc, memalign (a, n)
+let LB_N: u32 = 58;
 
 var lb_kind: u8[>..] = [];      // per global: LB_*, 0
 var lb_sym: u32[>..] = [];      // per LB_*: a global of that name, NIL
@@ -130,6 +135,14 @@ fn lb_name(nm: const u8[:]) -> u32 {
     if nm == "roundf" { return LB_ROUND + 6; }
     if nm == "rintf" { return LB_RINT + 6; }
     if nm == "nearbyintf" { return LB_NEARBYINT + 6; }
+    if nm == "malloc" || nm == "valloc" || nm == "_Znwm" || nm == "_Znam" || nm == "_ZnwmRKSt9nothrow_t" ||
+       nm == "_ZnamRKSt9nothrow_t" || nm == "_ZnwmSt11align_val_t" || nm == "_ZnamSt11align_val_t" ||
+       nm == "_ZnwmSt11align_val_tRKSt9nothrow_t" || nm == "_ZnamSt11align_val_tRKSt9nothrow_t" {
+        return LB_MALLOC;
+    }
+    if nm == "calloc" { return LB_CALLOC; }
+    if nm == "realloc" || nm == "reallocf" { return LB_REALLOC; }
+    if nm == "aligned_alloc" || nm == "memalign" { return LB_ALIGNED; }
     return 0;
 }
 
@@ -320,6 +333,8 @@ fn simp_libcall(i: u32) -> u32 {
     if k == LB_STRLEN && n == 1 && int_ty(t) {
         return lb_strlen_of(i, lb_arg(I, 0), t, 0);
     }
+    let fo = lb_fortified(i, k);
+    if fo != NIL { return fo; }
     if k == LB_STRNLEN && n == 2 && int_ty(t) {
         let ok, d, l = lb_str(lb_arg(I, 0));
         let kn, m = ci(lb_arg(I, 1));
@@ -641,6 +656,66 @@ fn lb_call4(at: u32, k: u32, ty: u32, a0: u32, a1: u32, a2: u32, a3: u32) -> u32
     link_before(at, c);
     return c;
 }
+// A __*_chk call whose check cannot fail (LLVM's FortifiedLibCallSimplifier,
+// isFortifiedCallFoldable): the object size is unknown (-1) or at least the
+// size argument (or the constant source string's length + 1), and the flag
+// (the printf family) is 0. It becomes the unchecked function without the
+// flag and object size arguments; NIL: not foldable.
+fn lb_fortified(i: u32, k: u32) -> u32 {
+    var plain: u32 = 0;
+    var os: u32 = NIL;       // operand positions: object size, size, source string, flag
+    var sz: u32 = NIL;
+    var st: u32 = NIL;
+    var fg: u32 = NIL;
+    if k == LB_MEMCPY_CHK { plain = LB_MEMCPY; os = 3; sz = 2; }
+    else if k == LB_MEMMOVE_CHK { plain = LB_MEMMOVE; os = 3; sz = 2; }
+    else if k == LB_MEMSET_CHK { plain = LB_MEMSET; os = 3; sz = 2; }
+    else if k == LB_STRCPY_CHK { plain = LB_STRCPY; os = 2; st = 1; }
+    else if k == LB_STPCPY_CHK { plain = LB_STPCPY; os = 2; st = 1; }
+    else if k == LB_STRCAT_CHK { plain = LB_STRCAT; os = 2; }
+    else if k == LB_STRNCPY_CHK { plain = LB_STRNCPY; os = 3; sz = 2; }
+    else if k == LB_STRNCAT_CHK { plain = LB_STRNCAT; os = 3; }
+    else if k == LB_SNPRINTF_CHK { plain = LB_SNPRINTF; os = 3; sz = 1; fg = 2; }
+    else if k == LB_SPRINTF_CHK { plain = LB_SPRINTF; os = 2; fg = 1; }
+    else if k == LB_VSNPRINTF_CHK { plain = LB_VSNPRINTF; os = 3; sz = 1; fg = 2; }
+    else if k == LB_VSPRINTF_CHK { plain = LB_VSPRINTF; os = 2; fg = 1; }
+    else { return NIL; }
+    let I = o_ins[i];
+    if I.c <= os || lb_sym[plain] == NIL { return NIL; }
+    if fg != NIL {
+        let kf, f = ci(lb_arg(I, fg));
+        if !kf || f != 0 { return NIL; }
+    }
+    let ko, o = ci(lb_arg(I, os));
+    if !ko { return NIL; }
+    if o != wmask(bits_of(otype(lb_arg(I, os)))) {
+        if sz != NIL {
+            let kn, m = ci(lb_arg(I, sz));
+            if !kn || m > o { return NIL; }
+        } else if st != NIL {
+            let ok, d, l = lb_str(lb_arg(I, st));
+            if !ok || (l + 1) as! u64 > o { return NIL; }
+        } else {
+            return NIL;
+        }
+    }
+    // the call without the flag and the object size
+    let drop2: u32 = if fg != NIL { fg } else { os };
+    let s = new_run(2 * (I.c - (if fg != NIL { 2 } else { 1 })));
+    var w: u32 = 0;
+    for q in 0..I.c {
+        if q == os || q == drop2 { continue; }
+        o_ops[s + 2 * w] = o_ops[I.b + 2 * q];
+        o_ops[s + 2 * w + 1] = o_ops[I.b + 2 * q + 1];
+        w++;
+    }
+    let c = new_inst(Inst { op: GIR_CALL as! u8, sub: 0, flags: I.flags & IF_VARARG, ty: I.ty, aux: I.aux,
+                            a: GIR_V_GLOBAL << 30 | lb_sym[plain], b: s, c: w, dbg: I.dbg });
+    link_before(i, c);
+    if I.ty == GIR_T_VOID { unlink(i); return NIL; }
+    return c;
+}
+
 // Whether the value of instruction i is used (a slow scan: only for the
 // rare printf rewrites).
 fn nuses_any(i: u32) -> bool {
@@ -652,4 +727,270 @@ fn nuses_any(i: u32) -> bool {
         if used { return true; }
     }
     return false;
+}
+
+// ------------------------------------------------------------ objectsize
+// (E2) GIR_OBJSIZE (llvm.objectsize, __builtin_object_size and
+// __builtin_dynamic_object_size at -O1 and above): the bytes from the
+// pointer to the end of its object, folded once the object is known (after
+// inlining, as LLVM's InstCombine does); what is left after all functions
+// are optimized is unknown (opt.goose, isconst_refine: -1, or 0 for the
+// minimum), as LLVM's LowerConstantIntrinsics. Objects: allocas, defined
+// variables that cannot be replaced (not weak or common), byval arguments,
+// the results of the allocation functions with constant (or, dynamic,
+// any) sizes, null (0 bytes unless null is unknown); selects and PHIs of
+// them (the larger, or the smaller for the minimum). An offset outside the
+// object leaves 0 bytes. Dynamic: run-time sizes and GEP offsets.
+let OS_MIN: u32 = 1;
+let OS_NULLUNK: u32 = 2;
+let OS_DYN: u32 = 4;
+
+fn os_new(at: u32, op: u32, ty: u32, aux: u32, a: u32, b: u32, c: u32) -> u32 {
+    let x = new_inst(Inst { op: op as! u8, sub: 0, flags: 0, ty: ty as! u16, aux: aux as! u16, a: a, b: b, c: c,
+                            dbg: o_ins[at].dbg });
+    link_before(at, x);
+    return x;
+}
+fn os_type(v: u32) -> u32 {
+    let k = gir_kind(v);
+    if k == GIR_V_INST { return o_ins[v].ty; }
+    if k == GIR_V_ARG { return M.opnds[o_f.args + 2 * gir_idx(v)]; }
+    if k == GIR_V_CONST { return x_consts[xb_c + gir_idx(v)].ty; }
+    return GIR_T_PTR;
+}
+// v as an i64 (size_t arguments are i64 already; narrower: zero-extended)
+fn os_i64(at: u32, v: u32) -> u32 {
+    let t = os_type(v);
+    if t == GIR_T_I64 { return v; }
+    let kc, x = ci(v);
+    if kc { return int_const(GIR_T_I64, x); }
+    return os_new(at, GIR_ZEXT, GIR_T_I64, t, v, 0, 0);
+}
+
+// The size of the object based at b: (known, constant size, run-time size
+// value or NIL); a run-time size only with OS_DYN.
+fn os_size(at: u32, b: u32, fl: u32) -> bool, i64, u32 {
+    let k = gir_kind(b);
+    if k == GIR_V_GLOBAL {
+        let G = M.globals[gir_idx(b)];
+        if G.kind == G_VAR && G.flags & GF_DEFINED != 0 && G.flags & (GF_WEAK | GF_COMMON) == 0 {
+            return true, G.size as i64, NIL;
+        }
+        return false, 0, NIL;
+    }
+    if k == GIR_V_ARG {
+        let a = gir_idx(b);
+        if a < o_f.n_args {
+            let w = M.opnds[o_f.args + 2 * a + 1];
+            if w & ABI_BYVAL != 0 { return true, abi_size(w) as i64, NIL; }
+        }
+        return false, 0, NIL;
+    }
+    if k == GIR_V_CONST {
+        let C = x_consts[xb_c + gir_idx(b)];
+        if C.ty == GIR_T_PTR && C.data == GIR_NONE && C.lo == 0 && C.hi == 0 && fl & OS_NULLUNK == 0 {
+            return true, 0, NIL;
+        }
+        return false, 0, NIL;
+    }
+    if k != GIR_V_INST { return false, 0, NIL; }
+    let I = o_ins[b];
+    if I.op == GIR_ALLOCA { return true, I.a as i64, NIL; }
+    if I.op == GIR_DYNALLOCA {
+        let ka, xa = ci(res(I.a));
+        if ka { return true, xa as! i64, NIL; }
+        if fl & OS_DYN != 0 { return true, 0, os_i64(at, res(I.a)); }
+        return false, 0, NIL;
+    }
+    if I.op == GIR_CALL && I.flags & IF_CALL_NOBUILTIN == 0 && gir_kind(I.a) == GIR_V_GLOBAL {
+        let lk: u32 = lb_kind[gir_idx(I.a)];
+        var s0: u32 = NIL;
+        var s1: u32 = NIL;
+        if lk == LB_MALLOC && I.c >= 1 { s0 = o_ops[I.b]; }
+        else if lk == LB_CALLOC && I.c == 2 { s0 = o_ops[I.b]; s1 = o_ops[I.b + 2]; }
+        else if (lk == LB_REALLOC || lk == LB_ALIGNED) && I.c == 2 { s0 = o_ops[I.b + 2]; }
+        if s0 == NIL { return false, 0, NIL; }
+        s0 = res(s0);
+        let k0, x0 = ci(s0);
+        if s1 == NIL {
+            if k0 { return true, x0 as! i64, NIL; }
+            if fl & OS_DYN != 0 { return true, 0, os_i64(at, s0); }
+            return false, 0, NIL;
+        }
+        s1 = res(s1);
+        let k1, x1 = ci(s1);
+        if k0 && k1 {
+            // (an overflowing product: no object)
+            if x1 != 0 && x0 > 0xFFFFFFFFFFFFFFFF / x1 { return false, 0, NIL; }
+            return true, (x0 * x1) as! i64, NIL;
+        }
+        if fl & OS_DYN != 0 {
+            return true, 0, os_new(at, GIR_MUL, GIR_T_I64, 0, os_i64(at, s0), os_i64(at, s1), 0);
+        }
+        return false, 0, NIL;
+    }
+    return false, 0, NIL;
+}
+
+// The remaining bytes of (size, offset): 0 outside the object (LLVM's
+// getSizeWithOverflow).
+inline fn os_rem(sz: i64, off: i64) -> i64 {
+    if off < 0 || off > sz { return 0; }
+    return sz - off;
+}
+
+// (memo of the selects and PHIs evaluated for one GIR_OBJSIZE: 1 in
+// progress, 2 known, 3 unknown)
+var os_ep: u32 = 0;
+var os_mep: u32[>..] = [];
+var os_mst: u8[>..] = [];
+var os_msz: i64[>..] = [];
+var os_moff: i64[>..] = [];
+
+// Static: the object of pointer p0 and the offset into it (known, size, offset).
+recursive fn os_st(at: u32, p0: u32, fl: u32) -> bool, i64, i64 {
+    var p = res(p0);
+    var off: i64 = 0;
+    var n = 0;
+    while is_inst(p) && o_ins[p].op == GIR_GEP && n < 64 {
+        let G = o_ins[p];
+        off += (o_ops[G.b] as u64 | (o_ops[G.b + 1] as u64 << 32)) as! i64;
+        for q in 0..G.c {
+            let ix = res(o_ops[G.b + 2 + 2 * q]);
+            let ki, xi = ci(ix);
+            if !ki { return false, 0, 0; }
+            off += (sx(xi, bits_of(os_type(ix))) as! u64 * (o_ops[G.b + 3 + 2 * q] as u64)) as! i64;
+        }
+        p = res(G.a);
+        n++;
+    }
+    if is_inst(p) && (o_ins[p].op == GIR_SELECT || o_ins[p].op == GIR_PHI) {
+        if os_mep.len < o_ins.len {
+            os_mep.resize(o_ins.len, 0);
+            os_mst.resize(o_ins.len, 0);
+            os_msz.resize(o_ins.len, 0);
+            os_moff.resize(o_ins.len, 0);
+        }
+        if os_mep[p] == os_ep {
+            // (a cycle of PHIs: unknown, as LLVM)
+            if os_mst[p] != 2 { return false, 0, 0; }
+            return true, os_msz[p], os_moff[p] + off;
+        }
+        os_mep[p] = os_ep;
+        os_mst[p] = 1;
+        let I = o_ins[p];
+        var ok = true;
+        var first = true;
+        var bs: i64 = 0;
+        var bo: i64 = 0;
+        let nv: u32 = if I.op == GIR_SELECT { 2 } else { I.c };
+        for q in 0..nv {
+            let v = if I.op == GIR_SELECT { if q == 0 { I.b } else { I.c } } else { o_ops[I.b + 2 * q] };
+            if res(v) == p { continue; }
+            let kv, sv, ov = os_st(at, v, fl);
+            if !kv { ok = false; break; }
+            // the larger remainder (the smaller for the minimum)
+            if first || (if fl & OS_MIN != 0 { os_rem(sv, ov) < os_rem(bs, bo) } else { os_rem(sv, ov) > os_rem(bs, bo) }) {
+                bs = sv;
+                bo = ov;
+            }
+            first = false;
+        }
+        if !ok || first {
+            os_mst[p] = 3;
+            return false, 0, 0;
+        }
+        os_mst[p] = 2;
+        os_msz[p] = bs;
+        os_moff[p] = bo;
+        return true, bs, bo + off;
+    }
+    let known, sz, dsz = os_size(at, p, fl & ~OS_DYN);
+    if !known || dsz != NIL { return false, 0, 0; }
+    return true, sz, off;
+}
+
+// Dynamic: (known, size value, offset value), both i64, made before at.
+recursive fn os_dy(at: u32, p0: u32, fl: u32, depth: u32) -> bool, u32, u32 {
+    let ks, ss, so = os_st(at, p0, fl);
+    if ks { return true, int_const(GIR_T_I64, ss as! u64), int_const(GIR_T_I64, so as! u64); }
+    var p = res(p0);
+    var off: i64 = 0;
+    var doff: u32 = NIL;
+    var n = 0;
+    while is_inst(p) && o_ins[p].op == GIR_GEP && n < 64 {
+        let G = o_ins[p];
+        off += (o_ops[G.b] as u64 | (o_ops[G.b + 1] as u64 << 32)) as! i64;
+        for q in 0..G.c {
+            let ix = res(o_ops[G.b + 2 + 2 * q]);
+            let sc: u64 = o_ops[G.b + 3 + 2 * q] as u64;
+            let ki, xi = ci(ix);
+            if ki {
+                off += (sx(xi, bits_of(os_type(ix))) as! u64 * sc) as! i64;
+                continue;
+            }
+            var t = ix;
+            let it = os_type(ix);
+            if it != GIR_T_I64 { t = os_new(at, GIR_SEXT, GIR_T_I64, it, ix, 0, 0); }
+            if sc != 1 { t = os_new(at, GIR_MUL, GIR_T_I64, 0, t, int_const(GIR_T_I64, sc), 0); }
+            doff = if doff == NIL { t } else { os_new(at, GIR_ADD, GIR_T_I64, 0, doff, t, 0) };
+        }
+        p = res(G.a);
+        n++;
+    }
+    var sv: u32 = NIL;
+    var ov: u32 = NIL;
+    if is_inst(p) && o_ins[p].op == GIR_SELECT && depth < 16 {
+        // the chosen object's size and offset
+        let I = o_ins[p];
+        let ka, sa, oa = os_dy(at, I.b, fl, depth + 1);
+        if !ka { return false, 0, 0; }
+        let kb, sb, ob = os_dy(at, I.c, fl, depth + 1);
+        if !kb { return false, 0, 0; }
+        let c = res(I.a);
+        sv = if sa == sb { sa } else { os_new(at, GIR_SELECT, GIR_T_I64, 0, c, sa, sb) };
+        ov = if oa == ob { oa } else { os_new(at, GIR_SELECT, GIR_T_I64, 0, c, oa, ob) };
+    } else {
+        let known, sz, dsz = os_size(at, p, fl);
+        if !known { return false, 0, 0; }
+        sv = if dsz == NIL { int_const(GIR_T_I64, sz as! u64) } else { dsz };
+        ov = int_const(GIR_T_I64, 0);
+    }
+    if off != 0 { ov = os_add(at, ov, int_const(GIR_T_I64, off as! u64)); }
+    if doff != NIL { ov = os_add(at, ov, doff); }
+    return true, sv, ov;
+}
+fn os_add(at: u32, a: u32, b: u32) -> u32 {
+    let ka, xa = ci(a);
+    let kb, xb = ci(b);
+    if ka && kb { return int_const(GIR_T_I64, xa + xb); }
+    if ka && xa == 0 { return b; }
+    if kb && xb == 0 { return a; }
+    return os_new(at, GIR_ADD, GIR_T_I64, 0, a, b, 0);
+}
+
+// GIR_OBJSIZE i: its value when the object is known, else NIL.
+fn simp_objsize(i: u32) -> u32 {
+    let I = o_ins[i];
+    let fl: u32 = I.sub;
+    let ty: u32 = I.ty;
+    os_ep++;
+    // (static first: no instructions are made when that suffices)
+    let ks, ss, so = os_st(i, I.a, fl);
+    if ks { return int_const(ty, os_rem(ss, so) as! u64); }
+    if fl & OS_DYN == 0 { return NIL; }
+    let kd, sv, ov = os_dy(i, I.a, fl, 0);
+    if !kd { return NIL; }
+    // size < offset (or a negative offset): 0
+    let lt = os_new(i, GIR_ICMP, GIR_T_I1, GIR_T_I64, sv, ov, 0);
+    o_ins[lt].sub = GIR_ULT as! u8;
+    let d = os_new(i, GIR_SUB, GIR_T_I64, 0, sv, ov, 0);
+    let r = os_new(i, GIR_SELECT, GIR_T_I64, 0, lt, int_const(GIR_T_I64, 0), d);
+    if ty == GIR_T_I64 { return r; }
+    return os_new(i, GIR_TRUNC, ty, GIR_T_I64, r, 0, 0);
+}
+// Its value when nothing is known: -1, or 0 for the minimum.
+fn objsize_unknown(i: u32) -> u32 {
+    let ty: u32 = o_ins[i].ty;
+    return int_const(ty, if o_ins[i].sub & OS_MIN != 0 { 0 as u64 } else { 0xFFFFFFFFFFFFFFFF as u64 });
 }

@@ -34,7 +34,41 @@ fn fold_branches() -> bool {
         } else if I.op == GIR_SWITCH {
             let c = res(I.a);
             let k, v = ci(c);
-            if !k && I.c != 0 { continue; }
+            if !k && I.c != 0 {
+                // (E2) cases that go to the default are dropped; one case
+                // left: a conditional branch (LLVM's SimplifyCFG)
+                let d = o_ops[I.b];
+                var w: u32 = 0;
+                for q in 0..I.c {
+                    let s = o_ops[I.b + 2 + 2 * q];
+                    if s == d {
+                        phi_remove_one(d, b);
+                        o_cfg_ok = false;
+                        any = true;
+                        continue;
+                    }
+                    o_ops[I.b + 1 + 2 * w] = o_ops[I.b + 1 + 2 * q];
+                    o_ops[I.b + 2 + 2 * w] = s;
+                    w++;
+                }
+                o_ins[t].c = w;
+                if w == 1 {
+                    let e = new_inst(Inst { op: GIR_ICMP as! u8, sub: GIR_EQ as! u8, flags: 0, ty: GIR_T_I1,
+                                            aux: otype(c) as! u16, a: c, b: o_ops[I.b + 1], c: 0, dbg: I.dbg });
+                    link_before(t, e);
+                    let ct = o_ops[I.b + 2];
+                    o_ins[t].op = GIR_CONDBR as! u8;
+                    o_ins[t].a = e;
+                    o_ins[t].b = ct;
+                    o_ins[t].c = d;
+                    o_ins[t].sub = 0;
+                    o_ins[t].aux = 0;
+                    o_cfg_ok = false;
+                    any = true;
+                }
+                if w == 0 { to_br(t, d); }
+                continue;
+            }
             var taken = o_ops[I.b];
             if k {
                 for q in 0..I.c {

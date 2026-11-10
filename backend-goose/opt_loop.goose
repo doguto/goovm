@@ -340,11 +340,25 @@ fn unroll_threshold() -> u32 {
     return if opt_lv >= 3 { 300 } else { 150 };
 }
 
+// Every loop gets a preheader (LLVM's LoopSimplify): a block that only
+// branches to the header, from which the header is entered (a switch that
+// enters the loop, or several edges into it). Then ensure_cfg.
+fn loop_preheaders() {
+    ensure_cfg();
+    loop_headers();
+    var made = false;
+    for h in lp_hdrs {
+        if rpo_num[h] == NIL || h == 0 || b_fl[h] & (BF_LP | BF_ADDR) != 0 { continue; }
+        if licm_preheader(h) { made = true; }
+    }
+    if made { ensure_cfg(); }
+}
+
 fn loop_unroll() -> bool {
     if o_pinned { return false; }
     let thr = unroll_threshold();
     if thr == 0 { return false; }
-    ensure_cfg();
+    loop_preheaders();
     loop_headers();
     var any = false;
     var k: i64 = 0;

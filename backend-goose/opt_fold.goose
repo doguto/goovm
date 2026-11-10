@@ -180,6 +180,7 @@ fn simp(i: u32) -> u32 {
         return NIL;
     }
     if op == GIR_CALL { return simp_call(i); }
+    if op == GIR_OBJSIZE { return simp_objsize(i); }
     return NIL;
 }
 

@@ -184,7 +184,8 @@ let GIR_NOPS = 84;            // opcode count of the x86-64 back-end's tables (u
 let GIR_FMA = 84;             // (additive, F1: AArch64)
 let GIR_A64 = 85;             // (additive, F1: AArch64 intrinsics)
 let GIR_ISCONST = 86;         // (additive, E2: llvm.is.constant at opt_level >= 1; folded by the middle-end)
-let GIR_NOPS_ALL = 87;        // opcode count (F1, E2)
+let GIR_OBJSIZE = 87;         // (additive, E2: llvm.objectsize at opt_level >= 1; folded by the middle-end)
+let GIR_NOPS_ALL = 88;        // opcode count (F1, E2)
 // GIR_A64.sub (additive, F1): AArch64 NEON / ACLE operations, as enum GirA64 in gir.h
 let GIR_A64_SQADD = 0; let GIR_A64_UQADD = 1; let GIR_A64_SQSUB = 2; let GIR_A64_UQSUB = 3;
 let GIR_A64_SHADD = 4; let GIR_A64_UHADD = 5; let GIR_A64_SRHADD = 6; let GIR_A64_URHADD = 7;

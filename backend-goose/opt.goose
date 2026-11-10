@@ -776,9 +776,9 @@ fn opt_module() {
     sroa_init();
     opt_order();
     for fi in fn_order { opt_function(fi); }
-    // (E2) the is.constant tests left in an emitted function are false;
-    // the function is simplified once more without them (the inliner,
-    // done now, saw them unfolded)
+    // (E2) the is.constant tests left in an emitted function are false,
+    // the object sizes left unknown; the function is simplified once more
+    // without them (the inliner, done now, saw them unfolded)
     for fi in fn_order { isconst_refine(fi); }
     // internal functions whose calls were all inlined are not emitted
     // (kept with debug information, whose subprograms name them)
@@ -805,12 +805,24 @@ fn opt_module() {
     M.dattrs = x_dattrs[xb_t..];
 }
 
+// The object sizes known before SROA and mem2reg (of allocas, globals):
+// their pointer is then no use of the alloca.
+fn objsize_early() {
+    let n: u32 = o_ins.len as! u32;
+    for i in 0..n {
+        if o_blk[i] == NIL || o_ins[i].op != GIR_OBJSIZE { continue; }
+        let v = simp_objsize(i as! u32);
+        if v != NIL { replace(i as! u32, v); }
+    }
+}
+
 fn isconst_refine(fi: u32) {
     let F2 = x_funcs[xb_f + fi];
     if F2.flags & (FN_AVAILEXT | FN_OPTNONE) != 0 || fn_done[fi] == 0 || fn_pinned[fi] != 0 { return; }
     var any = false;
     for k in F2.first_inst..F2.first_inst + F2.n_inst {
-        if x_insts[xb_i + k].op == GIR_ISCONST { any = true; }
+        let op: u32 = x_insts[xb_i + k].op;
+        if op == GIR_ISCONST || op == GIR_OBJSIZE { any = true; }
     }
     if !any { return; }
     o_fi = fi;
@@ -827,6 +839,10 @@ fn isconst_refine(fi: u32) {
         if o_ins[id].op == GIR_ISCONST {
             let k = gir_kind(res(o_ins[id].a));
             replace(id as! u32, mk_const(GIR_T_I1, if k == GIR_V_CONST || k == GIR_V_GLOBAL { 1 } else { 0 }, 0));
+        } else if o_ins[id].op == GIR_OBJSIZE {
+            // (the object still unknown: LLVM's LowerConstantIntrinsics)
+            let v = simp_objsize(id as! u32);
+            replace(id as! u32, if v != NIL { v } else { objsize_unknown(id as! u32) });
         }
     }
     opt_round();
@@ -867,9 +883,20 @@ fn blockaddr_remap() {
 
 // The is.constant tests left after all optimization (their operand did not
 // become a constant) are false: each becomes `or i1 0, 0` (and a test of a
-// constant `or i1 1, 0`), which code generation handles.
+// constant `or i1 1, 0`), which code generation handles. Object sizes left
+// (functions not refined): `or c, 0` of the unknown size.
 fn isconst_lower() {
     for k in xb_i..x_insts.len {
+        if x_insts[k].op == GIR_OBJSIZE {
+            // (functions not refined: unknown)
+            let ty: u32 = x_insts[k].ty;
+            x_insts[k].op = GIR_OR as! u8;
+            x_insts[k].a = mk_const(ty, if x_insts[k].sub & 1 != 0 { 0 } else { wmask(bits_of(ty)) }, 0);
+            x_insts[k].b = mk_const(ty, 0, 0);
+            x_insts[k].c = 0;
+            x_insts[k].sub = 0;
+            continue;
+        }
         if x_insts[k].op != GIR_ISCONST { continue; }
         let a = x_insts[k].a;
         let kd = gir_kind(a);
@@ -939,6 +966,7 @@ fn opt_function(fi: u32) {
         oir_store(fi);
         return;
     }
+    objsize_early();
     if !opt_off("m2r") {
         ensure_cfg();
         if remove_unreachable() { ensure_cfg(); }

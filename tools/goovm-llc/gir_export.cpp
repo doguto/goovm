@@ -1940,6 +1940,44 @@ struct Exporter : GirDwarfHost {
             return;
         }
         case Intrinsic::objectsize: {
+            // (E2) at -O1.. (not in optnone functions): known now, a
+            // constant; else GIR_OBJSIZE (a = b = c = the pointer, sub =
+            // min 1, nullunknown 2, dynamic 4), which the middle-end folds
+            // after inlining or lowers to the unknown size
+            if (T.header.opt_level && !CB.getFunction()->hasOptNone()) {
+                const Value *p = CB.getArgOperand(0);
+                bool mn = cast<ConstantInt>(CB.getArgOperand(1))->isOne();
+                bool nu = cast<ConstantInt>(CB.getArgOperand(2))->isOne();
+                bool dy = cast<ConstantInt>(CB.getArgOperand(3))->isOne();
+                ObjectSizeOpts O;
+                O.EvalMode = mn ? ObjectSizeOpts::Mode::Min : ObjectSizeOpts::Mode::Max;
+                O.NullIsUnknownSize = nu;
+                uint64_t sz;
+                uint16_t rt = ty(CB.getType());
+                if (getObjectSize(p, sz, DL, &TLI, O)) {
+                    vmap[&CB] = cint(sz, rt);
+                    return;
+                }
+                uint32_t a = ref(p);
+                if (!is_placeholder(a) && cast<PointerType>(p->getType())->getAddressSpace() == 0) {
+                    uint8_t sub = (mn ? GIR_OBJSIZE_MIN : 0) | (nu ? GIR_OBJSIZE_NULLUNK : 0) | (dy ? GIR_OBJSIZE_DYNAMIC : 0);
+                    vmap[&CB] = emit(GIR_OBJSIZE, rt, sub, 0, 0, a, a, a, RA);
+                    return;
+                }
+            }
+            if (cast<ConstantInt>(CB.getArgOperand(3))->isOne()) {
+                // (E2) dynamic, at -O0 or in an optnone function: the static
+                // size (LLVM's -O0 pipeline would compute it at run time;
+                // the static answer is as valid), else unknown
+                ObjectSizeOpts O;
+                bool mn = cast<ConstantInt>(CB.getArgOperand(1))->isOne();
+                O.EvalMode = mn ? ObjectSizeOpts::Mode::Min : ObjectSizeOpts::Mode::Max;
+                O.NullIsUnknownSize = cast<ConstantInt>(CB.getArgOperand(2))->isOne();
+                uint64_t sz;
+                if (!getObjectSize(CB.getArgOperand(0), sz, DL, &TLI, O)) sz = mn ? 0 : ~(uint64_t)0;
+                vmap[&CB] = cint(sz, ty(CB.getType()));
+                return;
+            }
             // As LLVM's LowerConstantIntrinsics does for the -O0 pipeline.
             Value *v = lowerObjectSizeCall(const_cast<IntrinsicInst *>(cast<IntrinsicInst>(&CB)), DL, &TLI, true);
             auto *ci = dyn_cast_or_null<ConstantInt>(v);
@@ -3582,7 +3620,10 @@ struct Exporter : GirDwarfHost {
             static const char *const companions[][2] = {
                 {"strcat", "strlen"}, {"strncat", "strlen"}, {"__strcat_chk", "strlen"},
                 {"printf", "puts"}, {"printf", "putchar"}, {"__vsnprintf_chk", "vsnprintf"},
-                {"__vsprintf_chk", "vsprintf"}};
+                {"__vsprintf_chk", "vsprintf"}, {"__snprintf_chk", "snprintf"}, {"__sprintf_chk", "sprintf"},
+                {"__memcpy_chk", "memcpy"}, {"__memmove_chk", "memmove"}, {"__memset_chk", "memset"},
+                {"__strcpy_chk", "strcpy"}, {"__stpcpy_chk", "stpcpy"}, {"__strcat_chk", "strcat"},
+                {"__strncpy_chk", "strncpy"}, {"__strncat_chk", "strncat"}};
             for (const auto &c : companions) {
                 const Function *f = M.getFunction(c[0]);
                 if (!f || f->hasLocalLinkage() || M.getNamedValue(c[1])) continue;
@@ -3761,7 +3802,7 @@ static const char *op_name(unsigned op) {
         "insertelt", "shuffle", "dynalloca", "stacksave", "stackrestore", "vastart", "memcpy", "memset", "ctlz",
         "cttz", "ctpop", "bswap", "bitreverse", "fshl", "fshr", "ovf", "scmp", "ucmp", "fabs", "copysign", "fsqrt",
         "isfpclass", "cmpxchg", "atomicrmw", "fence", "tlsaddr", "frameaddr", "retaddr", "sjlj_setjmp",
-        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm", "landingpad", "fma", "a64", "isconst"};
+        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm", "landingpad", "fma", "a64", "isconst", "objsize"};
     static_assert(sizeof(names) / sizeof(names[0]) == GIR_OP_COUNT, "op names");
     return op < GIR_OP_COUNT ? names[op] : "?";
 }

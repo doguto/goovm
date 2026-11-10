@@ -52,7 +52,7 @@ var vz_vf: u32 = 0;
 
 fn vectorize_loops() -> bool {
     if o_pinned || opt_lv < 2 || o_f.flags & FN_MINSIZE != 0 || opt_sz >= 2 { return false; }
-    ensure_cfg();
+    loop_preheaders();
     loop_headers();
     var any = false;
     var k: i64 = 0;
