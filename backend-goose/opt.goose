@@ -685,6 +685,7 @@ fn opt_module() {
     }
     opt_off("");    // (reads GOOVM_OPT)
     opt_verify_on = find(opt_env, "verify") >= 0;
+    inl_trace = find(opt_env, "inltrace") >= 0;
     inl_scan();
     gp_scan();
     aa_module_init();
@@ -779,6 +780,7 @@ fn opt_function(fi: u32) {
         if mem2reg() { simplify_phis(); }
     }
     opt_round();
+    if !opt_off("ldel") && loop_delete() { opt_round(); }
     if !opt_off("tre") && tail_recursion() { opt_round(); }
     if !opt_off("inline") && inl_any_call() {
         ensure_cfg();
@@ -796,6 +798,7 @@ fn opt_function(fi: u32) {
             }
             if mem2reg() { simplify_phis(); }
             opt_round();
+            if !opt_off("ldel") && loop_delete() { opt_round(); }
         }
     }
     if !opt_off("lrot") && rotate_loops() {

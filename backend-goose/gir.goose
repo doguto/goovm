@@ -289,6 +289,7 @@ let FN_COLD: u32 = 2048;
 let FN_HOT: u32 = 4096;
 let FN_INLINEHINT: u32 = 8192;
 let FN_AVAILEXT: u32 = 16384;       // available_externally body: inlining only, never emitted
+let FN_MUSTPROGRESS: u32 = 32768;   // mustprogress (C++)
 let FN_ALIGN_SHIFT = 24;
 
 // Globals.

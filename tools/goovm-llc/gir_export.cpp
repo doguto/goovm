@@ -2858,6 +2858,7 @@ struct Exporter : GirDwarfHost {
         if (Fn.hasFnAttribute(Attribute::Hot)) fn_flags |= GIR_FN_HOT;
         if (Fn.hasFnAttribute(Attribute::InlineHint)) fn_flags |= GIR_FN_INLINEHINT;
         if (avail_body(Fn)) fn_flags |= GIR_FN_AVAILEXT;
+        if (Fn.mustProgress()) fn_flags |= GIR_FN_MUSTPROGRESS;
         uint64_t falign = Fn.getAlign() ? Fn.getAlign()->value() : 16;
         if (falign < 16) falign = 16;
         gf.first_block = (uint32_t)T.blocks.size();

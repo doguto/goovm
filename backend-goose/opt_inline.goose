@@ -455,11 +455,18 @@ fn inl_profitable(i: u32, c: u32) -> bool {
                 if s == IC_CONST { continue; }
             }
             cost += if op == GIR_CALL { 1 + INL_PENALTY } else { 1 };
-            if cost > budget { return false; }
+            if cost > budget && !inl_trace { return false; }
         }
     }
-    return true;
+    if inl_trace {
+        let G = M.globals[o_f.global];
+        let H = M.globals[F.global];
+        write_stderr(str("inline? ", M.strtab[G.name..G.name + G.name_len], " <- ", M.strtab[H.name..H.name + H.name_len],
+                         " cost ", cost, " budget ", budget, " size ", fn_size[c], if cost <= budget { " yes" } else { " no" }, "\n"));
+    }
+    return cost <= budget;
 }
+var inl_trace = false;
 fn ic_mark(b: u32) {
     if b == NIL || b >= ic_live.len || ic_live[b] != 0 { return; }
     ic_live[b] = 1;

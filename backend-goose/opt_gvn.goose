@@ -304,12 +304,14 @@ fn gvn() -> bool {
         tmp_pos[3 * b + 1] = gv_lundo.len as! u32;
         tmp_pos[3 * b + 2] = gv_wlog.len as! u32;
         // the memory state at entry: the dominator's at its end if it is the
-        // only predecessor, else a new epoch
+        // only predecessor; at a merge point, the dominator's state with the
+        // writes of the blocks between it and here (a loop's body, the arms
+        // of an if) added to the log; a new epoch if they are too many
         let np = p_start[b + 1] - p_start[b];
         if b != 0 && np == 1 && p_list[p_start[b]] == idom[b] {
             gv_ep = gv_bep[idom[b]];
         } else if b != 0 {
-            gv_ep = gv_bump();
+            if gv_region_writes(b) { gv_ep = gv_bep[idom[b]]; } else { gv_ep = gv_bump(); }
         }
         gv_block(b);
         gv_bep[b] = gv_ep;
@@ -321,6 +323,53 @@ fn gvn() -> bool {
         }
     }
     return gv_changed;
+}
+
+// The blocks from which merge block b is reached without passing its
+// immediate dominator: their memory writes go to the write log (false: too
+// many, the log is left as it was).
+var gv_rmark: u32[>..] = [];
+var gv_rep: u32 = 0;
+var gv_rwl: u32[>..] = [];
+let GV_RBLOCKS: i64 = 256;
+let GV_RWRITES: i64 = 256;
+fn gv_region_writes(b: u32) -> bool {
+    let d = idom[b];
+    if d == NIL { return false; }
+    if gv_rmark.len < cfg_nb { gv_rmark.resize(cfg_nb, 0); }
+    gv_rep++;
+    let ep = gv_rep;
+    gv_rwl.clear();
+    let w0 = gv_wlog.len;
+    var nblk: i64 = 0;
+    for k in p_start[b]..p_start[b + 1] {
+        let p = p_list[k];
+        if p == d || rpo_num[p] == NIL || gv_rmark[p] == ep { continue; }
+        gv_rmark[p] = ep;
+        gv_rwl.push(p);
+    }
+    while gv_rwl.len != 0 {
+        let x = gv_rwl.pop();
+        nblk++;
+        if nblk > GV_RBLOCKS { break; }
+        var i = b_first[x];
+        while i != NIL {
+            if writes_mem(o_ins[i]) { gv_wlog.push(i); }
+            i = o_nxt[i];
+        }
+        if gv_wlog.len - w0 > GV_RWRITES { break; }
+        for k in p_start[x]..p_start[x + 1] {
+            let p = p_list[k];
+            if p == d || rpo_num[p] == NIL || gv_rmark[p] == ep { continue; }
+            gv_rmark[p] = ep;
+            gv_rwl.push(p);
+        }
+    }
+    if nblk > GV_RBLOCKS || gv_wlog.len - w0 > GV_RWRITES {
+        while gv_wlog.len > w0 { gv_wlog.pop(); }
+        return false;
+    }
+    return true;
 }
 
 // Dead stores: the stores of the block since the last read that may see them.

@@ -400,6 +400,7 @@ typedef struct GirBlock {
                                   opt_level >= 1 only): for inlining, never emitted; its global
                                   is not GIR_GF_DEFINED (calls that remain call the external
                                   symbol), but Global.func names this record */
+#define GIR_FN_MUSTPROGRESS 32768u /* mustprogress (C++): a loop without side effects ends */
 /* bits 16..23 are reserved for back-ends (backend-goose: FN_DEAD = bit 23 in the
  * optimizer's output tables) */
 #define GIR_FN_ALIGN_SHIFT 24  /* bits 24..31: log2 of the function alignment (>= 4) */
