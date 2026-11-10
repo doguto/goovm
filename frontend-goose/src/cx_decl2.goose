@@ -586,6 +586,9 @@ recursive fn parse_simple_decl(ctx0: i64) {
         init_ok = (ctx == DC_NS || ctx == DC_BLOCK || ctx == DC_COND) && ds.sc != SC_TYPEDEF;
         parse_cdeclr(if base0 == 0 { t_void } else { base }, 0, d);
         init_ok = sv_init;
+        if base0 == 0 && !no_type_ok(d, ctx) {
+            error_at((if d.qn.loc != 0 { d.qn.loc } else { dloc }) as i64, "a type specifier is required for all declarations");
+        }
         if d.qn.kind as i64 == QK_CONV && is_func(d.ty) { d.ty = func_with_ret(d.ty, d.qn.conv); }
         cx_attrs(a);
         parse_asm_label_cx(a);
@@ -647,6 +650,19 @@ recursive fn parse_simple_decl(ctx0: i64) {
 }
 
 // [explicit] X ( ... ) -> where X names a class template.
+// A declarator without decl-specifier types is valid only for constructors,
+// destructors and conversion functions (C++ [dcl.type]/2).
+fn no_type_ok(d: CD&, ctx: i64) -> bool {
+    let k = d.qn.kind as i64;
+    if k == QK_DTOR || k == QK_CONV { return true; }
+    if d.qn.dep != 0 || (d.qn.qual && d.qn.scope < 0) { return true; }
+    if k != QK_IDENT || !d.is_fn { return false; }
+    let cls = member_scope(d, ctx);
+    if cls >= 0 && scopes[cls].kind as i64 == CS_CLASS { return d.qn.name == scopes[cls].name; }
+    // friend X::X() resolved elsewhere; a namespace-scope declaration is not a constructor
+    return false;
+}
+
 fn deduction_guide_ahead() -> bool {
     var j = pc;
     if tu_toks[j].kind as i64 == TK_KW + KW_EXPLICIT {

@@ -451,6 +451,37 @@ recursive fn parse_call_cx(callee: u32) -> u32 {
     return r;
 }
 
+// x.~T() / p->~T(): a destructor call (class types) or a pseudo-destructor
+// call (scalar types), of type void. ot: the object's type; dt: the named
+// type (0 unknown).
+recursive fn dtor_call_cx(base: u32, arrow: bool, ot: u32, dt: u32, loc: u32) -> u32 {
+    if is_error(base) { return base; }
+    if is_opq(base) || ot == 0 || is_opaque(ot) || is_dep(ot) || dt == 0 || is_opaque(dt) || is_dep(dt) {
+        return dep_node(t_void, loc);
+    }
+    if is_record(ot) {
+        need_complete(ot);
+        let r = rec_of(ot);
+        let sc = crecs[r].scope as i64;
+        let s = scope_find(sc, id_dtor);
+        let ud = if s >= 0 { resolve(s) } else { -1 };
+        if cg_on {
+            let d = class_dtor(r);
+            if d >= 0 {
+                inst_use(d);
+                let obj = if arrow { n_deref(base, loc) } else { base };
+                return lower_call(d, obj, nscratch.len, loc, true);
+            }
+            return mk_cast(t_void, base, loc);
+        }
+        if ud >= 0 && syms[ud].kind as i64 == SK_FUNC { inst_use(ud); resolved_fn = ud; }
+        return typed_result(t_void, loc);
+    }
+    // a pseudo-destructor call: evaluates the object
+    if cg_on { return mk_cast(t_void, base, loc); }
+    return typed_result(t_void, loc);
+}
+
 // a.member / p->member (with template, ~pseudo-destructor, operator names).
 recursive fn parse_member_access(base: u32, arrow: bool, loc: u32) -> u32 {
     var qn = QN { .. };
@@ -469,12 +500,22 @@ recursive fn parse_member_access(base: u32, arrow: bool, loc: u32) -> u32 {
     // ~T pseudo-destructor or destructor call
     if at(TK_TILDE) {
         adv();
-        if at_kw(KW_DECLTYPE) { let t = parse_decltype(); }
+        var dt: u32 = 0;
+        if at_kw(KW_DECLTYPE) { dt = parse_decltype(); }
         else {
             var dq = QN { .. };
             parse_qname(dq);
+            if dq.dep == 0 && !dq.qual && csc >= 0 && dq.kind as i64 == QK_IDENT {
+                // ~X looked up in the object's class first (its injected name)
+                let s = qual_lookup(csc, dq.name);
+                if s >= 0 { dq.sym = s as! i32; }
+                else { lookup_qn(dq); }
+            } else { lookup_qn(dq); }
+            dt = qn_type(dq);
         }
-        return dep_node(t_unknown, loc);
+        if !at(TK_L_PAREN) || tk_n(1) != TK_R_PAREN { return dep_node(t_unknown, loc); }
+        adv(); adv();
+        return dtor_call_cx(base, arrow, obj_ty, dt, loc);
     }
     if (at(TK_IDENT) || at(TK_COLONCOLON)) && csc >= 0 && !qn.tkw {
         // a qualified member name (a.Base::f) or a plain one, looked up in the class
