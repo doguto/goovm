@@ -50,6 +50,7 @@ let CF2_INST_DONE = 2;      // its body was instantiated (or is being)
 let CF2_DIRTY = 4;          // errors while instantiating it (suppressed): not trusted for code generation
 let CF2_QUEUED = 8;         // in inst_work
 let CF2_FSPEC = 16;         // a function template specialization (cxs.tmpl: the template, cxs.targs: the arguments)
+let CF2_EXPLICIT = 128;     // an explicit specialization (template<>): its own definition, never instantiated
 
 var inst_depth: i64 = 0;
 var inst_work: u32[>..] = [];       // functions whose bodies are to be instantiated

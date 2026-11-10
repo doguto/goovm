@@ -1082,6 +1082,10 @@ fn cxx_builtin_call(name: u32, mark: i64, loc: u32) -> u32 {
         // clang's matrix builtins: matrix types are not implemented (unknown)
         return dep_node(matrix_unknown_t, loc);
     }
+    if nm == "__builtin_is_constant_evaluated" && nscratch.len == mark && !cg_on {
+        // true in a constant evaluation (N_CXX op 11; code generation: false)
+        return node(N_CXX, 11, t_bool, 0, 0, 0, loc);
+    }
     if nscratch.len - mark != 1 { return 0; }
     let a = nscratch[mark];
     if nm == "__builtin_addressof" {

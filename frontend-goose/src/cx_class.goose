@@ -195,6 +195,12 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
             // with each instantiation of Outer that needs it complete
             let rs = crecs[r].scope as i64;
             if pending_tmpl >= 0 && rs >= 0 && scopes[rs].flags & SCF_PATTERN != 0 { cxs[s].odef = pending_tmpl as! i32; }
+            if member_cls.contains(r as u64) {
+                // template<> struct X<int>::Inner { }: an explicit specialization
+                // of the member class of an instantiation
+                member_cls.remove(r as u64);
+                if rs >= 0 { scopes[rs].flags = scopes[rs].flags & ~(SCF_INST_PENDING as! u8); }
+            }
         } else {
             // a member of an opaque class: parse and drop
             s = declare_tag(qn.name, is_union, loc, false, cur_scope);

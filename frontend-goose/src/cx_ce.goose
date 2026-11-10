@@ -333,6 +333,9 @@ recursive fn ce_lv_temp(e: u32) -> bool, i64 {
     return true, a;
 }
 
+var ce_str_starts = dictionary<u64, u32> {};
+fn ce_is_string_start(a: i64) -> bool { ce_str_starts.contains(a as u64) }
+
 // A string literal's array (in the global memory).
 fn ce_string(e: u32) -> i64 {
     let si = nodes[e].a as i64;
@@ -343,6 +346,7 @@ fn ce_string(e: u32) -> i64 {
     let a = ce_alloc(sl.len as i64, 8, true);
     for i in sl.len as i64 { ce_st(a + i, 1, strbytes[sl.start as i64 + i] as i64); }
     ce_strs.insert(si as u64, a as u64);
+    ce_str_starts.insert(a as u64, 1);
     return a;
 }
 
@@ -407,7 +411,19 @@ recursive fn ce_rv(e: u32) -> CeV {
     let nd = nodes[e];
     let k = nd.kind as i64;
     let t = nd.ty;
-    if k == N_INT { return ce_int(trunc_to(nd.v, t), unqual(t)); }
+    if k == N_INT {
+        if nd.flags & NF_BCP != 0 && nd.a != 0 {
+            // __builtin_constant_p(x) in a constant evaluation: x evaluates to
+            // a number, a null pointer or the start of a string literal
+            let x = ce_rv(nd.a);
+            var c = 0;
+            if x.k == CE_INT as! u8 || x.k == CE_FLT as! u8 { c = 1; }
+            if x.k == CE_PTR as! u8 && (x.i == 0 || ce_is_string_start(x.i)) { c = 1; }
+            return ce_int(c, unqual(t));
+        }
+        return ce_int(trunc_to(nd.v, t), unqual(t));
+    }
+    if k == N_CXX && nd.op == 11 { return ce_int(1, t_bool); }
     if k == N_FLOAT { return ce_flt(reinterpret_f64(nd.v), unqual(t)); }
     if k == N_SIZEOF || k == N_OFFSETOF {
         if nd.v < 0 { return ce_bad(e); }
@@ -923,6 +939,20 @@ recursive fn ce_agg_default(a: i64, t: u32) -> bool {
             }
         }
         if is_record(ft) && !ce_value_init(a + f.offset, ft) { return false; }
+        if is_array(ft) && is_record(base_elem_t(ft)) && !ce_init_elems(a + f.offset, ft) { return false; }
+    }
+    return true;
+}
+
+// Each element of an array of class type value-initialized.
+recursive fn ce_init_elems(a: i64, t: u32) -> bool {
+    let el = tbase(t);
+    let n = types[t >> 4].n;
+    let es = type_size(el);
+    if n < 0 || es <= 0 { return false; }
+    for i in n {
+        if is_array(el) { if !ce_init_elems(a + i * es, el) { return false; } }
+        else if !ce_value_init(a + i * es, el) { return false; }
     }
     return true;
 }
@@ -964,7 +994,7 @@ recursive fn ce_agg_init(a: i64, t: u32, v: i64, c: i64) -> bool {
         } else if is_record(f.ty) {
             if !ce_value_init(a + f.offset, f.ty) { return false; }
         } else if is_array(f.ty) && is_record(base_elem_t(f.ty)) {
-            return false;
+            if !ce_init_elems(a + f.offset, f.ty) { return false; }
         }
     }
     return j == c;
@@ -1227,6 +1257,8 @@ recursive fn ce_ctor_inits(f: i64, obj: i64) -> bool {
             if init == 0 || !ce_init(obj + fd.offset, fd.ty, init) { return false; }
         } else if is_record(fd.ty) {
             if !ce_value_init_default(obj + fd.offset, fd.ty) { return false; }
+        } else if is_array(fd.ty) && is_record(base_elem_t(fd.ty)) {
+            if !ce_init_elems(obj + fd.offset, fd.ty) { return false; }
         }
         // scalars without an initializer stay as they are (zero here)
     }
@@ -1458,7 +1490,11 @@ fn cur_ce_fn() -> i64 { if ce_fn_stack.len == 0 { return -1; } return ce_fn_stac
 // ---------------------------------------------------------------------------
 // Builtins.
 
-recursive fn ce_builtin(e: u32) -> CeV { return ce_bad(e); }
+recursive fn ce_builtin(e: u32) -> CeV {
+    let nd = nodes[e];
+    if nd.op as i64 == BI_CALL { return ce_builtin_call(nd.a as i64, nd.v, nd.c as i64, e); }
+    return ce_bad(e);
+}
 
 recursive fn ce_builtin_call(f: i64, v: i64, c: i64, e: u32) -> CeV {
     let nm = ident_text(syms[f].name as i64);
@@ -1563,7 +1599,15 @@ recursive fn ce_body(f: i64) -> u32 {
     ce_capturing = true;
     syms[f].def = -1;
     var tried = true;
-    if cxs[f].flags2 & CF2_FSPEC != 0 {
+    let bt0 = ce_btok.get(f as u64);
+    if bt0 && cxs[f].flags2 & CF2_EXPLICIT != 0 {
+        let st = inst_enter(true);
+        cur_scope = (bt0 >> 32) as i64;
+        pc = (bt0 & 0xFFFFFFFF) as i64;
+        let ps, pn = fn_param_list(f);
+        let n = parse_function_body(f, if ps < 0 { 0 } else { ps }, if ps < 0 { 0 } else { pn });
+        let bad = inst_leave(st);
+    } else if cxs[f].flags2 & CF2_FSPEC != 0 {
         inst_fspec_body(f);
     } else if cxs[f].body != 0 && cxs[f].flags & (CF_HAS_BODY_LATER | CF_DEFINED_IN_CLASS) != 0 {
         let fsg = friend_scope.get(f as u64);
@@ -1619,6 +1663,23 @@ recursive fn ce_body(f: i64) -> u32 {
 
 // The default argument of parameter p of f, parsed for the evaluation.
 recursive fn ce_default_arg(f: i64, p: i64) -> u32 {
+    // __builtin_LINE() ... in a default argument are the call's: not modelled
+    var j = cxs[p].body as i64;
+    var depth = 0;
+    while j < tu_toks.len {
+        let tk2 = tu_toks[j];
+        let kk = tk2.kind as i64;
+        if kk == TK_EOF { break; }
+        if kk == TK_L_PAREN || kk == TK_L_BRACE || kk == TK_L_SQUARE { depth++; }
+        if kk == TK_R_PAREN || kk == TK_R_BRACE || kk == TK_R_SQUARE { if depth == 0 { break; } depth--; }
+        if depth == 0 && kk == TK_COMMA { break; }
+        if kk == TK_IDENT {
+            let nm = ident_text(tk2.val as i64);
+            if nm.len > 10 && nm[..10] == "__builtin_" && (nm == "__builtin_LINE" || nm == "__builtin_COLUMN" || nm == "__builtin_FILE" ||
+               nm == "__builtin_FUNCTION" || nm == "__builtin_FILE_NAME" || nm == "__builtin_FUNCSIG" || nm == "__builtin_source_location") { return 0; }
+        }
+        j++;
+    }
     let cg0 = cg_on;
     cg_on = false;
     let e = default_arg(f, p);
