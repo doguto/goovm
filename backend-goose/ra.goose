@@ -210,6 +210,8 @@ let OP_KIND: u8[84] = [
 fn inst_kind(I: Inst) -> u32 {
     let op: u32 = I.op;
     if op >= GIR_NOPS { return K_B; }
+    // (E2) vector shuffles that lowerv.goose does
+    if op == GIR_SHUFFLE && t_rc[I.ty] == RC_VX && vshuf_plan(I) != 0 { return K_A; }
     let k: u32 = OP_KIND[op] & 15;
     if k != K_T { return k; }
     if op == GIR_EXTRACTVALUE { return ev_kind(I.ty); }
@@ -243,7 +245,7 @@ fn vx_kind(I: Inst, op: u32, t: u32) -> u32 {
     if op == GIR_LOAD || op == GIR_STORE { return K_A; }
     if op >= GIR_FADD && op <= GIR_FDIV || op == GIR_FNEG || op == GIR_FABS { return if lfp { K_A } else { K_B }; }
     if op == GIR_ADD || op == GIR_SUB || op == GIR_AND || op == GIR_OR || op == GIR_XOR { return if lfp { K_B } else { K_A }; }
-    if op == GIR_MUL { return if !lfp && lb == 16 { K_A } else { K_B }; }
+    if op == GIR_MUL { return if !lfp && (lb == 16 || vx_kind_e2(I, op, t, lb, lfp)) { K_A } else { K_B }; }
     if op == GIR_INSERTELT { return if gir_kind(I.c) == GIR_V_CONST && lb != 8 { K_A } else { K_B }; }
     if op == GIR_EXTRACTELT { return if gir_kind(I.b) == GIR_V_CONST && lb != 8 { K_A } else { K_B }; }
     if op == GIR_BITCAST {
@@ -252,6 +254,7 @@ fn vx_kind(I: Inst, op: u32, t: u32) -> u32 {
         return K_A;
     }
     if op == GIR_SELECT { return if rc_of(type_of(I.a)) == RC_GPR { K_A } else { K_B }; }
+    if vx_kind_e2(I, op, t, lb, lfp) { return K_A; }
     return K_B;
 }
 fn inst_kind2(I: Inst, op: u32, t: u32, rc: u8) -> u32 {
@@ -426,7 +429,7 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
             let op: u32 = I.op;
             let kd: u32 = if op < GIR_NOPS { OP_KIND[op] } else { K_B };
             var k2 = kd & 15;
-            if k2 == K_T { k2 = inst_kind(I); }
+            if k2 == K_T || op == GIR_SHUFFLE { k2 = inst_kind(I); }
             let nodef = k2 == K_B || k2 == K_ALL;
             let m: u32 = if op < GIR_NOPS { OP_USES[op] } else { U_A | U_B | U_C };
             if m & U_A != 0 { pp_use(I.a, j, lo, ncl, mw, nodef); }

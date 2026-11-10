@@ -1516,6 +1516,9 @@ fn lower_vbin_a(I: Inst, j: u32) {
     let lfp = cls_of(lt) == C_FP;
     let lb = bits_of(lt);
     let op: u32 = I.op;
+    // (E2, lowerv.goose)
+    if op == GIR_MUL && lb == 32 { lower_vmul32(I, j); return; }
+    if op == GIR_SHL || op == GIR_LSHR || op == GIR_ASHR { lower_vshift(I, j, lb); return; }
     var a = I.a;
     var b = I.b;
     let comm = op == GIR_FADD || op == GIR_FMUL || op == GIR_ADD || op == GIR_MUL || op == GIR_AND

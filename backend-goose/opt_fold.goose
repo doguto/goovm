@@ -154,6 +154,20 @@ fn simp(i: u32) -> u32 {
         return simp_extract(i);
     }
     if op == GIR_EXTRACTELT { return simp_extract_elt(i); }
+    if op == GIR_INSERTELT {
+        // a zero lane into a zero vector
+        let v = res(o_ins[i].a);
+        let x = res(o_ins[i].b);
+        if gir_kind(v) == GIR_V_CONST && x_consts[xb_c + gir_idx(v)].data == GIR_NONE {
+            let kx, xv = ci(x);
+            if kx && xv == 0 { return v; }
+            if gir_kind(x) == GIR_V_CONST {
+                let C = x_consts[xb_c + gir_idx(x)];
+                if C.data == GIR_NONE && C.lo == 0 && C.hi == 0 { return v; }
+            }
+        }
+        return NIL;
+    }
     if op == GIR_FCMP {
         o_ins[i].a = res(o_ins[i].a);
         o_ins[i].b = res(o_ins[i].b);
@@ -750,7 +764,37 @@ fn simp_cast(i: u32) -> u32 {
         fold_changed = true;
         return NIL;
     }
+    // (E2, InstCombine's narrowing) trunc (op a, b) for add, sub, mul, and,
+    // or, xor, shl by a constant: op (trunc a), (trunc b) in the narrow type,
+    // when a and b are extensions from it or constants (then the truncs fold)
+    if op == GIR_TRUNC && (A.op == GIR_ADD || A.op == GIR_SUB || A.op == GIR_MUL || A.op == GIR_AND || A.op == GIR_OR
+                           || A.op == GIR_XOR || A.op == GIR_SHL) && db >= 8 {
+        let ra = res(A.a);
+        let rb = res(A.b);
+        if narrowable(ra, t) && (narrowable(rb, t) || A.op == GIR_SHL) {
+            if A.op == GIR_SHL {
+                let kb, sv = ci(rb);
+                if !kb || sv >= db as u64 { return NIL; }
+            }
+            let na = ins_cast(i, GIR_TRUNC, t, ra, st);
+            let nb = if A.op == GIR_SHL { int_const(t, ci_val(rb)) } else { ins_cast(i, GIR_TRUNC, t, rb, st) };
+            return ins_new(i, A.op, t, na, nb);
+        }
+    }
     return NIL;
+}
+// Whether integer value v (of a wider type) is an extension from type t or
+// a constant: its truncation to t folds away.
+fn narrowable(v: u32, t: u32) -> bool {
+    let k, x = ci(v);
+    if k { return true; }
+    if !is_inst(v) { return false; }
+    let V = o_ins[v];
+    return (V.op == GIR_ZEXT || V.op == GIR_SEXT) && V.aux == t;
+}
+fn ci_val(v: u32) -> u64 {
+    let k, x = ci(v);
+    return x;
 }
 
 // GEP: constant indices into the offset, no terms and offset 0 -> the base,

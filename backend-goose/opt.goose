@@ -33,6 +33,15 @@ var x_dies: Die[>..] = [];
 var x_dattrs: DAttr[>..] = [];
 var in2out: u32[>..] = [];       // input instruction index -> output index (debug info), NIL
 var x_from: u32[>..] = [];       // per x_insts entry: the input instruction it stands for, NIL (E2)
+// (E2) types and data the optimizer adds (the vectorizers' vector types and
+// constants): copies of M.types and M.data with the additions, which M
+// then views; made on the first addition only
+var x_types: TypeDef[>..] = [];
+var x_data: u8[>..] = [];
+var xb_ty: i64 = 0;
+var xb_dt: i64 = 0;
+var xt_on = false;
+var xd_on = false;
 // Where this call's region of each output array starts (M views x_*[xb_*..]).
 var xb_i: i64 = 0;
 var xb_b: i64 = 0;
@@ -331,9 +340,48 @@ checkfree fn wmask(bits: u32) -> u64 {
 }
 // An integer constant of type t (INT, <= 64 bits) with value x (truncated).
 fn int_const(t: u32, x: u64) -> u32 { mk_const(t, x & wmask(bits_of(t)), 0) }
+// (E2) The vector type of n lanes of type e (a new type if the module has none).
+fn vec_type(n: u32, e: u32) -> u32 {
+    for T, k in M.types {
+        if T.kind == TK_VECTOR && T.n == n && T.elems == e { return k as! u32; }
+    }
+    if !xt_on {
+        xt_on = true;
+        xb_ty = x_types.len;
+        x_types.append(M.types);
+        M.types = x_types[xb_ty..];
+    }
+    let es = M.types[e].size;
+    let sz = n * es;
+    var al: u32 = 1;
+    while al < sz && al < 16 { al *= 2; }
+    x_types.push(TypeDef { kind: TK_VECTOR as! u8, cls: C_VEC as! u8, bits: 0, size: sz, align: al, store: sz, n: n, elems: e });
+    M.types = x_types[xb_ty..];
+    build_type_rc();
+    return (x_types.len - xb_ty - 1) as! u32;
+}
+// (E2) A vector constant of type t whose bytes are b (16 at most).
+fn vec_const(t: u32, b: const u8[:]) -> u32 {
+    var zero = true;
+    for x in b { if x != 0 { zero = false; } }
+    if zero { return undef_of(t); }
+    if !xd_on {
+        xd_on = true;
+        xb_dt = x_data.len;
+        x_data.append(M.data);
+        M.data = x_data[xb_dt..];
+    }
+    while (x_data.len - xb_dt) % 16 != 0 { x_data.push(0); }
+    let off: u32 = (x_data.len - xb_dt) as! u32;
+    x_data.append(b);
+    M.data = x_data[xb_dt..];
+    let k: u32 = (x_consts.len - xb_c) as! u32;
+    x_consts.push(Const { lo: 0, hi: 0, ty: t, data: off });
+    return GIR_V_CONST << 30 | k;
+}
 // The undefined (zero) value of type t.
 fn undef_of(t: u32) -> u32 {
-    if undef_c.len <= t { undef_c.resize(M.types.len, NIL); }
+    if undef_c.len <= t { undef_c.resize(M.types.len + 1, NIL); }
     let u = undef_c[t];
     if u != NIL { return u; }
     var r: u32 = 0;
@@ -667,6 +715,8 @@ fn opt_module() {
     ch_n = 0;
     ch_grow();
     undef_c.clear();
+    xt_on = false;
+    xd_on = false;
     build_type_rc();
     o_dbg = M.dies.len != 0;
     opt_lv = M.header[0].r0 & 0xFF;
@@ -892,6 +942,11 @@ fn opt_function(fi: u32) {
         ensure_cfg();
         build_uses();
         if mem2reg() { simplify_phis(); }
+        opt_round();
+    }
+    if !opt_off("vec") && vectorize_loops() {
+        resolve_all();
+        ensure_cfg();
         opt_round();
     }
     if !opt_off("rotate") {
