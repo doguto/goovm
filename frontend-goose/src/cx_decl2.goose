@@ -801,6 +801,7 @@ recursive fn declare_var(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
                 tmpls[pt].kind = TT_VAR as! u8;
                 tmpls[pt].sym = vs as! i32;
                 tmpls[pt].spec_args = d.qn.targs;
+                tmpls[pt].sargs_t = d.qn.targs_t as! i32;
                 tmpls[pt].primary = vt as! i32;
                 tmpls[vt].specs = link_add(tmpls[vt].specs, pt);
                 let pv = csym(SK_VAR, name, ty, d.loc);
@@ -1229,7 +1230,7 @@ fn func_with_ret(ft: u32, ret: u32) -> u32 {
 fn builtin_template(name: const u8[:]) {
     let t = tmpls.len;
     tmpls.push(Tmpl { kind: TT_CLASS as! u8, depth: 1, rsv: 0, sym: -1, params: 0, nparams: 0, scope: 0, pos: 0, t0: 0, t1: 0,
-        pattern: -1, specs: -1, outer: -1, spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: -1, pat_t: -1 });
+        pattern: -1, specs: -1, outer: -1, spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: -1, pat_t: -1, sargs_t: 0 });
     let s = csym(SK_TEMPLATE, intern(name), 0, 0);
     cxs[s].tmpl = t as! i32;
     cxs[s].flags = CF_TEMPLATE;

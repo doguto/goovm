@@ -427,6 +427,7 @@ struct Tmpl {
     def_t: i32,             // D2: a function template: the Tmpl of its definition when that is another declaration, -1
     hdr_outer: i32,         // D2: template<..> template<..>: the Tmpl of the enclosing header, -1
     pat_t: i32,             // D2: a member template of an instantiated class: the pattern's member template (-1 unknown, -2 none)
+    sargs_t: i32,           // D2: a partial specialization: the '<' of its argument list (0 unknown)
 }
 var tmpls: Tmpl[>..] = [];
 

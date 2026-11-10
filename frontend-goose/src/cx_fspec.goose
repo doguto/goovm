@@ -84,7 +84,7 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
         o.append(str("fspec_decl ", ident_text(syms[tmpls[t].sym].name as i64), " in ", if tmpls[t].scope >= 0 && scopes[tmpls[t].scope].name != 0 { ident_text(scopes[tmpls[t].scope].name as i64) } else { "-" }, " t=", t, " -> ", res, " errs=", errs, " <"));
         for i in tl_count(binds as i64) {
             let a = tl_arg(binds as i64, i);
-            if a.kind as i64 == TA_TYPE { o.append(tname(a.ty)); } else { o.append(str("#", a.v)); }
+            if a.kind as i64 == TA_TYPE { o.append(ctname(a.ty)); } else { o.append(str("#", a.v)); }
             o.append(", ");
         }
         o.append(">\n");
@@ -357,7 +357,7 @@ recursive fn deduce_one(p0: u32, e: u32) -> i64 {
     if is_opq(e) && nodes[e].kind as i64 != N_FUNCREF && nodes[e].kind as i64 != N_INITBRACE { return -1; }
     let ek = nodes[e].kind as i64;
     if ek == N_INITBRACE { return -1; }           // std::initializer_list<T> deduction: not yet
-    if ek == N_FUNCREF { return -1; }             // an overload set: not yet
+    if ek == N_FUNCREF { return deduce_from_set(p0, e); }
     var p = p0;
     var a = nodes[e].ty;
     let lv = is_lvalue(e) && nodes[e].flags & NF_XVALUE == 0;
@@ -552,4 +552,97 @@ recursive fn var_spec(tsym: i64, args0: i32) -> i64 {
         var_specs.insert(key, s as! u32);
     }
     return s;
+}
+
+// Deduction from an overload set e (C++ [temp.deduct.call]p6): with a
+// function template among its members (no explicit arguments) it is a
+// non-deduced context; otherwise each member is tried, and only one may
+// succeed.
+recursive fn deduce_from_set(p0: u32, e: u32) -> i64 {
+    if nodes[e].b != 0 { return -1; }
+    let explicit = if nodes[e].c != 0 { (nodes[e].c - 1) as! i32 } else { -1 };
+    let pp = if is_ref(p0) { tbase(p0) } else { unqual(p0) };
+    var hits = 0;
+    var hit_a: u32 = 0;
+    var s = nodes[e].a as i64;
+    while s >= 0 {
+        let f = resolve(s);
+        s = cxs[s].nnext as i64;
+        if f < 0 { continue; }
+        let k = syms[f].kind as i64;
+        var ftype: u32 = 0;
+        if k == SK_TEMPLATE && tmpl_kind(f) == TT_FUNC {
+            if explicit < 0 { return 1; }
+            let sp = deduce_addr(cxs[f].tmpl as i64, explicit, 0);
+            if sp == -2 { return -1; }
+            if sp < 0 { continue; }
+            ftype = syms[sp].ty;
+        } else if k == SK_FUNC && explicit < 0 && cxs[f].flags & CF_PATTERN == 0 {
+            if cxs[f].flags & CF_MEMBER != 0 && cxs[f].flags & CF_STATIC == 0 { return -1; }
+            ftype = syms[f].ty;
+        } else { continue; }
+        let a = if is_ref(p0) { ftype } else { mk_ptr(ftype) };
+        if deduce_test(pp, a) { hits++; hit_a = a; }
+    }
+    if hits == 0 { return 0; }
+    if hits > 1 { return 1; }
+    if deduce_try(pp, hit_a) { return 1; }
+    return 0;
+}
+
+// Would p deduce against a? (The bindings are left unchanged.)
+recursive fn deduce_test(p: u32, a: u32) -> bool {
+    let m = ded_args.len;
+    for i in ded_n { ded_args.push(ded_args[ded_base + i]); }
+    let ok = deduce_type(p, a);
+    for i in ded_n { ded_args[ded_base + i] = ded_args[m + i]; }
+    ded_args.resize(m);
+    return ok;
+}
+
+// The specialization of function template t that the address of its name
+// with explicit arguments `explicit` (-1 none) denotes for the function
+// type `target` (0: the explicit arguments alone) [temp.deduct.funcaddr]:
+// a symbol, -1 none, -2 not known.
+recursive fn deduce_addr(t: i64, explicit: i32, target: u32) -> i64 {
+    let pf = tmpls[t].pattern as i64;
+    if pf < 0 || kind_of(syms[pf].ty) != TY_FUNC { return -2; }
+    if target != 0 && is_opaque(target) { return -2; }
+    let sv = ded_begin(t);
+    var ok = true;
+    var unknown = false;
+    let ne = tl_count(explicit as i64);
+    var i = 0;
+    while i < ne && ok {
+        if i >= ded_n { ok = false; break; }
+        let p = tps[tmpls[t].params as i64 + i];
+        let a = tl_arg(explicit as i64, i);
+        if a.kind as i64 == TA_TYPE && (a.ty == 0 || is_opaque(a.ty)) { unknown = true; }
+        if p.pack {
+            let m2 = targ_scratch.len;
+            var j = i;
+            while j < ne { targ_scratch.push(tl_arg(explicit as i64, j)); j++; }
+            let pl = targ_intern(m2);
+            ded_args[ded_base + i] = TArg { kind: TA_PACK as! u8, rsv: 0, rsv2: 0, ty: 0, v: pl as i64 };
+            break;
+        }
+        if (p.kind as i64 == TPK_TYPE && a.kind as i64 != TA_TYPE) || (p.kind as i64 == TPK_VALUE && a.kind as i64 != TA_VALUE) ||
+           (p.kind as i64 == TPK_TEMPLATE && a.kind as i64 != TA_TEMPLATE) { ok = false; break; }
+        var a2 = a;
+        a2.rsv = 1;
+        ded_args[ded_base + i] = a2;
+        i++;
+    }
+    if ok && target != 0 && !deduce_type(syms[pf].ty, unqual(target)) { ok = false; }
+    if ok && !unknown {
+        let full, binds = ded_complete(t);
+        ded_end(sv);
+        if !full { return -1; }
+        let s = fspec_decl(t, binds);
+        if s >= 0 && target != 0 && unqual(syms[s].ty) != unqual(target) { return -1; }
+        return s;
+    }
+    ded_end(sv);
+    if !ok { return -1; }
+    return -2;
 }

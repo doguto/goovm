@@ -300,15 +300,9 @@ fn ics_overload_set(e: u32, p: u32) -> Ics {
     if is_pointer(t) { t = tbase(t); }
     if kind_of(t) == TY_MEMPTR { return ics_unknown(); }
     if !is_func(t) { return ics_unknown(); }
-    var s = nodes[e].a as i64;
-    var found = false;
-    while s >= 0 {
-        let f = resolve(s);
-        if f >= 0 && syms[f].kind as i64 == SK_FUNC && unqual(syms[f].ty) == unqual(t) { found = true; }
-        if f >= 0 && syms[f].kind as i64 == SK_TEMPLATE { return ics_unknown(); }
-        s = cxs[s].nnext as i64;
-    }
-    if found { return ics_std(RK_EXACT, IF_IDENT, 0, 0); }
+    let f = overload_for_target(e, t);
+    if f >= 0 { return ics_std(RK_EXACT, IF_IDENT, 0, 0); }
+    if f == -2 { return ics_unknown(); }
     return ics_bad();
 }
 

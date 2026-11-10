@@ -56,6 +56,7 @@ import .cx_pack;
 import .cx_conv;
 import .cx_adl;
 import .cx_traits;
+import .cx_diag;
 import .cx_decl2;
 import .cx_expr;
 import .cx_sema;

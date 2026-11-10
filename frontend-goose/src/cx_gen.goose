@@ -413,7 +413,7 @@ recursive fn class_rv(e: u32, t: u32, loc: u32) -> u32 {
 recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
     if is_opq(e) && nodes[e].kind as i64 != N_FUNCREF && nodes[e].kind as i64 != N_INITBRACE { return opaque_node(loc); }
     if nodes[e].kind as i64 == N_FUNCREF {
-        let a = funcref_addr(e, loc);
+        let a = funcref_addr_to(e, t, loc);
         if is_opq(a) { return opaque_node(loc); }
         return conv_value(a, t, loc);
     }

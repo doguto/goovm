@@ -528,7 +528,7 @@ recursive fn parse_member_access(base: u32, arrow: bool, loc: u32) -> u32 {
             if at(TK_LESS) && chain_has_template(s) { targs = parse_targs(); }
             if s < 0 {
                 if has_dep_base(csc) || scopes[csc].flags & SCF_PATTERN != 0 || dependent_ctx() { return opaque_node(loc); }
-                if diag_suppress == 0 { err_at(mloc, str("no member named '", ident_text(name as i64), "' in ", tname(obj_ty))); }
+                if diag_suppress == 0 { err_at(mloc, str("no member named '", ident_text(name as i64), "' in ", ctname(obj_ty))); }
                 return opaque_node(loc);
             }
             return mk_member_ref(base, arrow, s, targs, loc);
@@ -1109,22 +1109,30 @@ recursive fn parse_id_expr() -> u32 {
     }
     let s0 = qn.sym as i64;
     if s0 < 0 {
-        if qn.kind as i64 == QK_IDENT && at(TK_L_PAREN) {
+        if (qn.kind as i64 == QK_IDENT || qn.kind as i64 == QK_OP) && at(TK_L_PAREN) {
             // an unqualified call to an undeclared name: argument-dependent
-            // lookup may still find it (D1 does not perform ADL)
+            // lookup may still find it
             if !qn.qual {
                 let mark = parse_args();
-                let bx = cxx_builtin_call(qn.name, mark, loc);
-                if bx != 0 { nscratch.resize(mark); return bx; }
-                if !dependent_ctx() {
-                    // code generation: C's builtins (__builtin_alloca ...)
-                    let b = cg_builtin_call(qn.name, mark, loc);
-                    if b != 0 { nscratch.resize(mark); return b; }
+                if qn.kind as i64 == QK_IDENT {
+                    let bx = cxx_builtin_call(qn.name, mark, loc);
+                    if bx != 0 { nscratch.resize(mark); return bx; }
+                    if !dependent_ctx() {
+                        // code generation: C's builtins (__builtin_alloca ...)
+                        let b = cg_builtin_call(qn.name, mark, loc);
+                        if b != 0 { nscratch.resize(mark); return b; }
+                    }
+                }
+                var known = !dependent_ctx();
+                for i in mark..nscratch.len { if is_opq(nscratch[i]) && nodes[nscratch[i]].kind as i64 != N_FUNCREF { known = false; } }
+                if known {
+                    let c = adl_only_call(qn.name, mark, if qn.has_targs { qn.targs } else { -1 }, loc);
+                    if c != 0 { nscratch.resize(mark); return c; }
+                    if diag_suppress == 0 && lenient == 0 {
+                        err_at(qn.loc, str("use of undeclared identifier '", qn_text(qn), "'"));
+                    }
                 }
                 nscratch.resize(mark);
-                if !dependent_ctx() && diag_suppress == 0 && !adl_could_find(mark) {
-                    err_at(qn.loc, str("use of undeclared identifier '", ident_text(qn.name as i64), "'"));
-                }
                 return opaque_node(loc);
             }
         }
@@ -1132,7 +1140,7 @@ recursive fn parse_id_expr() -> u32 {
         if ec >= 0 && (has_dep_base(ec) || scopes[ec].flags & SCF_PATTERN != 0) { return opaque_node(loc); }
         if dependent_ctx() || diag_suppress > 0 || lenient > 0 { return opaque_node(loc); }
         if qn.scope >= 0 && (scopes[qn.scope].flags & SCF_PATTERN != 0 || has_dep_base(qn.scope as i64)) { return opaque_node(loc); }
-        err_at(qn.loc, str("use of undeclared identifier '", ident_text(qn.name as i64), "'"));
+        err_at(qn.loc, str("use of undeclared identifier '", qn_text(qn), "'"));
         return opaque_node(loc);
     }
     // a type: a functional cast
@@ -1154,6 +1162,16 @@ recursive fn parse_id_expr() -> u32 {
 // D1 does not perform argument-dependent lookup; an unqualified call whose
 // arguments have class (or enum, or opaque) types may name a function ADL
 // finds, so no error is given for it.
+var qn_buf: u8[>..] = [];
+// The name of qn as written (operator<<, ~X, x).
+fn qn_text(qn: QN&) -> const u8[:] {
+    let k = qn.kind as i64;
+    qn_buf.clear();
+    if k == QK_DTOR { qn_buf.push('~'); }
+    qn_buf.append(ident_text(qn.name as i64));
+    return qn_buf;
+}
+
 fn adl_could_find(mark: i64) -> bool {
     for i in mark..nscratch.len {
         let t = nodes[nscratch[i]].ty;

@@ -677,3 +677,96 @@ recursive fn init_convert(s: i64, init: u32, form: i64, loc: u32) -> u32 {
 }
 
 fn default_init(s: i64, loc: u32) -> u32 { return 0; }
+
+// An unqualified call whose name ordinary lookup does not find: the
+// functions argument-dependent lookup finds (C++ [basic.lookup.argdep]).
+// 0 when it finds none; an opaque node when the choice is not known.
+recursive fn adl_only_call(name: u32, mark: i64, explicit: i32, loc: u32) -> u32 {
+    let mc = cand_syms.len;
+    let n0 = adl_seen;
+    let ok = adl_candidates(mc, name, mark, explicit, false);
+    if adl_seen == n0 && ok { cand_syms.resize(mc); return 0; }
+    cand_obj = 0;
+    let f = best_of_candidates(mc, mark, false, !ok);
+    if f < 0 { return opaque_node(loc); }
+    return build_call(f, 0, mark, loc, false);
+}
+
+// The function of overload set e whose type matches the target type t (a
+// pointer or reference to function, or a function type) [over.over]:
+// non-template functions are preferred, then the most specialized
+// template's specialization. -1 none (or ambiguous), -2 not known.
+recursive fn overload_for_target(e: u32, t: u32) -> i64 {
+    var ft = nonref(t);
+    if is_pointer(ft) { ft = tbase(ft); }
+    if is_opaque(ft) || !is_func(ft) { return -2; }
+    ft = unqual(ft);
+    if nodes[e].b != 0 { return -2; }
+    let explicit = if nodes[e].c != 0 { (nodes[e].c - 1) as! i32 } else { -1 };
+    var nt: i64 = -1;
+    var nnt = 0;
+    var unknown = false;
+    let mc = cand_syms.len;
+    var s = nodes[e].a as i64;
+    while s >= 0 {
+        let f = resolve(s);
+        let vis = visible(s);
+        s = cxs[s].nnext as i64;
+        if f < 0 || !vis { continue; }
+        let k = syms[f].kind as i64;
+        if k == SK_FUNC && cxs[f].flags & CF_PATTERN == 0 {
+            if cxs[f].flags & CF_MEMBER != 0 && cxs[f].flags & CF_STATIC == 0 { unknown = true; continue; }
+            if explicit < 0 && unqual(syms[f].ty) == ft && f != nt { nt = f; nnt++; }
+        } else if k == SK_TEMPLATE && tmpl_kind(f) == TT_FUNC {
+            let sp = deduce_addr(cxs[f].tmpl as i64, explicit, ft);
+            if sp >= 0 { add_cand(mc, sp); }
+            else if sp == -2 { unknown = true; }
+        }
+    }
+    if nnt == 1 { cand_syms.resize(mc); return nt; }
+    if nnt > 1 { cand_syms.resize(mc); return -1; }
+    let n = cand_syms.len - mc;
+    if n == 0 { return if unknown { -2 } else { -1 }; }
+    var best = cand_syms[mc] as i64;
+    if n > 1 {
+        // the most specialized template
+        for i in mc + 1..cand_syms.len {
+            let c = cand_syms[i] as i64;
+            let a = fn_at_least(cxs[c].tmpl as i64, cxs[best].tmpl as i64, tmpl_np(c));
+            let b = fn_at_least(cxs[best].tmpl as i64, cxs[c].tmpl as i64, tmpl_np(c));
+            if a && !b { best = c; }
+        }
+        for i in mc..cand_syms.len {
+            let c = cand_syms[i] as i64;
+            if c == best { continue; }
+            let a = fn_at_least(cxs[best].tmpl as i64, cxs[c].tmpl as i64, tmpl_np(c));
+            let b = fn_at_least(cxs[c].tmpl as i64, cxs[best].tmpl as i64, tmpl_np(c));
+            if !a || b { best = -1; break; }
+        }
+    }
+    cand_syms.resize(mc);
+    if best < 0 { return if unknown { -2 } else { -1 }; }
+    if unknown { return -2; }
+    return best;
+}
+
+// &f for the function of overload set e that target type t selects (the
+// function itself for a reference or function target); the single
+// function's address when the set has one.
+recursive fn funcref_addr_to(e: u32, t: u32, loc: u32) -> u32 {
+    let f = overload_for_target(e, t);
+    if f < 0 { return funcref_addr(e, loc); }
+    let r = node(N_DECLREF, 0, syms[f].ty, f, 0, 0, loc);
+    nodes[r].flags = NF_LVALUE;
+    syms[f].flags = syms[f].flags | SF_USED;
+    inst_use(f);
+    if is_ref(t) || is_func(t) { return r; }
+    return node(N_UNARY, U_ADDR, mk_ptr(syms[f].ty), r as i64, 0, 0, loc);
+}
+
+// The number of function parameters of specialization f's template.
+fn tmpl_np(f: i64) -> i64 {
+    let t = cxs[f].tmpl as i64;
+    if t < 0 || tmpls[t].pattern < 0 { return 0; }
+    return types[syms[tmpls[t].pattern].ty >> 4].n as i64;
+}

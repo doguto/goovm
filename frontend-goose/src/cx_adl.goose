@@ -115,6 +115,7 @@ recursive fn adl_add_cls(sc: i64, nm: i64, cm: i64, depth: i64) {
 // Adds the functions named `name` that argument-dependent lookup finds for
 // the arguments nscratch[mark..] to the candidates from mc; false when a
 // deduction could not be decided.
+var adl_seen: i64 = 0;    // functions (and templates) adl_candidates found, counted
 recursive fn adl_candidates(mc: i64, name: u32, mark: i64, explicit: i32, oper: bool) -> bool {
     let nm = adl_ns.len;
     let cm = adl_cls.len;
@@ -141,6 +142,7 @@ recursive fn adl_candidates(mc: i64, name: u32, mark: i64, explicit: i32, oper: 
                 }
                 let k = syms[f].kind as i64;
                 if take && (k == SK_FUNC || k == SK_TEMPLATE) && cxs[f].flags & CF_MEMBER == 0 {
+                    adl_seen++;
                     if !add_candidate(mc, f, explicit, mark, nargs, oper) { ok = false; }
                 }
             }
@@ -161,7 +163,7 @@ recursive fn adl_candidates(mc: i64, name: u32, mark: i64, explicit: i32, oper: 
 // when the built-in operator applies (no candidate is viable), or an
 // opaque node when the choice is not known.
 recursive fn resolve_oper(op: i64, l: u32, r: u32, post: bool, loc: u32) -> u32 {
-    if is_opq(l) || (r != 0 && is_opq(r) && nodes[r].kind as i64 != N_INITBRACE) { return 0; }
+    if is_opq(l) || (r != 0 && is_opq(r) && nodes[r].kind as i64 != N_INITBRACE && nodes[r].kind as i64 != N_FUNCREF) { return 0; }
     let lt = nodes[l].ty;
     let lcls = is_record(lt);
     let rcls = r != 0 && nodes[r].kind as i64 != N_INITBRACE && is_record(nodes[r].ty);

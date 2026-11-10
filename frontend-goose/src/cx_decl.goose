@@ -445,7 +445,7 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
                     // D2: a complete class without unknown bases has no such type
                     // (a substitution failure in a template's declaration)
                     if !dependent_ctx() {
-                        err_at(qn.loc, str("no type named '", ident_text(qn.name as i64), "' in ", tname(scope_class_type(qn.scope as i64))));
+                        err_at(qn.loc, str("no type named '", ident_text(qn.name as i64), "' in ", ctname(scope_class_type(qn.scope as i64))));
                     }
                     t = t_unknown;
                 } else if qn.dep == 0 && qn.qual && qn.scope >= 0 {

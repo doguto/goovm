@@ -217,7 +217,7 @@ fn inst_leave(st: InstSave) -> bool {
         var o: u8[>..] = [];
         loc_prefix(o, tloc() as i64);
         o.append("note: in instantiation of ");
-        o.append(ident_text(syms[st.what].name as i64));
+        inst_what_text(o, st.what);
         o.append(" requested here\n");
         write_stderr(o);
     }
@@ -346,7 +346,7 @@ recursive fn inst_record(r: i64) {
     let t = cxs[cs].tmpl as i64;
     let args = cxs[cs].targs;
     let pat, pargs = select_pattern(t, args);
-    if inst_debug() { write_stderr(str("inst_record r=", r, " ", ident_text(records[r].name as i64), " t=", t, " pat=", pat, " pattern=", if pat >= 0 { tmpls[pat].pattern } else { -9 }, "\n")); }
+    if inst_debug() { write_stderr(str("inst_record r=", r, " ", ctname(records[r].ty << 4), " t=", t, " pat=", pat, " pattern=", if pat >= 0 { tmpls[pat].pattern } else { -9 }, "\n")); }
     if pat < 0 || tmpls[pat].pattern < 0 || tmpls[pat].t1 == 0 { return; }
     // the header and tokens of the pattern's definition
     let src = if tmpls[pat].def_t >= 0 { tmpls[pat].def_t as i64 } else { pat };
@@ -563,6 +563,7 @@ recursive fn match_spec(pt: i64, args: i32) -> bool, i32 {
     var full = false;
     if ok { full, binds = ded_list(pt); }
     ded_end(sv);
+    if ok && full && !spec_args_check(pt, binds, args) { return false, -1; }
     return ok && full, binds;
 }
 
@@ -1032,4 +1033,88 @@ recursive fn inst_var_def(s: i64) {
     let bad = inst_leave(st);
     if bad { cxs[s].flags2 = cxs[s].flags2 | CF2_DIRTY; }
     take_defs(mark);
+}
+
+// After deduction: do partial specialization pt's arguments, substituted
+// with its parameters' bindings, give args? Substitution failures (an
+// alias template's unused argument such as void_t<typename T::x>,
+// enable_if_t<false>) and non-deduced contexts (typename T::x) are checked
+// by parsing the argument list again (C++ [temp.class.spec.match]p2-3).
+recursive fn spec_args_check(pt: i64, binds: i32, args: i32) -> bool {
+    let t0 = tmpls[pt].sargs_t as i64;
+    if t0 <= 0 || !spec_args_need_check(pt, t0) { return true; }
+    let l = subst_parse(pt, binds, t0, 2, 0);
+    if subst_failed || subst_list < 0 { return false; }
+    let prim = tmpls[pt].primary as i64;
+    let full = if prim >= 0 && tmpls[prim].kind as i64 == TT_CLASS { complete_args(prim, subst_list) } else { subst_list };
+    if full == args { return true; }
+    if args_dependent(full) || tl_count(full as i64) != tl_count(args as i64) { return true; }
+    for i in tl_count(args as i64) {
+        let a = tl_arg(args as i64, i);
+        let b = tl_arg(full as i64, i);
+        if a.kind != b.kind { return false; }
+        if a.kind as i64 == TA_TYPE {
+            if a.ty != b.ty && !(is_opaque(a.ty) || is_opaque(b.ty)) { return false; }
+        } else if a.kind as i64 == TA_VALUE {
+            if a.v != b.v && a.ty != 0 && b.ty != 0 && !is_opaque(a.ty) && !is_opaque(b.ty) && !is_dep(a.ty) && !is_dep(b.ty) { return false; }
+        } else if a.kind as i64 == TA_TEMPLATE {
+            if a.v != b.v { return false; }
+        }
+    }
+    return true;
+}
+
+// Does the argument list at token t0 (its '<') have parts deduction does
+// not check: qualified names, decltype, nested template-ids (alias
+// templates), expressions?
+fn spec_args_need_check(pt: i64, t0: i64) -> bool {
+    var j = t0 + 1;
+    var depth = 1;
+    loop {
+        let k = tu_toks[j].kind as i64;
+        if k == TK_EOF { return false; }
+        if k == TK_LESS { depth++; }
+        else if k == TK_GREATER { depth--; if depth == 0 { return false; } }
+        else if k == TK_GREATERGREATER { depth -= 2; if depth <= 0 { return depth < 0; } }
+        if k == TK_COLONCOLON || k == TK_LESS || k == TK_KW + KW_DECLTYPE || k == TK_KW + KW_SIZEOF { return true; }
+        j++;
+    }
+    return false;
+}
+
+// clang's wording of what is instantiated: "template class 'X<int>'",
+// "function template specialization 'f<int>'", "member function 'X<int>::f'".
+fn inst_what_text(o: u8[>..]&, s: i64) {
+    let k = syms[s].kind as i64;
+    if k == SK_TAG {
+        o.append("template class '");
+        cx_type_text(o, syms[s].ty);
+        o.push('\'');
+        return;
+    }
+    if k == SK_FUNC && cxs[s].flags2 & CF2_FSPEC != 0 {
+        o.append("function template specialization '");
+        cx_scope_prefix(o, cxs[s].dscope as i64);
+        o.append(ident_text(syms[s].name as i64));
+        if cxs[s].targs >= 0 { cx_targs_text(o, cxs[s].targs as i64); }
+        o.push('\'');
+        return;
+    }
+    if k == SK_FUNC {
+        o.append(if cxs[s].flags & CF_MEMBER != 0 { "member function '" } else { "function '" });
+        cx_scope_prefix(o, cxs[s].dscope as i64);
+        o.append(ident_text(syms[s].name as i64));
+        o.push('\'');
+        return;
+    }
+    if k == SK_VAR {
+        o.append("static data member '");
+        cx_scope_prefix(o, cxs[s].dscope as i64);
+        o.append(ident_text(syms[s].name as i64));
+        o.push('\'');
+        return;
+    }
+    o.push('\'');
+    o.append(ident_text(syms[s].name as i64));
+    o.push('\'');
 }

@@ -247,6 +247,7 @@ struct QN {
     sym: i32 = -1,          // the lookup result
     loc: u32 = 0,
     start: u32 = 0,         // its first token
+    targs_t: u32 = 0,       // D2: the '<' of the final component's template arguments
 }
 
 // Is symbol s (resolved) usable before :: (a namespace, a type, a class template)?
@@ -409,6 +410,7 @@ recursive fn parse_nns(qn: QN&) -> bool {
             let save_loc = tloc();
             let sv = save();
             adv();
+            let lt = pc;
             let args = parse_targs();
             if at(TK_COLONCOLON) {
                 adv();
@@ -421,6 +423,7 @@ recursive fn parse_nns(qn: QN&) -> bool {
             qn.kind = QK_IDENT;
             qn.name = id;
             qn.targs = args;
+            qn.targs_t = lt as! u32;
             qn.has_targs = true;
             qn.tkw = tkw;
             qn.loc = save_loc;
