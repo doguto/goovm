@@ -590,9 +590,21 @@ def run_and_verify(t, exe, wd, args, timeout):
     return dt
 
 
+ICOUNT = False   # --icount (F1, AArch64): instructions instead of seconds
+
+
 def time_exe(t, exe, wd, n):
-    """Best wall time of n runs of exe (output discarded, not verified again)."""
+    """Best wall time of n runs of exe (output discarded, not verified again); with --icount the
+    dynamic instruction count of the executable's own code, in billions (bench/a64/icount.py)."""
     rd = setup_rundir(t, wd)
+    if ICOUNT:
+        sys.path.insert(0, os.path.join(ROOT, "bench", "a64"))
+        import icount
+        stdin = open(os.path.join(rd, t.stdin), "rb") if t.stdin else None
+        tot, prog, rc = icount.count(exe, t.args, stdin=stdin, cwd=rd)
+        if stdin:
+            stdin.close()
+        return prog / 1e9
     best = None
     for _ in range(n):
         stdin = open(os.path.join(rd, t.stdin), "rb") if t.stdin else subprocess.DEVNULL
@@ -965,6 +977,8 @@ def main():
     ap.add_argument("--emit-bc", action="store_true", help="only write the bitcode of each variant (for analysis)")
     ap.add_argument("--time-run", type=int, default=0, metavar="N",
                     help="also time each passing program and its clang -O0 build: best of N runs (use -j 1)")
+    ap.add_argument("--icount", action="store_true",
+                    help="with --time-run and --target aarch64: dynamic instruction counts (billions) instead of times")
     ap.add_argument("--time-ref", default="", metavar="LEVELS",
                     help="with --time-run, also time clang builds at these levels (e.g. O1,O2)")
     ap.add_argument("--report", default="")
@@ -974,6 +988,11 @@ def main():
     ap.add_argument("filter", nargs="*", help="substrings of test ids to run")
     args = ap.parse_args()
     set_target(args.target)
+    if args.icount:
+        if args.target != "aarch64":
+            sys.exit("--icount needs --target aarch64 (qemu)")
+        global ICOUNT
+        ICOUNT = True
     args.variants = [v for v in args.variants.split(",") if v]
     args.time_ref = [v for v in args.time_ref.split(",") if v and v != "O0"]
     corpora = [c for c in args.corpus.split(",") if c]

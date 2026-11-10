@@ -493,6 +493,11 @@ fn a_gen_inst2(I: Inst, j: u32, k: u32, op: u32, cur: u32, next: u32) {
             GIR_BR => {
                 if a_edge_phi(cur, I.a) { a_phi_moves(cur, I.a); }
                 if I.a != next { a_b_block(I.a); }
+                else if !opt_on {
+                    // AArch64 FastISel branches to the next block too: the `b` carries the
+                    // branch's line (a loop body's closing brace), where a debugger stops
+                    a4(0x14000001);
+                }
             },
             GIR_CONDBR => a_lower_condbr(I, cur, next),
             GIR_SWITCH => a_lower_switch(I, cur, next),
