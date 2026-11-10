@@ -20,16 +20,30 @@ usage: backend-goose/check_identical.py --goovm BUILD/tools/goovm-llc/goovm-llc
            [--inputs DIR ...] [--opt-passes PASSES] [-j N] [--work DIR] [--keep]
 Prints one line per mismatch or failure and a pass count; exit status 0 iff
 every pair is identical.
+
+Two builds (milestone F1): `--base OLD_GOOVM_LLC` compares two goovm-llc
+builds instead (and with `--cc NEW --base-cc OLD`, two goovm-cc builds), on
+tests/c, tests/cxx and the sources of the tests/suite.py corpora
+(`--corpus`), for the variants O0, g, mem2reg, O1 and O1-g (goovm-llc on
+clang-20 bitcode) and cc, cc-g, cc-O1 (goovm-cc). This is how a change to the
+back-end or the exporter is shown not to change the x86-64 output. The old
+build's results can be recorded as checksums and reused:
+
+  check_identical.py --base OLD/goovm-llc --base-cc OLD/goovm-cc --save ref.json [--corpus ...]
+  check_identical.py --goovm NEW/goovm-llc --cc NEW/goovm-cc --load ref.json [--corpus ...]
 """
 import argparse
 import concurrent.futures as cf
 import filecmp
 import glob
+import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -90,6 +104,135 @@ def compare(label, bc, args):
     return label, "ok", f"{size} bytes"
 
 
+# ------------------------------------------------------------ two builds
+
+LLC_VARIANTS = ["O0", "g", "mem2reg", "O1", "O1-g"]
+CC_VARIANTS = ["cc", "cc-g", "cc-O1"]
+
+
+def two_build_jobs(args):
+    """[(label, src, flags, is_cxx)] for tests/c, tests/cxx and the suite corpora."""
+    sys.path.insert(0, os.path.join(ROOT, "tests"))
+    import suite  # noqa
+    jobs = []
+    for s in sorted(glob.glob(os.path.join(ROOT, "tests", "c", "*.c"))):
+        jobs.append(("tests/c/" + os.path.basename(s), s, ["-w"], False))
+    for s in sorted(glob.glob(os.path.join(ROOT, "tests", "cxx", "*.cpp"))):
+        jobs.append(("tests/cxx/" + os.path.basename(s), s, ["-w"], True))
+    corpora = [c for c in args.corpus.split(",") if c]
+    if corpora:
+        for t in suite.all_tests(args.suite, corpora):
+            for k, s in enumerate(t.srcs):
+                jobs.append((f"{t.id}#{k}", s, t.flags(s), suite.is_cxx(s)))
+    if args.filter:
+        jobs = [j for j in jobs if any(f in j[0] for f in args.filter)]
+    return jobs
+
+
+def digest_file(path, rc, err):
+    h = hashlib.sha256()
+    h.update(str(rc).encode())
+    if rc == 0 and os.path.exists(path):
+        h.update(open(path, "rb").read())
+    elif rc != 0:
+        h.update(err[-200:])
+    return h.hexdigest()[:32]
+
+
+def two_build_one(job, args, tools):
+    """{build: {variant: digest}} of one source file, per build in tools ({"new"|"base": (llc, cc)})."""
+    label, src, flags, cxx = job
+    cc = args.clangxx if cxx else args.clang
+    wd = os.path.join(args.work, "f%d" % threading.get_ident())
+    os.makedirs(wd, exist_ok=True)
+    bcs = {}
+    out = {}
+    for v, cmd in (("O0", ["-O0"]), ("g", ["-O0", "-g"]), ("raw", ["-O0", "-Xclang", "-disable-O0-optnone"])):
+        bc = os.path.join(wd, v + ".bc")
+        r = run([cc] + cmd + flags + ["-c", "-emit-llvm", src, "-o", bc])
+        bcs[v] = bc if r.returncode == 0 else None
+    if bcs["raw"]:
+        m2r = os.path.join(wd, "mem2reg.bc")
+        r = run([args.opt, "-passes=mem2reg", bcs["raw"], "-o", m2r])
+        bcs["mem2reg"] = m2r if r.returncode == 0 else None
+    bcs["O1"] = bcs["O0"]
+    bcs["O1-g"] = bcs["g"]
+    for who, (llc, gcc) in tools.items():
+        res = {}
+        o = os.path.join(wd, who + ".o")
+        for v in LLC_VARIANTS:
+            if not llc or not bcs.get(v):
+                continue
+            if os.path.exists(o):
+                os.unlink(o)
+            r = run([llc] + (["-O1"] if v.startswith("O1") else []) + [bcs[v], "-o", o])
+            res[v] = digest_file(o, r.returncode, r.stderr)
+        for v in CC_VARIANTS:
+            if not gcc:
+                continue
+            if os.path.exists(o):
+                os.unlink(o)
+            r = run([gcc, "-O1" if v == "cc-O1" else "-O0"] + (["-g"] if v == "cc-g" else []) + flags
+                    + ["-c", src, "-o", o])
+            res[v] = digest_file(o, r.returncode, r.stderr)
+        out[who] = res
+    return label, out
+
+
+def two_builds(args):
+    if not args.work:
+        args.work = tempfile.mkdtemp(prefix="goovm-identical-")
+    jobs = two_build_jobs(args)
+    ref = {}
+    if args.load:
+        ref = json.load(open(args.load))
+    tools = {}
+    if args.base and not args.load:
+        tools["base"] = (args.base, args.base_cc)
+    if not args.save:
+        tools["new"] = (args.goovm, args.cc)
+    saved = {}
+    if args.save and os.path.exists(args.save):
+        # resume an interrupted recording: the files already recorded are skipped
+        saved = json.load(open(args.save))
+        jobs = [j for j in jobs if j[0] not in saved]
+    counts = {"same": 0, "differ": 0, "missing": 0}
+    n = 0
+    with cf.ThreadPoolExecutor(max_workers=args.j) as ex:
+        for label, out in ex.map(lambda j: two_build_one(j, args, tools), jobs):
+            n += 1
+            if n % 250 == 0:
+                print(f"... {n}/{len(jobs)}", flush=True)
+            if args.save:
+                saved[label] = out["base"]
+                if n % 100 == 0:
+                    json.dump(saved, open(args.save + ".tmp", "w"), indent=0, sort_keys=True)
+                    os.replace(args.save + ".tmp", args.save)
+                continue
+            base = out.get("base") or ref.get(label)
+            new = out["new"]
+            if base is None:
+                counts["missing"] += 1
+                print(f"missing  {label} (not in the reference)")
+                continue
+            for v, d in sorted(new.items()):
+                if v not in base:
+                    counts["missing"] += 1
+                    print(f"missing  {label} [{v}]")
+                elif base[v] != d:
+                    counts["differ"] += 1
+                    print(f"DIFF     {label} [{v}]")
+                else:
+                    counts["same"] += 1
+    if args.save:
+        json.dump(saved, open(args.save, "w"), indent=0, sort_keys=True)
+        print(f"saved {sum(len(v) for v in saved.values())} digests of {len(saved)} files to {args.save}")
+        return 0
+    print(f"\nidentical: {counts['same']} objects (differ: {counts['differ']}, missing: {counts['missing']}; "
+          f"{len(jobs)} source files)")
+    return 0 if counts["differ"] == counts["missing"] == 0 else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--goovm", default=os.environ.get("GOOVM_LLC", os.path.join(ROOT, "build-goose/tools/goovm-llc/goovm-llc")),
@@ -102,7 +245,18 @@ def main():
     ap.add_argument("--work", default="")
     ap.add_argument("--keep", action="store_true", help="keep the objects and bitcode")
     ap.add_argument("-v", action="store_true", help="print a line for every input, not only failures")
+    ap.add_argument("--base", default="", help="two builds: the old goovm-llc")
+    ap.add_argument("--cc", default="", help="two builds: the new goovm-cc")
+    ap.add_argument("--base-cc", dest="base_cc", default="", help="two builds: the old goovm-cc")
+    ap.add_argument("--save", default="", help="two builds: record the old build's digests in this file")
+    ap.add_argument("--load", default="", help="two builds: compare with the digests recorded in this file")
+    ap.add_argument("--corpus", default="", help="two builds: tests/suite.py corpora to include (a,b,...)")
+    ap.add_argument("--suite", default="/home/user/llvm/llvm-test-suite")
+    ap.add_argument("--clangxx", default="clang++-20")
+    ap.add_argument("filter", nargs="*", help="two builds: only files whose label contains one of these")
     args = ap.parse_args()
+    if args.base or args.load or args.save:
+        sys.exit(two_builds(args))
     if not os.path.exists(args.goovm):
         sys.exit(f"goovm-llc not found at {args.goovm} (use --goovm or GOOVM_LLC)")
     tmp = None

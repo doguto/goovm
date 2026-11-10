@@ -551,6 +551,7 @@ fn ret_parts_fuse(j: u32, t: u32) -> bool {
                 let fc = rc_of(ft);
                 if pass == 0 {
                     if claimed & bit(k) != 0 || store_of(ft) != p.size { return false; }
+                    if rg_on && rg_reg[e] != NOREG { return false; }   // (a pinned value starts at its own instruction)
                     if p.kind == RP_XMM && !in_xmm(fc) { return false; }
                     if p.kind == RP_GPR && (fc != RC_GPR || !exact_width(bits_of(ft))) { return false; }
                     claimed |= bit(k);
@@ -679,7 +680,7 @@ fn setup_args() {
             if c == RC_GPR && exact_width(bits_of(t)) && bits_of(t) < 64 { st |= ST_EXT; }
             vi[id].st = st;
             let pa = st & ST_GLOB != 0 || c == RC_GPR && !exact_width(bits_of(t));
-            if st & ST_GLOB != 0 {
+            if st & (ST_GLOB | ST_PIN) == ST_GLOB {
                 ra_home_off(id);
                 vi[id].st |= ST_MEM;
             }
@@ -732,9 +733,9 @@ fn prologue_args() {
             store64(m_add(home, 8), RAX);
         } else if l.kind == AL_GPR && rc_of(t) == RC_GPR {
             if !exact_width(bits_of(t)) { zext_reg(l.r0, bits_of(t)); }
-            if vi[id].st & ST_GLOB != 0 { store_int(m_rbp(ho), l.r0, bits_of(t)); }
+            if vi[id].st & (ST_GLOB | ST_PIN) == ST_GLOB { store_int(m_rbp(ho), l.r0, bits_of(t)); }
         } else if l.kind == AL_XMM && in_xmm(rc_of(t)) {
-            xmm_store_t(m_rbp(ho), l.r0, t);
+            if vi[id].st & ST_PIN == 0 { xmm_store_t(m_rbp(ho), l.r0, t); }
         } else if l.kind == AL_GPR {
             store64(m_rbp(ho), l.r0);
         } else if l.kind == AL_GPR2 {

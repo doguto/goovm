@@ -3,8 +3,11 @@
 // structs with static_asserts. Field names follow gir.h except where gir.h
 // uses a Goose keyword.
 
+// r0 = opt_level (E1), r1 = target (F1: GIR_TARGET_*)
 struct Header { version: u32, flags: u32, tls_get_addr: u32, n_llvm_insts: u32,
                 r0: u32, r1: u32, r2: u32, r3: u32 }
+let GIR_TARGET_X86_64 = 0;
+let GIR_TARGET_AARCH64 = 1;
 struct TypeDef { kind: u8, cls: u8, bits: u16, size: u32, align: u32, store: u32, n: u32, elems: u32 }
 struct Func { global: u32, flags: u32, first_block: u32, n_blocks: u32, first_inst: u32,
               n_inst: u32, n_args: u32, args: u32, ret_ty: u32, dbg: u32 }
@@ -73,6 +76,7 @@ let GIR_T_F64 = 8;
 let GIR_T_F80 = 9;
 let GIR_T_I128 = 10;
 let GIR_T_F16 = 11;
+let GIR_T_F128 = 12;     // (additive, F1: AArch64 long double)
 
 // Type kinds and value classes.
 let TK_VOID = 0;
@@ -176,7 +180,11 @@ let GIR_BLOCKADDR = 80;
 let GIR_X86 = 81;
 let GIR_ASM = 82;
 let GIR_LANDINGPAD = 83;
-let GIR_NOPS = 84;            // opcode count
+let GIR_NOPS = 84;            // opcode count of the x86-64 back-end's tables (up to LANDINGPAD)
+let GIR_FMA = 84;             // (additive, F1: AArch64)
+let GIR_A64 = 85;             // (additive, F1: AArch64 intrinsics)
+let GIR_NOPS_ALL = 86;        // opcode count (F1)
+let ASMREG_V0 = 32;           // AArch64 inline-asm register numbers: 0..30 x, 32..63 v
 let ASMREG_XMM0 = 16;
 let ASMREG_ST0 = 32;
 
@@ -250,10 +258,12 @@ let IF_SINGLETHREAD = 0x0100;
 let IF_VARARG = 0x0200;
 let IF_NORETURN = 0x0400;
 let IF_INVOKE = 0x0800;
+let IF_NSW = 0x1000;
 let ORD_SEQ_CST = 7;
 
 // ABI words.
 let ABI_BYVAL = 0x80000000;
+let ABI_SRET = 0x40000000;
 
 checkfree fn abi_size(w: u32) -> u32 { w & 0x00FFFFFF }
 checkfree fn abi_align(w: u32) -> u32 { (1 as u32) << ((w >> 24) & 0x1F) }
@@ -292,6 +302,7 @@ let SF_NOBITS = 8;
 let DR_ABS64 = 0;
 let DR_BLOCK = 1;
 let DR_BLOCKDIFF32 = 2;
+let DR_PCREL32 = 3;      // (additive, E1)
 
 let MF_PIE = 1;
 

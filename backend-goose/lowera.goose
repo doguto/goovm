@@ -44,6 +44,15 @@ fn v_ext(v: u32) -> bool {
 // loaded and dies here, it is loaded into the register the result is wanted
 // in (its hint), so no copy follows.
 fn ra_gpr_h(v: u32, clean: bool, j: u32) -> u32 {
+    if rg_on && rg_reg[j] != NOREG {
+        // pinned result: a constant or address is built in its register
+        if is_val(v) { return ra_gpr(v, clean); }
+        let r: u32 = rg_reg[j];
+        r_lock |= bit(r);
+        r_temp |= bit(r);
+        ra_mat_gpr(v, r);
+        return r;
+    }
     if !is_val(v) && hint_free(j) {
         // a constant or address: built in the hint register (a scratch the
         // result takes over, see ra_reuse2)
@@ -82,6 +91,7 @@ fn def_from(j: u32, a: u32, ra: u32) -> u32 {
 // ------------------------------------------------------ integer binops
 
 fn lower_binop_a(I: Inst, j: u32) {
+    if opt_on && rmw_try(I, j) { return; }
     let bits = bits_of(I.ty);
     let op: u32 = I.op;
     let w = wq(bits);
@@ -194,6 +204,59 @@ fn lower_binop_a(I: Inst, j: u32) {
     let ext = op == GIR_ADD || op == GIR_SUB || op == GIR_MUL || v_ext(a) || v_ext(b);
     lower_int_done(j, rd, bits, ext);
 }
+// -O1: `store (op (load p), x), p` as one read-modify-write instruction
+// (`add [p], x`) when the load is deferred into the operation, the
+// operation's only use is the store right after it, and both name the same
+// address value. The store then emits nothing (K_DONE).
+fn rmw_try(I: Inst, j: u32) -> bool {
+    let op: u32 = I.op;
+    if op != GIR_ADD && op != GIR_SUB && op != GIR_AND && op != GIR_OR && op != GIR_XOR { return false; }
+    let bits = bits_of(I.ty);
+    if !exact_width(bits) || vi[j].nuse != 1 || vi[j].st & (ST_GLOB | ST_PIN) != 0 || j + 1 >= f_nins { return false; }
+    let S = M.insts[f_first_inst + j + 1];
+    if S.op != GIR_STORE || S.a != inst_ref(j) || S.aux != I.ty || S.flags & (IF_VOLATILE | IF_ORD_MASK) != 0 { return false; }
+    if vi[j + 1].kind != K_A { return false; }
+    var ld: u32 = I.a;
+    var other: u32 = I.b;
+    var found = false;
+    for side in 2 {
+        if side == 1 {
+            if op == GIR_SUB { break; }
+            ld = I.b;
+            other = I.a;
+        }
+        if gir_kind(ld) != GIR_V_INST || ld == other { continue; }
+        let id = vid(ld);
+        if id >= f_nins || vi[id].reg != PEND { continue; }
+        let L = M.insts[gir_idx(ld)];
+        if L.op == GIR_LOAD && L.a == S.b && L.ty == I.ty { found = true; break; }
+    }
+    if !found { return false; }
+    let n = int_bytes(bits);
+    let w = wq(bits);
+    let ok, imm = alu_imm(other, bits);
+    var rb: u32 = 32;
+    if !ok { rb = ra_gpr(other, false); }
+    let m = ra_take_pend(vid(ld));
+    ra_note(vid(ld));
+    if ok {
+        let ext: u32 = match op { GIR_ADD => G1_ADD, GIR_SUB => G1_SUB, GIR_AND => G1_AND, GIR_OR => G1_OR, _ => G1_XOR };
+        grp1_mi(n, ext, m, imm);
+    } else {
+        let aop: u32 = match op { GIR_ADD => ALU_ADD, GIR_SUB => ALU_SUB, GIR_AND => ALU_AND, GIR_OR => ALU_OR, _ => ALU_XOR };
+        if n == 1 { alu_mr8(aop, m, rb); }
+        else if n == 2 { alu_mr16(aop, m, rb); }
+        else { alu_mr(w, aop, m, rb); }
+    }
+    // the store is done; its address operand's last use is now
+    vi[j + 1].kind = K_DONE;
+    if is_val(S.b) {
+        let pid = vid(S.b);
+        if vi[pid].st & (ST_GLOB | ST_PIN) == 0 && vi[pid].last == j + 1 { dying.push(pid); }
+    }
+    return true;
+}
+
 // The INT result of j is in rd; `dirty`: the operation may have set bits
 // above the width (only possible below 32 bits, or for odd widths).
 fn lower_int_done(j: u32, rd: u32, bits: u32, dirty: bool) {
@@ -943,6 +1006,10 @@ fn dead_reg(r: u32) -> bool {
 // by it): arithmetic but division and variable shifts, compares, casts,
 // selects, stores.
 fn pend_reg_ok(j: u32) -> bool {
+    if rg_on && vi[j].st & ST_PIN != 0 { return false; }   // (rg_def_start may move a local value)
+    return pend_reg_ok2(j);
+}
+fn pend_reg_ok2(j: u32) -> bool {
     if vi[j].kind != K_A { return false; }
     let N = M.insts[f_first_inst + j];
     let op: u32 = N.op;
@@ -978,8 +1045,24 @@ fn lower_load_a(I: Inst, j: u32) {
             ra_carry = true;
             return;
         }
+        if rg_on && vi[j].last == j + 1 && vi[j + 1].st & ST_PIN != 0 && pend_reg_ok2(j + 1) {
+            // (into an instruction whose pinned result register the address does not use)
+            let m = ra_addr(I.a);
+            let pr: u32 = rg_reg[j + 1];
+            if m_regs(m) & bit(pr) == 0 {
+                ra_pend_add(j, m);
+                ra_carry = true;
+                return;
+            }
+            load_into_def(I, j, m);
+            return;
+        }
     }
     let m = ra_addr(I.a);
+    load_into_def(I, j, m);
+}
+fn load_into_def(I: Inst, j: u32, m: Mem) {
+    let t: u32 = I.ty;
     if in_xmm(rc_of(t)) {
         let xd = ra_xdef(j);
         xmm_load_t(xd, m, t);

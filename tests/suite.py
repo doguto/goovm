@@ -8,6 +8,16 @@ For every test of the selected corpora:
   g          clang-20 -O0 -g -emit-llvm   -> goovm-llc -> link -> run, verify
   mem2reg    clang-20 -O0 -Xclang -disable-O0-optnone -emit-llvm, opt-20 -passes=mem2reg
              -> goovm-llc -> link -> run, verify
+  O1         clang-20 -O0 -emit-llvm      -> goovm-llc -O1 (Goose middle-end, global RA) -> link -> run
+  O1-g       clang-20 -O0 -g -emit-llvm   -> goovm-llc -O1 -> link -> run
+  O2ir       clang-20 -O2 -emit-llvm      -> goovm-llc -O1 (LLVM's middle-end, Goose back-end)
+  O2nv       the same with -fno-vectorize -fno-slp-vectorize (the exporter rejects much of the
+             vectorizers' output)
+  cc-O1      goovm-cc -O1 (opt-in, with --cc)
+
+The O1, O1-g, O2ir and cc-O1 variants run only the tests that pass when built
+with plain clang-20 -O1 (a second baseline, which also excludes programs whose
+undefined behaviour shows at -O1).
 
 Verification follows the llvm-test-suite conventions:
   - SingleSource/MultiSource ("traditional output"): stdout and stderr go to one
@@ -30,7 +40,14 @@ consumer-typeset).
 
 usage: tests/suite.py [--goovm PATH] [--corpus a,b] [--variants O0,g,mem2reg]
                       [-j 3] [--work DIR] [--fallback] [--report FILE] [--json FILE]
-                      [--rebaseline] [--emit-bc] [--time-run N] [filter ...]
+                      [--rebaseline] [--emit-bc] [--time-run N] [--target aarch64] [filter ...]
+
+--target aarch64 (milestone F1): every compile (the baselines, the bitcode,
+goovm-cc) gets --target=aarch64-linux-gnu, links use lld, and the programs
+run under qemu-aarch64 (QEMU_LD_PREFIX=/usr/aarch64-linux-gnu). The corpora
+take the directories the llvm-test-suite adds for AArch64 instead of the
+x86-64 ones: UnitTests/Vector/AArch64 and UnitTests/AArch64 instead of
+UnitTests/Vector/SSE, Regression/C/SSE and UnitTests/X86 (C++).
 """
 import argparse
 import concurrent.futures as cf
@@ -52,10 +69,33 @@ CXX_EXTS = (".cpp", ".cc", ".cxx", ".C")
 
 def is_cxx(src):
     return os.path.splitext(src)[1] in CXX_EXTS
+
+
+# The target (--target): compile and link flags, and how programs run.
+TARGET = "x86_64"
+TFLAGS = []
+LFLAGS = []
+RUNNER = []
+
+
+def set_target(t):
+    global TARGET
+    TARGET = t
+    if t == "aarch64":
+        TFLAGS[:] = ["--target=aarch64-linux-gnu"]
+        LFLAGS[:] = ["--target=aarch64-linux-gnu", "-fuse-ld=lld"]
+        RUNNER[:] = ["qemu-aarch64"]
+        os.environ.setdefault("QEMU_LD_PREFIX", "/usr/aarch64-linux-gnu")
 VARIANTS = ["O0", "g", "mem2reg"]
 # Opt-in variants: "cc" builds each file with goovm-cc (clang front end in-process
 # + the Goose back-end) instead of clang -emit-llvm + goovm-llc.
-EXTRA_VARIANTS = ["cc", "cc-g"]
+EXTRA_VARIANTS = ["cc", "cc-g", "cc-O1"]
+# Optimizing variants (milestone E1): compared against the clang -O1 baseline.
+OPT_VARIANTS = ["O1", "O1-g", "O2ir", "O2nv"]
+
+
+def opt_variant(v):
+    return v in OPT_VARIANTS or v == "cc-O1"
 
 
 class Test:
@@ -96,6 +136,8 @@ class Test:
              self.hash_output, self.fp_rel, self.fp_abs, self.exit0]
         if self.cxxflags != self.cflags:
             k.append(self.cxxflags)
+        if TARGET != "x86_64":
+            k.append(TARGET)
         h = hashlib.sha1(json.dumps(k).encode())
         return h.hexdigest()[:16]
 
@@ -219,6 +261,12 @@ def unittest_tests(suite):
     t += singlesource("unittests", os.path.join(u, "Threads"), common + ["-pthread"], ["-pthread"])
     vcommon = common + ["-Wno-error=incompatible-pointer-types"]
     t += singlesource("unittests", os.path.join(u, "Vector"), vcommon)
+    if TARGET == "aarch64":
+        # the AArch64 directories (Vector/AArch64: the NEON intrinsics test, self-checking;
+        # AArch64: function multi-versioning, with the aarch64- prefix of its CMakeLists)
+        t += singlesource("unittests", os.path.join(u, "Vector/AArch64"), vcommon + ["-std=c99"])
+        t += singlesource("unittests", os.path.join(u, "AArch64"), common + ["-std=c99"], prefix="aarch64-")
+        return t
     t += singlesource("unittests", os.path.join(u, "Vector/SSE"),
                       vcommon + ["-msse2", "-ffp-contract=off", "-DFMA_DISABLED=1"], ["-lm"], fp_rel=0.016)
     return t
@@ -229,7 +277,8 @@ def regression_tests(suite):
     _D0["regression"] = r
     common = ["-Wno-implicit-int", "-Wno-error=incompatible-pointer-types"]
     t = singlesource("regression", r, common, ["-lm"])
-    t += singlesource("regression", os.path.join(r, "SSE"), common + ["-msse2"], ["-lm"])
+    if TARGET == "x86_64":
+        t += singlesource("regression", os.path.join(r, "SSE"), common + ["-msse2"], ["-lm"])
     return t
 
 
@@ -373,7 +422,8 @@ def unittest_cxx_tests(suite):
     t += singlesource("unittests-cxx", j(u, "Vectorizer"), common + ["-std=gnu++17"], exts=CXX_EXT)
     t += singlesource("unittests-cxx", j(u, "Vectorizer/VPlanNativePath"),
                       common + ["-mllvm", "-enable-vplan-native-path", "-fno-vectorize"], exts=CXX_EXT)
-    t += singlesource("unittests-cxx", j(u, "X86"), common, exts=CXX_EXT)
+    if TARGET == "x86_64":
+        t += singlesource("unittests-cxx", j(u, "X86"), common, exts=CXX_EXT)
     return t
 
 
@@ -500,7 +550,7 @@ def run_and_verify(t, exe, wd, args, timeout):
     t0 = time.time()
     with open(out, "wb") as fo:
         try:
-            p = subprocess.run([exe] + t.args, stdout=fo, stderr=fo, stdin=stdin, cwd=rd, timeout=timeout)
+            p = subprocess.run(RUNNER + [exe] + t.args, stdout=fo, stderr=fo, stdin=stdin, cwd=rd, timeout=timeout)
             code = p.returncode
         except subprocess.TimeoutExpired:
             code = None
@@ -547,7 +597,7 @@ def time_exe(t, exe, wd, n):
     for _ in range(n):
         stdin = open(os.path.join(rd, t.stdin), "rb") if t.stdin else subprocess.DEVNULL
         t0 = time.perf_counter()
-        subprocess.run([exe] + t.args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=stdin, cwd=rd)
+        subprocess.run(RUNNER + [exe] + t.args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=stdin, cwd=rd)
         dt = time.perf_counter() - t0
         if t.stdin:
             stdin.close()
@@ -567,16 +617,16 @@ def linker(t, args):
     return args.clangxx if t.cxx else args.clang
 
 
-def build_baseline(t, wd, args):
-    exe = os.path.join(wd, "base.exe")
+def build_baseline(t, wd, args, level="O0"):
+    exe = os.path.join(wd, "base.exe" if level == "O0" else f"base-{level}.exe")
     objs = []
     for i, s in enumerate(t.srcs):
-        o = os.path.join(wd, obj_name(s, i) + ".base.o")
-        r = sh([compiler(t, s, args), "-O0"] + t.flags(s) + ["-c", s, "-o", o])
+        o = os.path.join(wd, obj_name(s, i) + (".base.o" if level == "O0" else f".base-{level}.o"))
+        r = sh([compiler(t, s, args)] + TFLAGS + ["-" + level] + t.flags(s) + ["-c", s, "-o", o])
         if r.returncode:
-            raise Fail("build", f"clang -O0 failed on {os.path.basename(s)}:\n{r.stderr.decode(errors='replace')[-800:]}")
+            raise Fail("build", f"clang -{level} failed on {os.path.basename(s)}:\n{r.stderr.decode(errors='replace')[-800:]}")
         objs.append(o)
-    r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
+    r = sh([linker(t, args)] + LFLAGS + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise Fail("build", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -585,14 +635,18 @@ def build_baseline(t, wd, args):
 def emit_bc(t, s, i, wd, variant, args):
     base = os.path.join(wd, obj_name(s, i) + "." + variant)
     bc = base + ".bc"
-    cc = compiler(t, s, args)
-    if variant == "O0":
-        cmd = [cc, "-O0"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
-    elif variant == "g":
-        cmd = [cc, "-O0", "-g"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+    cc = [compiler(t, s, args)] + TFLAGS
+    if variant in ("O0", "O1"):
+        cmd = cc + ["-O0"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+    elif variant in ("g", "O1-g"):
+        cmd = cc + ["-O0", "-g"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+    elif variant == "O2ir":
+        cmd = cc + ["-O2"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
+    elif variant == "O2nv":
+        cmd = cc + ["-O2", "-fno-vectorize", "-fno-slp-vectorize"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", bc]
     else:
         raw = base + ".raw.bc"
-        r = sh([cc, "-O0", "-Xclang", "-disable-O0-optnone"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", raw])
+        r = sh(cc + ["-O0", "-Xclang", "-disable-O0-optnone"] + t.flags(s) + ["-c", "-emit-llvm", s, "-o", raw])
         if r.returncode:
             raise Fail("error", f"clang -emit-llvm failed on {os.path.basename(s)}")
         cmd = [args.opt, "-passes=mem2reg", raw, "-o", bc]
@@ -620,8 +674,9 @@ def build_goovm_cc(t, wd, variant, args, info):
     objs = []
     for i, s in enumerate(t.srcs):
         o = os.path.join(wd, obj_name(s, i) + "." + variant + ".o")
-        cmd = ([args.cc, "--backend=goose"] + (["--fallback"] if args.fallback else []) + ["-O0"]
-               + (["-g"] if variant == "cc-g" else []) + t.flags(s) + ["-c", s, "-o", o])
+        cmd = ([args.cc, "--backend=goose"] + (["--fallback"] if args.fallback else [])
+               + (["-O1"] if variant == "cc-O1" else ["-O0"])
+               + (["-g"] if variant == "cc-g" else []) + TFLAGS + t.flags(s) + ["-c", s, "-o", o])
         r = sh(cmd, timeout=600)
         err = r.stderr.decode(errors="replace")
         if r.returncode == 2:
@@ -634,7 +689,7 @@ def build_goovm_cc(t, wd, variant, args, info):
         if variant == "cc-g":
             verify_dwarf(o, s, args, info)
         objs.append(o)
-    r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
+    r = sh([linker(t, args)] + LFLAGS + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise Fail("fail", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
@@ -648,7 +703,8 @@ def build_goovm(t, wd, variant, args, info):
     for i, s in enumerate(t.srcs):
         base, bc = emit_bc(t, s, i, wd, variant, args)
         o = base + ".o"
-        cmd = [args.goovm, "--backend=goose"] + (["--fallback"] if args.fallback else []) + [bc, "-o", o]
+        cmd = ([args.goovm, "--backend=goose"] + (["--fallback"] if args.fallback else [])
+               + (["-O1"] if variant in OPT_VARIANTS else []) + [bc, "-o", o])
         r = sh(cmd, timeout=600)
         err = r.stderr.decode(errors="replace")
         if r.returncode == 2:
@@ -658,13 +714,30 @@ def build_goovm(t, wd, variant, args, info):
         if "goovm-llc: fallback:" in err:
             info.setdefault("fallback", []).append(
                 f"{os.path.basename(s)}: {err.split('goovm-llc: fallback:', 1)[1].strip().splitlines()[0]}")
-        if variant == "g":
+        if variant in ("g", "O1-g"):
             verify_dwarf(o, s, args, info)
         objs.append(o)
-    r = sh([linker(t, args)] + objs + t.ldflags + ["-o", exe])
+    r = sh([linker(t, args)] + LFLAGS + objs + t.ldflags + ["-o", exe])
     if r.returncode:
         raise Fail("fail", f"link failed:\n{r.stderr.decode(errors='replace')[-800:]}")
     return exe
+
+
+def baseline_at(t, wd, args, cache, level):
+    """The clang -<level> baseline of t ({"key", "status", "time"}), from the cache if current."""
+    key = t.key()
+    ck = t.id if level == "O0" else f"{t.id}@{level}"
+    b = cache.get(ck)
+    if b is None or b.get("key") != key or args.rebaseline:
+        try:
+            exe = build_baseline(t, wd, args, level)
+            dt = run_and_verify(t, exe, wd, args, timeout=t.timeout or 120)
+            b = {"key": key, "status": "pass", "time": dt}
+        except Fail as e:
+            b = {"key": key, "status": "build" if e.kind == "build" else "fail", "msg": e.msg[:2000]}
+        except Exception as e:  # noqa
+            b = {"key": key, "status": "fail", "msg": f"harness: {e}"}
+    return ck, b
 
 
 def do_test(t, args, baseline_cache):
@@ -694,13 +767,30 @@ def do_test(t, args, baseline_cache):
     if b["status"] != "pass" or args.baseline_only:
         return res
     tmo = max(60.0, 20 * b["time"]) if t.timeout is None else max(t.timeout, 20 * b["time"])
+    b1 = None
+    if any(opt_variant(v) for v in args.variants):
+        ck, b1 = baseline_at(t, wd, args, baseline_cache, "O1")
+        res["baseline_O1"] = b1
+        res["baseline_O1_key"] = ck
     if args.time_run:
         exe = os.path.join(wd, "base.exe")
         if not os.path.exists(exe):
             exe = build_baseline(t, wd, args)
         res["base_run"] = time_exe(t, exe, wd, args.time_run)
+        for lv in args.time_ref:
+            try:
+                exe = os.path.join(wd, f"base-{lv}.exe")
+                if not os.path.exists(exe):
+                    exe = build_baseline(t, wd, args, lv)
+                res[f"base_run_{lv}"] = time_exe(t, exe, wd, args.time_run)
+            except Fail:
+                pass
     for v in args.variants:
         info = {}
+        if opt_variant(v) and b1["status"] != "pass":
+            info["status"] = "excluded"
+            res[v] = info
+            continue
         try:
             exe = build_goovm(t, wd, v, args, info)
             run_and_verify(t, exe, wd, args, timeout=tmo)
@@ -714,7 +804,7 @@ def do_test(t, args, baseline_cache):
             info["status"] = "error"
             info["msg"] = f"harness: {e}"
         res[v] = info
-    if not args.keep and all(res.get(v, {}).get("status") == "pass" for v in args.variants):
+    if not args.keep and all(res.get(v, {}).get("status") in ("pass", "excluded") for v in args.variants):
         for f in os.listdir(wd):
             if f != "run":
                 p = os.path.join(wd, f)
@@ -745,12 +835,14 @@ def report(results, tests, args):
         row = f"| {c} | {len(rs)} | {len(bp)} | {len(rs) - len(bp)} |"
         for v in args.variants:
             st = [r.get(v, {}).get("status") for r in bp]
-            row += (f" {st.count('pass') + st.count('fallback')} | {st.count('fail') + st.count('error')} |"
+            ex = f" (of {len(st) - st.count('excluded')})" if opt_variant(v) else ""
+            row += (f" {st.count('pass') + st.count('fallback')}{ex} | {st.count('fail') + st.count('error')} |"
                     f" {st.count('unsupported')} | {st.count('fallback')} |")
         lines.append(row)
     lines.append("")
     lines.append("pass includes fallback; fallback counts tests in which at least one file was compiled by "
-                 "LLVM's code generator (goovm-llc --fallback).")
+                 "LLVM's code generator (goovm-llc --fallback). The optimizing variants (O1, O1-g, O2ir, cc-O1) "
+                 "run the tests that also pass when built with plain clang-20 -O1 (\"of N\").")
     if args.verify_dwarf:
         nv = sum(r.get(v, {}).get("dwarf_verified", 0) for r in results.values() for v in args.variants)
         lines.append("")
@@ -758,28 +850,45 @@ def report(results, tests, args):
                      "a failure counts as a failed test).")
     lines.append("")
     if args.time_run:
-        lines.append(f"## Run times (best of {args.time_run}, seconds; ratio to clang -O0)")
+        refs = ["O0"] + [lv for lv in args.time_ref if lv != "O0"]
+        rk = {lv: ("base_run" if lv == "O0" else f"base_run_{lv}") for lv in refs}
+
+        def ref_of(v):
+            # the optimizing variants against clang -O1 when it is timed
+            return "O1" if opt_variant(v) and "O1" in refs else "O0"
+        lines.append(f"## Run times (best of {args.time_run}, seconds; each variant's ratio to clang at its level: "
+                     f"-O1 for the optimizing variants when timed, else -O0)")
         lines.append("")
-        hdr = "| test | clang -O0 |" + "".join(f" {v} | {v} / clang |" for v in args.variants)
-        lines += [hdr, "|---|---:|" + "---:|---:|" * len(args.variants)]
+        hdr = "| test |" + "".join(f" clang -{lv} |" for lv in refs) + \
+              "".join(f" {v} | {v} / clang -{ref_of(v)} |" for v in args.variants)
+        lines += [hdr, "|---|" + "---:|" * len(refs) + "---:|---:|" * len(args.variants)]
         import math
         logs = {v: [] for v in args.variants}
+        rlogs = {lv: [] for lv in refs}
         for t in tests:
             r = results[t.id]
             if "base_run" not in r:
                 continue
-            row = f"| {t.id} | {r['base_run']:.3f} |"
+            row = f"| {t.id} |"
+            for lv in refs:
+                x = r.get(rk[lv])
+                row += " - |" if x is None else f" {x:.3f} |"
+                if x and r["base_run"] >= 0.05 and lv != "O0":
+                    rlogs[lv].append(math.log(x / r["base_run"]))
             for v in args.variants:
                 x = r.get(v, {}).get("run")
-                if x is None:
+                base = r.get(rk[ref_of(v)])
+                if x is None or not base:
                     row += " - | - |"
                 else:
-                    q = x / r["base_run"] if r["base_run"] > 0 else 0
+                    q = x / base
                     row += f" {x:.3f} | {q:.2f} |"
                     if r["base_run"] >= 0.05 and q > 0:
                         logs[v].append(math.log(q))
             lines.append(row)
-        geo = "| geometric mean (clang -O0 >= 50 ms) | |"
+        geo = "| geometric mean (clang -O0 >= 50 ms) |"
+        for lv in refs:
+            geo += " |" if lv == "O0" or not rlogs[lv] else f" {math.exp(sum(rlogs[lv]) / len(rlogs[lv])):.3f} x -O0 |"
         for v in args.variants:
             g = math.exp(sum(logs[v]) / len(logs[v])) if logs[v] else 0
             geo += f" | {g:.3f} |"
@@ -795,7 +904,7 @@ def report(results, tests, args):
                 continue
             for v in args.variants:
                 s = r.get(v, {}).get("status")
-                if s not in ("pass", None):
+                if s not in ("pass", "excluded", None):
                     msg = r[v].get("msg", "") or "; ".join(r[v].get("fallback", []))
                     bad.append(f"- `{r['id']}` [{v}] {s}: {msg.splitlines()[0][:200] if msg else ''}")
         if bad:
@@ -837,14 +946,20 @@ def main():
     ap.add_argument("--emit-bc", action="store_true", help="only write the bitcode of each variant (for analysis)")
     ap.add_argument("--time-run", type=int, default=0, metavar="N",
                     help="also time each passing program and its clang -O0 build: best of N runs (use -j 1)")
+    ap.add_argument("--time-ref", default="", metavar="LEVELS",
+                    help="with --time-run, also time clang builds at these levels (e.g. O1,O2)")
     ap.add_argument("--report", default="")
     ap.add_argument("--json", default="")
+    ap.add_argument("--target", default="x86_64", choices=["x86_64", "aarch64"],
+                    help="aarch64: compile for aarch64-linux-gnu and run under qemu-aarch64")
     ap.add_argument("filter", nargs="*", help="substrings of test ids to run")
     args = ap.parse_args()
+    set_target(args.target)
     args.variants = [v for v in args.variants.split(",") if v]
+    args.time_ref = [v for v in args.time_ref.split(",") if v and v != "O0"]
     corpora = [c for c in args.corpus.split(",") if c]
     for v in args.variants:
-        if v not in VARIANTS + EXTRA_VARIANTS:
+        if v not in VARIANTS + EXTRA_VARIANTS + OPT_VARIANTS:
             sys.exit(f"unknown variant {v}")
     os.makedirs(args.work, exist_ok=True)
     args.work = os.path.abspath(args.work)
@@ -872,8 +987,10 @@ def main():
             done += 1
             if "baseline" in r:
                 baseline_cache[t.id] = r["baseline"]
+            if "baseline_O1" in r:
+                baseline_cache[r["baseline_O1_key"]] = r["baseline_O1"]
             st = [f"{v}:{r[v]['status']}" for v in args.variants if v in r]
-            bad = [s for s in st if not s.endswith(":pass")]
+            bad = [s for s in st if not s.endswith((":pass", ":excluded"))]
             if bad or r.get("baseline", {}).get("status") not in ("pass", None):
                 print(f"[{done}/{len(tests)}] {t.id}: baseline={r.get('baseline', {}).get('status')} {' '.join(st)}",
                       flush=True)

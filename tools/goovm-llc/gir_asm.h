@@ -6,11 +6,13 @@
 #include <string>
 #include <vector>
 
-// Assembles x86-64 assembly text (AT&T, or Intel if `intel`) into machine
-// code. Fails (with a message) if the text does not assemble, or if the
-// code needs relocations or defines anything outside .text.
+// Assembles x86-64 assembly text (AT&T, or Intel if `intel`) or AArch64
+// assembly text (with the subtarget features `features`, e.g. a function's
+// "target-features") into machine code. Fails (with a message) if the text
+// does not assemble, or if the code needs relocations or defines anything
+// outside .text.
 bool gir_assemble(const std::string &triple, const std::string &text, bool intel, std::vector<uint8_t> &code,
-                  std::string &err);
+                  std::string &err, const std::string &features = "");
 
 // A symbol of assembled module-level asm.
 struct GirAsmSymbol {
