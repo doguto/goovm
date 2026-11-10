@@ -321,18 +321,52 @@ recursive fn synth_special(f: i64, k: i64, r: i64, th: i64, loc: u32) -> bool {
     let assign = k == 6 || k == 7;
     let src = n_var(p, loc);       // *__src (a reference parameter)
     let cr = crecs[r];
+    // a constructor of the complete object: the virtual bases first
+    // (depth-first left-to-right), from the source's
+    if !assign && cg_complete && has_vb(r) {
+        let vm = vbs.len;
+        vb_scratch_mark = vm;
+        collect_vbases(r);
+        let ve = vbs.len;
+        for j in vm..ve {
+            let vt = vbs[j];
+            let vr = rec_of(vt);
+            let off = vt_vbo(r, vr);
+            let dobj = this_at(th, vt, off, loc);
+            let sb = derived_to_base_lv(n_var(p, loc), unqual(vt), loc);
+            if sb == 0 { vbs.resize(vm); return false; }
+            nodes[sb].ty = with_q(nodes[sb].ty, quals(nodes[src].ty) & Q_CONST);
+            if move { nodes[sb].flags = nodes[sb].flags | NF_XVALUE; }
+            if has_vb(vr) { cg_vtt_arg = vtt_arg(r, vr, off, loc); }
+            let sv = cg_base_variant;
+            cg_base_variant = true;
+            let st = copy_into(dobj, sb, move, false, loc);
+            cg_base_variant = sv;
+            cg_vtt_arg = 0;
+            if st == 0 { vbs.resize(vm); return false; }
+            stmt_buf.push(st);
+            let ds = vbase_destroy(r, th, vr, loc);
+            if ds != 0 { stmt_buf.push(node(N_XPUSH, XP_STMT | XP_EHONLY, 0, ds as i64, 0, 0, loc)); }
+        }
+        vbs.resize(vm);
+    }
     for i in cr.nbases {
         let b = cbases[cr.bases + i];
-        if b.flags & BF_VIRTUAL != 0 || !is_record(b.ty) { return false; }
+        if !is_record(b.ty) { return false; }
+        // (virtual bases: the complete object's constructor did them; an
+        // assignment assigns its direct virtual bases, as clang does)
+        if b.flags & BF_VIRTUAL != 0 && !assign { continue; }
         let dobj = this_base(th, b.ty, loc);
-        let sb = derived_to_base_lv(src, unqual(b.ty), loc);
+        let sb = derived_to_base_lv(n_var(p, loc), unqual(b.ty), loc);
         if dobj == 0 || sb == 0 { return false; }
         nodes[sb].ty = with_q(nodes[sb].ty, quals(nodes[src].ty) & Q_CONST);
         if move { nodes[sb].flags = nodes[sb].flags | NF_XVALUE; }
+        if !assign && has_vb(rec_of(b.ty)) { cg_vtt_arg = vtt_arg(r, rec_of(b.ty), b.offset, loc); }
         let sv = cg_base_variant;
         cg_base_variant = true;
         let st = copy_into(dobj, sb, move, assign, loc);
         cg_base_variant = sv;
+        cg_vtt_arg = 0;
         if st == 0 { return false; }
         stmt_buf.push(st);
         if !assign {

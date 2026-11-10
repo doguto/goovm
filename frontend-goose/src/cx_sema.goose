@@ -196,7 +196,14 @@ recursive fn mk_cast_cx(t: u32, e: u32, loc: u32, kind: i64) -> u32 {
         if is_ref(t) { nodes[n].flags = nodes[n].flags | NF_LVALUE; }
         return n;
     }
-    if kind == CAST_DYNAMIC { return dep_node(nonref(t), loc); }
+    if kind == CAST_DYNAMIC {
+        if cg_on && !dependent_ctx() { return cg_dynamic_cast(t, e, loc); }
+        return dep_node(nonref(t), loc);
+    }
+    if cg_on && (kind == CAST_STATIC || kind == CAST_C) {
+        let cc = cg_class_cast(t, e, loc);
+        if cc != 0 { return cc; }
+    }
     if is_ref(t) {
         // a cast to a reference: the operand as an lvalue (xvalue) of the target type
         let to = tbase(t);

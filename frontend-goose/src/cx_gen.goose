@@ -59,6 +59,7 @@ import .cx_gen_link;
 import .cx_gen_eh;
 import .cx_gen_class;
 import .cx_gen_vt;
+import .cx_gen_rtti;
 
 let CF_DTOR_DELETING = 2147483648;  // the deleting destructor (D0) of a class with a virtual destructor
 
@@ -495,6 +496,7 @@ fn cg_ptr_conv(e: u32, to: u32, loc: u32) -> u32 {
     let b = unqual(tbase(to));
     if !is_record(a) || !is_record(b) || a == b { return 0; }
     let off = base_offset(a, b);
+    if off == -2 { return cg_vbase_ptr(e, to, loc); }
     if off < 0 { return 0; }
     if off == 0 { return node(N_ICAST, CK_BITCAST, unqual(to), e as i64, 0, 0, loc); }
     // ({ D *tmp = e; tmp ? (B *)((char *)tmp + off) : (B *)0; })
@@ -505,6 +507,148 @@ fn cg_ptr_conv(e: u32, to: u32, loc: u32) -> u32 {
     let v = rv(n_var(s, loc));
     let cp = node(N_ICAST, CK_BITCAST, mk_ptr(t_char), v as i64, 0, 0, loc);
     let add = node(N_BINARY, B_PTRADD, mk_ptr(t_char), cp as i64, int_node(off, t_long, loc) as i64, 0, loc);
+    let bp = node(N_ICAST, CK_BITCAST, unqual(to), add as i64, 0, 0, loc);
+    let z = node(N_ICAST, CK_NULL2PTR, unqual(to), int_node(0, t_int, loc) as i64, 0, 0, loc);
+    let c = node(N_COND, 0, unqual(to), icast(rv(n_var(s, loc)), CK_PTR2BOOL, t_bool) as i64, bp as i64, z as i64, loc);
+    nscratch.push(n_expr_stmt(c));
+    let body = n_block(mark, loc);
+    return node(N_STMTEXPR, 0, unqual(to), body as i64, 0, 0, loc);
+}
+
+// static_cast (or a C-style cast acting as one) between pointers to, or
+// references to, classes related by inheritance: the base subobject's
+// offset added (an upcast) or subtracted (a downcast; a null pointer kept),
+// an opaque node when it cannot be done, 0 when it is not such a cast.
+recursive fn cg_class_cast(t: u32, e: u32, loc: u32) -> u32 {
+    if is_ref(t) {
+        let to = tbase(t);
+        let ft = nodes[e].ty;
+        if !is_record(to) || !is_record(ft) || unqual(to) == unqual(ft) || !is_lvalue(e) { return 0; }
+        let xv = if kind_of(t) == TY_RREF { NF_XVALUE } else { 0 };
+        let up = base_offset(unqual(ft), unqual(to));
+        if up != -1 {
+            let c = derived_to_base_lv(e, to, loc);
+            if c == 0 { return opaque_node(loc); }
+            nodes[c].flags = (nodes[c].flags | xv) as! u16;
+            return c;
+        }
+        let off = base_offset(unqual(to), unqual(ft));
+        if off == -1 { return 0; }
+        if off < 0 { return opaque_node(loc); }
+        let cp = node(N_ICAST, CK_BITCAST, mk_ptr(t_char), n_addr(e, loc) as i64, 0, 0, loc);
+        var at = cp;
+        if off != 0 { at = node(N_BINARY, B_PTRSUB, mk_ptr(t_char), cp as i64, int_node(off, t_long, loc) as i64, 0, loc); }
+        let r = n_deref(node(N_ICAST, CK_BITCAST, mk_ptr(with_q(unqual(to), quals(to) | quals(ft))), at as i64, 0, 0, loc), loc);
+        nodes[r].flags = (NF_LVALUE | xv) as! u16;
+        return r;
+    }
+    if !is_pointer(t) { return 0; }
+    let pv = rv(e);
+    let ft = unqual(nodes[pv].ty);
+    if !is_pointer(ft) { return 0; }
+    let a = unqual(tbase(ft));
+    let b = unqual(tbase(t));
+    if !is_record(a) || !is_record(b) || a == b { return 0; }
+    if base_offset(a, b) != -1 {
+        let up = cg_ptr_conv(pv, unqual(t), loc);
+        if up == 0 { return opaque_node(loc); }
+        return up;
+    }
+    let off = base_offset(b, a);
+    if off == -1 { return 0; }
+    if off < 0 { return opaque_node(loc); }
+    if off == 0 { return node(N_ICAST, CK_BITCAST, unqual(t), pv as i64, 0, 0, loc); }
+    // ({ B *tmp = e; tmp ? (D *)((char *)tmp - off) : (D *)0; })
+    let s = csym(SK_VAR, intern("__base_tmp"), ft, loc);
+    syms[s].scope = 1;
+    let mark = nscratch.len;
+    nscratch.push(node(N_DECL, 0, ft, s, pv as i64, loc as i64, loc));
+    let cp = node(N_ICAST, CK_BITCAST, mk_ptr(t_char), rv(n_var(s, loc)) as i64, 0, 0, loc);
+    let sub = node(N_BINARY, B_PTRSUB, mk_ptr(t_char), cp as i64, int_node(off, t_long, loc) as i64, 0, loc);
+    let dp = node(N_ICAST, CK_BITCAST, unqual(t), sub as i64, 0, 0, loc);
+    let z = node(N_ICAST, CK_NULL2PTR, unqual(t), int_node(0, t_int, loc) as i64, 0, 0, loc);
+    let c = node(N_COND, 0, unqual(t), icast(rv(n_var(s, loc)), CK_PTR2BOOL, t_bool) as i64, dp as i64, z as i64, loc);
+    nscratch.push(n_expr_stmt(c));
+    let body = n_block(mark, loc);
+    return node(N_STMTEXPR, 0, unqual(t), body as i64, 0, 0, loc);
+}
+
+// A condition containing a call of a constexpr function that folds to a
+// constant (a function of no parameters whose body returns a constant):
+// rewritten to the constant, as clang's code generation folds it.
+fn fold_cond(c: u32) {
+    let v = fold_value(c, 0);
+    if v < 0 || !has_cx_call(c, 0) { return; }
+    let t = nodes[c].ty;
+    let loc = nodes[c].loc;
+    let i = int_node(v, t, loc);
+    nodes[c] = nodes[i];
+}
+
+// The value (0 or 1, and small integers) of e, or -1.
+recursive fn fold_value(e: u32, depth: i64) -> i64 {
+    if depth > 8 { return -1; }
+    let nd = nodes[e];
+    let k = nd.kind as i64;
+    if k == N_INT { return if nd.v >= 0 && nd.v < 0x7FFFFFFF { nd.v } else { -1 }; }
+    if (k == N_ICAST || k == N_CAST) && (nd.op as i64 == CK_INT2BOOL || nd.op as i64 == CK_NOOP || nd.op as i64 == CK_INTEGRAL) {
+        let v = fold_value(nd.a, depth + 1);
+        if v < 0 { return -1; }
+        if nd.op as i64 == CK_INT2BOOL || kind_of(nd.ty) == TY_BOOL { return if v != 0 { 1 } else { 0 }; }
+        return v;
+    }
+    if k == N_UNARY && nd.op as i64 == U_NOT {
+        let v = fold_value(nd.a, depth + 1);
+        if v < 0 { return -1; }
+        return if v == 0 { 1 } else { 0 };
+    }
+    if k == N_CALL && nd.c == 0 {
+        var cn = nd.a;
+        while (nodes[cn].kind as i64 == N_ICAST || nodes[cn].kind as i64 == N_CAST) && (nodes[cn].op as i64 == CK_FUNC2PTR || nodes[cn].op as i64 == CK_NOOP) { cn = nodes[cn].a; }
+        if nodes[cn].kind as i64 != N_DECLREF { return -1; }
+        let f = nodes[cn].a as i64;
+        if f < 0 || syms[f].kind as i64 != SK_FUNC || f >= cxs.len || cxs[f].flags & CF_CONSTEXPR == 0 { return -1; }
+        let d = syms[f].def;
+        if d < 0 || nodes[d].kind as i64 != N_FUNCDEF || nodes[d].c != 0 { return -1; }
+        let b = nodes[d].b;
+        if b == 0 || nodes[b].kind as i64 != N_COMPOUND || nodes[b].c != 1 { return -1; }
+        let r = nlist[nodes[b].v];
+        if nodes[r].kind as i64 != N_RETURN || nodes[r].a == 0 { return -1; }
+        return fold_value(nodes[r].a, depth + 1);
+    }
+    return -1;
+}
+
+recursive fn has_cx_call(e: u32, depth: i64) -> bool {
+    if depth > 8 { return false; }
+    let nd = nodes[e];
+    let k = nd.kind as i64;
+    if k == N_CALL { return true; }
+    if k == N_ICAST || k == N_CAST || k == N_UNARY { return has_cx_call(nd.a, depth + 1); }
+    return false;
+}
+
+// A pointer to a derived class converted to a pointer to a base reached
+// through a virtual base: the virtual base's offset from the vtable, then
+// the non-virtual offset; a null pointer kept.
+fn cg_vbase_ptr(e: u32, to: u32, loc: u32) -> u32 {
+    let ft = nodes[e].ty;
+    let from = rec_of(unqual(tbase(ft)));
+    path_vb = -1;
+    path_nv = 0;
+    path_found = false;
+    first_path(from, rec_of(unqual(tbase(to))), -1, 0);
+    if !path_found || path_vb < 0 { return 0; }
+    let nv = path_nv;
+    let vb = path_vb;
+    let s = csym(SK_VAR, intern("__base_tmp"), unqual(ft), loc);
+    syms[s].scope = 1;
+    let mark = nscratch.len;
+    nscratch.push(node(N_DECL, 0, unqual(ft), s, e as i64, loc as i64, loc));
+    let cp = node(N_ICAST, CK_BITCAST, mk_ptr(t_char), rv(n_var(s, loc)) as i64, 0, 0, loc);
+    let vo = vbase_off_load(rv(n_var(s, loc)), from, vb, loc);
+    var add = node(N_BINARY, B_PTRADD, mk_ptr(t_char), cp as i64, vo as i64, 0, loc);
+    if nv != 0 { add = node(N_BINARY, B_PTRADD, mk_ptr(t_char), add as i64, int_node(nv, t_long, loc) as i64, 0, loc); }
     let bp = node(N_ICAST, CK_BITCAST, unqual(to), add as i64, 0, 0, loc);
     let z = node(N_ICAST, CK_NULL2PTR, unqual(to), int_node(0, t_int, loc) as i64, 0, 0, loc);
     let c = node(N_COND, 0, unqual(to), icast(rv(n_var(s, loc)), CK_PTR2BOOL, t_bool) as i64, bp as i64, z as i64, loc);
@@ -2762,11 +2906,33 @@ fn build_vtable(r: i64) {
     let s = vtable_sym(r);
     let loc = records[r].loc;
     set_class_data_link(s, r, true, true);
-    if syms[s].sc as i64 == SC_EXTERN { return; }
+    if syms[s].sc as i64 == SC_EXTERN {
+        // the VTT lives with the vtable
+        if has_vb(r) { set_class_data_link(vtt_sym(r), r, true, true); }
+        return;
+    }
     let g = vt_class(r);
     let il = group_init(g, syms[s].ty, loc);
     cg_extra.push(node(N_DECL, 0, syms[s].ty, s, il as i64, loc as i64, loc));
-    if has_vb(r) { build_vtt(r, s, loc); }
+    if has_vb(r) {
+        build_vtt(r, s, loc);
+        // emitted with the vtable
+        let tv = vtt_sym(r);
+        note_cx_use(s, tv);
+        reach_var(tv);
+    }
+}
+
+// Is destructor f (a variant) virtual?
+fn dtor_is_virtual(f: i64) -> bool {
+    if cxs[f].flags & CF_DTOR_DELETING != 0 { return true; }
+    var b = f;
+    let g = complete_base.get(f as u64);
+    if g { b = g as i64; }
+    let cr = rec_of(scope_class_type(cxs[b].dscope as i64));
+    if cr >= crecs.len || crecs[cr].flags & CR_DYNAMIC == 0 { return false; }
+    if !group_ok(vt_class(cr)) { return false; }
+    return vt_method_index(b, false) >= 0;
 }
 
 // The components of group g as an initializer of type t.
@@ -2815,15 +2981,9 @@ var ctor_vts = dictionary<u64, u32> {};     // construction group -> its variabl
 fn build_vtt(r: i64, vt: i64, loc: u32) {
     let vi = vtt_of(r);
     let v = vtt_infos[vi];
-    let cls = records[r].ty << 4;
-    let tt = mk_array(with_q(t_voidptr, Q_CONST), v.ne as i64);
-    let s = csym(SK_VAR, intern("__vtt"), tt, loc);
-    syms[s].flags = SF_FILESCOPE | SF_DEFINED;
-    cxs[s].flags = CF_IMPLICIT;
-    mangle_special("_ZTT", cls);
-    set_label(s, mg);
+    let s = vtt_sym(r);
+    let tt = syms[s].ty;
     set_class_data_link(s, r, true, true);
-    vtt_syms.insert(r as u64, s as! u32);
     let mark = nscratch.len;
     let cg = vt_class(r);
     for i in v.e0..v.e0 + v.ne {
@@ -3015,29 +3175,60 @@ fn thunk_body(ts: i64, target: i64, t: VtThunk, loc: u32) {
 
 // The thunks of the virtual functions defined here (clang emits them with
 // the function, whether or not this unit has the vtable).
+// clang's EmitThunks: the thunks of the most derived class's vtable that
+// call a virtual member function, with its definition (each round: the
+// definitions made since). An inline function keeps its thunks (they are
+// emitted when it is).
+var mthunk_seen = dictionary<u64, u8> {};
 fn emit_method_thunks() {
     let tu = nodes[tu_node];
     for i in tu.c as i64 {
         let it = nlist[tu.v + i];
         if nodes[it].kind as i64 != N_FUNCDEF { continue; }
         let f = nodes[it].a as i64;
-        if f >= cxs.len || cxs[f].flags & CF_VIRTUAL == 0 || cxs[f].flags & CF_MEMBER == 0 { continue; }
-        if syms[f].def as u32 != it || cxl_link(f) != LK_DEFAULT || syms[f].sc as i64 == SC_STATIC { continue; }
-        let r = method_class(f);
-        if crecs[r].flags & CR_LAYOUT == 0 { continue; }
+        if f >= cxs.len || cxs[f].flags & CF_MEMBER == 0 || cxs[f].flags & CF_STATIC != 0 { continue; }
+        if cxs[f].flags & (CF_CTOR | CF_DTOR_DELETING) != 0 { continue; }
+        if syms[f].def as u32 != it || complete_base.contains(f as u64) { continue; }
+        if mthunk_seen.contains(f as u64) { continue; }
+        mthunk_seen.insert(f as u64, 1);
+        if cxs[f].dscope <= 0 { continue; }
+        let cls = scope_class_type(cxs[f].dscope as i64);
+        if cls == 0 { continue; }
+        let r = rec_of(cls);
+        if r >= crecs.len || crecs[r].flags & CR_LAYOUT == 0 || crecs[r].flags & CR_DYNAMIC == 0 { continue; }
         let g = vt_class(r);
+        if !group_ok(g) { continue; }
         let G = vgroups[g];
         for j in G.th0..G.th0 + G.nth {
             let t = vg_mthunks[j];
             if t.method as i64 != f { continue; }
             if cxs[f].flags & CF_DTOR != 0 {
-                thunk_sym(complete_sym(f), f, t, nodes[it].loc);
+                let c = complete_sym(f);
+                keep_thunk(f, c, thunk_sym(c, f, t, nodes[it].loc));
                 let d = deleting_dtor(r);
-                thunk_sym(d, d, t, nodes[it].loc);
+                keep_thunk(f, d, thunk_sym(d, d, t, nodes[it].loc));
             } else {
-                thunk_sym(f, f, t, nodes[it].loc);
+                keep_thunk(f, f, thunk_sym(f, f, t, nodes[it].loc));
             }
         }
+    }
+}
+
+fn keep_thunk(f: i64, target: i64, ts: i64) {
+    if ts < 0 || cxl_link(ts) != LK_LINKONCE { return; }
+    note_cx_use(f, ts);
+    if target != f { note_cx_use(target, ts); }
+}
+
+// What function f's definition keeps (note_cx_use) is reached with it.
+fn reach_uses(f: i64) {
+    let h = cx_use_head.get(f as u64);
+    if !h { return; }
+    var i = h as i64 - 1;
+    while i >= 0 {
+        let v = cx_uses[i].v as i64;
+        i = cx_uses[i].next as i64;
+        if syms[v].kind as i64 == SK_FUNC { reach_fn(v); } else { reach_var(v); }
     }
 }
 
@@ -3088,6 +3279,33 @@ recursive fn synth_body(f: i64, kind: i64) {
     if (kind == 1 || kind == 2) && has_vb(r) {
         let empty = n_block(nscratch.len, loc);
         complete_variant_body(f, r, empty, 0, loc);
+        cg_cur_vtt = make_vtt(f, loc);
+        cg_complete = false;
+    }
+    if (kind == 4 || kind == 5) && has_vb(r) {
+        // the complete object's copy or move constructor: its own body
+        let a = complete_sym(f);
+        fn_this.insert(a as u64, th as! u32);
+        let sm1 = stmt_buf.len;
+        let ok1 = synth_special(f, kind, r, th, loc);
+        let m1 = nscratch.len;
+        for i in sm1..stmt_buf.len { nscratch.push(stmt_buf[i]); }
+        stmt_buf.resize(sm1);
+        if !ok1 { nscratch.push(mark_bad_stmt(loc)); }
+        let b1 = n_block(m1, loc);
+        var np1: i64 = 0;
+        var ps1: i64 = 0;
+        let pg1 = implicit_params.get(f as u64);
+        if pg1 {
+            let pm = nscratch.len;
+            nscratch.push(pg1);
+            ps1 = commit_list(pm);
+            np1 = 1;
+        }
+        let fd = node_v(N_FUNCDEF, 0, syms[a].ty, a, b1 as i64, np1, loc, ps1);
+        syms[a].def = fd as! i32;
+        syms[a].flags = syms[a].flags | SF_DEFINED;
+        cg_extra.push(fd);
         cg_cur_vtt = make_vtt(f, loc);
         cg_complete = false;
     }
@@ -3178,7 +3396,6 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
             if !progress { break; }
         }
         if round == 0 {
-            emit_method_thunks();
             // the dynamic initialization of globals: a function per init_priority
             // (clang: _GLOBAL__I_000101 ..., then _GLOBAL__sub_I_<file>)
             var done_prio: i64 = -1;
@@ -3198,6 +3415,8 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
         let count = nscratch.len - mark;
         let start = commit_list(mark);
         tu_node = node_v(N_TU, 0, 0, 0, 0, count, 0, start);
+        // (thunk bodies made here are in the next round's unit)
+        emit_method_thunks();
         // names and linkage
         if cg_debug { write_stderr(str("cg_finish round ", round, " syms ", syms.len, "\n")); }
         name_syms();
@@ -3216,6 +3435,11 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
             for i in extra_seen..cg_extra.len {
                 let it = cg_extra[i];
                 if nodes[it].kind as i64 == N_DECL && syms[nodes[it].a].kind as i64 == SK_VAR { var_decls.insert(nodes[it].a as u64, it); }
+            }
+            let wv = reach_wanted_vars.len;
+            for i in wv {
+                let g = var_decls.get(reach_wanted_vars[i] as u64);
+                if g { wk.push(g); }
             }
             if !walk_reachable() { return false; }
         }
@@ -3300,8 +3524,9 @@ recursive fn reach_fn(f: i64) {
 
 fn reach_var(s: i64) {
     let g = var_decls.get(s as u64);
-    if g { wk.push(g); }
+    if g { wk.push(g); } else { reach_wanted_vars.push(s as! u32); }
 }
+var reach_wanted_vars: u32[>..] = [];
 
 fn check_reachable() -> bool {
     let tu = nodes[tu_node];
@@ -3356,6 +3581,14 @@ fn bad(n: u32) {
     var dv: u8[>..] = [];
     if env("GOOSECC_DEBUG_CG", dv) {
         write_stderr(str("  (node kind ", k, " op ", nodes[n].op, " flags ", nodes[n].flags, " type ", tname(nodes[n].ty), ")\n"));
+        if k == N_FUNCDEF {
+            let fs = nodes[n].a as i64;
+            let ai = syms[fs].attr;
+            if ai != 0 && sym_attrs[ai].asm_len != 0 {
+                let o = sym_attrs[ai].asm_label as i64;
+                write_stderr(str("  function ", strbytes[o..o + sym_attrs[ai].asm_len as i64], "\n"));
+            }
+        }
     }
 }
 
@@ -3390,6 +3623,11 @@ recursive fn c_type_ok(t: u32) -> bool {
 recursive fn visit(n: u32) {
     let nd = nodes[n];
     let k = nd.kind as i64;
+    // clang folds the conditions it can evaluate (ConstantFoldsToSimpleInteger),
+    // calls of constexpr functions too: `if (std::__is_constant_evaluated())`
+    if k == N_IF || k == N_COND || (k == N_BINARY && (nd.op as i64 == B_LAND || nd.op as i64 == B_LOR)) {
+        if nd.a != 0 { fold_cond(nd.a); }
+    }
     if (k == N_XPRV || (k == N_CTOR && is_record(nd.ty) && !is_opaque(nd.ty) && !class_trivial_copy(rec_of(nd.ty)))) {
         // a class prvalue no object was initialized from: a temporary
         let x = xtemp_of(n_copy(n), nd.ty, nd.loc);
@@ -3461,6 +3699,15 @@ recursive fn visit(n: u32) {
             nodes[n].c = count as! u32;
         }
         nodes[n].ty = abi_type(f);
+        // clang: a virtual destructor emitted uses its class's vtable (and so its VTT)
+        if cxs[f].flags & CF_DTOR != 0 && dtor_is_virtual(f) {
+            let cr = rec_of(scope_class_type(cxs[f].dscope as i64));
+            if cr < crecs.len {
+                let v = vtable_sym(cr);
+                if v >= 0 { note_cx_use(f, v); }
+            }
+        }
+        reach_uses(f);
         for i in nodes[n].c as i64 {
             let p = nlist[nodes[n].v + i] as i64;
             if !c_type_ok(lower_ty(syms[p].ty)) { bad(n); return; }

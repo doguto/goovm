@@ -7,6 +7,7 @@
 // the same as before D3.
 
 import std;
+import dictionary;
 import .common;
 import .ast;
 
@@ -88,3 +89,23 @@ fn cxl_grow() {
 
 fn cxl_link(s: i64) -> i64 { if s < cxl.len { cxl[s].link as i64 } else { 0 } }
 fn cxl_has(s: i64, f: i64) -> bool { s < cxl.len && (cxl[s].flags as i64) & f != 0 }
+
+// Variables a function's definition keeps (clang emits the vtable and VTT
+// of a class with each constructor and destructor it emits): a chain per
+// function of (variable, next) entries.
+struct CxUse { v: u32, next: i32 }
+var cx_uses: CxUse[>..] = [];
+var cx_use_head = dictionary<u64, u32> {};      // function -> its last entry + 1
+
+fn note_cx_use(f: i64, v: i64) {
+    var h: i64 = -1;
+    let g = cx_use_head.get(f as u64);
+    if g { h = g as i64 - 1; }
+    var i = h;
+    while i >= 0 {
+        if cx_uses[i].v as i64 == v { return; }
+        i = cx_uses[i].next as i64;
+    }
+    cx_uses.push(CxUse { v: v as! u32, next: h as! i32 });
+    cx_use_head.insert(f as u64, cx_uses.len as! u32);
+}

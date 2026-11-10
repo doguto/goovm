@@ -91,7 +91,7 @@ fn conv_rank(e: u32, p: u32) -> i64 {
             if quals(t) & ~quals(pt) != 0 { return RK_NONE; }
             return RK_EXACT;
         }
-        if is_record(t) && is_record(pt) && base_offset(unqual(t), unqual(pt)) >= 0 { return RK_CONV; }
+        if is_record(t) && is_record(pt) && base_offset(unqual(t), unqual(pt)) != -1 { return RK_CONV; }
         if kind_of(p) == TY_LREF && quals(pt) & Q_CONST == 0 { return RK_NONE; }
         // binds to a temporary of the converted value
         return conv_rank_val(e, unqual(pt));
@@ -107,7 +107,7 @@ fn conv_rank_val(e: u32, p: u32) -> i64 {
     let kt = kind_of(t);
     let kp = kind_of(p);
     if is_record(p) || is_record(t) {
-        if is_record(p) && is_record(t) && base_offset(t, p) >= 0 { return RK_CONV; }
+        if is_record(p) && is_record(t) && base_offset(t, p) != -1 { return RK_CONV; }
         return RK_USER;     // a constructor or a conversion function may apply
     }
     if is_arith(t) || kt == TY_ENUM {
@@ -131,7 +131,7 @@ fn conv_rank_val(e: u32, p: u32) -> i64 {
         let b = tbase(p);
         if unqual(a) == unqual(b) && quals(a) & ~quals(b) == 0 { return RK_EXACT; }   // qualification adjustment
         if is_void(b) && quals(a) & ~quals(b) == 0 { return RK_CONV; }
-        if is_record(a) && is_record(b) && base_offset(unqual(a), unqual(b)) >= 0 { return RK_CONV; }
+        if is_record(a) && is_record(b) && base_offset(unqual(a), unqual(b)) != -1 { return RK_CONV; }
         return RK_NONE;
     }
     if kt == TY_NULLPTR {

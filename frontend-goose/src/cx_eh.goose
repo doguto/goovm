@@ -37,6 +37,7 @@ let CL_TERM = 6;        // a terminate scope: no code
 let CLF_EHONLY = 1;     // only on the exceptional path
 let CLF_EXT = 2;        // a lifetime-extended temporary: survives the statement's scope
 let CLF_COND = 4;       // conditional: val is the slot of its i1 flag
+let CLF_MAYTHROW = 8;   // CL_ENDCATCH: __cxa_end_catch may throw (the exception's destructor)
 
 fn eh_on() -> bool { opt_cxx && opt_exceptions }
 
@@ -78,6 +79,19 @@ fn eh_fn_begin() {
     eh_pending.clear();
     eh_resume = NONE;
     f_eh = false;
+    eh_term = -1;
+}
+
+// The function's terminate scope for the code of cleanups on the
+// exceptional path (clang pushes one around each EH cleanup): what throws
+// there calls __clang_call_terminate.
+var eh_term: i64 = -1;
+fn eh_term_ent() -> i64 {
+    if eh_term >= 0 { return eh_term; }
+    eh_term = eh_ents.len;
+    eh_ents.push(EhEnt { kind: EK_TERM as! u8, used: 0, rsv: 0, parent: -1, lp: NONE, disp: NONE,
+        c: Cleanup { kind: CL_TERM, val: 0, sym: -1, fsym: -1 }, h0: 0, nh: 0, acts: 0, nacts: 0 });
+    return eh_term;
 }
 
 // ------------------------------------------------------------ the stack
@@ -183,7 +197,7 @@ fn cleanup_code(c: Cleanup, below: i64) {
         gen_stmt(c.node);
     } else if c.kind == CL_ENDCATCH {
         let s = m_opnds.len as! u32;
-        call_eh(GIR_T_VOID, 0, gref(libfn("__cxa_end_catch")), s, 0, true);
+        call_eh(GIR_T_VOID, 0, gref(libfn("__cxa_end_catch")), s, 0, c.flags & CLF_MAYTHROW != 0);
     }
     if skip != NONE {
         if has_insert() { br(skip); }
@@ -322,7 +336,7 @@ fn eh_fn_end() {
         // the dispatch block
         start_block(E.disp);
         if E.kind == EK_CLEANUP {
-            cleanup_code(E.c, E.parent as i64);
+            cleanup_code(E.c, eh_term_ent());
             if has_insert() { br(eh_disp(E.parent as i64)); }
         } else if E.kind == EK_TERM {
             let exn = ins_load(GIR_T_PTR, exn_slot(), false);
@@ -421,6 +435,33 @@ fn cx_aliases() {
         m_globals[g].flags = (m_globals[tg].flags & (GF_WEAK | GF_HIDDEN | GF_INTERNAL | GF_LOCALREF)) | GF_DEFINED;
         m_globals[g].align = m_globals[tg].align;
         glob_gen[g].state = 2;
+    }
+}
+
+// The variables function s's definition keeps (cx_gen_defs.note_cx_use)
+// are emitted with it.
+fn keep_cx_uses(s: i64) {
+    let h = cx_use_head.get(s as u64);
+    if !h { return; }
+    var i = h as i64 - 1;
+    while i >= 0 {
+        let v = cx_uses[i].v as i64;
+        i = cx_uses[i].next as i64;
+        if syms[v].kind as i64 == SK_FUNC {
+            if syms[v].def < 0 { continue; }
+            let fg = func_global(v);
+            if glob_gen[fg].state == 0 {
+                glob_gen[fg].state = 1;
+                work.push(fg);
+            }
+            continue;
+        }
+        if syms[v].flags & (SF_DEFINED | SF_TENTATIVE) == 0 { continue; }
+        let g = var_global(v);
+        if glob_gen[g].state == 0 {
+            glob_gen[g].state = 1;
+            work.push(g);
+        }
     }
 }
 
@@ -533,6 +574,7 @@ recursive fn gen_handler(h: u32) {
     push_cleanup_scope();
     let exn = ins_load(GIR_T_PTR, exn_slot(), false);
     let init = hd.v as! u32;
+    let ecf = if hd.ty == 0 || is_record(hd.ty) { CLF_MAYTHROW } else { 0 };
     if (hd.op as i64) & XC_COPY != 0 {
         // a class copied by its constructor (in a terminate scope), then begin_catch
         let p = libcall1("__cxa_get_exception_ptr", GIR_T_PTR, exn);
@@ -542,11 +584,11 @@ recursive fn gen_handler(h: u32) {
         if init != 0 { gen_stmt(init); }
         pop_cleanup_scope(true);
         libcall1("__cxa_begin_catch", GIR_T_PTR, exn);
-        push_cl(Cleanup { kind: CL_ENDCATCH, val: 0, sym: -1, fsym: -1 });
+        push_cl(Cleanup { kind: CL_ENDCATCH, val: 0, sym: -1, fsym: -1, flags: ecf as! u8 });
     } else {
         let p = libcall1("__cxa_begin_catch", GIR_T_PTR, exn);
         ins_store(GIR_T_PTR, p, cur_xexn, false);
-        push_cl(Cleanup { kind: CL_ENDCATCH, val: 0, sym: -1, fsym: -1 });
+        push_cl(Cleanup { kind: CL_ENDCATCH, val: 0, sym: -1, fsym: -1, flags: ecf as! u8 });
         if init != 0 { gen_stmt(init); }
     }
     gen_stmt(hd.b);
