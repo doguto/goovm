@@ -382,6 +382,9 @@ fn options() {
         else if s == "--pp-state-hash=v" { opt_state_hash = 2; }
         else if s == "-pthread" { opt_pthread = true; }
         else if s == "-nostdinc" { nostdinc = true; }
+        else if s == "-ffp-contract=off" { opt_fp_contract = 0; }
+        else if s == "-ffp-contract=on" { opt_fp_contract = 1; }
+        else if s == "-ffp-contract=fast" || s == "-ffp-contract=fast-honor-pragmas" { opt_fp_contract = 2; }
         else if s == "-funsigned-char" || s == "-fno-signed-char" { opt_unsigned_char = true; char_sign_set = 1; }
         else if s == "-fsigned-char" || s == "-fno-unsigned-char" { opt_unsigned_char = false; char_sign_set = 2; }
         else if s == "-trigraphs" { opt_trigraphs = true; }
