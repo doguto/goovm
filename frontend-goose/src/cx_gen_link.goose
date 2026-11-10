@@ -151,6 +151,10 @@ fn name_syms() {
     cxl_grow();
     // the functions lambdas are in first (their names are in the closures')
     for i in lam_infos.len { if lam_infos[i].encl > 0 { name_one(lam_infos[i].encl); } }
+    for x in local_cls_list {
+        let g = local_cls.get(x as u64);
+        if g { name_one((g >> 16) as i64); }
+    }
     for s in 1..syms.len { name_one(s); }
     // the complete-object variants of constructors and destructors (and
     // those made from now on)
@@ -275,7 +279,8 @@ fn name_static_locals() {
         if !mangle_sym(f) { continue; }
         var nm: u8[>..] = [];
         nm.append("_ZZ");
-        nm.append(mg[2..]);
+        // (an unmangled name: main, extern "C": its <source-name>)
+        if mg.len >= 2 && mg[0] == '_' && mg[1] == 'Z' { nm.append(mg[2..]); } else { format(nm, mg.len); nm.append(mg); }
         nm.push('E');
         let id = ident_text(syms[s].name as i64);
         format(nm, id.len);

@@ -55,7 +55,7 @@ fn is_std_ns(sc: i64) -> bool {
 
 // The mangled name of symbol s (a function or variable) into mg; false
 // when D1 cannot mangle it (a dependent or unknown type).
-fn mangle_sym(s: i64) -> bool {
+recursive fn mangle_sym(s: i64) -> bool {
     mg.clear();
     msubs.clear();
     mg_fail = false;
@@ -178,9 +178,15 @@ fn mangle_name(s: i64) {
         if member_fn && (types[syms[s].ty >> 4].flags as i64) & TF_MCONST != 0 { mg.push('K'); }
         mg.append(cm_name);
         msubs.push(MK_SCOPE | (sc as u64));
+        let disc_l = cm_disc.len;
+        let d0 = mg_stack.len;
+        mg_stack.append(cm_disc);
         unqualified(s);
         mg_name_end = mg.len;
         mg.push('E');
+        // a local class's discriminator ends the local name
+        mg.append(mg_stack[d0..d0 + disc_l]);
+        mg_stack.resize(d0);
         return;
     }
     mg.push('N');

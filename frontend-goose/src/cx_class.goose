@@ -77,6 +77,7 @@ fn declare_tag(name: u32, is_union: bool, loc: u32, in_block: bool, sc: i64) -> 
         scope_add(sc, s);
     }
     class_setup(r, s, sc);
+    if cg_on && in_block { note_local_class(r, sc); }     // code generation: a local class's name
     return s;
 }
 
