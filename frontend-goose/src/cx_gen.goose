@@ -61,6 +61,8 @@ import .cx_gen_class;
 import .cx_gen_vt;
 import .cx_gen_rtti;
 import .cx_gen_new;
+import .cx_gen_stmt;
+import .cx_gen_lambda;
 
 let CF_DTOR_DELETING = 2147483648;  // the deleting destructor (D0) of a class with a virtual destructor
 
@@ -1054,6 +1056,8 @@ recursive fn cg_call(f: i64, obj0: u32, mark: i64, loc: u32, qualified: bool) ->
 
 // `this` in a member function (an rvalue).
 fn cg_this_ref(loc: u32) -> u32 {
+    let lt = cg_lambda_this(loc);
+    if lt != 0 { return lt; }
     let n = node(N_DECLREF, 0, syms[cg_this].ty, cg_this, 0, 0, loc);
     nodes[n].flags = NF_LVALUE;
     return rv(n);
@@ -2449,7 +2453,7 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
         if bi != 0 && is_array(t) && types[t >> 4].n < 0 { syms[s].ty = with_q(nodes[bi].ty, quals(t)); }
     } else if init != 0 && kind_of(t) == TY_MEMPTR && !is_opq(init) {
         conv = conv_value(init, unqual(t), loc);
-    } else if init != 0 && conv != 0 && is_pointer(t) && !is_opq(init) {
+    } else if init != 0 && conv != 0 && is_pointer(t) && !is_opq(init) && !is_record(nodes[init].ty) {
         let c = cg_ptr_conv(rv(init), unqual(t), loc);
         if c != 0 { conv = c; }
     } else if init != 0 && conv != 0 && !is_opq(init) && is_record(nodes[init].ty) && cish(t) {
@@ -3777,6 +3781,13 @@ recursive fn visit(n: u32) {
             }
         } else if sk != SK_BUILTIN { bad(n); return; }
     } else if k == N_MEMBER {
+        if nd.c != 0 {
+            // a lambda's capture: its field in the closure (cx_gen_lambda.cap_ref)
+            nodes[n].b = records[nd.c - 1].first + nd.b;
+            nodes[n].c = 0;
+            visit(n);
+            return;
+        }
         if nd.flags & NF_REFDEREF != 0 {
             let c = node(N_MEMBER, nd.op as i64, lower_ty(fields[nd.b].ty), nd.a as i64, nd.b as i64, 0, nd.loc);
             nodes[c].flags = NF_LVALUE;

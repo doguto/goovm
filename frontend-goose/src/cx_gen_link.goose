@@ -149,25 +149,42 @@ fn set_class_data_link(s: i64, r: i64, dynamic: bool, relro: bool) {
 fn name_syms() {
     cx_grow();
     cxl_grow();
-    for s in 1..syms.len {
+    // the functions lambdas are in first (their names are in the closures')
+    for i in lam_infos.len { if lam_infos[i].encl > 0 { name_one(lam_infos[i].encl); } }
+    for s in 1..syms.len { name_one(s); }
+    // the complete-object variants of constructors and destructors (and
+    // those made from now on)
+    for i in 0..complete_pairs.len / 2 { name_complete(complete_pairs[2 * i] as i64, complete_pairs[2 * i + 1] as i64); }
+    name_static_locals();
+    name_lambdas();
+    names_done = true;
+}
+
+// The name and linkage of symbol s (once: a symbol with a name is skipped).
+fn name_one(s: i64) {
+    {
         let k = syms[s].kind as i64;
-        if k != SK_FUNC && k != SK_VAR { continue; }
+        if k != SK_FUNC && k != SK_VAR { return; }
         let fl = cxs[s].flags;
-        if fl & (CF_PATTERN | CF_TEMPLATE | CF_TPARAM) != 0 { continue; }
-        if syms[s].attr != 0 && sym_attrs[syms[s].attr].asm_len != 0 { continue; }
-        if k == SK_FUNC && complete_of.count > 0 && is_complete_variant(s) { continue; }
+        if fl & (CF_PATTERN | CF_TEMPLATE | CF_TPARAM) != 0 { return; }
+        if syms[s].attr != 0 && sym_attrs[syms[s].attr].asm_len != 0 { return; }
+        if k == SK_FUNC && complete_of.count > 0 && is_complete_variant(s) { return; }
+        if k == SK_FUNC && is_lambda_fn(s) { return; }
         if k == SK_VAR {
-            if syms[s].flags & SF_COMPLIT != 0 || syms[s].name == 0 { continue; }
+            if syms[s].flags & SF_COMPLIT != 0 || syms[s].name == 0 { return; }
             if fl & CF_MEMBER != 0 { syms[s].sc = 0; syms[s].flags = syms[s].flags | SF_FILESCOPE; }
-            if syms[s].flags & SF_FILESCOPE == 0 { continue; }
+            if syms[s].flags & SF_FILESCOPE == 0 { return; }
             // a static local: C's lowering names it
-            if syms[s].scope > 0 && fl & CF_MEMBER == 0 { continue; }
+            if syms[s].scope > 0 && fl & CF_MEMBER == 0 { return; }
         }
-        let internal = internal_linkage(s) || (cxs[s].dscope > 0 && in_anon_ns(cxs[s].dscope as i64));
+        var internal = internal_linkage(s) || (cxs[s].dscope > 0 && in_anon_ns(cxs[s].dscope as i64));
         let structor = k == SK_FUNC && fl & (CF_CTOR | CF_DTOR) != 0 && fl & CF_DTOR_DELETING == 0;
         mg_structor = if structor { 2 } else { 1 };
+        cm_no_linkage = false;
         let ok = mangle_sym(s);
         mg_structor = 1;
+        // (a name with a closure type that has no linkage: internal)
+        if cm_no_linkage { internal = true; }
         if ok {
             if syms[s].name == 0 || !same_text(mg, ident_text(syms[s].name as i64)) { set_label(s, mg); }
         } else {
@@ -193,11 +210,6 @@ fn name_syms() {
         }
         if internal && syms[s].sc as i64 != SC_EXTERN { syms[s].sc = SC_STATIC as! u8; }
     }
-    // the complete-object variants of constructors and destructors (and
-    // those made from now on)
-    for i in 0..complete_pairs.len / 2 { name_complete(complete_pairs[2 * i] as i64, complete_pairs[2 * i + 1] as i64); }
-    name_static_locals();
-    names_done = true;
 }
 var names_done = false;
 
