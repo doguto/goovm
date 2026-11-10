@@ -398,7 +398,7 @@ fn rotate_loops() -> bool {
     return n != 0;
 }
 fn rotate_one(H: u32) -> bool {
-    if b_fl[H] & (BF_LP | BF_DEAD) != 0 { return false; }
+    if b_fl[H] & (BF_LP | BF_DEAD | BF_ADDR) != 0 { return false; }
     // one latch, and the outside edges through one preheader (made here if
     // there are several: SimplifyCFG sends the edges of empty blocks straight
     // to the header)

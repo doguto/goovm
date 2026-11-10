@@ -185,14 +185,21 @@ fn rg_alloc(insts: const Inst[:], blocks: const Block[:]) {
             }
         }
     }
+    // (E2) the PHIs of indirectbr targets keep their home: the edges'
+    // moves all happen before the one jump
+    rg_ibt.clear();
+    rg_ibt.resize(nb, 0);
+    for I in insts {
+        if I.op == GIR_INDIRECTBR { for q in 0..I.c { rg_ibt[M.opnds[I.b + q]] = 1; } }
+    }
     for I, j in insts {
-        if I.op == GIR_INDIRECTBR { return; }
         // (a PHI is always a candidate: the edges define it, even if all its
         // uses are in its block)
         if I.ty == GIR_T_VOID || vi[j].nuse == 0 || vi[j].st & ST_KEEP != 0 { continue; }
         if vi[j].st & ST_GLOB == 0 && I.op != GIR_PHI { continue; }
         let c = rc_of(I.ty);
         if c == RC_MEM || vi[j].home == H_ALLOCA || vi[j].home == H_PTR { continue; }
+        if I.op == GIR_PHI && rg_ibt[rg_blk_of(blocks, j as! u32)] != 0 { continue; }
         rg_gid[j] = rg_val.len as! u32;
         rg_val.push(j as! u32);
     }
@@ -604,6 +611,17 @@ fn rg_shared(j: u32) -> u32 {
     if id == NIL || rg_reg[j] == NOREG || rg_reg[id] != rg_reg[j] { return NIL; }
     if id >= f_nins { return GIR_V_ARG << 30 | (id - f_nins); }
     return f_first_inst + id;
+}
+var rg_ibt: u8[>..] = [];          // per block: an indirectbr target
+// The block of local instruction j (PHIs: at the start of their block).
+fn rg_blk_of(blocks: const Block[:], j: u32) -> u32 {
+    var lo: i64 = 0;
+    var hi: i64 = blocks.len - 1;
+    while lo < hi {
+        let mid = (lo + hi + 1) >> 1;
+        if blocks[mid].first_inst - f_first_inst <= j { lo = mid; } else { hi = mid - 1; }
+    }
+    return lo as! u32;
 }
 // Whether register r is free over g's segments.
 fn rg_free(r: u32, g: u32) -> bool {

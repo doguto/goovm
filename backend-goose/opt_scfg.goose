@@ -76,7 +76,7 @@ fn merge_blocks() -> bool {
             let t = b_last[b];
             if t == NIL || o_ins[t].op != GIR_BR || block_invoke(b) != NIL { break; }
             let s = o_ins[t].a;
-            if s == b || s == 0 || b_fl[s] & (BF_LP | BF_DEAD) != 0 || p_start[s + 1] - p_start[s] != 1 { break; }
+            if s == b || s == 0 || b_fl[s] & (BF_LP | BF_DEAD | BF_ADDR) != 0 || p_start[s + 1] - p_start[s] != 1 { break; }
             // PHIs of a block with one predecessor are their value
             var i = b_first[s];
             while i != NIL && o_ins[i].op == GIR_PHI {
@@ -119,7 +119,7 @@ fn forward_empty() -> bool {
     fe_epoch++;
     for e in rpo {
         // (a block that gained predecessors this round has a stale predecessor list)
-        if e == 0 || b_fl[e] & (BF_LP | BF_DEAD) != 0 || fe_dirty[e] == fe_epoch { continue; }
+        if e == 0 || b_fl[e] & (BF_LP | BF_DEAD | BF_ADDR) != 0 || fe_dirty[e] == fe_epoch { continue; }
         let t = b_first[e];
         if t == NIL || t != b_last[e] || o_ins[t].op != GIR_BR { continue; }
         let tg = o_ins[t].a;
@@ -210,7 +210,7 @@ fn spec_op(I: Inst) -> bool {
 // The number of instructions block b (only reached from a) would speculate,
 // or NIL if it cannot be.
 fn spec_block(b: u32, a: u32) -> u32 {
-    if b == a || b == 0 || b_fl[b] & (BF_LP | BF_DEAD) != 0 { return NIL; }
+    if b == a || b == 0 || b_fl[b] & (BF_LP | BF_DEAD | BF_ADDR) != 0 { return NIL; }
     if p_start[b + 1] - p_start[b] != 1 || p_list[p_start[b]] != a { return NIL; }
     let t = b_last[b];
     if t == NIL || o_ins[t].op != GIR_BR { return NIL; }
@@ -447,7 +447,7 @@ fn thread_phis() -> bool {
 }
 // P if block m is a candidate (only PHIs and a condbr on one of them), else NIL.
 fn thread_cand(m: u32) -> u32 {
-    if m == 0 || b_fl[m] & (BF_LP | BF_DEAD) != 0 { return NIL; }
+    if m == 0 || b_fl[m] & (BF_LP | BF_DEAD | BF_ADDR) != 0 { return NIL; }
     let t = b_last[m];
     if t == NIL || o_ins[t].op != GIR_CONDBR || block_invoke(m) != NIL { return NIL; }
     let c = res(o_ins[t].a);
