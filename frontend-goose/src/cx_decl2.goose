@@ -166,6 +166,7 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
         let fs = enclosing_ns(cur_scope);
         s = find_redecl(fs, key, ft);
     }
+    let created = s < 0;
     if s < 0 {
         s = csym(SK_FUNC, key, ft, loc);
         if target >= 0 { scope_add(target, s); }
@@ -189,7 +190,13 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
         // a template entity in D1 (not lowered, not in the oracles)
         cxs[s].flags = cxs[s].flags | CF_SPEC | CF_PATTERN;
     }
-    if ctx == DC_FRIEND && cxs[s].flags & CF_MEMBER == 0 { cxs[s].flags = cxs[s].flags | CF_FRIEND; }
+    if ctx == DC_FRIEND && cxs[s].flags & CF_MEMBER == 0 && created {
+        cxs[s].flags = cxs[s].flags | CF_FRIEND;
+        if cur_class >= 0 { friend_class.insert(s as u64, cur_class as u32); }
+    } else if ctx != DC_FRIEND && cxs[s].flags & CF_FRIEND != 0 {
+        // declared at namespace scope too: found by ordinary lookup
+        cxs[s].flags = cxs[s].flags & ~(CF_FRIEND as! u32);
+    }
     if extern_c && !is_member && cxs[s].flags & CF_MEMBER == 0 { cxs[s].flags = cxs[s].flags | CF_EXTERN_C; }
     if dependent_ctx() || (target >= 0 && scopes[target].flags & SCF_PATTERN != 0) { cxs[s].flags = cxs[s].flags | CF_PATTERN; }
     if target >= 0 && scopes[target].flags & SCF_INST != 0 && cxs[s].flags & CF_PATTERN == 0 && !d.qn.qual {
@@ -674,6 +681,8 @@ var decl_is_extern: bool = false;    // the variable declaration being parsed sa
 recursive fn declare_var(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     decl_is_extern = ds.sc == SC_EXTERN;
     var ty = apply_type_attrs(d.ty, a, d.loc);
+    // a constexpr variable is const (C++ [dcl.constexpr]p10)
+    if ds.is_constexpr && !is_ref(ty) && !is_opaque(ty) { ty = with_q(ty, Q_CONST); }
     if ds.sc != SC_EXTERN && ctx != DC_CLASS && !is_ref(ty) && !dependent_ctx() { need_complete(ty); }
     if ctx != DC_NS { cur_init_prio = 65535; }
     let name = d.qn.name;

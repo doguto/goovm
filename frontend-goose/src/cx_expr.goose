@@ -965,7 +965,7 @@ recursive fn parse_id_expr() -> u32 {
             // lookup may still find it (D1 does not perform ADL)
             if !qn.qual {
                 let mark = parse_args();
-                if cg_on && !dependent_ctx() {
+                if !dependent_ctx() {
                     // code generation: C's builtins (__builtin_alloca ...)
                     let b = cg_builtin_call(qn.name, mark, loc);
                     if b != 0 { nscratch.resize(mark); return b; }

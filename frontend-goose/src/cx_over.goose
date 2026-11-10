@@ -280,6 +280,19 @@ recursive fn pick_best(cm0: i64, mark: i64, nargs: i64, obj: u32, has_obj: bool,
     }
     let nv = (cand_viable.len - vm) / 2;
     cand_nviable = nv;
+    if inst_debug() {
+        var o: u8[>..] = [];
+        o.append(str("pick_best ncand=", cand_syms.len - cm0, " nviable=", nv, " unknown=", any_unknown, " :"));
+        for v in nv {
+            let f = cand_syms[cand_viable[vm + 2 * v]] as i64;
+            o.append(str(" ", ident_text(syms[f].name as i64), "#", f, "["));
+            let st = cand_viable[vm + 2 * v + 1] as i64;
+            for k in nargs + 1 { let c = cand_ics[st + k]; o.append(str(c.kind, "/", c.rank, "/", c.flags, " ")); }
+            o.append("]");
+        }
+        o.push('\n');
+        write_stderr(o);
+    }
     var best: i64 = -1;
     if nv == 1 && any_unknown {
         // the only candidate that may be viable
@@ -404,9 +417,25 @@ recursive fn mk_call_cx(callee: u32, mark: i64, loc: u32) -> u32 {
     let ck = nodes[callee].kind as i64;
     if ck == N_FUNCREF {
         let obj = nodes[callee].b;
-        cand_explicit = if nodes[callee].c != 0 { (nodes[callee].c - 1) as! i32 } else { -1 };
+        let explicit = if nodes[callee].c != 0 { (nodes[callee].c - 1) as! i32 } else { -1 };
+        let s0 = nodes[callee].a as i64;
+        let nargs = nscratch.len - mark;
+        let mc = cand_syms.len;
+        var ok = true;
+        var s = s0;
+        while s >= 0 {
+            let f = resolve(s);
+            if f >= 0 && visible(s) && cxs[s].flags & CF_FRIEND == 0 {
+                if !add_candidate(mc, f, explicit, mark, nargs, false) { ok = false; }
+            }
+            s = cxs[s].nnext as i64;
+        }
+        // argument-dependent lookup for an unqualified call of a namespace-scope function
+        if obj == 0 && nodes[callee].op == 0 && adl_applies(s0) {
+            if !adl_candidates(mc, syms[s0].name, mark, explicit, false) { ok = false; }
+        }
         cand_obj = obj;
-        let f = best_candidate(nodes[callee].a as i64, mark, obj != 0);
+        let f = best_of_candidates(mc, mark, obj != 0, !ok);
         if f < 0 { return opaque_node(loc); }
         return build_call(f, obj, mark, loc, nodes[callee].op != 0);
     }
@@ -494,24 +523,54 @@ fn funcref_addr(e: u32, loc: u32) -> u32 {
 // found and selected; see build_call).
 
 recursive fn overloaded_binop(op: i64, l: u32, r: u32, loc: u32) -> u32 {
+    let x = resolve_oper(op, l, r, false, loc);
+    if x != 0 { return x; }
     if cg_on { return cg_operator(op, l, r, loc, false); }
     return 0;
 }
 recursive fn overloaded_assign(op: i64, l: u32, r: u32, loc: u32, tok: i64) -> u32 {
+    let x = resolve_oper(tok_op(tok), l, r, false, loc);
+    if x != 0 { return x; }
     if cg_on { return cg_assign(op, l, r, loc, tok); }
     return 0;
 }
 recursive fn overloaded_unop(op: i64, e: u32, loc: u32, post: bool) -> u32 {
+    let x = resolve_oper(op, e, 0, post, loc);
+    if x != 0 { return x; }
     if cg_on { return cg_operator(op, e, 0, loc, post); }
     return 0;
 }
 recursive fn overloaded_subscript(b: u32, i: u32, loc: u32) -> u32 {
+    let x = resolve_oper(OP_SUBSCRIPT, b, i, false, loc);
+    if x != 0 { return x; }
     if cg_on { return cg_operator(OP_SUBSCRIPT, b, i, loc, false); }
     return 0;
 }
 recursive fn overloaded_arrow(b: u32, loc: u32) -> u32 {
+    let x = resolve_oper(OP_ARROW, b, 0, false, loc);
+    if x != 0 { return x; }
     if cg_on { return cg_operator(OP_ARROW, b, 0, loc, false); }
     return 0;
+}
+
+// Does argument-dependent lookup apply to an unqualified call whose name
+// ordinary lookup found as the chain s0 (C++ [basic.lookup.argdep]p3: not
+// for a class member, a block-scope function declaration, or a name that
+// is not a function)?
+fn adl_applies(s0: i64) -> bool {
+    var s = s0;
+    while s >= 0 {
+        let f = resolve(s);
+        if f >= 0 && visible(s) {
+            let k = syms[f].kind as i64;
+            if k != SK_FUNC && k != SK_TEMPLATE { return false; }
+            if cxs[f].flags & CF_MEMBER != 0 { return false; }
+            if k == SK_TEMPLATE && tmpls[cxs[f].tmpl].pattern >= 0 && cxs[tmpls[cxs[f].tmpl].pattern].flags & CF_MEMBER != 0 { return false; }
+            if syms[s].scope > 0 && cxs[s].dscope < 0 { return false; }
+        }
+        s = cxs[s].nnext as i64;
+    }
+    return true;
 }
 recursive fn conv_to_bool(e: u32) -> u32 {
     if cg_on && !is_opq(e) {

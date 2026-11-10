@@ -297,6 +297,18 @@ recursive fn need_complete(t: u32) {
     if sc >= 0 && scopes[sc].flags & SCF_INST_PENDING != 0 { inst_record(r); }
 }
 
+// Is class scope sc complete with all its members known (no dependent or
+// unknown bases, not a template's pattern, not an instantiation that had
+// errors)? A lookup that fails there is an error, not something unknown.
+fn known_class_scope(sc: i64) -> bool {
+    if sc < 0 || scopes[sc].kind as i64 != CS_CLASS { return false; }
+    if scopes[sc].flags & (SCF_PATTERN | SCF_INST_PENDING) != 0 { return false; }
+    let r = scopes[sc].rec as i64;
+    if r < 0 || records[r].flags & RF_COMPLETE == 0 || records[r].flags & RF_BEING_DEFINED != 0 { return false; }
+    if crecs[r].flags & CR_PATTERN != 0 { return false; }
+    return !has_dep_base(sc);
+}
+
 // Is t (a record) an instantiation whose instantiation had errors (or that
 // could not be instantiated)?
 fn inst_is_dirty(t: u32) -> bool {
@@ -548,10 +560,29 @@ recursive fn synth_args(l: i64, d: i64) -> i32 {
     return targ_intern(mark);
 }
 
+// A class template's pattern record as the template-id it is (X<T> with
+// X's own parameters), 0 for another type.
+fn pattern_as_depspec(t: u32) -> u32 {
+    let r = rec_of(t);
+    if r >= crecs.len || crecs[r].flags & CR_PATTERN == 0 { return 0; }
+    let cs = crecs[r].sym as i64;
+    if cs < 0 || cxs[cs].tmpl < 0 { return 0; }
+    let tt = cxs[cs].tmpl as i64;
+    if tmpls[tt].spec_args >= 0 || tmpls[tt].kind as i64 != TT_CLASS || tmpls[tt].pattern as i64 != r { return 0; }
+    let ts = tmpls[tt].sym as i64;
+    if ts < 0 { return 0; }
+    return with_q(mk_depspec(ts, own_args(tt)), quals(t));
+}
+
 // t with the template parameters of depth `from` renumbered to depth `to`.
 recursive fn retag(t: u32, from: i64, to: i64) -> u32 {
     let k = kind_of(t);
     let q = quals(t);
+    if k == TY_STRUCT || k == TY_UNION {
+        let pd = pattern_as_depspec(t);
+        if pd != 0 { return retag(pd, from, to); }
+        return t;
+    }
     if k == TY_TPARAM {
         let n = types[t >> 4].n;
         if n >> 16 != from { return t; }
@@ -674,6 +705,15 @@ recursive fn deduce_type(p: u32, a: u32) -> bool {
     if k == TY_DEPNAME || k == TY_DEPEXPR || k == TY_UNKNOWN { return true; }   // non-deduced contexts
     if quals(p) != quals(a) { return false; }
     let ka = kind_of(a);
+    if k == TY_STRUCT || k == TY_UNION {
+        // X<T> written with the template's own parameters names its pattern
+        let pd = pattern_as_depspec(p);
+        if pd != 0 { return deduce_type(pd, a); }
+    }
+    if ka == TY_STRUCT || ka == TY_UNION {
+        let ad = pattern_as_depspec(a);
+        if ad != 0 { return deduce_type(p, ad); }
+    }
     if k == TY_DEPSPEC {
         // X<P...> against a specialization X<A...>
         let ts = types[p >> 4].extra as i64;

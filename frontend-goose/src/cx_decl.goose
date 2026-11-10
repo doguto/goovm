@@ -202,6 +202,8 @@ struct CDS {
     is_explicit: bool = false,
     is_friend: bool = false,
     is_constexpr: bool = false,
+    is_constinit: bool = false,
+    is_consteval: bool = false,
     is_mutable: bool = false,
     noreturn: bool = false,
     q: u8 = 0,
@@ -366,7 +368,14 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             if at(TK_L_PAREN) { skip_group(); }
             continue;
         }
-        if w == KW_CONSTEXPR || w == KW_CONSTEVAL || w == KW_CONSTINIT { ds.is_constexpr = true; ds.any = true; adv(); continue; }
+        if w == KW_CONSTINIT { ds.is_constinit = true; ds.any = true; adv(); continue; }
+        if w == KW_CONSTEXPR || w == KW_CONSTEVAL {
+            ds.is_constexpr = true;
+            if w == KW_CONSTEVAL { ds.is_consteval = true; }
+            ds.any = true;
+            adv();
+            continue;
+        }
         if w == KW_NORETURN { ds.noreturn = true; ds.any = true; adv(); continue; }
         if w == KW_CONST { ds.q = ds.q | Q_CONST; ds.any = true; adv(); continue; }
         if w == KW_VOLATILE { ds.q = ds.q | Q_VOLATILE; ds.any = true; adv(); continue; }
@@ -423,8 +432,15 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             lookup_qn(qn);
             var t = qn_type(qn);
             if t == 0 {
-                if qn.dep == 0 && qn.qual && qn.scope >= 0 {
-                    // a member of a non-dependent class D1 does not know
+                if qn.dep == 0 && qn.qual && qn.scope >= 0 && known_class_scope(qn.scope as i64) {
+                    // D2: a complete class without unknown bases has no such type
+                    // (a substitution failure in a template's declaration)
+                    if !dependent_ctx() {
+                        err_at(qn.loc, str("no type named '", ident_text(qn.name as i64), "' in ", tname(scope_class_type(qn.scope as i64))));
+                    }
+                    t = t_unknown;
+                } else if qn.dep == 0 && qn.qual && qn.scope >= 0 {
+                    // a member of a class whose members are not all known
                     t = t_unknown;
                 } else if qn.dep == 0 {
                     t = t_unknown;

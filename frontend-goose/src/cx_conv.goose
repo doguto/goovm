@@ -264,9 +264,9 @@ recursive fn ics_ref(e: u32, p: u32, fl: i64) -> Ics {
     let related = ref_related(t1, t2);
     // an lvalue (or a function) bound directly
     if !rv_ref && lv && compatible {
-        return ics_std(rank, IF_REF | addq | d2b | fnf | (if d2b == 0 && addq == 0 { IF_IDENT } else { 0 }), unqual(t2), unqual(t1));
+        return ics_std(rank, IF_REF | addq | d2b | fnf | (if d2b == 0 && addq == 0 { IF_IDENT } else { 0 }), unqual(t2), t1);
     }
-    if rv_ref && is_fn && compatible { return ics_std(RK_EXACT, IF_REF | IF_RVREF | fnf, unqual(t2), unqual(t1)); }
+    if rv_ref && is_fn && compatible { return ics_std(RK_EXACT, IF_REF | IF_RVREF | fnf, unqual(t2), t1); }
     // a conversion function giving an lvalue (an lvalue reference), [over.match.ref]
     if !rv_ref && is_record(t2) && !related && fl & CV_NOUSER == 0 {
         let u = ics_user(e, p, fl, true, true);
@@ -276,7 +276,7 @@ recursive fn ics_ref(e: u32, p: u32, fl: i64) -> Ics {
     if !rv_ref && (q1 & Q_CONST == 0 || q1 & Q_VOLATILE != 0) { return ics_bad(); }
     // an rvalue of a related type (an xvalue, a class or array prvalue) bound directly
     if !lv && compatible && (is_record(t2) || is_array(t2) || nodes[e].flags & NF_XVALUE != 0) {
-        return ics_std(rank, IF_REF | addq | d2b | (if rv_ref { IF_RVREF } else { 0 }) | (if d2b == 0 && addq == 0 { IF_IDENT } else { 0 }), unqual(t2), unqual(t1));
+        return ics_std(rank, IF_REF | addq | d2b | (if rv_ref { IF_RVREF } else { 0 }) | (if d2b == 0 && addq == 0 { IF_IDENT } else { 0 }), unqual(t2), t1);
     }
     if rv_ref && lv && related { return ics_bad(); }
     // a conversion function giving an rvalue
@@ -289,6 +289,7 @@ recursive fn ics_ref(e: u32, p: u32, fl: i64) -> Ics {
     var c = ics_of(e, unqual(t1), fl | CV_COPY);
     if c.kind == ICS_BAD { return c; }
     c.flags = c.flags | (IF_REF | IF_TEMP | (if rv_ref { IF_RVREF } else { 0 })) as! u16;
+    c.to = t1;
     return c;
 }
 
@@ -386,10 +387,19 @@ recursive fn ics_user(e: u32, t: u32, fl: i64, ref: bool, lvref_only: bool) -> I
         if sc >= 0 {
             var s = scope_find(sc, id_ctor);
             while s >= 0 {
-                let f = resolve(s);
+                var f = resolve(s);
                 s = cxs[s].nnext as i64;
                 if f < 0 { continue; }
-                if syms[f].kind as i64 == SK_TEMPLATE { unknown = true; continue; }
+                if syms[f].kind as i64 == SK_TEMPLATE {
+                    // a constructor template: deduced from e
+                    let mk = nscratch.len;
+                    nscratch.push(e);
+                    let sp = deduce_call(cxs[f].tmpl as i64, -1, mk, 1);
+                    nscratch.resize(mk);
+                    if sp == -2 { unknown = true; continue; }
+                    if sp < 0 { continue; }
+                    f = sp;
+                }
                 if syms[f].kind as i64 != SK_FUNC || cxs[f].flags & (CF_PATTERN | CF_DELETED) != 0 { continue; }
                 if cxs[f].flags & CF_EXPLICIT != 0 && fl & CV_COPY != 0 { continue; }
                 let ft = types[syms[f].ty >> 4];
@@ -411,8 +421,13 @@ recursive fn ics_user(e: u32, t: u32, fl: i64, ref: bool, lvref_only: bool) -> I
         let mark = conv_fns.len;
         collect_conv_fns(unqual(src), 0);
         for i in mark..conv_fns.len {
-            let f = conv_fns[i] as i64;
-            if syms[f].kind as i64 == SK_TEMPLATE { unknown = true; continue; }
+            var f = conv_fns[i] as i64;
+            if syms[f].kind as i64 == SK_TEMPLATE {
+                let sp = deduce_conv_template(cxs[f].tmpl as i64, target);
+                if sp == -2 { unknown = true; continue; }
+                if sp < 0 { continue; }
+                f = sp;
+            }
             if cxs[f].flags & CF_EXPLICIT != 0 && !explicit_ok { continue; }
             let rt = types[syms[f].ty >> 4].base;
             // the implied object argument
@@ -551,7 +566,7 @@ recursive fn ics_object(obj: u32, f: i64) -> Ics {
     if d2b == 0 && addq == 0 { fl = fl | IF_IDENT; }
     if ff & TF_MRREF != 0 { fl = fl | IF_RVREF; }
     if ff & (TF_MLREF | TF_MRREF) == 0 { fl = fl | IF_NOREFQ; }
-    let r = ics_std(if d2b != 0 { RK_CONV } else { RK_EXACT }, fl, unqual(ot), unqual(cls));
+    let r = ics_std(if d2b != 0 { RK_CONV } else { RK_EXACT }, fl, unqual(ot), p);
     return r;
 }
 
@@ -652,4 +667,31 @@ fn d2b_compare(a: Ics, b: Ics) -> i64 {
         if is_base_of(fb, fa) { return -1; }
     }
     return 0;
+}
+
+// A conversion function template converting to type t ([temp.deduct.conv]):
+// its specialization, -1 none, -2 not known.
+recursive fn deduce_conv_template(tt: i64, t: u32) -> i64 {
+    let pf = tmpls[tt].pattern as i64;
+    if pf < 0 { return -2; }
+    var p = types[syms[pf].ty >> 4].base;
+    var a = t;
+    if is_ref(p) { p = tbase(p); }
+    else {
+        if is_array(a) { a = mk_ptr(tbase(a)); } else if is_func(a) { a = mk_ptr(a); }
+        a = unqual(a);
+        p = unqual(p);
+    }
+    if is_opaque(a) { return -2; }
+    let sv = ded_begin(tt);
+    let ok = deduce_type(p, a);
+    var res: i64 = -1;
+    if ok {
+        let full, binds = ded_complete(tt);
+        ded_end(sv);
+        if !full { return -1; }
+        return fspec_decl(tt, binds);
+    }
+    ded_end(sv);
+    return res;
 }
