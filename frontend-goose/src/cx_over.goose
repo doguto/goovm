@@ -54,10 +54,11 @@ recursive fn base_offset(der: u32, base: u32) -> i64 {
 }
 
 // A derived-class glvalue converted to its base `to` (an lvalue), or 0.
-fn derived_to_base_lv(e: u32, to: u32, loc: u32) -> u32 {
+recursive fn derived_to_base_lv(e: u32, to: u32, loc: u32) -> u32 {
     let from = nodes[e].ty;
     if !is_record(from) || !is_record(to) { return 0; }
     let o = base_offset(unqual(from), unqual(to));
+    if o == -2 && cg_on { return cg_vbase_lv(e, to, loc); }
     if o < 0 { return 0; }
     let n = node_v(N_ICAST, CK_DERIVED2BASE, with_q(unqual(to), quals(from)), e as i64, 0, 0, loc, o);
     nodes[n].flags = nodes[e].flags & (NF_LVALUE | NF_XVALUE);
@@ -90,7 +91,7 @@ fn conv_rank(e: u32, p: u32) -> i64 {
             if quals(t) & ~quals(pt) != 0 { return RK_NONE; }
             return RK_EXACT;
         }
-        if is_record(t) && is_record(pt) && base_offset(unqual(t), unqual(pt)) >= 0 { return RK_CONV; }
+        if is_record(t) && is_record(pt) && base_offset(unqual(t), unqual(pt)) != -1 { return RK_CONV; }
         if kind_of(p) == TY_LREF && quals(pt) & Q_CONST == 0 { return RK_NONE; }
         // binds to a temporary of the converted value
         return conv_rank_val(e, unqual(pt));
@@ -106,7 +107,7 @@ fn conv_rank_val(e: u32, p: u32) -> i64 {
     let kt = kind_of(t);
     let kp = kind_of(p);
     if is_record(p) || is_record(t) {
-        if is_record(p) && is_record(t) && base_offset(t, p) >= 0 { return RK_CONV; }
+        if is_record(p) && is_record(t) && base_offset(t, p) != -1 { return RK_CONV; }
         return RK_USER;     // a constructor or a conversion function may apply
     }
     if is_arith(t) || kt == TY_ENUM {
@@ -130,7 +131,7 @@ fn conv_rank_val(e: u32, p: u32) -> i64 {
         let b = tbase(p);
         if unqual(a) == unqual(b) && quals(a) & ~quals(b) == 0 { return RK_EXACT; }   // qualification adjustment
         if is_void(b) && quals(a) & ~quals(b) == 0 { return RK_CONV; }
-        if is_record(a) && is_record(b) && base_offset(unqual(a), unqual(b)) >= 0 { return RK_CONV; }
+        if is_record(a) && is_record(b) && base_offset(unqual(a), unqual(b)) != -1 { return RK_CONV; }
         return RK_NONE;
     }
     if kt == TY_NULLPTR {
@@ -292,6 +293,7 @@ recursive fn mk_call_cx(callee: u32, mark: i64, loc: u32) -> u32 {
         return build_call(f, obj, mark, loc, nodes[callee].op != 0);
     }
     if cg_on && ck == N_CXX && nodes[callee].op == 5 { return cg_memfn_call(callee, mark, loc); }
+    if cg_on && ck == N_CXX && nodes[callee].op == 9 { return cg_dtor_call(callee, mark, loc); }
     if is_opq(callee) { return opaque_node(loc); }
     let t = nodes[callee].ty;
     if is_record(t) {
@@ -406,7 +408,9 @@ recursive fn cast_to_class(t: u32, e: u32, loc: u32) -> u32 { return 0; }
 recursive fn construct_class(t: u32, mark: i64, loc: u32, braces: bool) -> u32 {
     let count = nscratch.len - mark;
     let start = commit_list(mark);
-    return node_v(N_CTOR, 0, unqual(t), 0, 0, count, loc, start);
+    // code generation: T{args} of an aggregate is aggregate initialization (op 2)
+    let op = if cg_on && braces && is_complete(t) && is_aggregate_class(rec_of(t)) { 2 } else { 0 };
+    return node_v(N_CTOR, op, unqual(t), 0, 0, count, loc, start);
 }
 
 // T x(args).

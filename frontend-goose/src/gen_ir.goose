@@ -57,7 +57,7 @@ fn tdef(kind: u32, cls: u32, bits: u32, size: u32, align: u32, store: u32) {
 
 fn ir_init() {
     m_header.push(Header { version: 2, flags: if opt_pie { MF_PIE } else { 0 }, tls_get_addr: NONE, n_llvm_insts: 0,
-        r0: 0, r1: 0, r2: 0, r3: 0 });
+        r0: 0, r1: if opt_a64 { GIR_TARGET_AARCH64 } else { GIR_TARGET_X86_64 }, r2: 0, r3: 0 });
     tdef(TK_VOID, C_NONE, 0, 0, 1, 0);
     tdef(TK_INT, C_INT, 1, 1, 1, 1);
     tdef(TK_INT, C_INT, 8, 1, 1, 1);
@@ -70,6 +70,7 @@ fn ir_init() {
     tdef(TK_FLOAT, C_X87, 80, 16, 16, 10);
     tdef(TK_INT, C_INT2, 128, 16, 16, 16);
     tdef(TK_FLOAT, C_FP, 16, 2, 2, 2);
+    if opt_a64 { tdef(TK_FLOAT, C_FP, 128, 16, 16, 16); }   // GIR_T_F128: AArch64 long double (F1)
     while m_types.len < 16 { tdef(TK_VOID, C_NONE, 0, 0, 1, 0); }
     m_strtab.push(0);
     m_dstr.push(0);
@@ -451,7 +452,7 @@ fn fn_finish(g: u32, flags: u32, nargs: u32, args: u32, ret_ty: u32, dbg: u32) -
     }
     for I in f_insts {
         var J = I;
-        let m: u32 = if I.op < 83 { OPM[I.op] } else { 0 };
+        let m: u32 = if I.op < 83 { OPM[I.op] } else if I.op == GIR_FMA || I.op == GIR_A64 { 7 } else { 0 };   // (F1: a, b, c values)
         if m != 0 {
             if m & 1 != 0 { J.a = remap(I.a, first, na); }
             if m & 2 != 0 { J.b = remap(I.b, first, na); }

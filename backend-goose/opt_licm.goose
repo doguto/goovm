@@ -793,7 +793,7 @@ fn gp_loop(h: u32) -> bool {
             let I = o_ins[i];
             let op: u32 = I.op;
             if op == GIR_CALL || op == GIR_ASM || op == GIR_SJLJ_SETJMP || op == GIR_SJLJ_LONGJMP || op == GIR_LANDINGPAD
-               || op == GIR_VASTART {
+               || op == GIR_VASTART || op == GIR_A64 && a64_effect(I.sub) {
                 for g in gp_list {
                     gp_ty[g] = NIL;
                     gp_st[g] = NIL;

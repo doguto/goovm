@@ -238,6 +238,10 @@ fn a_phi_copy(doff: i64, v: u32, t: u32) {
 }
 // Edge from -> to: each PHI's incoming value.
 fn a_phi_moves(from: u32, to: u32) {
+    if rg_on {
+        a_phi_moves_rg(from, to);
+        return;
+    }
     let B = M.blocks[f_first_block + to];
     for k in B.first_inst..B.first_inst + B.n_inst {
         let I = M.insts[k];
@@ -252,7 +256,7 @@ fn a_phi_moves(from: u32, to: u32) {
     }
 }
 fn a_lower_phi(I: Inst, j: u32, b: u32) {
-    if vi[j].nuse == 0 { return; }
+    if vi[j].nuse == 0 || vi[j].st & ST_PIN != 0 { return; }   // (a pinned PHI is in its register)
     let h = a_home_off(j) as i64;
     if b_tag[b] == pp_epoch {
         if t_off[j] == 0 { t_off[j] = a_new_slot(a_slot_size(I.ty)); }
@@ -302,8 +306,8 @@ fn a_lower_condbr(I: Inst, cur: u32, next: u32) {
         a_fcomb = 0;
     }
     a_flags_id = RV_NONE;
-    let pb = a_has_phi(I.b);
-    let pc = a_has_phi(I.c);
+    let pb = a_edge_phi(cur, I.b);
+    let pc = a_edge_phi(cur, I.c);
     if pb != pc {
         if pc {
             a_bflags(true, I.b);
@@ -472,6 +476,13 @@ fn a_gen_inst(gi: u32, cur: u32) {
     cur_pos = j;
     let k: u32 = vi[j].kind;
     let op: u32 = I.op;
+    let pin = rg_on && vi[j].st & ST_PIN != 0 && op != GIR_PHI;
+    if pin { a_rg_def_start(j); }
+    a_gen_inst2(I, j, k, op, cur, next);
+    if pin { a_rg_def_end(j); }
+    a_end_inst();
+}
+fn a_gen_inst2(I: Inst, j: u32, k: u32, op: u32, cur: u32, next: u32) {
     if k == K_A {
         match op {
             GIR_LOAD => a_lower_load(I, j),
@@ -480,7 +491,7 @@ fn a_gen_inst(gi: u32, cur: u32) {
             GIR_ICMP => a_lower_icmp(I, j),
             GIR_RET => a_lower_ret(I, j),
             GIR_BR => {
-                if a_has_phi(I.a) { a_phi_moves(cur, I.a); }
+                if a_edge_phi(cur, I.a) { a_phi_moves(cur, I.a); }
                 if I.a != next { a_b_block(I.a); }
             },
             GIR_CONDBR => a_lower_condbr(I, cur, next),
@@ -529,14 +540,12 @@ fn a_gen_inst(gi: u32, cur: u32) {
             GIR_BLOCKADDR => a_lower_blockaddr(I, j),
             _ => a_brk(1),
         }
-        a_end_inst();
         return;
     }
     if k == K_CALL && op == GIR_CALL {
         if I.flags & IF_INVOKE != 0 { call_lp = M.opnds[I.b + 2 * I.c]; }
         a_lower_call(I, j);
         call_lp = GIR_NONE;
-        a_end_inst();
         return;
     }
     b_begin(k == K_ALL);
@@ -585,9 +594,9 @@ fn a_gen_inst(gi: u32, cur: u32) {
         GIR_SJLJ_LONGJMP => b_lower_longjmp(I),
         GIR_ASM => b_lower_asm(I, j),
         GIR_LANDINGPAD => b_lower_landingpad(I, j),
+        GIR_A64 => b_lower_a64(I, j),
         _ => a_brk(1),
     }
-    a_end_inst();
 }
 
 // extractelement of a register vector with a constant lane (else the memory path).
@@ -787,6 +796,9 @@ fn a_gen_function(fi: u32) {
     if block_off.len < f.n_blocks + 1 { block_off.resize(f.n_blocks + 1, 0); }
     a_prepass(insts, blocks);
     if dbg_on { dbg_keep_homes(fi); }
+    rg_on = false;
+    a_nborrow = 0;
+    if opt_on && !opt_off("ra") { a_rg_alloc(insts, blocks); }
     f_share = f.flags & (FN_SJLJ | FN_RETURNS_TWICE) == 0;
     // the callee-saved budget: as many as values spanning calls want
     var ng = a_ncs_g;
@@ -800,8 +812,29 @@ fn a_gen_function(fi: u32) {
     a_ncs_save_g = ng;
     a_ncs_save_v = nvr;
     var cs: u64 = 0;
-    for q in 0..ng { cs |= abit(A_CS_GP[q]); }
-    for q in 0..nvr { cs |= abit(A_CS_V[q]); }
+    if rg_on {
+        // the pinned values' callee-saved registers, then as many more as local values want
+        cs = a_rg_cs;
+        var tg: i64 = popcount(a_rg_cs & A_GP_CALLEE) + ng;
+        var tv: i64 = popcount(a_rg_cs & A_V_CALLEE) + nvr;
+        if tg > 10 { tg = 10; }
+        if tv > 8 { tv = 8; }
+        var q = 0;
+        while popcount(cs & A_GP_CALLEE) < tg {
+            cs |= abit(A_CS_GP[q]);
+            q++;
+        }
+        q = 0;
+        while popcount(cs & A_V_CALLEE) < tv {
+            cs |= abit(A_CS_V[q]);
+            q++;
+        }
+        ng = popcount(cs & A_GP_CALLEE) as! u32;
+        nvr = popcount(cs & A_V_CALLEE) as! u32;
+    } else {
+        for q in 0..ng { cs |= abit(A_CS_GP[q]); }
+        for q in 0..nvr { cs |= abit(A_CS_V[q]); }
+    }
     a_alloc = A_GP_CALLER | A_V_CALLER | cs;
     a_csused = if f_sjlj || f_asm { cs } else { 0 };
     a_func_start();
@@ -864,6 +897,10 @@ fn a_gen_function(fi: u32) {
         cur_blk = b as! u32;
         block_off[b] = here();
         if b == 0 { a_entry_state(); } else { a_block_start(); }
+        if rg_on {
+            a_rg_block_enter(b as! u32);
+            if b == 0 { a_rg_entry_moves(); }
+        }
         if dbg_on {
             if b == 0 { dbg_func_start(f.dbg); }
             dbg_block_start();

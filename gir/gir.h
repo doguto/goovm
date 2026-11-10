@@ -271,9 +271,8 @@ enum GirOp {
                        /*   llvm.fmuladd on AArch64); ty = f32, f64 or a     */
                        /*   vector of them                                   */
     GIR_A64,           /* AArch64 intrinsic (NEON, ACLE): sub = GirA64;      */
-                       /*   ty = result type, aux = operand type; a, b, c =  */
-                       /*   operands, or for the forms marked "run" in       */
-                       /*   GirA64: b = s, c = n: ops[s..s+n) (a unused)     */
+                       /*   ty = result type, aux = type of a; a, b, c =     */
+                       /*   operands (an unused one is the constant i32 0)   */
     /* --- version 2, optimizer (additive, milestone E2; emitted at opt_level
      * >= 1 only) --- */
     GIR_ISCONST,       /* a = b = c = a value of any type; ty = i1: whether  */
@@ -319,6 +318,71 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
     GIR_X86_PSLLID,        /* llvm.x86.sse2.pslli.d                           */
     GIR_X86_PSRLID,        /* llvm.x86.sse2.psrli.d                           */
     GIR_X86_PSRAID         /* llvm.x86.sse2.psrai.d                           */
+};
+
+/* GIR_A64.sub (additive, milestone F1): AArch64 NEON and ACLE operations
+ * that are not generic IR (llvm.aarch64.neon.*, llvm.aarch64.*), each the
+ * Arm instruction of that name. ty is the result type, aux the type of
+ * operand a; a vector type gives the arrangement (lanes, 64 or 128 bits),
+ * a scalar type (i32, i64, f32, f64) the scalar (SISD) form, computed in a
+ * SIMD&FP register. a, b, c are value references; an operand that is not
+ * used is the constant i32 0; "#" marks operands that must be constants
+ * (shift amounts, lane numbers, fraction bits; a splat vector constant for
+ * SQSHLU, whose lane 0 is the amount). Structure loads and stores (ld2..ld4,
+ * their lane and replicate forms, st2..st4) are generic loads, stores and
+ * shuffles in GIR (the exporter expands them). */
+enum GirA64 {
+    /* same type: (a, b) -> ty */
+    GIR_A64_SQADD = 0, GIR_A64_UQADD, GIR_A64_SQSUB, GIR_A64_UQSUB, GIR_A64_SHADD, GIR_A64_UHADD,
+    GIR_A64_SRHADD, GIR_A64_URHADD, GIR_A64_SHSUB, GIR_A64_UHSUB, GIR_A64_SMAX, GIR_A64_UMAX,
+    GIR_A64_SMIN, GIR_A64_UMIN, GIR_A64_SABD, GIR_A64_UABD, GIR_A64_SSHL, GIR_A64_USHL,
+    GIR_A64_SQSHL, GIR_A64_UQSHL, GIR_A64_SRSHL, GIR_A64_URSHL, GIR_A64_SQRSHL, GIR_A64_UQRSHL,
+    GIR_A64_ADDP, GIR_A64_SMAXP, GIR_A64_UMAXP, GIR_A64_SMINP, GIR_A64_UMINP, GIR_A64_SQDMULH,
+    GIR_A64_SQRDMULH, GIR_A64_PMUL, GIR_A64_FMAX, GIR_A64_FMIN, GIR_A64_FMAXNM, GIR_A64_FMINNM,
+    GIR_A64_FABD, GIR_A64_FMULX, GIR_A64_FRECPS, GIR_A64_FRSQRTS, GIR_A64_FACGE, GIR_A64_FACGT,
+    GIR_A64_FADDP, GIR_A64_FMAXP, GIR_A64_FMINP, GIR_A64_FMAXNMP, GIR_A64_FMINNMP,
+    GIR_A64_SUQADD, GIR_A64_USQADD,          /* (accumulator a, operand b) */
+    /* unary: a -> ty (same lane count; fp <-> int conversions round as named) */
+    GIR_A64_SQABS, GIR_A64_SQNEG, GIR_A64_ABS, GIR_A64_CLS, GIR_A64_FRECPE, GIR_A64_FRSQRTE,
+    GIR_A64_URECPE, GIR_A64_URSQRTE, GIR_A64_FCVTZS, GIR_A64_FCVTZU, GIR_A64_FCVTNS, GIR_A64_FCVTNU,
+    GIR_A64_FCVTMS, GIR_A64_FCVTMU, GIR_A64_FCVTPS, GIR_A64_FCVTPU, GIR_A64_FCVTAS, GIR_A64_FCVTAU,
+    GIR_A64_SADDLP, GIR_A64_UADDLP,          /* pairwise add long */
+    GIR_A64_SQXTN, GIR_A64_UQXTN, GIR_A64_SQXTUN, GIR_A64_FCVTXN,   /* narrow */
+    GIR_A64_FRINTN, GIR_A64_FRINTP, GIR_A64_FRINTM, GIR_A64_FRINTZ, GIR_A64_FRINTA, GIR_A64_FRINTX,
+    GIR_A64_FRINTI, GIR_A64_CLZ, GIR_A64_CNT, GIR_A64_RBIT,
+    /* across lanes: vector a -> scalar ty (signed results sign-extended) */
+    GIR_A64_ADDV, GIR_A64_SMAXV, GIR_A64_UMAXV, GIR_A64_SMINV, GIR_A64_UMINV, GIR_A64_SADDLV,
+    GIR_A64_UADDLV, GIR_A64_FMAXV, GIR_A64_FMINV, GIR_A64_FMAXNMV, GIR_A64_FMINNMV,
+    GIR_A64_FADDV,                           /* (pairwise adds down to one lane) */
+    /* long (a, b narrow -> ty wide) and high-narrow (a, b wide -> ty narrow) */
+    GIR_A64_SMULL, GIR_A64_UMULL, GIR_A64_SQDMULL, GIR_A64_PMULL, GIR_A64_RADDHN, GIR_A64_RSUBHN,
+    /* shift by immediate: (a, #b); SLI / SRI: (a, b, #c) */
+    GIR_A64_SQSHLU, GIR_A64_RSHRN, GIR_A64_SQSHRN, GIR_A64_UQSHRN, GIR_A64_SQRSHRN, GIR_A64_UQRSHRN,
+    GIR_A64_SQSHRUN, GIR_A64_SQRSHRUN, GIR_A64_SLI, GIR_A64_SRI,
+    GIR_A64_SCVTF_FX, GIR_A64_UCVTF_FX, GIR_A64_FCVTZS_FX, GIR_A64_FCVTZU_FX,   /* (a, #fbits) */
+    /* by element: (a, b, #c lane of b) */
+    GIR_A64_SQDMULH_LANE, GIR_A64_SQRDMULH_LANE,
+    /* table lookup: a = table (16, 32, 48 or 64 bytes of i8), b = indices; TBX: c = the
+       vector whose lanes out-of-range indices keep */
+    GIR_A64_TBL, GIR_A64_TBX,
+    /* system (ACLE): barriers and hints (#a = the CRm / hint number), the thread pointer,
+       system registers (#a = op0:op1:CRn:CRm:op2 as in MRS/MSR, 16 bits; MSR: b = value) */
+    GIR_A64_DMB, GIR_A64_DSB, GIR_A64_ISB, GIR_A64_HINT, GIR_A64_THREAD_POINTER, GIR_A64_MRS,
+    GIR_A64_MSR,
+    /* CRC32 (ACLE __crc32*, +crc): (a = accumulator i32, b = data) -> i32 */
+    GIR_A64_CRC32B, GIR_A64_CRC32H, GIR_A64_CRC32W, GIR_A64_CRC32X,
+    GIR_A64_CRC32CB, GIR_A64_CRC32CH, GIR_A64_CRC32CW, GIR_A64_CRC32CX,
+    /* exclusives (ACLE __builtin_arm_ldrex / strex / ldaex / stlex / clrex): aux = the
+       memory type (i8..i64); LDXR / LDAXR: a = pointer -> i64 (zero-extended);
+       STXR / STLXR: (a = value i64, b = pointer) -> i32 status (0: stored) */
+    GIR_A64_LDXR, GIR_A64_LDAXR, GIR_A64_STXR, GIR_A64_STLXR, GIR_A64_CLREX,
+    /* cryptographic extension (+aes, +sha2), operands as llvm.aarch64.crypto.* */
+    GIR_A64_AESE, GIR_A64_AESD, GIR_A64_AESMC, GIR_A64_AESIMC, GIR_A64_SHA1C, GIR_A64_SHA1P,
+    GIR_A64_SHA1M, GIR_A64_SHA1H, GIR_A64_SHA1SU0, GIR_A64_SHA1SU1, GIR_A64_SHA256H, GIR_A64_SHA256H2,
+    GIR_A64_SHA256SU0, GIR_A64_SHA256SU1,
+    /* dot product (+dotprod): (a = accumulator, b, c bytes) -> ty */
+    GIR_A64_SDOT, GIR_A64_UDOT,
+    GIR_A64_COUNT
 };
 
 /* GirInst.flags */

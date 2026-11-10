@@ -64,10 +64,28 @@ import .cx_check;
 import .cx_gen;
 import cg from "../../backend-goose";
 
-let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std="];
+let OPTS_WITH_VALUE = ["-I", "-D", "-U", "-isystem", "-iquote", "-idirafter", "-include", "-o", "-x", "-MF", "-MT", "-MQ", "-std=",
+                       "--target=", "-target", "-march="];
 var in_off: u32 = 0;        // the input file's name (names)
 var in_len: i64 = 0;
 fn opt_input() -> const u8[:] { names[in_off..in_off + in_len] }
+var char_sign_set: i64 = 0; // 1 -funsigned-char, 2 -fsigned-char (last wins)
+
+// --target= / -target: x86_64-* (the default) or aarch64-* (F1).
+fn set_target(t: const u8[:]) {
+    if starts_with(t, "aarch64") || starts_with(t, "arm64") {
+        if find(t, "linux") < 0 && t != "aarch64" {
+            write_stderr(str("goosecc: error: unsupported target '", t, "' (aarch64-linux-gnu)\n"));
+            exit(1);
+        }
+        opt_a64 = true;
+    } else if starts_with(t, "x86_64") || starts_with(t, "amd64") {
+        opt_a64 = false;
+    } else {
+        write_stderr(str("goosecc: error: unsupported target '", t, "' (x86_64-linux-gnu, aarch64-linux-gnu)\n"));
+        exit(1);
+    }
+}
 var out_off: u32 = 0;
 var out_len: i64 = 0;
 var opt_mode: i64 = 0;      // 0 = -fsyntax-only, 1 = -E, 2 = --layout-check, 3 = --dump-ast, 4 = -c, 5 = --emit-gir
@@ -332,6 +350,8 @@ fn options() {
             else if which == 7 { out_off = name_add(val); out_len = val.len; }
             else if which == 8 { lang_x = if val == "c++" || val == "c++-header" { 2 } else if val == "c" || val == "c-header" { 1 } else { 0 }; }
             else if which == 12 { std_off = name_add(val); std_len = val.len; }
+            else if which == 13 || which == 14 { set_target(val); }
+            else if which == 15 { march_off = name_add(val); march_len = val.len; }
         }
         if has_val { continue; }
         if s == "-E" { opt_mode = 1; }
@@ -358,7 +378,8 @@ fn options() {
         else if s == "--pp-state-hash=v" { opt_state_hash = 2; }
         else if s == "-pthread" { opt_pthread = true; }
         else if s == "-nostdinc" { nostdinc = true; }
-        else if s == "-funsigned-char" { opt_unsigned_char = true; }
+        else if s == "-funsigned-char" || s == "-fno-signed-char" { opt_unsigned_char = true; char_sign_set = 1; }
+        else if s == "-fsigned-char" || s == "-fno-unsigned-char" { opt_unsigned_char = false; char_sign_set = 2; }
         else if s == "-trigraphs" { opt_trigraphs = true; }
         else if s == "-Wno-return-type" || s == "-Wno-return-mismatch" || s == "-Wno-error=return-type" || s == "-Wno-error=return-mismatch" { opt_wno_return = true; }
         else if s == "-Wno-int-conversion" || s == "-Wno-error=int-conversion" { opt_wno_int_conv = true; }
@@ -391,6 +412,16 @@ fn options() {
         // everything else (-w, -W..., -f..., -m...) is accepted and ignored
     }
     if in_len == 0 { usage(); }
+    if opt_a64 {
+        // AArch64: char is unsigned unless -fsigned-char
+        if char_sign_set != 2 { opt_unsigned_char = true; }
+        char_unsigned = opt_unsigned_char;
+        let ma = opt_march();
+        if march_len > 0 && !a64_march(ma) {
+            write_stderr(str("goosecc: error: unsupported -march=", ma, " for aarch64 (supported: armv8-a and the -march values of predef_a64_gen.goose)\n"));
+            exit(1);
+        }
+    }
     // C++ (D1): -x c++ before the input, or a C++ extension
     let inp = opt_input();
     if in_lang == 2 { opt_cxx = true; }
@@ -428,16 +459,29 @@ fn options() {
     k = 0;
     while k + 1 < isystem_dirs.len { add_dir(names[isystem_dirs[k]..isystem_dirs[k] + isystem_dirs[k + 1]], true); k += 2; }
     if !nostdinc {
-        if opt_cxx {
+        if opt_cxx && !opt_a64 {
             // clang++'s libstdc++ directories, spelled as it spells them
             add_dir("/usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13", true);
             add_dir("/usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/x86_64-linux-gnu/c++/13", true);
             add_dir("/usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/backward", true);
         }
+        if opt_a64 {
+            // clang --target=aarch64-linux-gnu's list (the cross toolchain's libc and libstdc++)
+            if opt_cxx {
+                add_dir("/usr/lib/gcc-cross/aarch64-linux-gnu/14/../../../../aarch64-linux-gnu/include/c++/14", true);
+                add_dir("/usr/lib/gcc-cross/aarch64-linux-gnu/14/../../../../aarch64-linux-gnu/include/c++/14/aarch64-linux-gnu", true);
+                add_dir("/usr/lib/gcc-cross/aarch64-linux-gnu/14/../../../../aarch64-linux-gnu/include/c++/14/backward", true);
+            }
+            add_dir("/usr/lib/llvm-20/lib/clang/20/include", true);
+            add_dir("/usr/local/include", true);
+            add_dir("/usr/lib/gcc-cross/aarch64-linux-gnu/14/../../../../aarch64-linux-gnu/include", true);
+            add_dir("/usr/include", true);
+        } else {
         add_dir("/usr/lib/llvm-20/lib/clang/20/include", true);
         add_dir("/usr/local/include", true);
         add_dir("/usr/include/x86_64-linux-gnu", true);
         add_dir("/usr/include", true);
+        }
     }
     k = 0;
     while k + 1 < sys_dirs_after.len { add_dir(names[sys_dirs_after[k]..sys_dirs_after[k] + sys_dirs_after[k + 1]], true); k += 2; }

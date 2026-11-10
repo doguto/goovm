@@ -749,7 +749,7 @@ def baseline_at(t, wd, args, cache, level):
     if b is None or b.get("key") != key or args.rebaseline:
         try:
             exe = build_baseline(t, wd, args, level)
-            dt = run_and_verify(t, exe, wd, args, timeout=t.timeout or 120)
+            dt = run_and_verify(t, exe, wd, args, timeout=(t.timeout or 120) * (10 if RUNNER else 1))
             b = {"key": key, "status": "pass", "time": dt}
         except Fail as e:
             b = {"key": key, "status": "build" if e.kind == "build" else "fail", "msg": e.msg[:2000]}
@@ -775,13 +775,24 @@ def do_test(t, args, baseline_cache):
     if b is None or b.get("key") != key or args.rebaseline:
         try:
             exe = build_baseline(t, wd, args)
-            dt = run_and_verify(t, exe, wd, args, timeout=t.timeout or 120)
+            dt = run_and_verify(t, exe, wd, args, timeout=(t.timeout or 120) * (10 if RUNNER else 1))
             b = {"key": key, "status": "pass", "time": dt}
         except Fail as e:
             b = {"key": key, "status": "build" if e.kind == "build" else "fail", "msg": e.msg[:2000]}
         except Exception as e:  # noqa
             b = {"key": key, "status": "fail", "msg": f"harness: {e}"}
     res["baseline"] = b
+    if RUNNER and b["status"] == "fail":
+        # AArch64 (F1): a program whose clang -O0 build fails but whose clang -O2 build passes
+        # (aarch64_neon_intrinsics: -O0 code runs scalar intrinsics on whole vectors whose
+        # undefined lanes saturate) is tested against the expected output, with an -O2 baseline.
+        try:
+            exe = build_baseline(t, wd, args, "O2")
+            dt = run_and_verify(t, exe, wd, args, timeout=(t.timeout or 120) * 10)
+            b = {"key": key, "status": "pass", "time": dt, "level": "O2", "msg": b.get("msg", "")}
+            res["baseline"] = b
+        except Fail:
+            pass
     if b["status"] != "pass" or args.baseline_only:
         return res
     tmo = max(60.0, 20 * b["time"]) if t.timeout is None else max(t.timeout, 20 * b["time"])
@@ -936,6 +947,14 @@ def report(results, tests, args):
             for r in excl:
                 m = r.get("baseline", {}).get("msg", "")
                 lines.append(f"- `{r['id']}` {r['baseline']['status']}: {m.splitlines()[0][:160] if m else ''}")
+            lines.append("")
+        alt = [r for r in rs if r.get("baseline", {}).get("level")]
+        if alt:
+            lines.append(f"## {c}: baseline at clang-20 -O2 (fails with -O0)")
+            lines.append("")
+            for r in alt:
+                m = r["baseline"].get("msg", "")
+                lines.append(f"- `{r['id']}`: -O0 {m.splitlines()[0][:160] if m else ''}")
             lines.append("")
     return "\n".join(lines) + "\n"
 

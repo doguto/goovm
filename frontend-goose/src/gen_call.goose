@@ -208,6 +208,7 @@ recursive fn ex_call(n: u32, dst: u32) -> u32 {
             if vk == VK_COMPLEX && dst != NONE { mem_copy(dst, p, type_size(rq), false); }
         }
     }
+    if ra.kind == AK_SRET && vkind(rq) == VK_SCALAR && !noret { res = load_c(rq, sret, false); }   // (AArch64: a vector of more than 16 bytes)
     if noret { emit_term(GIR_UNREACHABLE, 0, 0, 0); }
     if res == NONE && vkind(rq) == VK_SCALAR { return c_zero(vty(rq)); }
     return res;
@@ -243,7 +244,9 @@ fn inline_target(n: u32) -> i64 {
     let nd = nodes[n];
     let ds = direct_callee(nd.a);
     if ds < 0 || syms[ds].kind != SK_FUNC { return -1; }
-    if !sym_has_attr(ds, AM_ALWAYS_INLINE) || !sym_has_attr(ds, AM_NODEBUG) { return -1; }
+    // (C++: clang inlines every always_inline function; goosecc the free
+    // functions among them, their code at the call as for nodebug ones)
+    if !sym_has_attr(ds, AM_ALWAYS_INLINE) || !(sym_has_attr(ds, AM_NODEBUG) || opt_cxx) { return -1; }
     let def = syms[ds].def;
     if def < 0 || !fn_emitted_def(ds) || ds == f_sym { return -1; }
     let fty = types[syms[ds].ty >> 4];
@@ -278,6 +281,7 @@ recursive fn inline_viable(n: u32) -> bool {
     if k == N_FOR { return inline_viable(nd.a) && inline_viable(nd.v as! u32); }
     if k == N_CASE || k == N_DEFAULT { return inline_viable(nd.a); }
     if k == N_LABEL || k == N_GOTO || k == N_IGOTO || k == N_ASM { return false; }
+    if k >= N_XTEMP { return false; }      // C++ lowering statements (cleanups, try)
     return true;
 }
 
@@ -509,6 +513,7 @@ recursive fn gen_return(n: u32) {
 
 // The address of the next variadic argument of type q (X86_64ABIInfo::EmitVAArg).
 recursive fn va_arg_addr(n: u32) -> u32 {
+    if opt_a64 { return a64_va_arg_addr(n); }
     let nd = nodes[n];
     let q = unqual(nd.ty);
     // the va_list: an array (a local va_list) or a pointer (a va_list parameter)
@@ -604,6 +609,80 @@ recursive fn va_arg_addr(n: u32) -> u32 {
     br(end);
     start_block(end);
     return phi2(GIR_T_PTR, reg_addr, p_reg, mem_addr, p_mem);
+}
+
+// AArch64 (F1): AArch64ABIInfo::EmitAAPCSVAArg. va_list is struct __va_list
+// { __stack @0, __gr_top @8, __vr_top @16, __gr_offs @24, __vr_offs @28 }:
+// an argument comes from the general (or SIMD&FP) register save area while
+// the offset stays negative, else from the stack; an HFA's members sit 16
+// bytes apart in the save area and are gathered into a temporary; a
+// composite passed by reference is read as a pointer.
+recursive fn a64_va_arg_addr(n: u32) -> u32 {
+    let nd = nodes[n];
+    let q = unqual(nd.ty);
+    let ap = ex_lv(nd.a).addr;
+    let a = a64_arg_abi(q);
+    if a.kind == AK_IGNORE { return alloca(1, 1); }
+    let indirect = a.kind == AK_BYVAL;
+    var bt = a.t0;
+    var nregs: i64 = 1;
+    if !indirect && tkind(bt) == TK_ARRAY {
+        nregs = m_types[bt].n as i64;
+        bt = m_types[bt].elems;
+    }
+    if indirect { bt = GIR_T_PTR; }
+    let fpr = tcls(bt) == C_FP || tkind(bt) == TK_VECTOR;
+    let size = type_size(q);
+    let tal = a64_unadj_align(q);
+    let offs_p = gep(ap, if fpr { 28 } else { 24 });
+    var reg_size: i64 = 0;
+    if fpr { reg_size = 16 * nregs; } else { reg_size = if indirect { 8 } else { (size + 7) / 8 * 8 }; }
+    var offs = ins_load(GIR_T_I32, offs_p, false);
+    let maybe_reg = new_block();
+    let in_reg = new_block();
+    let on_stack = new_block();
+    let end = new_block();
+    condbr(ins_icmp(GIR_SGE, GIR_T_I32, offs, c_i32(0)), on_stack, maybe_reg);
+    start_block(maybe_reg);
+    if !fpr && !indirect && tal > 8 {
+        offs = ins_bin(GIR_ADD, GIR_T_I32, offs, c_i32(tal - 1));
+        offs = ins_bin(GIR_AND, GIR_T_I32, offs, c_i32(0 - tal));
+    }
+    let next = ins_bin(GIR_ADD, GIR_T_I32, offs, c_i32(reg_size));
+    ins_store(GIR_T_I32, next, offs_p, false);
+    condbr(ins_icmp(GIR_SLE, GIR_T_I32, next, c_i32(0)), in_reg, on_stack);
+    start_block(in_reg);
+    let top = ins_load(GIR_T_PTR, gep(ap, if fpr { 16 } else { 8 }), false);
+    var reg_addr = gep_idx(top, 0, int_cast(offs, GIR_T_I32, GIR_T_I64, true), 1);
+    let hm, hbt = a64_hfa(q);
+    if !indirect && hm > 1 {
+        // the members, 16 bytes apart, into a temporary
+        let es = tsize(hbt) as i64;
+        let tmp = alloca(size, if tal > 8 { tal } else { 8 });
+        for i in hm {
+            let v = ins_load(hbt, gep(reg_addr, 16 * i), false);
+            ins_store(hbt, v, gep(tmp, es * i), false);
+        }
+        reg_addr = tmp;
+    }
+    let p_reg = cur_blk;
+    br(end);
+    start_block(on_stack);
+    var stk = ins_load(GIR_T_PTR, ap, false);
+    if !indirect && tal > 8 {
+        let i = ins_ptrtoint(stk, GIR_T_I64);
+        let a1 = ins_bin(GIR_ADD, GIR_T_I64, i, c_i64(tal - 1));
+        let a2 = ins_bin(GIR_AND, GIR_T_I64, a1, c_i64(0 - tal));
+        stk = ins_inttoptr(a2);
+    }
+    let ssize = if indirect { 8 } else { (size + 7) / 8 * 8 };
+    ins_store(GIR_T_PTR, gep(stk, ssize), ap, false);
+    let p_mem = cur_blk;
+    br(end);
+    start_block(end);
+    let addr = phi2(GIR_T_PTR, reg_addr, p_reg, stk, p_mem);
+    if indirect { return ins_load(GIR_T_PTR, addr, false); }
+    return addr;
 }
 
 fn va_from_mem(ap: u32, q: u32) -> u32 {

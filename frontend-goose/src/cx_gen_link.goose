@@ -196,6 +196,7 @@ fn name_syms() {
     // the complete-object variants of constructors and destructors (and
     // those made from now on)
     for i in 0..complete_pairs.len / 2 { name_complete(complete_pairs[2 * i] as i64, complete_pairs[2 * i + 1] as i64); }
+    name_static_locals();
     names_done = true;
 }
 var names_done = false;
@@ -206,6 +207,15 @@ fn name_complete(s: i64, a: i64) {
     cxs[a].flags = cxs[s].flags;
     syms[a].ty = syms[s].ty;
     syms[a].sc = syms[s].sc;
+    let r = rec_of(scope_class_type(cxs[s].dscope as i64));
+    if r < crecs.len && has_vb(r) {
+        // a function of its own (a class with virtual bases)
+        mg_structor = 1;
+        if mangle_sym(s) { set_label(a, mg); }
+        cxl[a] = cxl[s];
+        cxl[a].alias = -1;
+        return;
+    }
     if syms[s].sc as i64 == SC_STATIC || cxl_link(s) != LK_DEFAULT {
         // one function: the same symbol
         set_label(a, ident_text(gen::link_name(s) as i64));
@@ -221,10 +231,57 @@ fn name_complete(s: i64, a: i64) {
 
 fn same_text(a: const u8[:], b: const u8[:]) -> bool { a == b }
 
-// The offset (from the address point, negative) of the virtual base offset
-// of virtual base br in the vtable of r (the typeinfo of a class with
-// virtual bases). TODO(D3 MI): the Itanium vtable layout.
-fn vbase_offset_offset(r: i64, br: i64) -> i64 {
-    err_at(records[r].loc, "goosecc: C++ code generation does not support the typeinfo of classes with virtual bases yet");
-    return 0;
+// ---------------------------------------------------------------------------
+// Static local variables: _ZZ <the function's encoding> E <name>
+// [_<discriminator>], their guards _ZGV..., with the function's linkage
+// (linkonce_odr in an inline function, each in a comdat of its own).
+
+var static_owner = dictionary<u64, u32> {};     // static local -> its function
+var static_locals: u32[>..] = [];
+var static_fns: u32[>..] = [];
+var guard_of = dictionary<u64, u32> {};         // static local -> its guard variable
+
+fn note_static_local(s: i64) {
+    if cur_func_cx < 0 { return; }
+    static_locals.push(s as! u32);
+    static_fns.push(cur_func_cx as! u32);
+}
+
+fn name_static_locals() {
+    for i in static_locals.len {
+        let s = static_locals[i] as i64;
+        let f = static_fns[i] as i64;
+        // the discriminator: earlier statics of the same name in the function
+        var disc: i64 = -1;
+        for j in i {
+            let x = static_locals[j] as i64;
+            if syms[x].name == syms[s].name && static_fns[j] as i64 == f { disc++; }
+        }
+        let st = cxs[f].flags & (CF_CTOR | CF_DTOR) != 0;
+        mg_structor = 1;
+        if !mangle_sym(f) { continue; }
+        var nm: u8[>..] = [];
+        nm.append("_ZZ");
+        nm.append(mg[2..]);
+        nm.push('E');
+        let id = ident_text(syms[s].name as i64);
+        format(nm, id.len);
+        nm.append(id);
+        if disc >= 0 {
+            if disc < 10 { format(nm, "_", disc); } else { format(nm, "__", disc, "_"); }
+        }
+        set_label(s, nm);
+        let internal = syms[f].sc as i64 == SC_STATIC || cxl_link(f) == LK_DEFAULT;
+        if !internal { set_link(s, LK_LINKONCE, CXL_COMDAT); }
+        let gg = guard_of.get(s as u64);
+        if gg {
+            let g = gg as i64;
+            var gn: u8[>..] = [];
+            gn.append("_ZGV");
+            gn.append(nm[2..]);
+            set_label(g, gn);
+            if !internal { set_link(g, LK_LINKONCE, CXL_COMDAT); }
+        }
+        if st { }
+    }
 }

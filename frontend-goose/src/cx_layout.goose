@@ -236,21 +236,37 @@ fn cx_layout(r: i64) {
     var data_bits: i64 = 0;
     var size_bits: i64 = 0;
     var al_bits: i64 = 8;
-    // the primary base: the first non-virtual dynamic base
+    // the primary base: the first non-virtual dynamic base, else a nearly
+    // empty virtual base (D3: clang's DeterminePrimaryBase)
     var primary = -1;
+    var vprimary: i64 = -1;
+    crecs[r].primary = -1;
+    crecs[r].flags = crecs[r].flags & ~(CR_PRIM_VIRTUAL as! u32);
     if cr.flags & CR_DYNAMIC != 0 {
         for i in cr.nbases {
             let b = cbases[cr.bases + i];
             if b.flags & BF_VIRTUAL == 0 && crecs[rec_of(b.ty)].flags & CR_DYNAMIC != 0 { primary = i; break; }
         }
-        if primary < 0 {
+        if primary < 0 { vprimary = primary_vbase(r); }
+        if primary < 0 && vprimary < 0 {
             // the vtable pointer
             data_bits = 64;
             size_bits = 64;
             al_bits = 64;
         }
     }
-    crecs[r].primary = -1;
+    let vb_mark = vbs.len;
+    if vprimary >= 0 {
+        // the primary virtual base, at offset 0
+        let bc = crecs[vprimary];
+        crecs[r].primary = vprimary as! i32;
+        crecs[r].flags = crecs[r].flags | (CR_PRIM_VIRTUAL as! u32);
+        note_empties(records[vprimary].ty << 4, 0);
+        data_bits = bc.nvsize * 8;
+        size_bits = bc.nvsize * 8;
+        if bc.nvalign * 8 > al_bits { al_bits = bc.nvalign * 8; }
+        vbase_off.insert(((r as u64) << 32) | (vprimary as u64), 0);
+    }
     // non-virtual bases (the primary first)
     var order = 0;
     while order <= cr.nbases as i64 {
@@ -282,7 +298,7 @@ fn cx_layout(r: i64) {
         if i == primary { cbases[cr.bases + i].flags = cbases[cr.bases + i].flags | BF_PRIMARY; crecs[r].primary = br as! i32; }
         note_empties(b.ty, off / 8);
         if bc.flags & CR_EMPTY == 0 {
-            data_bits = off + bc.dsize * 8;
+            data_bits = off + bc.nvsize * 8;
             if off + bc.nvsize * 8 > size_bits { size_bits = off + bc.nvsize * 8; }
         } else {
             if off + 8 > size_bits { size_bits = off + 8; }
@@ -370,12 +386,17 @@ fn cx_layout(r: i64) {
     let nvsize = round_up(size_bits, 8) / 8;
     let nval = al_bits / 8;
     let dsize_nv = round_up(data_bits, 8) / 8;
-    // virtual bases (D1: in base order, depth-first)
+    // virtual bases (D3: clang's LayoutVirtualBases: inheritance graph
+    // order, not the primary virtual base nor the indirect primary ones)
     vb_scratch_mark = vbs.len;
-    collect_vbases(r);
+    let ipm = ipb.len;
+    indirect_primaries(r);
+    if vprimary >= 0 { ipb.push(vprimary as! u32); vbs.push(records[vprimary].ty << 4); }
+    let laid = vbs.len;
+    order_vbases(r, r, ipm);
     var vdata = data_bits;
     var vsize = size_bits;
-    var i = vb_scratch_mark;
+    var i = laid;
     while i < vbs.len {
         let vt = vbs[i];
         i++;
@@ -383,19 +404,26 @@ fn cx_layout(r: i64) {
         let bc = crecs[br];
         let bal = bc.nvalign * 8;
         var off: i64 = 0;
-        if bc.flags & CR_EMPTY != 0 && can_place(vt, 0) { off = 0; }
-        else {
+        if bc.flags & CR_EMPTY != 0 && can_place(vt, 0) {
+            off = 0;
+            if records[br].size * 8 > vsize { vsize = records[br].size * 8; }
+        } else {
             off = round_up(vdata, bal);
             while !can_place(vt, off / 8) { off += bal; }
+            if bc.flags & CR_EMPTY == 0 {
+                vdata = off + bc.nvsize * 8;
+                if vdata > vsize { vsize = vdata; }
+            } else if off + records[br].size * 8 > vsize { vsize = off + records[br].size * 8; }
         }
         note_empties(vt, off / 8);
         vbase_off.insert(((r as u64) << 32) | (br as u64), (off / 8) as u64);
-        if bc.flags & CR_EMPTY == 0 { vdata = off + bc.dsize * 8; }
-        if off + (if bc.flags & CR_EMPTY != 0 { 8 } else { bc.nvsize * 8 }) > vsize { vsize = off + (if bc.flags & CR_EMPTY != 0 { 8 } else { bc.nvsize * 8 }); }
-        if vsize < vdata { vsize = vdata; }
         if bal > al_bits { al_bits = bal; }
     }
+    ipb.resize(ipm);
     vbs.resize(vb_scratch_mark);
+    // the indirect primary virtual bases share their deriver's address
+    claim_primary_vbases(r, r, 0);
+    if vb_mark == vbs.len { }
     var size = round_up(vsize, 8) / 8;
     let al = al_bits / 8;
     if size == 0 { size = 1; }
@@ -415,6 +443,126 @@ fn cx_layout(r: i64) {
 }
 
 var vbs: u32[>..<] = [];
+let CR_PRIM_VIRTUAL = 524288;      // D3: the primary base (crecs.primary) is a virtual base
+var ipb: u32[>..<] = [];           // the indirect primary virtual bases of the class being laid out
+var ne_first: i64 = -1;
+
+// The record of the virtual base offset of virtual base br in class r, or -1.
+fn vbase_offset_of(r: i64, br: i64) -> i64 {
+    let g = vbase_off.get(((r as u64) << 32) | (br as u64));
+    if g { return g as i64; }
+    return -1;
+}
+
+// Is r a nearly empty class (a vtable pointer and nothing else)?
+fn nearly_empty(r: i64) -> bool { crecs[r].flags & CR_DYNAMIC != 0 && crecs[r].nvsize == 8 }
+
+fn has_vbases(r: i64) -> bool { crecs[r].flags & CR_HAS_VBASE != 0 }
+
+// clang's getIndirectPrimaryBases: the virtual primary bases of the bases
+// with virtual bases, transitively.
+recursive fn indirect_primaries(r: i64) {
+    let cr = crecs[r];
+    for i in cr.nbases {
+        let b = cbases[cr.bases + i];
+        if !is_record(b.ty) { continue; }
+        let br = rec_of(b.ty);
+        if !has_vbases(br) { continue; }
+        if crecs[br].flags & CR_PRIM_VIRTUAL != 0 && crecs[br].primary >= 0 { ipb.push(crecs[br].primary as! u32); }
+        indirect_primaries(br);
+    }
+}
+
+fn in_ipb(br: i64, from: i64) -> bool {
+    for j in from..ipb.len { if ipb[j] as i64 == br { return true; } }
+    return false;
+}
+
+// The primary virtual base of r (clang's SelectPrimaryVBase): the first
+// nearly empty virtual base in inheritance graph order that is not an
+// indirect primary base, else the first nearly empty one; -1 none.
+fn primary_vbase(r: i64) -> i64 {
+    if !has_vbases(r) { return -1; }
+    let m = ipb.len;
+    indirect_primaries(r);
+    ne_first = -1;
+    var p = select_pvb(r, m);
+    if p < 0 { p = ne_first; }
+    ipb.resize(m);
+    return p;
+}
+
+recursive fn select_pvb(rd: i64, m: i64) -> i64 {
+    let cr = crecs[rd];
+    for i in cr.nbases {
+        let b = cbases[cr.bases + i];
+        if !is_record(b.ty) { continue; }
+        let br = rec_of(b.ty);
+        if b.flags & BF_VIRTUAL != 0 && nearly_empty(br) {
+            if !in_ipb(br, m) { return br; }
+            if ne_first < 0 { ne_first = br; }
+        }
+        let x = select_pvb(br, m);
+        if x >= 0 { return x; }
+    }
+    return -1;
+}
+
+// The virtual bases of r to lay out, in order (clang's LayoutVirtualBases).
+recursive fn order_vbases(rd: i64, r: i64, ipm: i64) {
+    let cr = crecs[rd];
+    let pb = crecs[rd].primary as i64;
+    let pbv = crecs[rd].flags & CR_PRIM_VIRTUAL != 0;
+    for i in cr.nbases {
+        let b = cbases[cr.bases + i];
+        if !is_record(b.ty) { continue; }
+        let br = rec_of(b.ty);
+        if b.flags & BF_VIRTUAL != 0 && (pb != br || !pbv) && !in_ipb(br, ipm) {
+            var seen = false;
+            for j in vb_scratch_mark..vbs.len { if rec_of(vbs[j]) == br { seen = true; } }
+            if !seen { vbs.push(unqual(b.ty)); }
+        }
+        if has_vbases(br) { order_vbases(br, r, ipm); }
+    }
+}
+
+// The offsets in r of the virtual bases that are primary bases of a base
+// subobject (at offset off, of class c): they share its address (clang's
+// AddPrimaryVirtualBaseOffsets, in layout order).
+recursive fn claim_primary_vbases(r: i64, c: i64, off: i64) {
+    if !has_vbases(c) && c != r { return; }
+    if crecs[c].flags & CR_PRIM_VIRTUAL != 0 && crecs[c].primary >= 0 {
+        let v = crecs[c].primary as i64;
+        if vbase_offset_of(r, v) < 0 || (c == r) {
+            vbase_off.insert(((r as u64) << 32) | (v as u64), off as u64);
+        }
+        claim_primary_vbases(r, v, off);
+    }
+    let cr = crecs[c];
+    // the non-virtual bases, the primary first
+    for pass in 2 {
+        for i in cr.nbases {
+            let b = cbases[cr.bases + i];
+            if !is_record(b.ty) || b.flags & BF_VIRTUAL != 0 { continue; }
+            let isp = b.flags & BF_PRIMARY != 0;
+            if (pass == 0) != isp { continue; }
+            claim_primary_vbases(r, rec_of(b.ty), off + b.offset);
+        }
+    }
+    if c == r {
+        // then the virtual bases laid out
+        let m = vbs.len;
+        vb_scratch_mark = m;
+        collect_vbases(r);
+        let e = vbs.len;
+        for j in m..e {
+            let br = rec_of(vbs[j]);
+            let o = vbase_offset_of(r, br);
+            if o >= 0 { claim_primary_vbases(r, br, o); }
+        }
+        vbs.resize(m);
+    }
+}
 var vb_scratch_mark: i64 = 0;
 var vbase_off = dictionary<u64, u64> {};    // (class << 32 | virtual base record) -> offset
 

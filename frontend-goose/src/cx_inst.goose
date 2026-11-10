@@ -700,6 +700,32 @@ recursive fn deduce_type(p: u32, a: u32) -> bool {
         if !same_template(ts, tmpls[at].sym as i64) { return false; }
         return deduce_list(pl, cxs[cs].targs as i64);
     }
+    if (k == TY_STRUCT || k == TY_UNION) && (ka == TY_STRUCT || ka == TY_UNION || ka == TY_DEPSPEC) {
+        // X<P...> written with exactly X's own parameters names X's pattern
+        // (cx_tmpl.specialization); in a function template's parameter it
+        // is X<P...> with the function's parameters of the same positions
+        let pr = rec_of(p);
+        if pr < crecs.len && crecs[pr].flags & CR_PATTERN != 0 {
+            let ps = crecs[pr].sym as i64;
+            if ps >= 0 && cxs[ps].tmpl >= 0 {
+                let pt = cxs[ps].tmpl as i64;
+                if tmpls[pt].kind as i64 == TT_CLASS && tmpls[pt].pattern as i64 == pr && tmpls[pt].sym >= 0 {
+                    if ka == TY_DEPSPEC {
+                        if same_template(tmpls[pt].sym as i64, types[a >> 4].extra as i64) { return deduce_list(own_args(pt), types[a >> 4].n); }
+                        return false;
+                    }
+                    let ar = rec_of(a);
+                    if ar < crecs.len {
+                        let cs = crecs[ar].sym as i64;
+                        if cs >= 0 && cxs[cs].flags & CF_SPEC != 0 && cxs[cs].tmpl >= 0 {
+                            let at = cxs[cs].tmpl as i64;
+                            if same_template(tmpls[pt].sym as i64, tmpls[at].sym as i64) { return deduce_list(own_args(pt), cxs[cs].targs as i64); }
+                        }
+                    }
+                }
+            }
+        }
+    }
     if k != ka { return false; }
     if k == TY_POINTER || k == TY_LREF || k == TY_RREF || k == TY_COMPLEX || k == TY_VECTOR {
         return deduce_type(tbase(p), tbase(a));

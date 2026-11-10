@@ -51,15 +51,162 @@ fn excspec_kind(s: i64) -> i64 {
     return 0;
 }
 
-// Does function s never throw (noexcept, throw(), or a destructor or
-// deallocation function without an exception specification)?
-fn fn_nothrow(s: i64) -> bool {
+// Does function s never throw (noexcept, throw(), a destructor or
+// deallocation function without an exception specification, or an
+// implicit or defaulted special member whose implicit exception
+// specification is non-throwing)?
+recursive fn fn_nothrow(s: i64) -> bool {
     let k = excspec_kind(s);
     if k == 1 { return true; }
     if k == 2 || k == 3 { return false; }
     if cxs[s].flags & CF_NOEXCEPT != 0 { return true; }
     if cxs[s].flags & CF_DTOR != 0 { return true; }
     if cxs[s].flags & CF_OPERATOR != 0 && (cxs[s].op as i64 == OP_DELETE || cxs[s].op as i64 == OP_DELETE_ARR) { return true; }
+    if cxs[s].flags & (CF_IMPLICIT | CF_DEFAULTED) != 0 && cxs[s].flags & CF_MEMBER != 0 {
+        let sk = special_kind(s);
+        if sk > 0 {
+            let cls = scope_class_type(cxs[s].dscope as i64);
+            if cls != 0 && is_complete(cls) { return subobjects_nothrow(rec_of(cls), sk); }
+        }
+    }
+    return false;
+}
+
+// The kind of special member f: 1 default constructor, 4 copy constructor,
+// 5 move constructor, 6 copy assignment, 7 move assignment, 0 other.
+fn special_kind(f: i64) -> i64 {
+    let cls = scope_class_type(cxs[f].dscope as i64);
+    if cls == 0 { return 0; }
+    let ft = types[syms[f].ty >> 4];
+    if cxs[f].flags & CF_CTOR != 0 {
+        if ft.n == 0 || defaults_from(f, 0) { return 1; }
+        let p0 = tparams[ft.extra];
+        if !is_ref(p0) || unqual(tbase(p0)) != unqual(cls) { return 0; }
+        if ft.n > 1 && !defaults_from(f, 1) { return 0; }
+        return if kind_of(p0) == TY_RREF { 5 } else { 4 };
+    }
+    if cxs[f].flags & CF_OPERATOR != 0 && cxs[f].op as i64 == OP_EQUAL && ft.n == 1 {
+        let p0 = tparams[ft.extra];
+        if !is_ref(p0) || unqual(tbase(p0)) != unqual(cls) { return 0; }
+        return if kind_of(p0) == TY_RREF { 7 } else { 6 };
+    }
+    return 0;
+}
+
+// The implicit exception specification ([except.spec]p8): is every
+// function the special member of kind k of class r calls for its bases
+// and members non-throwing (and, for the default constructor, every
+// default member initializer)?
+var subnt_memo = dictionary<u64, u8> {};
+recursive fn subobjects_nothrow(r: i64, k: i64) -> bool {
+    let key = ((r as u64) << 3) | (k as u64);
+    let g = subnt_memo.get(key);
+    if g { return g == 1; }
+    subnt_memo.insert(key, 2);      // (a cycle: throwing)
+    var ok = true;
+    let cr = crecs[r];
+    for i in cr.nbases {
+        let b = cbases[cr.bases + i];
+        if !is_record(b.ty) || is_opaque(b.ty) { ok = false; break; }
+        if !class_op_nothrow(rec_of(b.ty), k) { ok = false; break; }
+    }
+    if ok {
+        let rec = records[r];
+        let sc = cr.scope as i64;
+        for i in rec.first..rec.first + rec.count {
+            let f = fields[i];
+            if f.name == 0 { continue; }
+            if k == 1 && field_nsdmi(sc, f.name) != 0 {
+                if nsdmi_may_throw(field_nsdmi(sc, f.name), f.ty) { ok = false; break; }
+                continue;
+            }
+            let bt = base_elem_t(f.ty);
+            if is_ref(f.ty) || !is_record(bt) { continue; }
+            if is_opaque(bt) { ok = false; break; }
+            if !class_op_nothrow(rec_of(bt), k) { ok = false; break; }
+        }
+    }
+    subnt_memo.insert(key, if ok { 1 } else { 2 });
+    return ok;
+}
+
+// Is the special member of kind k that class r's subobject uses non-throwing?
+recursive fn class_op_nothrow(r: i64, k: i64) -> bool {
+    if crecs[r].flags & CR_LAYOUT == 0 { return false; }
+    let i = sm(r);
+    if k == 1 {
+        let d = default_ctor_of(r);
+        if d >= 0 && user_provided(d) { return fn_nothrow(d); }
+        if d == -2 { return true; }     // deleted: not called
+        return subobjects_nothrow(r, 1);
+    }
+    var kk = k;
+    if k == 5 && i.flags & SM_HAS_MOVE == 0 { kk = 4; }
+    if k == 7 && i.flags & SM_HAS_MASG == 0 { kk = 6; }
+    if kk == 4 {
+        if i.flags & SM_COPY_DEL != 0 { return true; }
+        if i.copy >= 0 && user_provided(i.copy as i64) { return fn_nothrow(i.copy as i64); }
+        if i.flags & SM_TRIV_COPY != 0 { return true; }
+        return subobjects_nothrow(r, 4);
+    }
+    if kk == 5 {
+        if i.flags & SM_MOVE_DEL != 0 { return true; }
+        if i.move >= 0 && user_provided(i.move as i64) { return fn_nothrow(i.move as i64); }
+        if i.flags & SM_TRIV_MOVE != 0 { return true; }
+        return subobjects_nothrow(r, 5);
+    }
+    if kk == 6 {
+        if i.casg >= 0 && user_provided(i.casg as i64) { return fn_nothrow(i.casg as i64); }
+        if i.flags & SM_TRIV_CASG != 0 { return true; }
+        return subobjects_nothrow(r, 6);
+    }
+    if i.masg >= 0 && user_provided(i.masg as i64) { return fn_nothrow(i.masg as i64); }
+    if i.flags & SM_TRIV_MASG != 0 { return true; }
+    return subobjects_nothrow(r, 7);
+}
+
+// The default constructor of class r (all parameters with defaults), -1
+// when it has none declared, -2 when it is deleted.
+fn default_ctor_of(r: i64) -> i64 {
+    var s = scope_find(crecs[r].scope as i64, id_ctor);
+    while s >= 0 {
+        let f = resolve(s);
+        if f >= 0 && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & CF_CTOR != 0 {
+            let ft = types[syms[f].ty >> 4];
+            if ft.n == 0 || defaults_from(f, 0) {
+                if cxs[f].flags & CF_DELETED != 0 { return -2; }
+                return f;
+            }
+        }
+        s = cxs[s].nnext as i64;
+    }
+    return -1;
+}
+
+// May the default member initializer of member m (its tokens) throw? A
+// conservative look at the tokens: no call, new, throw, typeid or
+// dynamic_cast, and not a class type initialized by a constructor.
+fn nsdmi_may_throw(m: i64, t: u32) -> bool {
+    if is_record(base_elem_t(t)) { return true; }
+    var i = cxs[m].body as i64;
+    var depth: i64 = 0;
+    var prev: i64 = 0;
+    var n = 0;
+    while i < tu_toks.len {
+        let k = tu_toks[i].kind as i64;
+        if k == TK_EOF { break; }
+        if depth == 0 && n > 0 && (k == TK_SEMI || k == TK_COMMA || k == TK_R_BRACE) { break; }
+        if k == TK_L_PAREN || k == TK_L_BRACE || k == TK_L_SQUARE {
+            if n > 0 && (prev == TK_IDENT || prev == TK_GREATER || prev == TK_R_PAREN || prev == TK_R_SQUARE) { return true; }
+            depth++;
+        }
+        if k == TK_R_PAREN || k == TK_R_SQUARE || k == TK_R_BRACE { depth--; }
+        if k == TK_KW + KW_NEW || k == TK_KW + KW_THROW || k == TK_KW + KW_TYPEID || k == TK_KW + KW_DYNAMIC_CAST { return true; }
+        prev = k;
+        n++;
+        i++;
+        if n > 10000 { return true; }
+    }
     return false;
 }
 

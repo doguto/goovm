@@ -30,6 +30,7 @@ extern fn f80_arith(op: i64, a: F80, b: F80, prec: i64) -> F80 = "goosecc_f80_ar
 extern fn f80_round(x: F80, prec: i64) -> F80 = "goosecc_f80_round";
 extern fn f80_to_i128_x(x: F80, signed: i64) -> F80 = "goosecc_f80_to_i128";
 extern fn strtod_bits(s: const u8[:], prec: i64) -> u64 = "goosecc_strtod_bits";
+extern fn set_ld128(on: i64) = "goosecc_set_ld128";    // F1: the F80 pairs hold binary128 (AArch64)
 
 fn f80_to_i128(x: F80, signed: bool) -> u64, u64 {
     let r = f80_to_i128_x(x, if signed { 1 } else { 0 });
@@ -40,6 +41,7 @@ var lower_us: i64 = 0;
 
 // Lowers the translation unit; false on errors.
 fn lower_tu(main_file: const u8[:]) -> bool {
+    set_ld128(if opt_a64 { 1 } else { 0 });
     ir_init();
     init_no_builtin();
     dbg_init(main_file);
@@ -148,8 +150,10 @@ fn lower_tu(main_file: const u8[:]) -> bool {
         if m_globals[g].kind == G_FUNC {
             let d = syms[s].def;
             if d >= 0 { gen_function(d as! u32); }
+            if opt_cxx { keep_cx_uses(s); }
         } else {
             emit_var(g);
+            if opt_cxx { keep_cx_uses(s); }
         }
         if n_errors > 0 && n_errors >= 50 { break; }
     }

@@ -129,6 +129,7 @@ fn writes_mem(I: Inst) -> bool {
     if op == GIR_CMPXCHG || op == GIR_ATOMICRMW || op == GIR_FENCE || op == GIR_ASM { return true; }
     if op == GIR_SJLJ_SETJMP || op == GIR_SJLJ_LONGJMP || op == GIR_STACKRESTORE || op == GIR_LANDINGPAD { return true; }
     if op == GIR_LOAD { return I.flags & (IF_VOLATILE | IF_ORD_MASK) != 0; }
+    if op == GIR_A64 { return a64_effect(I.sub); }
     return false;
 }
 

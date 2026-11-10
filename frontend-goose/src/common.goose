@@ -7,6 +7,11 @@
 import std;
 import os;
 
+// The target (milestone F1): x86-64 (the default) or AArch64
+// (--target=aarch64-linux-gnu: AAPCS64, char unsigned, long double binary128).
+var opt_a64: bool = false;
+var char_unsigned: bool = false;   // plain char is unsigned (AArch64 unless -fsigned-char)
+
 // ---------------------------------------------------------------------------
 // Token kinds. Punctuators each have their own kind; keywords are
 // identifiers at the preprocessor level (Ident.kw gives the keyword).

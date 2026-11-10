@@ -155,7 +155,10 @@ fn a_store_home(id: u32, r: u32) {
 
 // ------------------------------------------------------------ allocation
 
-fn a_live_after(id: u32) -> bool { vi[id].st & ST_GLOB != 0 || vi[id].last > cur_pos }
+fn a_live_after(id: u32) -> bool {
+    if vi[id].st & ST_PIN != 0 { return rg_live_after(id); }
+    return vi[id].st & ST_GLOB != 0 || vi[id].last > cur_pos;
+}
 inline fn a_note(id: u32) {
     if vi[id].st & ST_GLOB == 0 && vi[id].last == cur_pos { dying.push(id); }
 }
@@ -184,7 +187,8 @@ fn a_alloc_r(xm: u64, pref: u64) -> u32 {
     return r;
 }
 fn a_evict(xm: u64) -> u32 {
-    var m = ~a_free & ~a_lock & xm & a_alloc;
+    var m = ~a_free & ~a_lock & xm & a_alloc & ~a_rg_pin;   // (pinned global values stay)
+    if m == 0 && rg_on { return a_rg_borrow(xm); }
     if m == 0 {
         write_stderr(str("goovm: aarch64: no register to evict: function ", f_index, " instruction ", cur_pos, " op ",
                          M.insts[f_first_inst + cur_pos].op, "\n"));
@@ -267,7 +271,8 @@ fn a_flush(mask: u64) {
         m &= m - 1;
         let id = a_rval[r];
         if id >= RV_TEMP { continue; }
-        if vi[id].st & ST_MEM == 0 { a_store_home(id, r); }
+        // (a pinned value's home is never current: PHI moves change its register only)
+        if vi[id].st & (ST_MEM | ST_PIN) != ST_MEM { a_store_home(id, r); }
         vi[id].reg = NOREG;
         a_release(r);
     }
@@ -579,6 +584,11 @@ fn a_vr_into(v: u32, r: u32) {
 }
 // A register for the result of j (its class).
 fn a_def(j: u32) -> u32 {
+    if rg_on && rg_reg[j] != NOREG {
+        let r: u32 = rg_reg[j];
+        a_lock |= abit(r);
+        return r;
+    }
     let t = M.insts[f_first_inst + j].ty;
     if a_inv(arc(t)) { return a_alloc_r(A_V_ALL, a_pref_v(j)); }
     let h: u32 = vi[j].hint;
@@ -593,12 +603,32 @@ fn a_reuse(v: u32) -> u32 {
     let id = vid(v);
     let r: u32 = vi[id].reg;
     if r >= 64 { return 64; }
+    if vi[id].st & ST_PIN != 0 {
+        if rg_live_after(id) || vi[cur_pos].st & ST_PIN != 0 || a_rval[r] != id { return 64; }
+        return r;
+    }
     if vi[id].st & ST_GLOB != 0 || vi[id].last != cur_pos { return 64; }
     return r;
 }
 // The result of j is in r (ext: garbage above its width). Global values are
 // written to their home at once; a result nobody uses is dropped.
-fn a_set(j: u32, r: u32, ext: bool) {
+fn a_set(j: u32, r0: u32, ext0: bool) {
+    var r = r0;
+    var ext = ext0;
+    if rg_on && vi[j].st & ST_PIN != 0 {
+        // a pinned value goes to its register, normalized
+        let pr: u32 = rg_reg[j];
+        if r != pr {
+            if pr >= 32 { a_vmov(true, pr, r); } else { a_mov_rr(true, pr, r); }
+            if a_tmp & abit(r) == 0 && a_rval[r] >= RV_TEMP {
+                a_rval[r] = RV_NONE;
+                a_free |= abit(r);
+            }
+            r = pr;
+        }
+        if ext && r < 32 { a_zext(r, bits_of(vtype(j))); }
+        ext = false;
+    }
     let old = a_rval[r];
     if old < RV_TEMP && old != j { vi[old].reg = NOREG; }
     a_tmp &= ~abit(r);
@@ -609,7 +639,7 @@ fn a_set(j: u32, r: u32, ext: bool) {
     var st = vi[j].st & ~(ST_MEM | ST_EXT);
     if ext { st |= ST_EXT; }
     vi[j].st = st;
-    if st & ST_GLOB != 0 {
+    if st & (ST_GLOB | ST_PIN) == ST_GLOB {
         a_store_home(j, r);
     } else if vi[j].nuse == 0 {
         a_rval[r] = RV_NONE;
@@ -670,6 +700,10 @@ fn a_end_inst() {
     a_free |= a_tmp;
     a_tmp = 0;
     a_lock = 0;
+    if rg_on {
+        if a_nborrow != 0 { a_rg_restore(); }
+        a_rg_kills();
+    }
 }
 
 // A compare whose flags feed the next instruction (CONDBR, SELECT): its

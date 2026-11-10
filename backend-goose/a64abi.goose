@@ -308,7 +308,7 @@ fn a_save_caller() {
         let r = actz(m);
         m &= m - 1;
         let id = a_rval[r];
-        if id >= RV_TEMP || !a_live_after(id) { continue; }
+        if id >= RV_TEMP || !a_live_after(id) || vi[id].st & ST_PIN != 0 { continue; }
         if vi[id].st & ST_GLOB == 0 {
             var cs: u64 = 0;
             if r < 32 { cs = a_free & a_alloc & A_GP_CALLEE & ~a_lock; }
@@ -705,7 +705,7 @@ fn a_setup_args() {
             var st = vi[id].st;
             if c == ARC_GPR && bits_of(t) < 64 { st |= ST_EXT; }
             vi[id].st = st;
-            if st & ST_GLOB != 0 {
+            if st & (ST_GLOB | ST_PIN) == ST_GLOB {
                 a_home_off(id);
                 vi[id].st |= ST_MEM;
                 a_pro.push(AProArg { a: a, off: vi[id].off });
