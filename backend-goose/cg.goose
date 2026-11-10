@@ -48,6 +48,7 @@ import a64cg;
 
 var M: Module;
 var opt_on = false;          // opt_level >= 1 (the middle-end ran; global register allocation)
+var fn_opt = false;          // opt_on, and the function being generated is not optnone (E2)
 
 // The object file being built; the host reads it until the next call.
 var obj: u8[>..] = [];
@@ -562,7 +563,7 @@ fn gen_inst(gi: u32, cur: u32) {
                     phi_moves(cur, I.a);
                 }
                 if I.a != next { jmp_block(I.a); }
-                else if M.blocks[f_first_block + cur].n_inst == 1 && !opt_on {
+                else if M.blocks[f_first_block + cur].n_inst == 1 && !fn_opt {
                     // a block of only a branch to the next block: LLVM's
                     // FastISel emits the jump anyway "for more accurate line
                     // information" (a debugger stops on the branch's line)
@@ -867,10 +868,11 @@ fn gen_function(fi: u32) {
     if block_off.len < f.n_blocks + 1 { block_off.resize(f.n_blocks + 1, 0); }
     assert(t_off.len >= insts.len && block_off.len > blocks.len);
 
+    fn_opt = opt_on && f.flags & FN_OPTNONE == 0;
     ra_prepass(insts, blocks);
     if dbg_on { dbg_keep_homes(fi); }
     rg_on = false;
-    if opt_on && !opt_off("ra") { rg_alloc(insts, blocks); }
+    if fn_opt && !opt_off("ra") { rg_alloc(insts, blocks); }
     f_share = f.flags & (FN_SJLJ | FN_RETURNS_TWICE) == 0;
     var ncs = pp_ncs;
     if ncs > 5 { ncs = 5; }
@@ -996,7 +998,7 @@ fn gen_functions() {
         for k in sec_end[s - 1]..sec_end[s] {
             let G = M.globals[g_order[k]];
             if G.kind != G_FUNC || G.func == GIR_NONE { continue; }
-            if M.funcs[G.func].flags & FN_DEAD != 0 { continue; }   // (-O1: inlined everywhere)
+            if M.funcs[G.func].flags & (FN_DEAD | FN_AVAILEXT) != 0 { continue; }   // (-O1: inlined everywhere)
             gen_function(G.func);
         }
         osecs[s].size = mcode.len as u64 - osecs[s].start;

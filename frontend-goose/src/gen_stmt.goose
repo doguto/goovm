@@ -1506,6 +1506,7 @@ fn gen_function0(fd: u32) {
     var flags = f_flags;
     if fty.flags & TF_VARIADIC != 0 { flags = flags | FN_VARARG; }
     if is_internal_sym(s) || fn_local_inline(s) { flags = flags | FN_INTERNAL; }
+    flags = flags | fn_opt_flags(s);
     var al: u32 = 4;
     let a = syms[s].attr;
     if a != 0 && sym_attrs[a].align > 16 {

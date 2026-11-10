@@ -63,6 +63,8 @@ var o_fi: u32 = 0;               // funcs index of the function being optimized
 var o_f: Func;                   // its record (input)
 var o_pinned = false;            // its blocks are named elsewhere (block addresses): no CFG changes
 var o_dbg = false;               // the module has debug information entries
+var opt_lv: u32 = 1;             // the optimization level (GIR opt_level bits 0..7: 1, 2, 3)
+var opt_sz: u32 = 0;             // the size level (bits 8..9: 1 = -Os, 2 = -Oz)
 
 // Value-operand masks per opcode: fields a, b, c, and the runs.
 let OV_A: u8 = 1;
@@ -664,6 +666,9 @@ fn opt_module() {
     undef_c.clear();
     build_type_rc();
     o_dbg = M.dies.len != 0;
+    opt_lv = M.header[0].r0 & 0xFF;
+    if opt_lv > 3 { opt_lv = 3; }
+    opt_sz = (M.header[0].r0 >> 8) & 3;
     fn_pinned.clear();
     fn_pinned.resize(M.funcs.len, 0);
     for d in M.drelocs {
@@ -756,6 +761,12 @@ fn opt_function(fi: u32) {
     oir_reset();
     amap_on = false;
     oir_load(M.insts, M.blocks, o_f, true);
+    if o_f.flags & FN_OPTNONE != 0 {
+        // optnone: not optimized (and -O0 code generation, cg.goose fn_opt)
+        inl_record();
+        oir_store(fi);
+        return;
+    }
     if !opt_off("m2r") {
         ensure_cfg();
         if remove_unreachable() { ensure_cfg(); }

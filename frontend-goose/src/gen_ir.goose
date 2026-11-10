@@ -47,6 +47,8 @@ let ABI_SRET: u32 = 0x40000000;
 var opt_pie: bool = true;
 var opt_pic: bool = false;       // -fPIC / -fpic: defined globals are preemptible
 var opt_debug: bool = false;     // -g
+var opt_gir_level: u32 = 0;      // GIR opt_level (E2): -O1 1, -O2 2, -O3 3, -Os 2 | 1 << 8, -Oz 2 | 2 << 8
+var opt_no_inline: bool = false; // -fno-inline
 var opt_common: bool = false;    // -fcommon
 
 fn tdef(kind: u32, cls: u32, bits: u32, size: u32, align: u32, store: u32) {

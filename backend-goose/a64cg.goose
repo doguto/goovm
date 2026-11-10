@@ -933,7 +933,7 @@ fn a_gen_functions() {
         for k in sec_end[s - 1]..sec_end[s] {
             let G = M.globals[g_order[k]];
             if G.kind != G_FUNC || G.func == GIR_NONE { continue; }
-            if M.funcs[G.func].flags & FN_DEAD != 0 { continue; }
+            if M.funcs[G.func].flags & (FN_DEAD | FN_AVAILEXT) != 0 { continue; }
             if first {
                 map_syms.push(MapSym { sec: s as! u32, off: 0, data: false });
                 first = false;

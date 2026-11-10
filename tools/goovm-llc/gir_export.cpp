@@ -44,6 +44,8 @@
 #include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/Scalar/LowerMatrixIntrinsics.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -1184,6 +1186,9 @@ struct Exporter : GirDwarfHost {
             T.opnds.push_back(args[i + 1]);
         }
         uint16_t fl = (vararg ? GIR_IF_VARARG : 0) | (al & AL_NR ? GIR_IF_NORETURN : 0);
+        // call-site inlining attributes (E2)
+        if (CB.getAttributes().hasFnAttr(Attribute::NoInline)) fl |= GIR_IF_NOINLINE_CALL;
+        if (CB.getAttributes().hasFnAttr(Attribute::AlwaysInline)) fl |= GIR_IF_ALWAYSINLINE_CALL;
         if (cur_invoke_lp != GIR_NONE) {
             fl |= GIR_IF_INVOKE;
             T.opnds.push_back(cur_invoke_lp);
@@ -2798,12 +2803,18 @@ struct Exporter : GirDwarfHost {
         GirFunc gf{};
         gf.global = g;
         fn_flags = (Fn.hasLocalLinkage() ? GIR_FN_INTERNAL : 0) | (FT->isVarArg() ? GIR_FN_VARARG : 0);
-        // inlining hints for the optimizer (-O1); clang -O0 puts noinline on
-        // every function together with optnone, so that noinline is not the
-        // source's and is not exported
-        if (Fn.hasFnAttribute(Attribute::NoInline) && !Fn.hasFnAttribute(Attribute::OptimizeNone))
-            fn_flags |= GIR_FN_NOINLINE;
+        // LLVM's function attributes as the optimizer honors them (E1, E2;
+        // ignored at -O0): clang -O0 IR has optnone noinline on every
+        // function, which the optimizer then leaves alone, as LLVM's would
+        if (Fn.hasFnAttribute(Attribute::NoInline)) fn_flags |= GIR_FN_NOINLINE;
         if (Fn.hasFnAttribute(Attribute::AlwaysInline)) fn_flags |= GIR_FN_ALWAYSINLINE;
+        if (Fn.hasFnAttribute(Attribute::OptimizeNone)) fn_flags |= GIR_FN_OPTNONE | GIR_FN_NOINLINE;
+        if (Fn.hasFnAttribute(Attribute::OptimizeForSize)) fn_flags |= GIR_FN_OPTSIZE;
+        if (Fn.hasFnAttribute(Attribute::MinSize)) fn_flags |= GIR_FN_MINSIZE | GIR_FN_OPTSIZE;
+        if (Fn.hasFnAttribute(Attribute::Cold)) fn_flags |= GIR_FN_COLD;
+        if (Fn.hasFnAttribute(Attribute::Hot)) fn_flags |= GIR_FN_HOT;
+        if (Fn.hasFnAttribute(Attribute::InlineHint)) fn_flags |= GIR_FN_INLINEHINT;
+        if (avail_body(Fn)) fn_flags |= GIR_FN_AVAILEXT;
         uint64_t falign = Fn.getAlign() ? Fn.getAlign()->value() : 16;
         if (falign < 16) falign = 16;
         gf.first_block = (uint32_t)T.blocks.size();
@@ -3099,6 +3110,13 @@ struct Exporter : GirDwarfHost {
         }
     }
 
+    // An available_externally function whose body is exported for the
+    // optimizer (E2): LLVM inlines such bodies and then drops them
+    // (EliminateAvailableExternally); at -O0 clang emits none.
+    bool avail_body(const Function &Fn) const {
+        return T.header.opt_level != 0 && Fn.hasAvailableExternallyLinkage() && !Fn.isDeclaration();
+    }
+
     // ---------------------------------------------------------------- module
     void run() {
         T.header.version = GIR_VERSION;
@@ -3230,10 +3248,12 @@ struct Exporter : GirDwarfHost {
         dw = std::make_unique<GirDwarfBuilder>(M, T, *this);
         dw_on = dw->enabled();
         if (dw_on) dw->begin_module();
-        // Pass 3: function bodies.
+        // Pass 3: function bodies (and at -O1.. the bodies of available_externally
+        // functions, for the inliner only: GIR_FN_AVAILEXT, the symbol stays undefined)
         for (const Function &Fn : M.functions()) {
             auto it = gmap.find(&Fn);
-            if (it == gmap.end() || !(T.globals[it->second].flags & GIR_GF_DEFINED)) continue;
+            if (it == gmap.end()) continue;
+            if (!(T.globals[it->second].flags & GIR_GF_DEFINED) && !avail_body(Fn)) continue;
             function(Fn, it->second);
         }
         if (dw_on) dw->end_module();
@@ -3267,6 +3287,27 @@ struct Exporter : GirDwarfHost {
 };
 
 }  // namespace
+
+void gir_prepare(Module &m) {
+    bool matrix = false;
+    for (const Function &F : m)
+        if (F.isDeclaration() && F.getName().starts_with("llvm.matrix.")) matrix = true;
+    if (!matrix) return;
+    PassBuilder PB;
+    LoopAnalysisManager LAM;
+    FunctionAnalysisManager FAM;
+    CGSCCAnalysisManager CGAM;
+    ModuleAnalysisManager MAM;
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+    FunctionPassManager FPM;
+    FPM.addPass(LowerMatrixIntrinsicsPass(/*Minimal=*/true));   // as LLVM's -O0 pipeline
+    for (Function &F : m)
+        if (!F.isDeclaration()) FPM.run(F, FAM);
+}
 
 void gir_export(const Module &m, GirTables &out, size_t size_hint) {
     // Bitcode takes 6 to 11 bytes per instruction (more with debug info);

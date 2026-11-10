@@ -331,6 +331,10 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
 #define GIR_IF_NSW           0x1000u  /* additive (E1): ADD, SUB, MUL, SHL whose signed   */
                                       /*   overflow is undefined (LLVM nsw); a hint for  */
                                       /*   the optimizer, ignored by -O0 code generation */
+/* additive (milestone E2), CALL only, hints for the optimizer: */
+#define GIR_IF_NOINLINE_CALL 0x2000u  /* call-site noinline ([[clang::noinline]],         */
+                                      /*   -fno-inline's calls): never inlined           */
+#define GIR_IF_ALWAYSINLINE_CALL 0x4000u /* call-site always_inline ([[clang::always_inline]]) */
 
 /* ABI words of CALL arguments and Func arguments. 0 = passed by value as
  * its type says. GIR_ABI_BYVAL: the argument is a pointer whose pointee
@@ -368,10 +372,24 @@ typedef struct GirBlock {
                                /*   a frame slot must not be shared between values */
 /* additive (milestone E1), hints for the optimizer (opt_level >= 1); an -O0
  * back-end ignores them */
-#define GIR_FN_NOINLINE 64u    /* do not inline calls of this function (the source said
-                                  noinline; clang -O0's implied noinline, which comes with
-                                  optnone, is not exported) */
+#define GIR_FN_NOINLINE 64u    /* do not inline calls of this function (LLVM noinline; E2:
+                                  also when it comes with optnone, which E1 did not export) */
 #define GIR_FN_ALWAYSINLINE 128u /* always_inline */
+/* additive (milestone E2): LLVM's function attributes as the optimizer honors
+ * them (backend-goose/DESIGN.md §15); an -O0 back-end ignores them */
+#define GIR_FN_OPTNONE   256u  /* optnone: the function is not optimized (-O0 code generation
+                                  for it, whatever the module's opt_level); implies noinline */
+#define GIR_FN_OPTSIZE   512u  /* optsize (clang -Os, -Oz, and __attribute__((cold))) */
+#define GIR_FN_MINSIZE  1024u  /* minsize (clang -Oz, __attribute__((minsize))) */
+#define GIR_FN_COLD     2048u  /* cold: calls of it are unlikely; .text.unlikely. at -O1+ */
+#define GIR_FN_HOT      4096u  /* hot: .text.hot. at -O1+ */
+#define GIR_FN_INLINEHINT 8192u /* inlinehint (an `inline` function) */
+#define GIR_FN_AVAILEXT 16384u /* the body of an available_externally function (exported at
+                                  opt_level >= 1 only): for inlining, never emitted; its global
+                                  is not GIR_GF_DEFINED (calls that remain call the external
+                                  symbol), but Global.func names this record */
+/* bits 16..23 are reserved for back-ends (backend-goose: FN_DEAD = bit 23 in the
+ * optimizer's output tables) */
 #define GIR_FN_ALIGN_SHIFT 24  /* bits 24..31: log2 of the function alignment (>= 4) */
 
 /* 40 bytes. Functions are also globals (Func.global is their entry in the
@@ -432,7 +450,9 @@ typedef struct GirGlobal {
                                  /*   (size is also set for ZERO/COMMON)   */
     uint32_t align;              /* power of two >= 1 */
     uint32_t func;               /* functions: index into funcs (GIR_NONE if */
-                                 /*   undefined); aliases: the aliased global; */
+                                 /*   undefined; E2: an undefined function may */
+                                 /*   have a GIR_FN_AVAILEXT body); aliases: the */
+                                 /*   aliased global; */
                                  /*   variables: GIR_NONE                  */
     uint32_t section;            /* GIR_NONE = the default section for its */
                                  /*   kind; else index into sections       */
@@ -633,11 +653,15 @@ typedef struct GirHeader {
                                     producers): 0 = -O0 code generation; >= 1 = the
                                     back-end runs its middle-end on the tables and
                                     allocates registers globally (backend-goose/DESIGN.md
-                                    §15, §16) */
+                                    §15, §16). E2: bits 0..7 are the level (1, 2, 3 for
+                                    -O1, -O2, -O3; -Os and -Oz are 2), bits 8..9 the size
+                                    level (GIR_OPT_SIZE: 1 = -Os, 2 = -Oz) */
     uint32_t target;             /* additive (milestone F1; was reserved, so 0 from older
                                     producers): GIR_TARGET_* */
     uint32_t reserved[2];
 } GirHeader;
+#define GIR_OPT_LEVEL(x)   ((x) & 0xFFu)          /* GirHeader.opt_level (E2) */
+#define GIR_OPT_SIZE(x)    (((x) >> 8) & 3u)
 #define GIR_TARGET_X86_64  0u    /* x86-64 Linux, SysV ABI */
 #define GIR_TARGET_AARCH64 1u    /* AArch64 Linux (aarch64-linux-gnu), AAPCS64, LP64 */
 

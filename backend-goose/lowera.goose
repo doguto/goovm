@@ -91,7 +91,7 @@ fn def_from(j: u32, a: u32, ra: u32) -> u32 {
 // ------------------------------------------------------ integer binops
 
 fn lower_binop_a(I: Inst, j: u32) {
-    if opt_on && rmw_try(I, j) { return; }
+    if fn_opt && rmw_try(I, j) { return; }
     let bits = bits_of(I.ty);
     let op: u32 = I.op;
     let w = wq(bits);

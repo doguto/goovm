@@ -259,6 +259,8 @@ let IF_VARARG = 0x0200;
 let IF_NORETURN = 0x0400;
 let IF_INVOKE = 0x0800;
 let IF_NSW = 0x1000;
+let IF_NOINLINE_CALL = 0x2000;      // (E2) CALL: call-site noinline
+let IF_ALWAYSINLINE_CALL = 0x4000;  // (E2) CALL: call-site always_inline
 let ORD_SEQ_CST = 7;
 
 // ABI words.
@@ -274,6 +276,15 @@ let FN_INTERNAL = 4;
 let FN_VASTART = 8;
 let FN_SJLJ = 16;
 let FN_RETURNS_TWICE = 32;
+let FN_NOINLINE: u32 = 64;          // (E1)
+let FN_ALWAYSINLINE: u32 = 128;     // (E1)
+let FN_OPTNONE: u32 = 256;          // (E2) LLVM's function attributes
+let FN_OPTSIZE: u32 = 512;
+let FN_MINSIZE: u32 = 1024;
+let FN_COLD: u32 = 2048;
+let FN_HOT: u32 = 4096;
+let FN_INLINEHINT: u32 = 8192;
+let FN_AVAILEXT: u32 = 16384;       // available_externally body: inlining only, never emitted
 let FN_ALIGN_SHIFT = 24;
 
 // Globals.

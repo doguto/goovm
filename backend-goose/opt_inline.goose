@@ -13,7 +13,7 @@ let INL_SMALL: u32 = 40;        // always
 let INL_LOOP: u32 = 80;         // a call in a loop
 let INL_ONCE: u32 = 500;        // an internal function's only call site
 let INL_GROWTH: u32 = 4000;     // instructions a caller may grow by
-let FN_DEAD: u32 = 0x100;       // output GirFunc flag: all calls were inlined; not emitted
+let FN_DEAD: u32 = 0x800000;    // output GirFunc flag (bit 23, reserved for back-ends): all calls were inlined; not emitted
 
 var fn_done: u8[>..] = [];      // per function: stored (optimized) in the output tables
 var fn_size: u32[>..] = [];     // its size then
@@ -120,7 +120,7 @@ fn inl_record() {
     var n: u32 = 0;
     var ok = !o_pinned;
     let fl = o_f.flags;
-    if fl & (FN_VARARG | FN_VASTART | FN_SJLJ | FN_RETURNS_TWICE | GIR_FN_NOINLINE) != 0 { ok = false; }
+    if fl & (FN_VARARG | FN_VASTART | FN_SJLJ | FN_RETURNS_TWICE | FN_NOINLINE | FN_OPTNONE) != 0 { ok = false; }
     for a in 0..o_f.n_args {
         if M.opnds[o_f.args + 2 * a + 1] & ABI_BYVAL != 0 { ok = false; }
     }
@@ -144,8 +144,6 @@ fn inl_record() {
     fn_done[o_fi] = 1;
 }
 
-let GIR_FN_NOINLINE = 64;
-let GIR_FN_ALWAYSINLINE = 128;
 
 // Inlines the calls the cost model accepts (build_cfg and build_loops
 // first: loop depths). Returns whether any call was inlined.
@@ -158,13 +156,13 @@ fn inline_calls() -> bool {
         while i != NIL {
             let I = o_ins[i];
             size++;
-            if I.op == GIR_CALL && I.flags & IF_INVOKE == 0 {
+            if I.op == GIR_CALL && I.flags & (IF_INVOKE | IF_NOINLINE_CALL) == 0 {
                 let c = callee_of(I);
                 if c != NIL && c != o_fi && fn_done[c] != 0 && fn_inl[c] != 0 {
                     let s = fn_size[c];
                     let F = M.funcs[c];
                     let once = F.flags & FN_INTERNAL != 0 && fn_calls[c] == 1 && fn_addr[c] == 0;
-                    var want = s <= INL_SMALL || F.flags & GIR_FN_ALWAYSINLINE != 0;
+                    var want = s <= INL_SMALL || F.flags & FN_ALWAYSINLINE != 0 || I.flags & IF_ALWAYSINLINE_CALL != 0;
                     if !want && once && s <= INL_ONCE { want = true; }
                     if !want && lp_depth[b] != 0 && s <= INL_LOOP { want = true; }
                     if want { inl_cand.push(i); }
@@ -179,7 +177,8 @@ fn inline_calls() -> bool {
     for c in inl_cand {
         if o_blk[c] == NIL { continue; }
         let cfi = callee_of(o_ins[c]);
-        if size + fn_size[cfi] > limit && M.funcs[cfi].flags & GIR_FN_ALWAYSINLINE == 0 { continue; }
+        if size + fn_size[cfi] > limit && M.funcs[cfi].flags & FN_ALWAYSINLINE == 0
+           && o_ins[c].flags & IF_ALWAYSINLINE_CALL == 0 { continue; }
         inline_call(c, cfi);
         size += fn_size[cfi];
         fn_calls[cfi]--;
@@ -192,7 +191,7 @@ fn inline_calls() -> bool {
 fn inl_any_call() -> bool {
     if o_pinned { return false; }
     for i in 0..o_ins.len {
-        if o_blk[i] == NIL || o_ins[i].op != GIR_CALL { continue; }
+        if o_blk[i] == NIL || o_ins[i].op != GIR_CALL || o_ins[i].flags & IF_NOINLINE_CALL != 0 { continue; }
         let c = callee_of(o_ins[i]);
         if c != NIL && c != o_fi && fn_done[c] != 0 && fn_inl[c] != 0 { return true; }
     }

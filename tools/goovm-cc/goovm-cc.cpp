@@ -10,11 +10,13 @@
 //   llvm    clang front end -> llvm::Module -> LLVM's -O0 code generator.
 //   goose   clang front end -> llvm::Module -> GIR exporter -> Goose back-end.
 //           Needs GOOVM_CC_WITH_GOOSE (links the goovm exporter and back-end).
-// -O1 (also -O2, -O3, -Os, -Oz, -O) with --backend=goose: clang's front end
-//   still runs at -O0 semantics, but without the optnone (and the noinline
-//   it implies) it puts on every function at -O0; the module then goes
-//   through the Goose middle-end and the global register allocator (GIR
-//   header opt_level 1).
+// -O1, -O2, -O3, -Os, -Oz (and -O, -Og, -Ofast as clang reads them) with
+//   --backend=goose: clang's front end runs at that level (its macros such
+//   as __OPTIMIZE__ and __OPTIMIZE_SIZE__, its function attributes optsize,
+//   minsize, inlinehint, its TBAA and lifetime markers) but without LLVM's
+//   passes (as -Xclang -disable-llvm-passes); the module then goes through
+//   the Goose middle-end at that level and the global register allocator
+//   (GIR header opt_level: the level, and the size level in bits 8..9).
 // --fallback: if the Goose back-end rejects the module, use LLVM's.
 // --time: phase times in microseconds on stderr, and a machine-readable line
 //   `goovm-cc-time: frontend_us=... backend_us=... write_us=... total_us=...`.
@@ -98,16 +100,7 @@ int main(int argc, char **argv) {
         if (!std::strncmp(argv[i], "--backend=", 10)) backend = argv[i] + 10;
         else if (!std::strcmp(argv[i], "--fallback")) fallback = true;
         else if (!std::strcmp(argv[i], "--time")) timing = true;
-        else {
-            // the optimization level: kept for clang's own back-ends, turned
-            // into the Goose optimizer's level (and -O0 for clang) otherwise
-            if (argv[i][0] == '-' && argv[i][1] == 'O') opt_level = std::strcmp(argv[i], "-O0") ? 1 : 0;
-            args.push_back(argv[i]);
-        }
-    }
-    if (backend == "goose" && opt_level) {
-        for (auto &a : args)
-            if (a[0] == '-' && a[1] == 'O') a = "-O0";
+        else args.push_back(argv[i]);
     }
 #ifndef GOOVM_CC_WITH_GOOSE
     if (backend == "goose") backend = "llvm";   // not built in: behave like clang -c
@@ -147,11 +140,14 @@ int main(int argc, char **argv) {
     auto inv = std::make_shared<clang::CompilerInvocation>();
     if (!clang::CompilerInvocation::CreateFromArgs(*inv, cmd.getArguments(), *diags, GOOVM_CLANG_PATH)) return 1;
     const std::string out = inv->getFrontendOpts().OutputFile;
+    // the optimization level as clang reads it (-O, -Og, -Ofast, -O4, ...)
+    opt_level = inv->getCodeGenOpts().OptimizationLevel;
+    if (opt_level > 3) opt_level = 3;
+    if (opt_level) opt_level |= (unsigned)inv->getCodeGenOpts().OptimizeSize << 8;
     if (backend == "goose" && opt_level) {
-        // -O0 front end without optnone and its implied noinline (inlining
-        // and the rest are the Goose optimizer's job)
-        inv->getCodeGenOpts().DisableO0ImplyOptNone = true;
-        inv->getCodeGenOpts().setInlining(clang::CodeGenOptions::NormalInlining);
+        // the front end at that level, without LLVM's passes: the Goose
+        // middle-end is the optimizer (clang -Xclang -disable-llvm-passes)
+        inv->getCodeGenOpts().DisableLLVMPasses = true;
     }
     // -mllvm options (e.g. -enable-matrix from -fenable-matrix), as
     // clang's ExecuteCompilerInvocation applies them

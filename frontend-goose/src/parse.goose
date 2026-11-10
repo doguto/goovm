@@ -45,6 +45,11 @@ let AM_DTOR = 16384;
 let AM_NOCOMMON = 32768;
 let AM_COMMON = 65536;
 let AM_NODEBUG = 131072;       // G1: no debug information for the function
+let AM_NOINLINE = 262144;      // E2: function attributes the optimizer honors
+let AM_OPTNONE = 524288;
+let AM_COLD = 1048576;
+let AM_HOT = 2097152;
+let AM_MINSIZE = 4194304;
 
 struct Attrs {
     aligned: u32 = 0,
@@ -175,6 +180,16 @@ recursive fn parse_attributes(a: Attrs&) {
                     a.misc = a.misc | AM_FALLTHROUGH;
                 } else if name == "nodebug" {
                     a.misc = a.misc | AM_NODEBUG;
+                } else if name == "noinline" {
+                    a.misc = a.misc | AM_NOINLINE;
+                } else if name == "optnone" {
+                    a.misc = a.misc | AM_OPTNONE;
+                } else if name == "cold" {
+                    a.misc = a.misc | AM_COLD;
+                } else if name == "hot" {
+                    a.misc = a.misc | AM_HOT;
+                } else if name == "minsize" {
+                    a.misc = a.misc | AM_MINSIZE;
                 } else if name == "section" {
                     if at(TK_L_PAREN) {
                         let o, l = attr_string_arg();
