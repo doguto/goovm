@@ -222,7 +222,7 @@ let CV_BOOL_CTX = 4;        // contextual conversion to bool (explicit conversio
 recursive fn ics_of(e: u32, p: u32, fl: i64) -> Ics {
     let ek = nodes[e].kind as i64;
     if ek == N_INITBRACE { return ics_list(e, p, fl); }
-    if ek == N_FUNCREF { return ics_overload_set(e, p); }
+    if ek == N_FUNCREF { return ics_overload_set(e, p, fl); }
     if is_opq(e) || is_opaque(p) { return ics_unknown(); }
     if is_ref(p) { return ics_ref(e, p, fl); }
     let pt = unqual(p);
@@ -295,11 +295,33 @@ recursive fn ics_ref(e: u32, p: u32, fl: i64) -> Ics {
 
 // An overload set (&f, or f where a function pointer is expected): the one
 // function matching the target type exactly is an identity conversion.
-fn ics_overload_set(e: u32, p: u32) -> Ics {
+recursive fn ics_overload_set(e: u32, p: u32, fl: i64) -> Ics {
     var t = nonref(p);
     if is_pointer(t) { t = tbase(t); }
-    if kind_of(t) == TY_MEMPTR { return ics_unknown(); }
-    if !is_func(t) { return ics_unknown(); }
+    if kind_of(t) == TY_MEMPTR || is_opaque(t) || is_dep(t) { return ics_unknown(); }
+    if !is_func(t) {
+        // not a function target: the set's single non-template function
+        // decays to a pointer (to bool, void * ...)
+        var s = nodes[e].a as i64;
+        var f: i64 = -1;
+        var n = 0;
+        while s >= 0 {
+            let x = resolve(s);
+            if x >= 0 && visible(s) && (syms[x].kind as i64 == SK_FUNC || syms[x].kind as i64 == SK_TEMPLATE) { f = x; n++; }
+            s = cxs[s].nnext as i64;
+        }
+        if n != 1 || syms[f].kind as i64 != SK_FUNC || nodes[e].b != 0 || nodes[e].c != 0 {
+            if is_record(nonref(p)) && fl & CV_NOUSER == 0 {
+                // a converting constructor taking the set
+                need_complete(unqual(nonref(p)));
+                return ics_user(e, unqual(nonref(p)), CV_COPY, false, false);
+            }
+            return ics_bad();
+        }
+        if cxs[f].flags & CF_MEMBER != 0 && cxs[f].flags & CF_STATIC == 0 { return ics_unknown(); }
+        let a = node(N_CXX, 0, mk_ptr(syms[f].ty), 0, 0, 0, nodes[e].loc);
+        return ics_of(a, p, CV_COPY);
+    }
     let f = overload_for_target(e, t);
     if f >= 0 { return ics_std(RK_EXACT, IF_IDENT, 0, 0); }
     if f == -2 { return ics_unknown(); }

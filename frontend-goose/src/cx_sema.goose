@@ -57,7 +57,7 @@ fn is_cmp_or_logic(op: i64) -> bool {
 recursive fn mk_binop(op_cx: i64, op_c: i64, l0: u32, r0: u32, loc: u32) -> u32 {
     var l = l0;
     var r = r0;
-    if is_opq(l) || is_opq(r) { return dep_node(t_unknown, loc); }
+    if is_opq(l) || (is_opq(r) && !(nodes[r].kind as i64 == N_FUNCREF && is_record(nodes[l].ty))) { return dep_node(t_unknown, loc); }
     // (.* is the only binary operator without an OP_ code: C's bin_op maps it to B_REM)
     if cg_on && (op_cx == OP_ARROWSTAR || op_cx == 0) { return cg_memptr_access(l, r, op_cx == OP_ARROWSTAR, loc); }
     if op_cx == OP_ARROWSTAR || op_cx == 0 && op_c == 0 { return dep_node(t_unknown, loc); }
@@ -229,7 +229,7 @@ recursive fn mk_cast_cx(t: u32, e0: u32, loc: u32, kind: i64) -> u32 {
     if is_opaque(t) || is_opq(e) {
         if nodes[e].kind as i64 == N_FUNCREF && !is_opaque(t) {
             // a cast of an overload set: the function of the target type
-            let c = ics_overload_set(e, t);
+            let c = ics_overload_set(e, t, 0);
             if c.kind as i64 != ICS_BAD { let a = funcref_addr(e, loc); if !is_opq(a) { return mk_cast_cx(t, a, loc, kind); } }
         }
         let n = dep_node(nonref(t), loc);
