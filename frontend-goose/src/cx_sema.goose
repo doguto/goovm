@@ -510,7 +510,17 @@ recursive fn mk_name_ref(qn: QN&, s0: i64, loc: u32) -> u32 {
         return n;
     }
     if k == SK_FUNC || k == SK_TEMPLATE {
-        if k == SK_TEMPLATE && tmpl_kind(s) == TT_VAR { return dep_node(t_unknown, loc); }
+        if k == SK_TEMPLATE && tmpl_kind(s) == TT_VAR {
+            // D2: a variable template specialization
+            if qn.has_targs {
+                let v = var_spec(s, qn.targs);
+                if v >= 0 {
+                    var q2 = QN { .. };
+                    return mk_name_ref(q2, v, loc);
+                }
+            }
+            return dep_node(t_unknown, loc);
+        }
         let n = node(N_FUNCREF, 0, t_unknown, s0, 0, (if qn.has_targs { qn.targs + 1 } else { 0 }) as i64, loc);
         nodes[n].op = if qn.qual { 1 } else { 0 };
         return n;

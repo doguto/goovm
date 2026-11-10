@@ -232,6 +232,7 @@ recursive fn resolve_oper(op: i64, l: u32, r: u32, post: bool, loc: u32) -> u32 
         return c;
     }
     nscratch.resize(mark);
+    resolved_fn = f;
     return typed_result(types[syms[f].ty >> 4].base, loc);
 }
 

@@ -390,7 +390,9 @@ recursive fn apply_user_conv(e: u32, uf: i64, p: u32) -> u32 {
         return r;
     }
     let rt = types[syms[uf].ty >> 4].base;
+    resolved_fn = uf;
     if cg_on {
+        resolved_fn = -1;
         var o = e;
         if !is_lvalue(o) { o = materialize(o, loc); }
         let mark = nscratch.len;
@@ -478,7 +480,9 @@ fn cish_call(ft: u32, mark: i64) -> bool {
 
 // An expression of a call's result type that D1 does not lower yet.
 fn typed_result(ret: u32, loc: u32) -> u32 {
-    let n = node(N_CXX, 0, nonref(ret), 0, 0, 0, loc);
+    let n = node(N_CXX, 0, nonref(ret), if resolved_fn >= 0 { resolved_fn } else { 0 }, 0, 0, loc);
+    if resolved_fn >= 0 { nodes[n].op = 7; }      // a resolved call: a = the function
+    resolved_fn = -1;
     if is_ref(ret) { nodes[n].flags = (NF_LVALUE | (if kind_of(ret) == TY_RREF { NF_XVALUE } else { 0 })) as! u16; }
     if is_opaque(ret) { nodes[n].flags = nodes[n].flags | NF_DEP; }
     return n;
@@ -486,8 +490,10 @@ fn typed_result(ret: u32, loc: u32) -> u32 {
 
 // A call of the chosen function f (obj: the object for a member function,
 // 0 none).
+var resolved_fn: i64 = -1;     // typed_result: the function its call node is a call of
 recursive fn build_call(f: i64, obj: u32, mark: i64, loc: u32, qualified: bool) -> u32 {
     inst_use(f);
+    resolved_fn = f;
     if cg_on { return cg_call(f, obj, mark, loc, qualified); }
     let ft = syms[f].ty;
     let member = cxs[f].flags & CF_MEMBER != 0 && cxs[f].flags & CF_STATIC == 0;

@@ -71,6 +71,7 @@ fn opq_report() -> bool {
 }
 fn opq_note(loc: u32, kind: i64) {
     if dependent_ctx() { return; }
+    if pk_refs.len > 0 { return; }      // the first parse of a pack expansion's element (discarded)
     if opq_mode < 2 && diag_suppress > 0 && diag_suppress != diag_inst_level { return; }
     var o: u8[>..] = [];
     loc_prefix(o, loc as i64);
@@ -334,7 +335,8 @@ recursive fn parse_unary_cx() -> u32 {
         unevaluated--;
         expect(TK_R_PAREN, "')'");
         if is_opq(e) || dependent_ctx() { return dep_node(t_bool, loc); }
-        return int_node(0, t_bool, loc);
+        // D2: not potentially-throwing ([except.spec]p6)
+        return int_node(if can_throw(e) { 0 } else { 1 }, t_bool, loc);
     }
     if k == TK_KW + KW_NEW || (k == TK_COLONCOLON && tk_n(1) == TK_KW + KW_NEW) { return parse_new(); }
     if k == TK_KW + KW_DELETE || (k == TK_COLONCOLON && tk_n(1) == TK_KW + KW_DELETE) { return parse_delete(); }
@@ -706,6 +708,43 @@ fn string_has_u8(p: i64) -> bool {
     return false;
 }
 
+// May evaluating e throw (a call of a function without a non-throwing
+// exception specification, a throw, a dynamic_cast to a reference)?
+recursive fn can_throw(e: u32) -> bool {
+    if e == 0 { return false; }
+    let nd = nodes[e];
+    let k = nd.kind as i64;
+    if k == N_THROW { return true; }
+    if k == N_CXX && nd.op == 7 && nd.a != 0 { return fn_can_throw(nd.a as i64); }
+    if k == N_CXX && nd.flags & NF_DEP != 0 { return true; }
+    if k == N_CALL {
+        let c = nodes[nd.a];
+        var f: i64 = -1;
+        if c.kind as i64 == N_DECLREF { f = c.a as i64; }
+        else if c.kind as i64 == N_ICAST && nodes[c.a].kind as i64 == N_DECLREF { f = nodes[c.a].a as i64; }
+        if f < 0 { return true; }
+        if syms[f].kind as i64 == SK_BUILTIN { return false; }
+        if fn_can_throw(f) { return true; }
+        for i in nd.c as i64 { if can_throw(nlist[nd.v + i]) { return true; } }
+        return false;
+    }
+    if k == N_DYNCAST { return nd.flags & NF_LVALUE != 0; }
+    if k == N_CTOR || k == N_NEW { return true; }
+    if k == N_UNARY || k == N_CAST || k == N_ICAST || k == N_MEMBER || k == N_STMTEXPR { return can_throw(nd.a); }
+    if k == N_BINARY || k == N_ASSIGN || k == N_INDEX { return can_throw(nd.a) || can_throw(nd.b); }
+    if k == N_COND { return can_throw(nd.a) || can_throw(nd.b) || can_throw(nd.c); }
+    return false;
+}
+
+fn fn_can_throw(f: i64) -> bool {
+    if f < 0 || f >= cxs.len { return true; }
+    let fl = cxs[f].flags;
+    if fl & CF_NOEXCEPT != 0 { return false; }
+    // destructors are noexcept unless declared otherwise; C functions do not throw in practice: not assumed
+    if fl & CF_DTOR != 0 { return false; }
+    return true;
+}
+
 fn has_udl(t: Tok) -> bool {
     let s = src[t.spell..t.spell + t.val];
     if t.kind as i64 == TK_NUMBER {
@@ -879,6 +918,10 @@ recursive fn parse_trait() -> u32 {
     let mark = trait_args.len;
     var any_dep = false;
     while !at(TK_R_PAREN) && !at(TK_EOF) {
+        let p0 = pc;
+        let pm = pk_refs.len;
+        let am0 = trait_args.len;
+        let dep0 = any_dep;
         if looks_like_type_id() && type_id_then(TK_COMMA, TK_R_PAREN) {
             let t = parse_type_id();
             trait_args.push(t);
@@ -887,6 +930,31 @@ recursive fn parse_trait() -> u32 {
             let e = parse_assign_cx();
             if is_opq(e) { any_dep = true; }
             trait_args.push(nodes[e].ty);
+        }
+        if at(TK_ELLIPSIS) {
+            let ok, nn = pk_count(pm);
+            if ok {
+                // D2: a pack expansion of bound packs
+                adv();
+                let p1 = pc;
+                trait_args.resize(am0);
+                any_dep = dep0;
+                let sm = pk_save(pm);
+                for i in nn {
+                    pc = p0;
+                    gt_pos = -1;
+                    let am = pk_activate_saved(sm, i);
+                    let t2 = parse_type_id();
+                    pk_active.resize(am);
+                    trait_args.push(t2);
+                    if is_opaque(t2) { any_dep = true; }
+                }
+                pk_saved.resize(sm);
+                pc = p1;
+                if !accept(TK_COMMA) { break; }
+                continue;
+            }
+            pk_refs.resize(pm);
         }
         accept(TK_ELLIPSIS);
         if !accept(TK_COMMA) { break; }
@@ -898,7 +966,7 @@ recursive fn parse_trait() -> u32 {
         trait_args.resize(mark);
         return dep_node(rt, loc);
     }
-    let ok, v = eval_trait(name, mark);
+    let ok, v = eval_trait_cx(name, mark);
     trait_args.resize(mark);
     if !ok { return dep_node(rt, loc); }
     return int_node(v, rt, loc);

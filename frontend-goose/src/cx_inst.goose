@@ -71,7 +71,8 @@ fn inst_debug() -> bool {
 fn inst_reporting() -> bool {
     if inst_report_mode < 0 {
         var v: u8[>..] = [];
-        inst_report_mode = if env("GOOSECC_INST_ERRORS", v) && v.len > 0 && v[0] == '1' { 1 } else { 0 };
+        inst_report_mode = if env("GOOSECC_INST_ERRORS", v) && v.len > 0 && (v[0] == '1' || v[0] == '2') { 1 } else { 0 };
+        if v.len > 0 && v[0] == '2' { diag_show_all = true; }
     }
     return inst_report_mode == 1;
 }
@@ -113,6 +114,9 @@ struct InstSave {
     spec_decl: bool,
     body_now: bool,
     def_target: i64,
+    var_t: i64,
+    watch: i64,
+    watch_errs: i64,
 }
 
 fn inst_enter() -> InstSave {
@@ -122,7 +126,9 @@ fn inst_enter() -> InstSave {
         bfd: block_fn_depth, targd: targ_depth, pard: paren_depth, uneval: unevaluated, lenient0: lenient,
         errs: diag_inst_errors, what: inst_what, supp: diag_suppress, level: diag_inst_level,
         spec_t: inst_spec_tmpl, spec_b: inst_spec_binds, spec_res: inst_spec_result, spec_decl: inst_spec_decl,
-        body_now: inst_body_now, def_target: inst_def_target };
+        body_now: inst_body_now, def_target: inst_def_target, var_t: inst_var_tmpl, watch: diag_watch_level, watch_errs: diag_watch_errors };
+    diag_watch_level = -1;
+    inst_var_tmpl = -1;
     inst_spec_tmpl = -1;
     inst_spec_result = -1;
     inst_spec_decl = false;
@@ -163,6 +169,9 @@ fn inst_leave(st: InstSave) -> bool {
     inst_spec_decl = st.spec_decl;
     inst_body_now = st.body_now;
     inst_def_target = st.def_target;
+    inst_var_tmpl = st.var_t;
+    diag_watch_level = st.watch;
+    diag_watch_errors = st.watch_errs;
     diag_suppress = st.supp;
     diag_inst_level = st.level;
     inst_depth--;
@@ -191,6 +200,8 @@ fn inst_leave(st: InstSave) -> bool {
     lenient = st.lenient0;
     restore(st.sv);
     let bad = diag_inst_errors != st.errs;
+    // an instantiation's errors are its own, not its trigger's
+    diag_inst_errors = st.errs;
     if bad { inst_errors++; }
     if bad && inst_reporting() && st.what >= 0 {
         var o: u8[>..] = [];
@@ -334,6 +345,7 @@ recursive fn inst_record(r: i64) {
     scopes[sc].tps = tparam_scope(src, pargs) as! i32;
     inst_pat.insert(r as u64, ((pat as u64) << 32) | (pargs as u64));
     let w = tmpl_class_key(src);
+    if head_has_final(src) { mark_final(r); }
     inst_what = cs;
     let st = inst_enter();
     cur_scope = sc;
@@ -342,6 +354,12 @@ recursive fn inst_record(r: i64) {
     parse_class_body(r, w);
     let bad = inst_leave(st);
     if bad { inst_dirty.insert(r as u64, 1); }
+}
+
+// Is the class-head of t's pattern `... Name final`?
+fn head_has_final(t: i64) -> bool {
+    let e = class_head_end(t);
+    return e > 0 && tu_toks[e - 1].kind as i64 == TK_IDENT && tu_toks[e - 1].val == id_final;
 }
 
 // The token after the class-head of a class template's pattern: its ':' or '{'.

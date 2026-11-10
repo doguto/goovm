@@ -493,3 +493,63 @@ recursive fn fn_at_least(a: i64, b: i64, nargs: i64) -> bool {
     ded_end(sv);
     return ok;
 }
+
+// ---------------------------------------------------------------------------
+// Variable templates.
+
+var inst_var_tmpl: i64 = -1;    // declare_var: make the specialization of this variable template
+var inst_var_binds: i32 = -1;
+var inst_var_result: i64 = -1;
+var var_specs = dictionary<u64, u32> {};   // (template << 32 | arguments) -> the variable
+
+// The variable template named `name` in the current scope, -1.
+fn var_template_of(name: u32) -> i64 {
+    var s = scope_find(cur_scope, name);
+    while s >= 0 {
+        if syms[s].kind as i64 == SK_TEMPLATE && tmpl_kind(s) == TT_VAR { return s; }
+        s = cxs[s].nnext as i64;
+    }
+    return -1;
+}
+
+// The specialization of variable template tsym for `args` (instantiated
+// from the primary or the most specialized partial specialization), -1
+// when it cannot be made yet.
+recursive fn var_spec(tsym: i64, args0: i32) -> i64 {
+    let t = cxs[tsym].tmpl as i64;
+    if t < 0 || tmpls[t].kind as i64 != TT_VAR { return -1; }
+    let args = complete_args(t, args0);
+    if args_dependent_strict(args as i64) { return -1; }
+    for i in tl_count(args as i64) {
+        let a = tl_arg(args as i64, i);
+        if (a.kind as i64 == TA_TYPE || a.kind as i64 == TA_VALUE) && (a.ty == 0 || is_opaque(a.ty)) { return -1; }
+    }
+    let key = ((t as u64) << 32) | (args as u64);
+    let g = var_specs.get(key);
+    if g { return g as i64; }
+    let pat, binds = select_pattern(t, args);
+    if pat < 0 || tmpls[pat].t1 == 0 || inst_depth > 400 { return -1; }
+    let mark = nscratch.len;
+    inst_what = tsym;
+    let st = inst_enter();
+    bind_header(pat, binds);
+    let sc = tmpls[pat].scope as i64;
+    var ctx = DC_NS;
+    if sc >= 0 && scopes[sc].kind as i64 == CS_CLASS { cur_scope = sc; cur_class = sc; cur_access = AC_PUBLIC; ctx = DC_CLASS; }
+    else { cur_scope = if sc >= 0 { sc } else { 0 }; }
+    pc = tmpls[pat].t0 as i64;
+    inst_var_tmpl = t;
+    inst_var_binds = args;
+    inst_var_result = -1;
+    parse_simple_decl(ctx);
+    inst_var_tmpl = -1;
+    let s = inst_var_result;
+    inst_var_result = -1;
+    let bad = inst_leave(st);
+    take_defs(mark);
+    if s >= 0 {
+        if bad { cxs[s].flags2 = cxs[s].flags2 | CF2_DIRTY; }
+        var_specs.insert(key, s as! u32);
+    }
+    return s;
+}

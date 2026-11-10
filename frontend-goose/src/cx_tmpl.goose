@@ -362,6 +362,7 @@ recursive fn alias_subst(t: i64, args: i32) -> u32 {
 // parameters bound to `args`, in the template's scope and as of its point
 // of definition (two-phase lookup).
 var subst_val: i64 = 0;
+var subst_failed: bool = false;  // D2: the last subst_parse met errors (counted for the enclosing instantiation)
 var subst_ok: bool = false;
 recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u32 {
     if alias_depth > 32 { return t_unknown; }
@@ -439,7 +440,12 @@ recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u
     if !args_dependent(args) { vis_limit = if tok > tmpls[t].pos as i64 { tok } else { tmpls[t].pos as i64 }; tmpl_depth = 0; }
     pc = tok;
     gt_pos = -1;
+    // D2: errors here are the enclosing instantiation's (a substitution
+    // failure in an alias template is one of the declaration using it)
+    let wl0 = diag_watch_level;
+    let we0 = diag_watch_errors;
     diag_suppress++;
+    diag_watch_level = diag_suppress;
     var ty: u32 = 0;
     subst_ok = false;
     if what == 0 {
@@ -454,6 +460,9 @@ recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u
         subst_val = v;
     }
     diag_suppress--;
+    subst_failed = diag_watch_errors != we0;
+    diag_watch_level = wl0;
+    if subst_failed { diag_propagate(diag_suppress); }
     pop_scope();
     alias_depth--;
     tmpl_depth = s_tdepth;
