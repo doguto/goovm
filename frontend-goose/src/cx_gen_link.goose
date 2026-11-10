@@ -207,6 +207,15 @@ fn name_complete(s: i64, a: i64) {
     cxs[a].flags = cxs[s].flags;
     syms[a].ty = syms[s].ty;
     syms[a].sc = syms[s].sc;
+    let r = rec_of(scope_class_type(cxs[s].dscope as i64));
+    if r < crecs.len && has_vb(r) {
+        // a function of its own (a class with virtual bases)
+        mg_structor = 1;
+        if mangle_sym(s) { set_label(a, mg); }
+        cxl[a] = cxl[s];
+        cxl[a].alias = -1;
+        return;
+    }
     if syms[s].sc as i64 == SC_STATIC || cxl_link(s) != LK_DEFAULT {
         // one function: the same symbol
         set_label(a, ident_text(gen::link_name(s) as i64));
@@ -275,12 +284,4 @@ fn name_static_locals() {
         }
         if st { }
     }
-}
-
-// The offset (from the address point, negative) of the virtual base offset
-// of virtual base br in the vtable of r (the typeinfo of a class with
-// virtual bases). TODO(D3 MI): the Itanium vtable layout.
-fn vbase_offset_offset(r: i64, br: i64) -> i64 {
-    err_at(records[r].loc, "goosecc: C++ code generation does not support the typeinfo of classes with virtual bases yet");
-    return 0;
 }

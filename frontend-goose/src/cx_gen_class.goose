@@ -341,9 +341,7 @@ recursive fn synth_special(f: i64, k: i64, r: i64, th: i64, loc: u32) -> bool {
         }
     }
     if !assign && crecs[r].flags & CR_DYNAMIC != 0 {
-        let vs = vptr_store(r, th, loc);
-        if vs == 0 { return false; }
-        stmt_buf.push(vs);
+        if !vptr_stores(r, th, loc) { return false; }
     }
     let rec = records[r];
     for i in rec.first..rec.first + rec.count {

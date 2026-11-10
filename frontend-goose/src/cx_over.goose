@@ -54,10 +54,11 @@ recursive fn base_offset(der: u32, base: u32) -> i64 {
 }
 
 // A derived-class glvalue converted to its base `to` (an lvalue), or 0.
-fn derived_to_base_lv(e: u32, to: u32, loc: u32) -> u32 {
+recursive fn derived_to_base_lv(e: u32, to: u32, loc: u32) -> u32 {
     let from = nodes[e].ty;
     if !is_record(from) || !is_record(to) { return 0; }
     let o = base_offset(unqual(from), unqual(to));
+    if o == -2 && cg_on { return cg_vbase_lv(e, to, loc); }
     if o < 0 { return 0; }
     let n = node_v(N_ICAST, CK_DERIVED2BASE, with_q(unqual(to), quals(from)), e as i64, 0, 0, loc, o);
     nodes[n].flags = nodes[e].flags & (NF_LVALUE | NF_XVALUE);
