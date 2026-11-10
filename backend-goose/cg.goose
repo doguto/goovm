@@ -15,6 +15,7 @@
 
 import std;
 import os;
+import binary;
 import gir;
 import x86;
 import ra;

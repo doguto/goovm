@@ -1,3 +1,5 @@
+import binary;
+
 // Instruction simplification on the OIR (opt.goose): constant folding,
 // algebraic identities, strength reduction, compare and cast folding, GEP
 // merging (an "instcombine-lite"). One forward pass over the blocks in RPO;
@@ -86,6 +88,27 @@ checkfree fn swp_pred(p: u32) -> u32 {
 }
 inline fn bool_c(x: bool) -> u32 { mk_const(GIR_T_I1, if x { 1 } else { 0 }, 0) }
 
+// (E2) FP arithmetic on two f32 or f64 constants (IEEE, round to nearest).
+fn simp_fbin(i: u32) -> u32 {
+    let I = o_ins[i];
+    let t: u32 = I.ty;
+    if t != GIR_T_F32 && t != GIR_T_F64 { return NIL; }
+    let ka, x = fpc(res(I.a));
+    let kb, y = fpc(res(I.b));
+    if !ka || !kb { return NIL; }
+    let op: u32 = I.op;
+    if t == GIR_T_F64 {
+        var r: f64 = 0.0;
+        if op == GIR_FADD { r = x + y; } else if op == GIR_FSUB { r = x - y; } else if op == GIR_FMUL { r = x * y; } else { r = x / y; }
+        return mk_const(t, binary::bits_of_f64(r), 0);
+    }
+    let xf = x as f32;
+    let yf = y as f32;
+    var r: f32 = 0.0;
+    if op == GIR_FADD { r = xf + yf; } else if op == GIR_FSUB { r = xf - yf; } else if op == GIR_FMUL { r = xf * yf; } else { r = xf / yf; }
+    return mk_const(t, binary::bits_of_f32(r) as u64, 0);
+}
+
 // One pass over the function. Returns whether anything changed.
 fn simplify() -> bool {
     fold_changed = false;
@@ -131,6 +154,12 @@ fn simp(i: u32) -> u32 {
         return simp_extract(i);
     }
     if op == GIR_EXTRACTELT { return simp_extract_elt(i); }
+    if op == GIR_FCMP {
+        o_ins[i].a = res(o_ins[i].a);
+        o_ins[i].b = res(o_ins[i].b);
+        return simp_fcmp(i);
+    }
+    if op >= GIR_FADD && op <= GIR_FDIV { return simp_fbin(i); }
     if op == GIR_CALL { return simp_call(i); }
     return NIL;
 }
@@ -149,6 +178,42 @@ fn simp_call(i: u32) -> u32 {
     if C.ty != GIR_T_F64 || C.lo != 0x4000000000000000 { return NIL; }
     let x = res(o_ops[I.b]);
     return ins_new(i, GIR_FMUL, GIR_T_F64, x, x);
+}
+
+// An f32 or f64 constant as an f64: (ok, value).
+fn fpc(v: u32) -> bool, f64 {
+    if gir_kind(v) != GIR_V_CONST { return false, 0.0; }
+    let C = x_consts[xb_c + gir_idx(v)];
+    if C.data != GIR_NONE && C.data != 0 { return false, 0.0; }
+    if C.ty == GIR_T_F64 { return true, binary::f64_of_bits(C.lo); }
+    if C.ty == GIR_T_F32 { return true, binary::f32_of_bits((C.lo & 0xFFFFFFFF) as! u32) as f64; }
+    return false, 0.0;
+}
+// (E2) FP compares: of constants, of fabs(x) with +0.0.
+fn simp_fcmp(i: u32) -> u32 {
+    let I = o_ins[i];
+    let p: u32 = I.sub;
+    if p == F_FALSE { return bool_c(false); }
+    if p == F_TRUE { return bool_c(true); }
+    let a = I.a;
+    let b = I.b;
+    let ka, x = fpc(a);
+    let kb, y = fpc(b);
+    if ka && kb && (I.aux == GIR_T_F32 || I.aux == GIR_T_F64) {
+        // the outcome: unordered (8), less (4), greater (2), equal (1)
+        var o: u32 = 1;
+        if x != x || y != y { o = 8; } else if x < y { o = 4; } else if x > y { o = 2; }
+        return bool_c(p & o != 0);
+    }
+    if gir_kind(b) == GIR_V_CONST && is_inst(a) && o_ins[a].op == GIR_FABS {
+        let C = x_consts[xb_c + gir_idx(b)];
+        if C.data == GIR_NONE && C.lo == 0 && C.hi == 0 && (C.ty == GIR_T_F32 || C.ty == GIR_T_F64) {
+            // |x| < 0 never; |x| >= 0 unless NaN (then unordered)
+            if p == F_OLT { return bool_c(false); }
+            if p == F_UGE { return bool_c(true); }
+        }
+    }
+    return NIL;
 }
 
 // (E2) extractvalue through a chain of insertvalues: the inserted value at
@@ -367,6 +432,7 @@ fn simp_bin(i: u32) -> u32 {
         if op == GIR_SHL || op == GIR_LSHR || op == GIR_ASHR || op == GIR_UDIV || op == GIR_SDIV
            || op == GIR_UREM || op == GIR_SREM { return a; }
     }
+    if ka && va == m && op == GIR_ASHR { return a; }   // (-1 >> x)
     if a == b {
         if op == GIR_SUB || op == GIR_XOR { return int_const(t, 0); }
         if op == GIR_AND || op == GIR_OR { return a; }
@@ -507,6 +573,26 @@ fn simp_icmp(i: u32) -> u32 {
         if vb == m {
             if p == GIR_UGT { return bool_c(false); }
             if p == GIR_ULE { return bool_c(true); }
+        }
+        // (E2) the compares that one value decides become equalities:
+        // x <u MAX -> x != MAX, x >u 0 -> x != 0, x >=u MAX -> x == MAX,
+        // x <=u 0 -> x == 0, and the signed extremes likewise
+        let smax: u64 = m >> 1;
+        let smin: u64 = smax + 1;
+        var np: u32 = NIL;
+        if p == GIR_ULT && vb == m || p == GIR_UGT && vb == 0 || p == GIR_SLT && vb == smax || p == GIR_SGT && vb == smin {
+            np = GIR_NE;
+        } else if p == GIR_UGE && vb == m || p == GIR_ULE && vb == 0 || p == GIR_SGE && vb == smax || p == GIR_SLE && vb == smin {
+            np = GIR_EQ;
+        } else if p == GIR_SLT && vb == smin || p == GIR_SGT && vb == smax {
+            return bool_c(false);
+        } else if p == GIR_SGE && vb == smin || p == GIR_SLE && vb == smax {
+            return bool_c(true);
+        }
+        if np != NIL {
+            o_ins[i].sub = np as! u8;
+            p = np;
+            fold_changed = true;
         }
         if is_inst(a) {
             let A = o_ins[a];

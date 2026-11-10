@@ -11,6 +11,12 @@
 // entries of before are not valid, except for a private alloca all of whose
 // writes are in one block that dominates the load. Calls that read no
 // memory and write none are CSE'd like pure instructions.
+//
+// (E2) Conditions: a block entered by one edge of a conditional branch
+// knows the branch's condition there (and in the blocks it dominates); a
+// compare of the same operands that the known compares imply is replaced by
+// its constant (LLVM's isImpliedCondition: x == y implies !(x != y), x < 5
+// implies x < 7, ...), and so is a branch on a known condition.
 
 var gv_tab: u32[>..] = [];      // open addressing: instruction id + 1, 0 = empty
 var gv_undo: u32[>..] = [];     // slots filled, in order (scope exit clears them in reverse)
@@ -277,6 +283,10 @@ fn gvn() -> bool {
     gv_undo.clear();
     gv_lundo.clear();
     gv_wlog.clear();
+    gv_fc.clear();
+    gv_fv.clear();
+    gv_fpos.clear();
+    gv_fpos.resize(cfg_nb, 0);
     gv_cnt = 1;
     gv_ep = 1;
     tmp_stack.clear();
@@ -297,12 +307,18 @@ fn gvn() -> bool {
             }
             let m3: i64 = tmp_pos[3 * b + 2];
             while gv_wlog.len > m3 { gv_wlog.pop(); }
+            let m4: i64 = gv_fpos[b];
+            while gv_fc.len > m4 {
+                gv_fc.pop();
+                gv_fv.pop();
+            }
             continue;
         }
         let b = e;
         tmp_pos[3 * b] = gv_undo.len as! u32;
         tmp_pos[3 * b + 1] = gv_lundo.len as! u32;
         tmp_pos[3 * b + 2] = gv_wlog.len as! u32;
+        gv_fpos[b] = gv_fc.len as! u32;
         // the memory state at entry: the dominator's at its end if it is the
         // only predecessor; at a merge point, the dominator's state with the
         // writes of the blocks between it and here (a loop's body, the arms
@@ -310,6 +326,7 @@ fn gvn() -> bool {
         let np = p_start[b + 1] - p_start[b];
         if b != 0 && np == 1 && p_list[p_start[b]] == idom[b] {
             gv_ep = gv_bep[idom[b]];
+            gv_note_edge(p_list[p_start[b]], b);
         } else if b != 0 {
             if gv_region_writes(b) { gv_ep = gv_bep[idom[b]]; } else { gv_ep = gv_bump(); }
         }
@@ -372,6 +389,180 @@ fn gv_region_writes(b: u32) -> bool {
     return true;
 }
 
+// ---------------------------------------------------------- conditions
+var gv_fc: u32[>..] = [];       // known conditions on the dominator path: the condition
+var gv_fv: u8[>..] = [];        //   and its value
+var gv_fpos: u32[>..] = [];     // per block: gv_fc.len at its entry
+let GV_MAXF: i64 = 64;
+// Block b is entered only from p: p's branch condition is known in b.
+fn gv_note_edge(p: u32, b: u32) {
+    let t = b_last[p];
+    if t == NIL || gv_fc.len >= GV_MAXF { return; }
+    let T = o_ins[t];
+    if T.op != GIR_CONDBR || T.b == T.c { return; }
+    let c = res(T.a);
+    if !is_inst(c) { return; }
+    gv_fc.push(c);
+    gv_fv.push(if T.b == b { 1 } else { 0 });
+    // (not x) known: x known the other way
+    let C = o_ins[c];
+    if C.op == GIR_XOR && C.ty == GIR_T_I1 && gv_fc.len < GV_MAXF {
+        let k, v = ci(res(C.b));
+        if k && v == 1 && is_inst(res(C.a)) {
+            gv_fc.push(res(C.a));
+            gv_fv.push(if T.b == b { 0 } else { 1 });
+        }
+    }
+}
+// Integer compares as sets of outcomes: domain (0 eq/ne, 1 signed, 2
+// unsigned) and a mask of lt (4), eq (2), gt (1).
+fn gv_pred_set(p: u32) -> u32, u32 {
+    if p == GIR_EQ { return 0, 2; }
+    if p == GIR_NE { return 0, 5; }
+    if p == GIR_SLT { return 1, 4; }
+    if p == GIR_SLE { return 1, 6; }
+    if p == GIR_SGT { return 1, 1; }
+    if p == GIR_SGE { return 1, 3; }
+    if p == GIR_ULT { return 2, 4; }
+    if p == GIR_ULE { return 2, 6; }
+    if p == GIR_UGT { return 2, 1; }
+    return 2, 3;   // uge
+}
+// The range [lo, hi] (in the order of domain d: signed or unsigned, as
+// biased u64) where x pred c holds, for a constant c; ok false for ne.
+fn gv_range(p: u32, d: u32, c: u64, bits: u32) -> bool, u64, u64 {
+    let m = wmask(bits);
+    let bias: u64 = if d == 1 { (1 as u64) << (bits - 1) } else { 0 };
+    let x = (c + bias) & m;   // c in unsigned order
+    if p == GIR_EQ { return true, x, x; }
+    if p == GIR_NE { return false, 0, 0; }
+    let ds, mk = gv_pred_set(p);
+    if mk == 4 { if x == 0 { return true, 1, 0; } return true, 0, x - 1; }
+    if mk == 6 { return true, 0, x; }
+    if mk == 1 { if x == m { return true, 1, 0; } return true, x + 1, m; }
+    return true, x, m;
+}
+// An FP predicate swapped (x pred y == y swapped x): the LLVM numbering is a
+// mask of eq (1), gt (2), lt (4), unordered (8).
+inline fn fswap(p: u32) -> u32 { (p & 9) | ((p & 2) << 1) | ((p & 4) >> 1) }
+// Whether FP compare i is decided by the known conditions.
+fn gv_implied_f(i: u32) -> bool, bool {
+    let I = o_ins[i];
+    let a = res(I.a);
+    let b = res(I.b);
+    // the outcomes the known compares of a and b leave
+    var m: u32 = 15;
+    var k: i64 = gv_fc.len - 1;
+    while k >= 0 {
+        let c = gv_fc[k];
+        let fv = gv_fv[k] != 0;
+        k--;
+        if c == i { return true, fv; }
+        let C = o_ins[c];
+        if C.op != GIR_FCMP || C.aux != I.aux { continue; }
+        var fp: u32 = C.sub;
+        if res(C.a) == b && res(C.b) == a { fp = fswap(fp); }
+        else if res(C.a) != a || res(C.b) != b { continue; }
+        m &= if fv { fp } else { 15 & ~fp };
+    }
+    let qm: u32 = I.sub;
+    if m == 15 { return false, false; }
+    if m & ~qm == 0 { return true, true; }
+    if m & qm == 0 { return true, false; }
+    return false, false;
+}
+// Whether compare i (x pred y) is decided by the known conditions: (known, value).
+fn gv_implied(i: u32) -> bool, bool {
+    let I = o_ins[i];
+    if I.op == GIR_FCMP { return gv_implied_f(i); }
+    if !int_ty(I.aux) && I.aux != GIR_T_PTR { return false, false; }
+    let bits: u32 = if I.aux == GIR_T_PTR { 64 } else { bits_of(I.aux) };
+    if bits > 64 { return false, false; }
+    let a = res(I.a);
+    let b = res(I.b);
+    let qd0, qm0 = gv_pred_set(I.sub);
+    var acc: u32 = 7;       // outcomes left for (a, b) in domain dom
+    var dom: u32 = qd0;     // (0 until a signed or unsigned fact or query fixes it)
+    var k: i64 = gv_fc.len - 1;
+    while k >= 0 {
+        let c = gv_fc[k];
+        let fv = gv_fv[k] != 0;
+        k--;
+        if c == i { return true, fv; }
+        let C = o_ins[c];
+        if C.op != GIR_ICMP || C.aux != I.aux { continue; }
+        if res(C.a) == a && res(C.b) == b || res(C.a) == b && res(C.b) == a {
+            var sp: u32 = C.sub;
+            if res(C.a) != a { sp = swap_pred(sp); }
+            let sd, sm = gv_pred_set(sp);
+            if sd == 0 || dom == 0 || sd == dom {
+                if sd != 0 { dom = sd; }
+                acc &= if fv { sm } else { 7 & ~sm };
+            }
+        }
+        var fa = res(C.a);
+        var fb = res(C.b);
+        var fp: u32 = C.sub;
+        if fa == b && fb == a {
+            let t = fa;
+            fa = fb;
+            fb = t;
+            fp = swap_pred(fp);
+        }
+        if fa != a { continue; }
+        if fb == b {
+            if acc != 7 {
+                if acc & ~qm0 == 0 { return true, true; }
+                if acc & qm0 == 0 { return true, false; }
+            }
+            continue;
+        }
+        // the fact as a set of outcomes (negated if it is false)
+        let fd, fm0 = gv_pred_set(fp);
+        let fm = if fv { fm0 } else { 7 & ~fm0 };
+        let qd, qm = gv_pred_set(I.sub);
+        if fb == b {
+            if fd != 0 && qd != 0 && fd != qd { continue; }
+            if fm & ~qm == 0 { return true, true; }
+            if fm & qm == 0 { return true, false; }
+            continue;
+        }
+        // x pred1 c1 known, x pred2 c2 asked: by ranges
+        let k1, c1 = ci(fb);
+        let k2, c2 = ci(b);
+        if !k1 || !k2 { continue; }
+        let d = if fd != 0 { fd } else { qd };
+        if d == 0 {
+            // two equalities or inequalities
+            if fp == GIR_EQ && fv && I.sub == GIR_EQ { return true, c1 == c2; }
+            if fp == GIR_EQ && fv && I.sub == GIR_NE { return true, c1 != c2; }
+            continue;
+        }
+        if fd != 0 && qd != 0 && fd != qd { continue; }
+        // the fact's range (only a true relational or equality fact, or a
+        // false one turned around)
+        var p1 = fp;
+        if !fv {
+            if fp == GIR_EQ { continue; }
+            p1 = inv_pred(fp);
+        }
+        let r1, lo1, hi1 = gv_range(p1, d, c1, bits);
+        if !r1 || lo1 > hi1 { continue; }
+        if I.sub == GIR_NE || I.sub == GIR_EQ {
+            let bias: u64 = if d == 1 { (1 as u64) << (bits - 1) } else { 0 };
+            let x2 = (c2 + bias) & wmask(bits);
+            let outside = x2 < lo1 || x2 > hi1;
+            if outside { return true, I.sub == GIR_NE; }
+            if lo1 == hi1 && lo1 == x2 { return true, I.sub == GIR_EQ; }
+            continue;
+        }
+        let r2, lo2, hi2 = gv_range(I.sub, d, c2, bits);
+        if !r2 { continue; }
+        if lo2 <= lo1 && hi1 <= hi2 { return true, true; }
+        if hi1 < lo2 || hi2 < lo1 || lo2 > hi2 { return true, false; }
+    }
+    return false, false;
+}
 // Dead stores: the stores of the block since the last read that may see them.
 var ds_st: u32[16] = [0; 16];
 var ds_n: u32 = 0;
@@ -451,10 +642,30 @@ fn gv_block(b: u32) {
         } else if op == GIR_LOAD {
             ds_n = 0;
         } else if cse_op(I) {
+            if (op == GIR_ICMP || op == GIR_FCMP) && gv_fc.len != 0 {
+                let kn, val = gv_implied(i);
+                if kn {
+                    replace(i, mk_const(GIR_T_I1, if val { 1 } else { 0 }, 0));
+                    gv_changed = true;
+                    i = nx;
+                    continue;
+                }
+            }
             let j = gv_find_add(i);
             if j != NIL {
                 replace(i, j);
                 gv_changed = true;
+            }
+        } else if op == GIR_CONDBR && gv_fc.len != 0 {
+            let c = res(I.a);
+            var k: i64 = gv_fc.len - 1;
+            while k >= 0 {
+                if gv_fc[k] == c {
+                    o_ins[i].a = mk_const(GIR_T_I1, gv_fv[k] as u64, 0);
+                    gv_changed = true;
+                    break;
+                }
+                k--;
             }
         }
         i = nx;
