@@ -601,6 +601,16 @@ fn lower_fcmp_a(I: Inst, j: u32) {
         ra_set(j, rd, false);
         return;
     }
+    // (E2) x > y ? x : y and the like: maxss / minss in the select
+    if fn_opt && fuse_flags(j) {
+        let k = fminmax_kind(I, M.insts[f_first_inst + j + 1]);
+        if k != 0 {
+            flags_id = j;
+            flags_cc = k;
+            flags_comb = 3;
+            return;
+        }
+    }
     let swap, cc1, cc2, comb = fcmp_plan(p);
     if swap { emit_ucomis(dbl, I.b, I.a); } else { emit_ucomis(dbl, I.a, I.b); }
     if fuse_flags(j) && (comb == 0 || M.insts[f_first_inst + j + 1].op == GIR_CONDBR) {
@@ -691,9 +701,47 @@ fn lower_isfpclass_a(I: Inst, j: u32) {
 
 // ------------------------------------------------------------- select
 
+// (E2) A select of F's operands by F, an FP compare, that x86's maxss /
+// minss compute exactly (NaN and equal operands give the second operand,
+// as select(false) does): 1 max(x, y), 2 min(x, y), 3 min(y, x), 4 max(y,
+// x) (first operand the destination); 0 none.
+fn fminmax_kind(F: Inst, S: Inst) -> u32 {
+    if S.op != GIR_SELECT || S.ty != F.aux || (F.aux != GIR_T_F32 && F.aux != GIR_T_F64) { return 0; }
+    let p: u32 = F.sub;
+    if S.b == F.a && S.c == F.b {
+        if p == F_OGT { return 1; }
+        if p == F_OLT { return 2; }
+    }
+    if S.b == F.b && S.c == F.a {
+        if p == F_OGT { return 3; }
+        if p == F_OLT { return 4; }
+    }
+    return 0;
+}
+fn lower_fminmax(I: Inst, j: u32, k: u32) {
+    let F = M.insts[f_first_inst + flags_id];
+    let dbl = F.aux == GIR_T_F64;
+    let d = if k <= 2 { F.a } else { F.b };
+    let s = if k <= 2 { F.b } else { F.a };
+    let xs = ra_xmm(s);
+    let xd0 = ra_xmm(d);
+    var xd = ra_xreuse(d);
+    if xd != xd0 {
+        xd = ra_xdef(j);
+        movaps_rr(xd, xd0);
+    }
+    sse_arith(if k == 1 || k == 4 { 0x5F } else { 0x5D }, dbl, xd, xs);
+    ra_xset(j, xd);
+}
 fn lower_select_a(I: Inst, j: u32) {
     var cc: u32 = CC_NE;
     let fused = flags_id != RV_NONE && I.a == inst_ref(flags_id);
+    if fused && flags_comb == 3 {
+        let k = flags_cc;
+        lower_fminmax(I, j, k);
+        flags_id = RV_NONE;
+        return;
+    }
     if fused { cc = flags_cc; }
     else {
         let rc = ra_gpr(I.a, true);

@@ -303,7 +303,12 @@ fn fold_selects() -> bool {
             let vy = phi_in(i, py);
             if vx == NIL || vy == NIL { ok = false; break; }
             if res(vx) != res(vy) {
-                if !int_ty(o_ins[i].ty) || bits_of(o_ins[i].ty) > 64 { ok = false; break; }
+                let pt = o_ins[i].ty;
+                // (E2) FP values when the condition is an FP compare (a
+                // select of its operands is maxss / minss)
+                let c0 = res(o_ins[t].a);
+                let fp = (pt == GIR_T_F32 || pt == GIR_T_F64) && is_inst(c0) && o_ins[c0].op == GIR_FCMP;
+                if !(int_ty(pt) && bits_of(pt) <= 64) && !fp { ok = false; break; }
                 ns++;
             }
             i = o_nxt[i];
@@ -313,7 +318,8 @@ fn fold_selects() -> bool {
         // so that the compare sets the flags for the select)
         let c = res(o_ins[t].a);
         var at = t;
-        if is_inst(c) && o_nxt[c] == t && o_ins[c].op == GIR_ICMP && !spec_uses(x, px != a, c) && !spec_uses(y, py != a, c) {
+        if is_inst(c) && o_nxt[c] == t && (o_ins[c].op == GIR_ICMP || o_ins[c].op == GIR_FCMP) && !spec_uses(x, px != a, c)
+           && !spec_uses(y, py != a, c) {
             at = c;
         }
         if px != a { spec_hoist(x, at); }

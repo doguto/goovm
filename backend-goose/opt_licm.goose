@@ -730,6 +730,24 @@ fn promote_globals() -> bool {
     }
     return any;
 }
+// Whether a block that dominates b (b included) stores to global g.
+fn gp_pre_store(b0: u32, g: u32) -> bool {
+    let gref: u32 = (3 as u32) << 30 | g;
+    var b = b0;
+    var n = 0;
+    while b != NIL && n < 1000 {
+        var i = b_first[b];
+        while i != NIL {
+            let I = o_ins[i];
+            if I.op == GIR_STORE && res(I.b) == gref && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 { return true; }
+            i = o_nxt[i];
+        }
+        if b == 0 { break; }
+        b = idom[b];
+        n++;
+    }
+    return false;
+}
 // Whether block b dominates every exiting block of the loop (gp_exit).
 fn gp_dom_exits(b: u32) -> bool {
     var e: i64 = 0;
@@ -828,6 +846,11 @@ fn gp_loop(h: u32) -> bool {
     var n: u32 = 0;
     var any_st = false;
     for g in gp_list {
+        // (E2) a store in the function before the loop (in a block that
+        // dominates the preheader) makes the stores on the exits safe too:
+        // the global is written whenever the loop runs, so no other thread
+        // may use it then without a race
+        if gp_st[g] == GV_MANY && gp_pre_store(pre, g) { gp_st[g] = pre; }
         let ok = gp_ty[g] != GV_MANY && gp_st[g] != GV_MANY;
         if !ok {
             gp_ty[g] = NIL;
