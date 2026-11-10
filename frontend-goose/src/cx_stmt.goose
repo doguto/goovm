@@ -874,6 +874,7 @@ recursive fn parse_member_body(s: i64, sc: i64) {
     pc = cxs[s].body as i64;
     gt_pos = -1;
     let st, n = fn_param_list(s);
+    if inst_debug() { write_stderr(str("member_body ", s, " st=", st, " n=", n, " p0=", if n > 0 { nlist[st] as i64 } else { -1 }, " name=", if n > 0 { syms[nlist[st] as i64].name as i64 } else { -1 }, "\n")); }
     let f = parse_function_body(s, if st < 0 { 0 } else { st }, if st < 0 { 0 } else { n });
     if f != 0 {
         if block_fn_depth > 0 { fdefs_extra.push(f); } else { nscratch.push(f); }

@@ -416,7 +416,7 @@ recursive fn class_rv(e: u32, t: u32, loc: u32) -> u32 {
 recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
     if is_opq(e) && nodes[e].kind as i64 != N_FUNCREF && nodes[e].kind as i64 != N_INITBRACE { return opaque_node(loc); }
     if nodes[e].kind as i64 == N_FUNCREF {
-        let a = funcref_addr(e, loc);
+        let a = funcref_addr_to(e, t, loc);
         if is_opq(a) { return opaque_node(loc); }
         return conv_value(a, t, loc);
     }
@@ -1182,6 +1182,29 @@ recursive fn cg_memptr_conv(e: u32, t: u32, loc: u32, explicit: bool) -> u32 {
     if off == -1 { return 0; }
     if off < 0 { return opaque_node(loc); }
     if off == 0 { return node(N_ICAST, CK_NOOP, unqual(t), v as i64, 0, 0, loc); }
+    // a constant (&X::m, null): folded, as clang does (a static's initializer stays constant)
+    var cv = v;
+    while (nodes[cv].kind as i64 == N_ICAST || nodes[cv].kind as i64 == N_CAST) && (nodes[cv].op as i64 == CK_NOOP || nodes[cv].op as i64 == CK_LVAL2RVAL) { cv = nodes[cv].a; }
+    if !fn_mp && nodes[cv].kind as i64 == N_INT {
+        let x = if nodes[cv].v == -1 { -1 } else { nodes[cv].v + sign * off };
+        let n = int_node(x, t_long, loc);
+        nodes[n].ty = unqual(t);
+        return n;
+    }
+    if fn_mp && nodes[cv].kind as i64 == N_COMPLIT && nodes[nodes[cv].a].kind as i64 == N_INITLIST && nodes[nodes[cv].a].c == 2 {
+        let il = nodes[cv].a;
+        let adj = nlist[nodes[il].v + 1];
+        if nodes[adj].kind as i64 == N_INT {
+            let m0 = nscratch.len;
+            nscratch.push(nlist[nodes[il].v]);
+            nscratch.push(int_node(nodes[adj].v + sign * off, t_long, loc));
+            let start = commit_list(m0);
+            let nl = node_v(N_INITLIST, 0, mfp_type(), 0, 0, 2, loc, start);
+            let r = compound_value(nl, mfp_type(), loc);
+            nodes[r].ty = unqual(t);
+            return r;
+        }
+    }
     let mark = nscratch.len;
     if fn_mp {
         // ({ struct mfp m = e; m.adj += off; m })
@@ -1604,7 +1627,9 @@ fn pick_ctor(r: i64, mark: i64) -> i64 {
         let a = nscratch[mark];
         if s >= 0 {
             let f = best_candidate(s, mark, true);
-            if f >= 0 && user_provided(f) && cxs[f].flags & CF_DELETED == 0 && first_param_ref(f, cls) != 0 { return f; }
+            // (a constructor template's specialization is never a copy
+            // constructor: with the same conversions the implicit one wins)
+            if f >= 0 && user_provided(f) && cxs[f].flags & CF_DELETED == 0 && cxs[f].flags2 & CF2_FSPEC == 0 && first_param_ref(f, cls) != 0 { return f; }
         }
         let rvalue = !is_lvalue(a) || nodes[a].flags & NF_XVALUE != 0;
         let c = copy_ctor_of(r, rvalue);
@@ -2473,6 +2498,11 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
         }
     }
     if !is_extern && (fs || init != 0) { syms[s].flags = syms[s].flags | SF_DEFINED; }
+    // clang: constant data with relocations in .data.rel.ro (cx_comdats)
+    if !local && !is_extern && quals(base_elem_q(t)) & Q_CONST != 0 && dyn == 0 && cst == 0 {
+        cxl_grow();
+        cxl[s].flags = cxl[s].flags | (CXL_RELRO as! u8);
+    }
     nscratch.push(node(N_DECL, 0, syms[s].ty, s, conv as i64, dloc as i64, loc));
     if static_local { note_static_local(s); }
     if static_local && (dyn != 0 || cst != 0 || has_dtor) {
