@@ -1095,8 +1095,10 @@ fn lower_load_a(I: Inst, j: u32) {
             return;
         }
         if vi[j].last == j + 1 && pend_reg_ok(j + 1) {
-            ra_pend_add(j, ra_addr(I.a));
+            let mp = ra_addr(I.a);
+            ra_pend_add(j, mp);
             ra_carry = true;
+            carry_keep |= m_regs(mp);
             return;
         }
         if rg_on && vi[j].last == j + 1 && vi[j + 1].st & ST_PIN != 0 && pend_reg_ok2(j + 1) {
@@ -1106,6 +1108,7 @@ fn lower_load_a(I: Inst, j: u32) {
             if m_regs(m) & bit(pr) == 0 {
                 ra_pend_add(j, m);
                 ra_carry = true;
+                carry_keep |= m_regs(m);
                 return;
             }
             load_into_def(I, j, m);
@@ -1341,6 +1344,7 @@ fn lower_gep_a(I: Inst, j: u32) {
             vi[j].reg = PADDR;
             paddr_m = m;
             ra_carry = true;
+            carry_keep |= m_regs(m);
             return;
         }
     }

@@ -60,6 +60,11 @@ var r_temp: u32 = 0;     // scratch registers of the current instruction
 var r_alloc: u32 = 0;    // the registers this function may allocate
 var r_cs_used: u32 = 0;  // callee-saved registers that were allocated (the prologue saves them)
 var ra_carry = false;    // the current instruction's registers stay locked into the next one
+// (E2) what a carried address keeps: the registers of the carried memory
+// operands, and the scratch registers still held at the start of the
+// current instruction (from the instructions that carried into it)
+var carry_keep: u32 = 0;
+var carry_temp: u32 = 0;
 
 // Per value (id: local instruction index, or f_nins + argument number):
 //   reg   the register holding it (0..31), NOREG, PEND or PADDR
@@ -603,8 +608,33 @@ fn ra_alloc(xm: u32, pref: u32) -> u32 {
 // farthest (a value that is also in its home costs nothing).
 fn ra_evict(xm: u32) -> u32 {
     var m = ~r_free & ~r_lock & xm & r_alloc & ~rg_pin;   // (pinned global values stay)
+    if m == 0 && carry_temp & ~carry_keep & r_lock & xm != 0 {
+        // (E2) a chain of carried addresses (GEP -> load -> store) holds the
+        // scratch registers of every instruction in it; those that no carried
+        // address uses are free again (only when nothing else is left, so that
+        // the code is otherwise what it was)
+        let rel = carry_temp & ~carry_keep & r_lock & r_temp;
+        var mm = rel;
+        while mm != 0 {
+            let r = ctz32(mm);
+            mm &= mm - 1;
+            r_val[r] = RV_NONE;
+        }
+        r_free |= rel;
+        r_temp &= ~rel;
+        r_lock &= ~rel;
+        carry_temp &= ~rel;
+        let c = r_free & ~r_lock & xm;
+        if c != 0 { return ctz32(c); }
+        m = ~r_free & ~r_lock & xm & r_alloc & ~rg_pin;
+    }
     if m == 0 && rg_on { return rg_borrow(xm); }
-    if m == 0 { assert(false); }   // every register is locked: a lowering asks for too many
+    if m == 0 {
+        // every register is locked: a lowering asks for too many
+        write_stderr(str("goovm: no register to evict: function ", f_index, " instruction ", cur_pos, " op ",
+                         M.insts[f_first_inst + cur_pos].op, " lock ", r_lock, " free ", r_free, "\n"));
+        assert(false);
+    }
     var best: u32 = 32;
     var best_last: u32 = 0;
     while m != 0 {
@@ -1077,8 +1107,11 @@ fn ra_block_start() {
 fn ra_end_inst() {
     if ra_carry {
         ra_carry = false;
+        carry_temp = r_temp;
         return;
     }
+    carry_keep = 0;
+    carry_temp = 0;
     for id in dying {
         let r: u32 = vi[id].reg;
         if r < 32 && r_val[r] == id {
