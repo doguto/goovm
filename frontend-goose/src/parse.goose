@@ -45,12 +45,18 @@ let AM_DTOR = 16384;
 let AM_NOCOMMON = 32768;
 let AM_COMMON = 65536;
 let AM_NODEBUG = 131072;       // G1: no debug information for the function
+let AM_NOINLINE = 262144;      // E2: function attributes the optimizer honors
+let AM_OPTNONE = 524288;
+let AM_COLD = 1048576;
+let AM_HOT = 2097152;
+let AM_MINSIZE = 4194304;
 
 struct Attrs {
     aligned: u32 = 0,
     mode: u8 = 0,
     vector_size: i64 = 0,
     ext_vector: i64 = 0,
+    neon_lanes: i64 = 0,    // neon_vector_type(N) / neon_polyvector_type(N) (AArch64)
     cleanup: i32 = -1,
     asm_off: u32 = 0,
     asm_len: u32 = 0,
@@ -62,6 +68,7 @@ struct Attrs {
     vis: u8 = 0,            // visibility("hidden") = 1, ("protected") = 2
     ctor_prio: u16 = 65535,
     dtor_prio: u16 = 65535,
+    matrix: bool = false,   // C++ (D2): matrix_type(R, C) (not implemented: the type is unknown)
 }
 
 // The string argument of an attribute: ("text") -> (offset in strbytes, length).
@@ -151,6 +158,8 @@ recursive fn parse_attributes(a: Attrs&) {
                     if at(TK_L_PAREN) { a.vector_size = attr_int_arg(); }
                 } else if name == "ext_vector_type" {
                     if at(TK_L_PAREN) { a.ext_vector = attr_int_arg(); }
+                } else if name == "neon_vector_type" || name == "neon_polyvector_type" {
+                    if at(TK_L_PAREN) { a.neon_lanes = attr_int_arg(); }
                 } else if name == "transparent_union" {
                     a.misc = a.misc | AM_TRANSPARENT;
                 } else if name == "noreturn" {
@@ -175,6 +184,16 @@ recursive fn parse_attributes(a: Attrs&) {
                     a.misc = a.misc | AM_FALLTHROUGH;
                 } else if name == "nodebug" {
                     a.misc = a.misc | AM_NODEBUG;
+                } else if name == "noinline" {
+                    a.misc = a.misc | AM_NOINLINE;
+                } else if name == "optnone" {
+                    a.misc = a.misc | AM_OPTNONE;
+                } else if name == "cold" {
+                    a.misc = a.misc | AM_COLD;
+                } else if name == "hot" {
+                    a.misc = a.misc | AM_HOT;
+                } else if name == "minsize" {
+                    a.misc = a.misc | AM_MINSIZE;
                 } else if name == "section" {
                     if at(TK_L_PAREN) {
                         let o, l = attr_string_arg();
@@ -259,7 +278,9 @@ recursive fn parse_asm_label(a: Attrs&) {
 }
 
 // Applies the type attributes (mode, vector_size, ext_vector_type) to t.
+var matrix_unknown_t: u32 = 0;     // C++ (D2): the type a matrix_type attribute gives (unknown)
 fn apply_type_attrs(t: u32, a: Attrs&, loc: u32) -> u32 {
+    if a.matrix { return matrix_unknown_t; }
     var r = t;
     if a.mode != 0 {
         let m = a.mode as i64;
@@ -284,6 +305,10 @@ fn apply_type_attrs(t: u32, a: Attrs&, loc: u32) -> u32 {
             // mode on a vector element: rare
         }
         r = with_quals(r, q);
+    }
+    if a.neon_lanes > 0 {
+        a.vector_size = a.neon_lanes * type_size(unqual(r));
+        a.neon_lanes = 0;
     }
     if a.vector_size > 0 {
         let q = quals(r);
@@ -2267,4 +2292,15 @@ fn parse_init() {
     declare_builtin_typedef("__uint128_t", t_uint128);
     declare_builtin_typedef("__builtin_ms_va_list", t_charptr);
     declare_builtin_typedef("__fp16", t_float16);
+    if opt_a64 {
+        // AArch64 (F1): clang's SVE types, as incomplete structures (headers declare
+        // functions with them; goosecc has no SVE)
+        for nm in ["__SVInt8_t", "__SVInt16_t", "__SVInt32_t", "__SVInt64_t", "__SVUint8_t", "__SVUint16_t", "__SVUint32_t", "__SVUint64_t", "__SVFloat16_t", "__SVFloat32_t", "__SVFloat64_t", "__SVBfloat16_t", "__SVMfloat8_t", "__SVBool_t", "__SVCount_t", "__clang_svint8x2_t", "__clang_svint16x2_t", "__clang_svint32x2_t", "__clang_svint64x2_t", "__clang_svuint8x2_t", "__clang_svuint16x2_t", "__clang_svuint32x2_t", "__clang_svuint64x2_t", "__clang_svfloat16x2_t", "__clang_svfloat32x2_t", "__clang_svfloat64x2_t", "__clang_svbfloat16x2_t", "__clang_svmfloat8x2_t", "__clang_svint8x3_t", "__clang_svint16x3_t", "__clang_svint32x3_t", "__clang_svint64x3_t", "__clang_svuint8x3_t", "__clang_svuint16x3_t", "__clang_svuint32x3_t", "__clang_svuint64x3_t", "__clang_svfloat16x3_t", "__clang_svfloat32x3_t", "__clang_svfloat64x3_t", "__clang_svbfloat16x3_t", "__clang_svmfloat8x3_t", "__clang_svint8x4_t", "__clang_svint16x4_t", "__clang_svint32x4_t", "__clang_svint64x4_t", "__clang_svuint8x4_t", "__clang_svuint16x4_t", "__clang_svuint32x4_t", "__clang_svuint64x4_t", "__clang_svfloat16x4_t", "__clang_svfloat32x4_t", "__clang_svfloat64x4_t", "__clang_svbfloat16x4_t", "__clang_svmfloat8x4_t", "__clang_svboolx2_t", "__clang_svboolx4_t"] {
+            let r = records.len;
+            let rt = mk_tagged(TY_STRUCT, r as! u32);
+            records.push(Record { name: intern(nm), ty: rt, first: fields.len as! u32, count: 0, size: 0, align: 1,
+                flags: 0, rsv: 0, attr_align: 0, pack: 0, loc: 0, scope: 0 });
+            declare_builtin_typedef(nm, rt << 4);
+        }
+    }
 }

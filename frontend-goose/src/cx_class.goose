@@ -225,6 +225,7 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
         r = rr;
     }
     if w == KW_CLASS { crecs[r].flags = crecs[r].flags | CR_CLASS_KW; }
+    if is_final { mark_final(r); }
     if ca.aligned > 0 { records[r].attr_align = ca.aligned; }
     if ca.misc & AM_PACKED != 0 { records[r].flags = records[r].flags | RF_PACKED; }
     records[r].pack = pack_now();

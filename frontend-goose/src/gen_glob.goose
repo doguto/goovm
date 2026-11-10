@@ -199,6 +199,27 @@ fn sym_has_attr(s: i64, m: u32) -> bool {
     return a != 0 && sym_attrs[a].flags & m != 0;
 }
 
+// The function attributes the optimizer honors (E2; ignored at -O0), as
+// clang sets them: optnone implies noinline, cold implies optsize, -Os and
+// -Oz put optsize (and minsize) on every function, -fno-inline noinline on
+// every function that is not always_inline, `inline` is inlinehint.
+fn fn_opt_flags(s: i64) -> u32 {
+    if opt_gir_level == 0 { return 0; }
+    var f: u32 = 0;
+    let ai = sym_has_attr(s, AM_ALWAYS_INLINE);
+    if ai { f = f | FN_ALWAYSINLINE; }
+    if sym_has_attr(s, AM_NOINLINE) || opt_no_inline && !ai { f = f | FN_NOINLINE; }
+    if sym_has_attr(s, AM_OPTNONE) { f = f | FN_OPTNONE | FN_NOINLINE; }
+    if sym_has_attr(s, AM_COLD) { f = f | FN_COLD | FN_OPTSIZE; }
+    if sym_has_attr(s, AM_HOT) { f = f | FN_HOT; }
+    if sym_has_attr(s, AM_MINSIZE) { f = f | FN_MINSIZE | FN_OPTSIZE; }
+    let sz = (opt_gir_level >> 8) & 3;
+    if sz >= 1 { f = f | FN_OPTSIZE; }
+    if sz >= 2 { f = f | FN_MINSIZE; }
+    if syms[s].flags & SF_INLINE != 0 && !opt_no_inline { f = f | FN_INLINEHINT; }
+    return f;
+}
+
 // Linkage flags of a defined or referenced global.
 fn link_flags(s: i64, defined: bool) -> u32 {
     var f: u32 = 0;
@@ -642,9 +663,9 @@ recursive fn sinit_scalar(g: u32, at: i64, off: i64, q: u32, n: u32) {
             init_error(n);
             return;
         }
-        if k == TY_LDOUBLE {
+        if k == TY_LDOUBLE || (opt_a64 && k == TY_FLOAT128) {
             put_bytes(at, x.lo, 8);
-            put_bytes(at + 8, x.hi, 2);
+            put_bytes(at + 8, x.hi, if opt_a64 { 8 } else { 2 });
             return;
         }
         let d = f80_to_f64(x);
@@ -729,10 +750,11 @@ fn put_cplx(at: i64, et: u32, re: F80, im: F80) {
         return;
     }
     if k == TY_LDOUBLE {
+        let hs = if opt_a64 { 8 } else { 2 };
         put_bytes(at, re.lo, 8);
-        put_bytes(at + 8, re.hi, 2);
+        put_bytes(at + 8, re.hi, hs);
         put_bytes(at + es, im.lo, 8);
-        put_bytes(at + es + 8, im.hi, 2);
+        put_bytes(at + es + 8, im.hi, hs);
     } else if k == TY_DOUBLE {
         put_bytes(at, reinterpret_i64(f80_to_f64(re)) as! u64, 8);
         put_bytes(at + 8, reinterpret_i64(f80_to_f64(im)) as! u64, 8);
@@ -820,7 +842,7 @@ recursive fn static_f80(n: u32) -> bool, F80 {
     if k == N_UNARY {
         let ok, x = static_f80(nd.a);
         if !ok { return false, z; }
-        if nd.op == U_NEG { return true, F80 { lo: x.lo, hi: x.hi ^ 0x8000 }; }
+        if nd.op == U_NEG { return true, F80 { lo: x.lo, hi: x.hi ^ ld_sign() }; }
         if nd.op == U_PLUS || nd.op == U_EXTENSION { return true, x; }
         if nd.op == U_REAL { return true, x; }
         return false, z;
@@ -851,24 +873,25 @@ recursive fn static_fp_builtin(n: u32) -> bool, F80 {
     let t = vty(unqual(nd.ty));
     if starts_with(name, "inf") || starts_with(name, "huge_val") {
         if t == GIR_T_F80 { return true, F80 { lo: 0x8000000000000000, hi: 0x7FFF }; }
+        if t == GIR_T_F128 { return true, F80 { lo: 0, hi: 0x7FFF000000000000 }; }
         return true, f64_to_f80(reinterpret_f64(0x7FF0000000000000));
     }
     if starts_with(name, "nan") {
         let quiet = !starts_with(name, "nans");
         let c = fp_nan_const(t, quiet, nan_payload(barg(n, 0)));
         let cc = m_consts[cidx(c)];
-        if t == GIR_T_F80 { return true, F80 { lo: cc.lo, hi: cc.hi }; }
+        if is_ld(t) { return true, F80 { lo: cc.lo, hi: cc.hi }; }
         if t == GIR_T_F32 { return true, f64_to_f80(f32bits_to_f64(cc.lo as! u32)); }
         return true, f64_to_f80(reinterpret_f64(cc.lo as! i64));
     }
     if starts_with(name, "fabs") {
         let ok, x = static_f80(barg(n, 0));
-        return ok, F80 { lo: x.lo, hi: x.hi & 0x7FFF };
+        return ok, F80 { lo: x.lo, hi: x.hi & (ld_sign() - 1) };
     }
     if starts_with(name, "copysign") {
         let ok, x = static_f80(barg(n, 0));
         let ok2, y = static_f80(barg(n, 1));
-        return ok && ok2, F80 { lo: x.lo, hi: (x.hi & 0x7FFF) | (y.hi & 0x8000) };
+        return ok && ok2, F80 { lo: x.lo, hi: (x.hi & (ld_sign() - 1)) | (y.hi & ld_sign()) };
     }
     return false, z;
 }
@@ -934,7 +957,7 @@ recursive fn static_cplx(n: u32) -> bool, F80, F80 {
     }
     if k == N_UNARY && nd.op == U_NEG {
         let ok, re, im = static_cplx(nd.a);
-        return ok, F80 { lo: re.lo, hi: re.hi ^ 0x8000 }, F80 { lo: im.lo, hi: im.hi ^ 0x8000 };
+        return ok, F80 { lo: re.lo, hi: re.hi ^ ld_sign() }, F80 { lo: im.lo, hi: im.hi ^ ld_sign() };
     }
     if k == N_UNARY && (nd.op == U_PLUS || nd.op == U_EXTENSION) { return static_cplx(nd.a); }
     return false, z, z;

@@ -427,6 +427,7 @@ struct Tmpl {
     def_t: i32,             // D2: a function template: the Tmpl of its definition when that is another declaration, -1
     hdr_outer: i32,         // D2: template<..> template<..>: the Tmpl of the enclosing header, -1
     pat_t: i32,             // D2: a member template of an instantiated class: the pattern's member template (-1 unknown, -2 none)
+    sargs_t: i32,           // D2: a partial specialization: the '<' of its argument list (0 unknown)
 }
 var tmpls: Tmpl[>..] = [];
 
@@ -599,7 +600,11 @@ fn visible(s: i64) -> bool {
     if syms[s].scope > 0 { return true; }
     // D2: VIS_PC while instantiating: what precedes the token being parsed
     let lim = if vis_limit == VIS_PC { pc } else { vis_limit };
-    return cxs[s].pos as i64 <= lim || cxs[s].flags & CF_MEMBER != 0;
+    if cxs[s].pos as i64 <= lim || cxs[s].flags & CF_MEMBER != 0 { return true; }
+    // class members (nested classes, typedefs, enumerators) are found in
+    // the class, wherever the class was completed
+    let ds = cxs[s].dscope as i64;
+    return ds >= 0 && scopes[ds].kind as i64 == CS_CLASS;
 }
 let VIS_PC = 0x7FFFFFFE;
 

@@ -259,6 +259,182 @@ double goosecc_libm_op(int64_t k, double x, double y) {
     }
 }
 
+/* F1: long double is IEEE binary128 on AArch64. With goosecc_set_ld128(1) the
+ * F80 pairs of the constant evaluator hold binary128 bits (lo = bits 0..63,
+ * hi = bits 64..127) and the helpers below compute in __float128 (the host's
+ * soft-float routines, correctly rounded as LLVM's APFloat). Decimal and
+ * hexadecimal literals are converted exactly (q_strto). */
+static int goosecc_ld_q = 0;
+void goosecc_set_ld128(int64_t on) { goosecc_ld_q = on != 0; }
+typedef __float128 gq_t;
+static gq_t q_get(gen_F80_g3 x) { gq_t q; uint64_t w[2] = {x.lo_g, x.hi_g}; memcpy(&q, w, 16); return q; }
+static gen_F80_g3 q_put(gq_t q) { uint64_t w[2]; gen_F80_g3 r; memcpy(w, &q, 16); r.lo_g = w[0]; r.hi_g = w[1]; return r; }
+
+/* little bignums: 32-bit limbs, least significant first */
+#define QB_MAX 1100
+typedef struct { int n; uint32_t d[QB_MAX]; } qbig;
+static void qb_set(qbig *a, uint64_t v) { a->n = 0; while (v) { a->d[a->n++] = (uint32_t)v; v >>= 32; } }
+static void qb_muladd(qbig *a, uint32_t m, uint32_t c) {
+    uint64_t carry = c;
+    for (int i = 0; i < a->n; i++) { uint64_t t = (uint64_t)a->d[i] * m + carry; a->d[i] = (uint32_t)t; carry = t >> 32; }
+    if (carry && a->n < QB_MAX) a->d[a->n++] = (uint32_t)carry;
+}
+static int qb_bits(const qbig *a) {
+    if (a->n == 0) return 0;
+    return (a->n - 1) * 32 + (32 - __builtin_clz(a->d[a->n - 1]));
+}
+static int qb_bit(const qbig *a, int i) { int w = i >> 5; return w < a->n ? (a->d[w] >> (i & 31)) & 1 : 0; }
+static void qb_shl1(qbig *a, int bit) {
+    uint32_t c = (uint32_t)bit;
+    for (int i = 0; i < a->n; i++) { uint32_t t = a->d[i]; a->d[i] = (t << 1) | c; c = t >> 31; }
+    if (c && a->n < QB_MAX) a->d[a->n++] = c;
+}
+static int qb_cmp(const qbig *a, const qbig *b) {
+    if (a->n != b->n) return a->n < b->n ? -1 : 1;
+    for (int i = a->n - 1; i >= 0; i--) if (a->d[i] != b->d[i]) return a->d[i] < b->d[i] ? -1 : 1;
+    return 0;
+}
+static void qb_sub(qbig *a, const qbig *b) {
+    int64_t br = 0;
+    for (int i = 0; i < a->n; i++) {
+        int64_t t = (int64_t)a->d[i] - (i < b->n ? b->d[i] : 0) - br;
+        br = t < 0;
+        a->d[i] = (uint32_t)(t + (br << 32));
+    }
+    while (a->n && a->d[a->n - 1] == 0) a->n--;
+}
+
+/* Assembles sign * mant * 2^e (mant: up to 128 bits, with `sticky` for bits
+ * below) into binary128, rounding to nearest even (subnormals and overflow
+ * included). */
+static gen_F80_g3 q_make(int neg, unsigned __int128 mant, int64_t e, int sticky) {
+    gen_F80_g3 r;
+    unsigned __int128 m = mant;
+    uint64_t sign = neg ? 0x8000000000000000ull : 0;
+    if (m == 0) { r.lo_g = 0; r.hi_g = sign; return r; }
+    int nb = 128 - (int)(((uint64_t)(m >> 64)) ? __builtin_clzll((uint64_t)(m >> 64)) : 64 + __builtin_clzll((uint64_t)m));
+    int64_t exp = e + nb - 1;               /* value = 1.xxx * 2^exp */
+    int64_t prec = 113;                     /* the significant bits the result can hold */
+    if (exp < -16382) prec = 113 - (-16382 - exp);
+    if (prec <= 0) {
+        /* below the smallest subnormal: half of it rounds to even (zero), more rounds up */
+        if (prec == 0 && (m != ((unsigned __int128)1 << (nb - 1)) || sticky)) { r.lo_g = 1; r.hi_g = sign; return r; }
+        r.lo_g = 0; r.hi_g = sign; return r;
+    }
+    int64_t drop = nb - prec;
+    if (drop > 0) {
+        unsigned __int128 half = (unsigned __int128)1 << (drop - 1);
+        unsigned __int128 low = m & (((unsigned __int128)1 << drop) - 1);
+        m >>= drop;
+        if (low > half || (low == half && (sticky || (m & 1)))) m++;
+        if (prec == 113 && (m >> 113) != 0) { m >>= 1; exp++; }
+    } else if (drop < 0) {
+        m <<= -drop;
+    }
+    if (exp > 16383) { r.lo_g = 0; r.hi_g = sign | 0x7FFF000000000000ull; return r; }
+    uint64_t biased = 0;
+    unsigned __int128 frac = m;   /* a subnormal (a carry into bit 112 makes it the smallest normal) */
+    if (prec == 113) { biased = (uint64_t)(exp + 16383); frac = m & ((((unsigned __int128)1) << 112) - 1); }
+    r.lo_g = (uint64_t)frac;
+    r.hi_g = (uint64_t)(frac >> 64) | (biased << 48) | sign;
+    return r;
+}
+
+static int q_hexval(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static gen_F80_g3 q_strto(const char *s) {
+    static qbig num, den, rem;
+    int neg = 0;
+    while (*s == ' ') s++;
+    if (*s == '-') { neg = 1; s++; } else if (*s == '+') s++;
+    if ((s[0] == 'i' || s[0] == 'I') && (s[1] == 'n' || s[1] == 'N')) return q_put(neg ? -__builtin_inff128() : __builtin_inff128());
+    if ((s[0] == 'n' || s[0] == 'N') && (s[1] == 'a' || s[1] == 'A')) return q_put(__builtin_nanf128(""));
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        /* hexadecimal: the first 124 bits of the mantissa, the rest as sticky */
+        s += 2;
+        unsigned __int128 m = 0;
+        int64_t e = 0;
+        int sticky = 0, seen_dot = 0, nbits = 0;
+        for (;; s++) {
+            if (*s == '.') { seen_dot = 1; continue; }
+            int v = q_hexval(*s);
+            if (v < 0) break;
+            if (nbits == 0 && v == 0) { if (seen_dot) e -= 4; continue; }
+            if (nbits < 124) { m = (m << 4) | (unsigned)v; nbits += 4; if (seen_dot) e -= 4; }
+            else { if (v) sticky = 1; if (!seen_dot) e += 4; }
+        }
+        if (*s == 'p' || *s == 'P') {
+            s++;
+            int en = 0; int64_t ev = 0;
+            if (*s == '-') { en = 1; s++; } else if (*s == '+') s++;
+            while (*s >= '0' && *s <= '9') { if (ev < 100000) ev = ev * 10 + (*s - '0'); s++; }
+            e += en ? -ev : ev;
+        }
+        return q_make(neg, m, e, sticky);
+    }
+    /* decimal: num = the digits, value = num * 10^e10 */
+    qb_set(&num, 0);
+    int64_t e10 = 0;
+    int seen_dot = 0, ndig = 0, extra = 0;
+    for (;; s++) {
+        if (*s == '.') { seen_dot = 1; continue; }
+        if (*s < '0' || *s > '9') break;
+        if (ndig < 3000) {
+            qb_muladd(&num, 10, (uint32_t)(*s - '0'));
+            if (num.n || *s != '0') ndig++;
+            if (seen_dot) e10--;
+        } else {
+            /* digits past 3000 only decide the rounding of a tie */
+            if (*s != '0') extra = 1;
+            if (!seen_dot) e10++;
+        }
+    }
+    if (*s == 'e' || *s == 'E') {
+        s++;
+        int en = 0; int64_t ev = 0;
+        if (*s == '-') { en = 1; s++; } else if (*s == '+') s++;
+        while (*s >= '0' && *s <= '9') { if (ev < 100000) ev = ev * 10 + (*s - '0'); s++; }
+        e10 += en ? -ev : ev;
+    }
+    if (num.n == 0) return q_make(neg, 0, 0, 0);
+    if (ndig + e10 > 4940) return q_make(neg, 1, 20000, 0);       /* overflow */
+    if (ndig + e10 < -4970) return q_make(neg, 0, 0, 0);          /* underflow */
+    if (e10 >= 0) {
+        for (int64_t i = 0; i < e10; i++) qb_muladd(&num, 10, 0);
+        int nb = qb_bits(&num);
+        int take = nb < 120 ? nb : 120;
+        unsigned __int128 m = 0;
+        for (int i = nb - 1; i >= nb - take; i--) m = (m << 1) | (unsigned)qb_bit(&num, i);
+        int sticky = extra;
+        for (int i = nb - take - 1; i >= 0 && !sticky; i--) sticky = qb_bit(&num, i);
+        return q_make(neg, m, nb - take, sticky);
+    }
+    /* num / 10^-e10: a quotient of at least 120 bits, the remainder as sticky */
+    qb_set(&den, 1);
+    for (int64_t i = 0; i < -e10; i++) qb_muladd(&den, 10, 0);
+    int shift = qb_bits(&den) - qb_bits(&num) + 121;
+    if (shift < 0) shift = 0;
+    /* long division of num << shift by den, bit by bit */
+    qb_set(&rem, 0);
+    unsigned __int128 q = 0;
+    int nb = qb_bits(&num);
+    int total = nb + shift;
+    int qbits = 0;
+    for (int i = total - 1; i >= 0; i--) {
+        int bit = i >= shift ? qb_bit(&num, i - shift) : 0;
+        qb_shl1(&rem, bit);
+        int one = qb_cmp(&rem, &den) >= 0;
+        if (one) qb_sub(&rem, &den);
+        if (qbits || one) { q = (q << 1) | (unsigned)one; qbits++; }
+    }
+    return q_make(neg, q, -(int64_t)shift, rem.n != 0 || extra);
+}
+
 static long double gcc_ld_get(gen_F80_g3 x) {
     unsigned char b[16] = {0};
     long double d;
@@ -284,6 +460,7 @@ gen_F80_g3 goosecc_strtold(sl_u8 s) {
     size_t j = 0;
     for (size_t i = 0; i < n; i++) if (s.data[i] != '\'') buf[j++] = (char)s.data[i];
     buf[j] = 0;
+    if (goosecc_ld_q) return q_strto(buf);
     return gcc_ld_put(strtold(buf, 0));
 }
 /* the bits of the literal text as a float (prec 0), double (1) or half (3) */
@@ -300,21 +477,53 @@ uint64_t goosecc_strtod_bits(sl_u8 s, int64_t prec) {
     memcpy(&b, &d, 8);
     return b;
 }
-gen_F80_g3 goosecc_f64_to_f80(double d) { return gcc_ld_put((long double)d); }
-double goosecc_f80_to_f64(gen_F80_g3 x) { return (double)gcc_ld_get(x); }
-double goosecc_f80_to_f32_d(gen_F80_g3 x) { return (double)(float)gcc_ld_get(x); }
-uint32_t goosecc_f80_to_f32bits(gen_F80_g3 x) { float f = (float)gcc_ld_get(x); uint32_t b; memcpy(&b, &f, 4); return b; }
-gen_F80_g3 goosecc_u64_to_f80(uint64_t x) { return gcc_ld_put((long double)x); }
-gen_F80_g3 goosecc_i64_to_f80(int64_t x) { return gcc_ld_put((long double)x); }
-int64_t goosecc_f80_to_i64(gen_F80_g3 x) { long double d = gcc_ld_get(x); if (d != d) return 0; if (d >= 9.2233720368547758e18L) return INT64_MAX; if (d <= -9.2233720368547758e18L) return INT64_MIN; return (int64_t)d; }
+gen_F80_g3 goosecc_f64_to_f80(double d) { if (goosecc_ld_q) return q_put((gq_t)d); return gcc_ld_put((long double)d); }
+double goosecc_f80_to_f64(gen_F80_g3 x) { if (goosecc_ld_q) return (double)q_get(x); return (double)gcc_ld_get(x); }
+double goosecc_f80_to_f32_d(gen_F80_g3 x) { if (goosecc_ld_q) return (double)(float)q_get(x); return (double)(float)gcc_ld_get(x); }
+uint32_t goosecc_f80_to_f32bits(gen_F80_g3 x) { float f = goosecc_ld_q ? (float)q_get(x) : (float)gcc_ld_get(x); uint32_t b; memcpy(&b, &f, 4); return b; }
+gen_F80_g3 goosecc_u64_to_f80(uint64_t x) { if (goosecc_ld_q) return q_put((gq_t)x); return gcc_ld_put((long double)x); }
+gen_F80_g3 goosecc_i64_to_f80(int64_t x) { if (goosecc_ld_q) return q_put((gq_t)x); return gcc_ld_put((long double)x); }
+static int64_t q_to_i64(gen_F80_g3 x) {
+    gq_t d = q_get(x);
+    if (d != d) return 0;
+    if (d >= (gq_t)9.2233720368547758e18) return INT64_MAX;
+    if (d <= -(gq_t)9.2233720368547758e18) return INT64_MIN;
+    return (int64_t)d;
+}
+int64_t goosecc_f80_to_i64(gen_F80_g3 x) { if (goosecc_ld_q) return q_to_i64(x); long double d = gcc_ld_get(x); if (d != d) return 0; if (d >= 9.2233720368547758e18L) return INT64_MAX; if (d <= -9.2233720368547758e18L) return INT64_MIN; return (int64_t)d; }
 static long double gcc_round_prec(long double v, int64_t prec) {
     if (prec == 0) return (long double)(float)v;
     if (prec == 1) return (long double)(double)v;
     if (prec == 3) return (long double)(_Float16)v;
     return v;
 }
-gen_F80_g3 goosecc_f80_round(gen_F80_g3 x, int64_t prec) { return gcc_ld_put(gcc_round_prec(gcc_ld_get(x), prec)); }
+static gq_t q_round_prec(gq_t v, int64_t prec) {
+    if (prec == 0) return (gq_t)(float)v;
+    if (prec == 1) return (gq_t)(double)v;
+    if (prec == 3) return (gq_t)(_Float16)v;
+    return v;
+}
+gen_F80_g3 goosecc_f80_round(gen_F80_g3 x, int64_t prec) {
+    if (goosecc_ld_q) return q_put(q_round_prec(q_get(x), prec));
+    return gcc_ld_put(gcc_round_prec(gcc_ld_get(x), prec));
+}
+static gen_F80_g3 q_arith(int64_t op, gen_F80_g3 a, gen_F80_g3 b, int64_t prec) {
+    gq_t x = q_get(a), y = q_get(b), r;
+    if (prec == 0) {
+        float fx = (float)x, fy = (float)y, fr;
+        switch (op) { case 0: fr = fx + fy; break; case 1: fr = fx - fy; break; case 2: fr = fx * fy; break; default: fr = fx / fy; }
+        return q_put((gq_t)fr);
+    }
+    if (prec == 1) {
+        double dx = (double)x, dy = (double)y, dr;
+        switch (op) { case 0: dr = dx + dy; break; case 1: dr = dx - dy; break; case 2: dr = dx * dy; break; default: dr = dx / dy; }
+        return q_put((gq_t)dr);
+    }
+    switch (op) { case 0: r = x + y; break; case 1: r = x - y; break; case 2: r = x * y; break; default: r = x / y; }
+    return q_put(q_round_prec(r, prec));
+}
 gen_F80_g3 goosecc_f80_arith(int64_t op, gen_F80_g3 a, gen_F80_g3 b, int64_t prec) {
+    if (goosecc_ld_q) return q_arith(op, a, b, prec);
     long double x = gcc_ld_get(a), y = gcc_ld_get(b), r;
     if (prec == 0) {
         float fx = (float)x, fy = (float)y, fr;
@@ -330,8 +539,14 @@ gen_F80_g3 goosecc_f80_arith(int64_t op, gen_F80_g3 a, gen_F80_g3 b, int64_t pre
     return gcc_ld_put(gcc_round_prec(r, prec));
 }
 gen_F80_g3 goosecc_f80_to_i128(gen_F80_g3 x, int64_t is_signed) {
-    long double d = gcc_ld_get(x);
     gen_F80_g3 r;
+    if (goosecc_ld_q) {
+        gq_t q = q_get(x);
+        if (is_signed) { __int128 v = (__int128)q; r.lo_g = (uint64_t)v; r.hi_g = (uint64_t)(v >> 64); }
+        else { unsigned __int128 v = (unsigned __int128)q; r.lo_g = (uint64_t)v; r.hi_g = (uint64_t)(v >> 64); }
+        return r;
+    }
+    long double d = gcc_ld_get(x);
     if (is_signed) { __int128 v = (__int128)d; r.lo_g = (uint64_t)v; r.hi_g = (uint64_t)(v >> 64); }
     else { unsigned __int128 v = (unsigned __int128)d; r.lo_g = (uint64_t)v; r.hi_g = (uint64_t)(v >> 64); }
     return r;

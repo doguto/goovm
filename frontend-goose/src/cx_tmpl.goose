@@ -71,7 +71,7 @@ recursive fn parse_template_decl(ctx: i64) {
     let t = tmpls.len;
     tmpls.push(Tmpl { kind: 0, depth: tmpl_depth as! u8, rsv: 0, sym: -1, params: first as! u32, nparams: count as! u32,
         scope: cur_scope as! i32, pos: tpos as! u32, t0: pc as! u32, t1: 0, pattern: -1, specs: -1, outer: -1,
-        spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: hdr_outer_next as! i32, pat_t: -1 });
+        spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: hdr_outer_next as! i32, pat_t: -1, sargs_t: 0 });
     hdr_outer_next = -1;
     let sv_pending = pending_tmpl;
     if at_kw(KW_TEMPLATE) {
@@ -156,7 +156,7 @@ recursive fn parse_tparams() {
             let tt = tmpls.len;
             tmpls.push(Tmpl { kind: TT_PARAM as! u8, depth: tmpl_depth as! u8, rsv: 0, sym: s as! i32, params: 0, nparams: 0,
                 scope: cur_scope as! i32, pos: pc as! u32, t0: 0, t1: 0, pattern: -1, specs: -1, outer: -1, spec_args: -1,
-                primary: -1, inst_scope: -1, def_t: -1, hdr_outer: -1, pat_t: -1 });
+                primary: -1, inst_scope: -1, def_t: -1, hdr_outer: -1, pat_t: -1, sargs_t: 0 });
             cxs[s].tmpl = tt as! i32;
             cxs[s].flags = CF_TPARAM | CF_TEMPLATE;
             syms[s].v = ((tmpl_depth << 16) | index) as i64;
@@ -362,7 +362,9 @@ recursive fn alias_subst(t: i64, args: i32) -> u32 {
 // parameters bound to `args`, in the template's scope and as of its point
 // of definition (two-phase lookup).
 var subst_val: i64 = 0;
+var subst_failed: bool = false;  // D2: the last subst_parse met errors (counted for the enclosing instantiation)
 var subst_ok: bool = false;
+var subst_list: i32 = -1;   // what 2: the argument list
 recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u32 {
     if alias_depth > 32 { return t_unknown; }
     let n = if upto > 0 { upto } else { tmpls[t].nparams as i64 };
@@ -439,11 +441,19 @@ recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u
     if !args_dependent(args) { vis_limit = if tok > tmpls[t].pos as i64 { tok } else { tmpls[t].pos as i64 }; tmpl_depth = 0; }
     pc = tok;
     gt_pos = -1;
+    // D2: errors here are the enclosing instantiation's (a substitution
+    // failure in an alias template is one of the declaration using it)
+    let wl0 = diag_watch_level;
+    let we0 = diag_watch_errors;
     diag_suppress++;
+    diag_watch_level = diag_suppress;
     var ty: u32 = 0;
     subst_ok = false;
     if what == 0 {
         ty = parse_type_id();
+    } else if what == 2 {
+        // a template argument list at its '<'
+        subst_list = parse_targs();
     } else {
         targ_depth++;
         let e = parse_cexpr_noGT();
@@ -454,6 +464,9 @@ recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u
         subst_val = v;
     }
     diag_suppress--;
+    subst_failed = diag_watch_errors != we0;
+    diag_watch_level = wl0;
+    if subst_failed { diag_propagate(diag_suppress); }
     pop_scope();
     alias_depth--;
     tmpl_depth = s_tdepth;
@@ -585,6 +598,7 @@ recursive fn begin_class_specialization(qn: QN&, is_union: bool, loc: u32) -> i6
         tmpls[pt].sym = tsym as! i32;
         tmpls[pt].pattern = r as! i32;
         tmpls[pt].spec_args = qn.targs;
+        tmpls[pt].sargs_t = qn.targs_t as! i32;
         tmpls[pt].primary = t as! i32;
         tmpls[t].specs = link_add(tmpls[t].specs, pt);
         scopes[sc].flags = scopes[sc].flags | SCF_PATTERN;

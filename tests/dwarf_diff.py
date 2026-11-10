@@ -233,14 +233,18 @@ def verify(obj):
     return ok, "" if ok else "\n".join(l for l in out.splitlines() if "error" in l.lower() or "warning" in l.lower())[:500]
 
 
-LOC_RE = re.compile(r"location=(LOCLIST|DW_OP_breg7 RSP[+-]\d+|DW_OP_breg5 RDI\+0|DW_OP_fbreg(, DW_OP_deref)?)( |$)")
+LOC_RE = re.compile(r"location=(LOCLIST|DW_OP_breg7 RSP[+-]\d+|DW_OP_breg5 RDI\+0|DW_OP_breg31 WSP[+-]\d+(?:, DW_OP_deref)?|"
+                    r"DW_OP_breg[89] W[89]\+0|DW_OP_fbreg(, DW_OP_deref)?)( |$)")
+# AArch64 (F1): clang keeps no frame record in leaf functions at -O0 (-mframe-pointer=non-leaf):
+# their frame base is SP, goovm's always x29
+FB_RE = re.compile(r"frame_base=DW_OP_reg(29 W29|31 WSP)( |$)")
 
 
 def relax(lines):
     """Frame locations of either form (an offset from the frame base, from the
     stack pointer, a location list, a pointer kept in a slot) as LOC: where
     the two compilers' code differs (VLAs, the return slot, realigned frames)."""
-    return [LOC_RE.sub(r"location=LOC\3", l) for l in lines]
+    return [FB_RE.sub(r"frame_base=FB\2", LOC_RE.sub(r"location=LOC\3", l)) for l in lines]
 
 
 def subtrees(lines):

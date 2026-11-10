@@ -41,9 +41,12 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/Scalar/LowerMatrixIntrinsics.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -172,6 +175,7 @@ struct Exporter : GirDwarfHost {
     DenseMap<const DIFile *, uint32_t> dfmap;
     uint32_t n_unnamed = 0;
     bool pie = false;
+    bool a64 = false;  // AArch64 (milestone F1): GirHeader.target = GIR_TARGET_AARCH64
     // Exception handling and comdats (module).
     DenseMap<const Comdat *, uint32_t> cdmap;       // comdat -> comdats index
     StringMap<uint32_t> cdnames;                    // group signature -> comdats index
@@ -213,7 +217,9 @@ struct Exporter : GirDwarfHost {
     std::vector<GirDwarfLabel> flabels;
 
     Exporter(const Module &m, GirTables &t)
-        : M(m), DL(m.getDataLayout()), T(t), TLII(Triple(m.getTargetTriple())), TLI(TLII) {}
+        : M(m), DL(m.getDataLayout()), T(t), TLII(Triple(m.getTargetTriple())), TLI(TLII) {
+        a64 = Triple(m.getTargetTriple()).isAArch64();
+    }
 
     // GirDwarfHost
     uint32_t dw_str(StringRef s) override { return dstring(s); }
@@ -288,6 +294,7 @@ struct Exporter : GirDwarfHost {
         def(GIR_TK_FLOAT, GIR_C_X87, 80, 16, 16, 10);  // F80
         def(GIR_TK_INT, GIR_C_INT2, 128, 16, 16, 16);  // I128
         def(GIR_TK_FLOAT, GIR_C_FP, 16, 2, 2, 2);    // F16
+        def(GIR_TK_FLOAT, GIR_C_FP, 128, 16, 16, 16);  // F128 (F1; produced for AArch64 only)
         while (T.types.size() < GIR_T_FIRST_USER) def(GIR_TK_VOID, GIR_C_NONE, 0, 0, 1, 0);
     }
     // Type id of a value type; fails on anything GIR cannot hold.
@@ -336,6 +343,8 @@ struct Exporter : GirDwarfHost {
             return GIR_T_F80;
         } else if (t->isHalfTy()) {
             return GIR_T_F16;
+        } else if (t->isFP128Ty() && a64) {
+            return GIR_T_F128;
         } else if (t->isVoidTy()) {
             fail("void value");
         }
@@ -753,7 +762,7 @@ struct Exporter : GirDwarfHost {
         fail("operand kind");
     }
     uint32_t tls_addr(uint32_t g) {
-        if (!pie && T.header.tls_get_addr == GIR_NONE) T.header.tls_get_addr = libfn("__tls_get_addr");
+        if (!pie && !a64 && T.header.tls_get_addr == GIR_NONE) T.header.tls_get_addr = libfn("__tls_get_addr");
         return emit(GIR_TLSADDR, GIR_T_PTR, 0, 0, 0, g, 0, 0, 0);
     }
     static uint32_t local_block(const BasicBlock *BB) {
@@ -834,19 +843,24 @@ struct Exporter : GirDwarfHost {
     std::string fsuf(uint16_t t) {
         if (t == GIR_T_F32) return "f";
         if (t == GIR_T_F64) return "";
-        if (t == GIR_T_F80) return "l";
+        if (t == GIR_T_F80 || t == GIR_T_F128) return "l";
         fail("libm call on type " + std::to_string(t));
     }
-    static const char *fpart(uint16_t t) { return t == GIR_T_F32 ? "sf" : t == GIR_T_F64 ? "df" : "xf"; }
+    static const char *fpart(uint16_t t) {
+        return t == GIR_T_F32 ? "sf" : t == GIR_T_F64 ? "df" : t == GIR_T_F128 ? "tf" : "xf";
+    }
 
     // half <-> float through the compiler-rt/libgcc helpers (LLVM -O0 on
     // x86-64 without F16C does the same).
     uint32_t half_to(uint32_t v, uint16_t dst) {
+        // AArch64: fcvt (the base FP instruction set converts half)
+        if (a64) return emit(GIR_FPEXT, dst, 0, 0, GIR_T_F16, v, 0, 0, RA);
         uint32_t f = libcall("__extendhfsf2", GIR_T_F32, {v});
         if (dst == GIR_T_F32) return f;
         return emit(GIR_FPEXT, dst, 0, 0, GIR_T_F32, f, 0, 0, 0);
     }
     uint32_t to_half(uint32_t v, uint16_t src) {
+        if (a64) return emit(GIR_FPTRUNC, GIR_T_F16, 0, 0, src, v, 0, 0, RA);
         const char *fn = src == GIR_T_F32 ? "__truncsfhf2" : src == GIR_T_F64 ? "__truncdfhf2" : "__truncxfhf2";
         return libcall(fn, GIR_T_F16, {v});
     }
@@ -1039,11 +1053,41 @@ struct Exporter : GirDwarfHost {
         return true;
     }
     std::vector<uint8_t> ret_ok;  // per type id: checked as a return type
+    // AArch64 (CC_AArch64_AAPCS returns): the members in x0-x7 and v0-v7.
+    bool returnable_a64(uint16_t t, unsigned &ngp, unsigned &nfp) {
+        const GirTypeDef &d = T.types[t];
+        switch (d.cls) {
+        case GIR_C_NONE: return true;
+        case GIR_C_INT: ngp++; return true;
+        case GIR_C_INT2: ngp += 2; return true;
+        case GIR_C_FP: nfp++; return true;
+        case GIR_C_VEC:
+            // (LLVM legalizes other vector sizes into 64/128-bit registers; the back-end does the same)
+            if (bits(d.elems) == 1) return false;
+            nfp += d.store <= 16 ? 1 : (d.store + 15) / 16;
+            return true;
+        default: break;
+        }
+        if (d.kind == GIR_TK_STRUCT) {
+            for (uint32_t i = 0; i < d.n; i++)
+                if (!returnable_a64((uint16_t)T.opnds[d.elems + 2 * i], ngp, nfp)) return false;
+            return true;
+        }
+        for (uint32_t i = 0; i < d.n; i++)
+            if (!returnable_a64((uint16_t)d.elems, ngp, nfp)) return false;
+        return true;
+    }
     uint16_t check_ret(Type *rt) {
         uint16_t t = ret_ty(rt);
         if (t < ret_ok.size() && ret_ok[t]) return t;
         if (ret_ok.size() <= t) ret_ok.resize(t + 1, 0);
         ret_ok[t] = 1;
+        if (a64) {
+            unsigned g = 0, f = 0;
+            if (!returnable_a64(t, g, f) || g > 8 || f > 8)
+                fail("return type " + tystr(rt) + " that does not fit the return registers");
+            return t;
+        }
         unsigned g = 0, f = 0, v = 0, x = 0;
         if (!returnable(t, g, f, v, x) || g > 3 || f > 2 || f + v > 4 || x > 2)
             fail("return type " + tystr(rt) + " that does not fit the return registers");
@@ -1070,6 +1114,7 @@ struct Exporter : GirDwarfHost {
     // The ABI word of a parameter without special attributes.
     uint32_t abi_plain(uint16_t gt, const char *what) {
         uint8_t c = cls(gt);
+        if (c == GIR_C_MEM && a64) return a64_agg_arg(gt, what);
         if (c == GIR_C_MEM) fail(std::string("aggregate passed by value as ") + what);
         if (c == GIR_C_VEC && bits(T.types[gt].elems) == 1) fail(std::string("i1 vector ") + what);
         return 0;
@@ -1078,6 +1123,7 @@ struct Exporter : GirDwarfHost {
         if (!as.hasAttributes()) {
             uint16_t gt = ty(t);
             uint8_t c = cls(gt);
+            if (c == GIR_C_MEM && a64) return a64_agg_arg(gt, what);
             if (c == GIR_C_MEM) fail(std::string("aggregate passed by value as ") + what);
             if (c == GIR_C_VEC && bits(T.types[gt].elems) == 1) fail(std::string("i1 vector ") + what);
             return 0;
@@ -1096,10 +1142,58 @@ struct Exporter : GirDwarfHost {
         if (as.hasAttribute(Attribute::ByRef)) fail(std::string("byref ") + what);
         uint16_t gt = ty(t);
         uint8_t c = cls(gt);
+        if (c == GIR_C_MEM && a64) return a64_agg_arg(gt, what);
         if (c == GIR_C_MEM) fail(std::string("aggregate passed by value as ") + what);
         if (c == GIR_C_VEC && bits(T.types[gt].elems) == 1) fail(std::string("i1 vector ") + what);
         if (as.hasAttribute(Attribute::StructRet)) return GIR_ABI_SRET;
         return 0;
+    }
+
+    // AArch64: a first-class aggregate argument (clang's coercions: [n x i64],
+    // HFA/HVA arrays [n x float], ...) is passed by the AAPCS64 rules on its
+    // members (gir.h); its members must be register-class values.
+    uint32_t a64_agg_arg(uint16_t gt, const char *what) {
+        unsigned g = 0, f = 0;
+        if (!returnable_a64(gt, g, f)) fail(std::string("aggregate ") + what + " with members of no register class");
+        return 0;
+    }
+
+    // ----------------------------------------------------------------- TBAA
+    // (E2, opt_level >= 1) The access type of a load's or store's !tbaa tag
+    // as a node of the scalar type tree, numbered from 1 (0: no tag); the
+    // parents go to the table GirHeader.tbaa names. Struct-path tags count
+    // by their access type (conservative: LLVM also tells apart fields of
+    // one scalar type in unrelated structs).
+    std::map<const MDNode *, uint32_t> tbaa_ids;
+    std::vector<uint32_t> tbaa_parent{0};
+    uint32_t tbaa_node(const MDNode *N, int depth = 0) {
+        if (!N || depth > 64) return 0;
+        auto it = tbaa_ids.find(N);
+        if (it != tbaa_ids.end()) return it->second;
+        // a scalar type node: !{!"name", !parent, i64 offset} (old format) or
+        // !{!parent, i64 size, !"name", ...} (new format); a root: !{!"name"}
+        const MDNode *P = nullptr;
+        if (N->getNumOperands() >= 2 && isa<MDString>(N->getOperand(0))) P = dyn_cast<MDNode>(N->getOperand(1));
+        else if (N->getNumOperands() >= 3 && isa<MDNode>(N->getOperand(0))) P = dyn_cast<MDNode>(N->getOperand(0));
+        uint32_t p = P ? tbaa_node(P, depth + 1) : 0;
+        uint32_t id = (uint32_t)tbaa_parent.size();
+        tbaa_parent.push_back(p);
+        tbaa_ids[N] = id;
+        return id;
+    }
+    uint32_t tbaa_of(const Instruction &I) {
+        if (!T.header.opt_level) return 0;
+        const MDNode *tag = I.getMetadata(LLVMContext::MD_tbaa);
+        if (!tag || tag->getNumOperands() < 2) return 0;
+        // struct-path tag !{base, access, offset[, const]}; a scalar tag is its own access type
+        const MDNode *acc = isa<MDNode>(tag->getOperand(0)) ? dyn_cast<MDNode>(tag->getOperand(1)) : tag;
+        return tbaa_node(acc);
+    }
+    void tbaa_table() {
+        if (tbaa_parent.size() <= 1) return;
+        T.header.tbaa = (uint32_t)T.opnds.size();
+        T.opnds.push_back((uint32_t)tbaa_parent.size() - 1);
+        for (size_t k = 1; k < tbaa_parent.size(); k++) T.opnds.push_back(tbaa_parent[k]);
     }
 
     // ---------------------------------------------------------------- calls
@@ -1131,6 +1225,14 @@ struct Exporter : GirDwarfHost {
             T.opnds.push_back(args[i + 1]);
         }
         uint16_t fl = (vararg ? GIR_IF_VARARG : 0) | (al & AL_NR ? GIR_IF_NORETURN : 0);
+        // call-site inlining attributes and memory effects (E2, for the optimizer)
+        if (CB.getAttributes().hasFnAttr(Attribute::NoInline)) fl |= GIR_IF_NOINLINE_CALL;
+        if (T.header.opt_level && !(fl & GIR_IF_VARARG) && cur_invoke_lp == GIR_NONE) {
+            if (CB.onlyReadsMemory()) fl |= GIR_IF_CALL_NOWRITE;
+            if (CB.doesNotAccessMemory()) fl |= GIR_IF_CALL_NOWRITE | GIR_IF_CALL_NOREAD;
+            if (CB.doesNotThrow() && CB.hasFnAttr(Attribute::WillReturn)) fl |= GIR_IF_CALL_PURE;
+        }
+        if (CB.getAttributes().hasFnAttr(Attribute::AlwaysInline)) fl |= GIR_IF_ALWAYSINLINE_CALL;
         if (cur_invoke_lp != GIR_NONE) {
             fl |= GIR_IF_INVOKE;
             T.opnds.push_back(cur_invoke_lp);
@@ -1239,6 +1341,378 @@ struct Exporter : GirDwarfHost {
         return true;
     }
 
+    // ------------------------------------------------- AArch64 intrinsics (F1)
+    // llvm.aarch64.neon.* and llvm.aarch64.* as GIR_A64 (gir.h GirA64), the
+    // structure loads and stores as generic loads, stores and shuffles, and
+    // the generic intrinsics on vectors that AArch64 has instructions for.
+    uint32_t a64_op(uint8_t k, uint16_t t, uint16_t at, uint32_t a, uint32_t b, uint32_t c) {
+        return emit(GIR_A64, t, k, 0, at, a, b, c, RA | RB | RC);
+    }
+    uint32_t zero32() { return cint(0, GIR_T_I32); }
+    // Vector type of n lanes of lane type lt.
+    uint16_t vty(Type *lt, unsigned n) { return ty(FixedVectorType::get(lt, n)); }
+    uint32_t shuffle(uint16_t t, uint16_t at, uint32_t a, uint32_t b, const std::vector<int> &mask) {
+        uint32_t s = (uint32_t)T.opnds.size();
+        for (int m : mask) T.opnds.push_back(m < 0 ? GIR_NONE : (uint32_t)m);
+        return emit(GIR_SHUFFLE, t, 0, 0, at, a, b, s, RA | RB);
+    }
+    // ptr + off bytes
+    uint32_t ptr_add(uint32_t p, uint64_t off) {
+        if (off == 0) return p;
+        uint32_t s = (uint32_t)T.opnds.size();
+        T.opnds.push_back((uint32_t)off);
+        T.opnds.push_back((uint32_t)(off >> 32));
+        return emit(GIR_GEP, GIR_T_PTR, 0, 0, 0, p, s, 0, RA);
+    }
+    // { v0, ..., vn-1 } of struct type st
+    uint32_t make_struct(StructType *st, const std::vector<uint32_t> &vals) {
+        uint16_t t = ty(st);
+        const StructLayout *SL = DL.getStructLayout(st);
+        uint32_t agg = czero(t);
+        for (unsigned k = 0; k < vals.size(); k++)
+            agg = emit(GIR_INSERTVALUE, t, 0, 0, 0, agg, vals[k], (uint32_t)SL->getElementOffset(k).getFixedValue(),
+                       RA | RB);
+        return agg;
+    }
+    // ldN / ldNr / ldNlane and stN / stNlane: interleaved memory <-> N vectors.
+    void a64_ldst(const CallBase &CB, unsigned N, int kind, bool store) {
+        // kind 0: whole vectors, 1: replicate (ldNr), 2: one lane
+        auto *VT = cast<FixedVectorType>(store ? CB.getArgOperand(0)->getType()
+                                                : cast<StructType>(CB.getType())->getElementType(0));
+        Type *LT = VT->getElementType();
+        unsigned n = VT->getNumElements();
+        uint16_t vt = ty(VT), lt = ty(LT);
+        uint64_t es = DL.getTypeStoreSize(LT);
+        uint32_t p = ref(CB.getArgOperand(CB.arg_size() - 1));
+        if (!store) {
+            std::vector<uint32_t> vals;
+            if (kind == 0) {
+                uint16_t wt = vty(LT, N * n);
+                uint32_t w = emit(GIR_LOAD, wt, 0, 0, 0, p, 0, 0, RA);
+                for (unsigned k = 0; k < N; k++) {
+                    std::vector<int> mask;
+                    for (unsigned i = 0; i < n; i++) mask.push_back((int)(i * N + k));
+                    vals.push_back(shuffle(vt, wt, w, w, mask));
+                }
+            } else if (kind == 1) {
+                for (unsigned k = 0; k < N; k++) {
+                    uint32_t s = emit(GIR_LOAD, lt, 0, 0, 0, ptr_add(p, k * es), 0, 0, RA);
+                    uint32_t v = emit(GIR_INSERTELT, vt, 0, 0, 0, czero(vt), s, zero32(), RB);
+                    vals.push_back(shuffle(vt, vt, v, v, std::vector<int>(n, 0)));
+                }
+            } else {
+                uint32_t lane = ref(CB.getArgOperand(N));
+                for (unsigned k = 0; k < N; k++) {
+                    uint32_t s = emit(GIR_LOAD, lt, 0, 0, 0, ptr_add(p, k * es), 0, 0, RA);
+                    vals.push_back(emit(GIR_INSERTELT, vt, 0, 0, 0, ref(CB.getArgOperand(k)), s, lane, RA | RB | RC));
+                }
+            }
+            vmap[&CB] = make_struct(cast<StructType>(CB.getType()), vals);
+            return;
+        }
+        std::vector<uint32_t> v;
+        for (unsigned k = 0; k < N; k++) v.push_back(ref(CB.getArgOperand(k)));
+        if (kind == 2) {
+            uint32_t lane = ref(CB.getArgOperand(N));
+            for (unsigned k = 0; k < N; k++) {
+                uint32_t e = emit(GIR_EXTRACTELT, lt, 0, 0, vt, v[k], lane, 0, RA | RB);
+                emit(GIR_STORE, GIR_T_VOID, 0, 0, lt, e, ptr_add(p, k * es), 0, RA | RB);
+            }
+            return;
+        }
+        // interleave: concatenate pairs, then one shuffle of the two halves
+        uint16_t t2 = vty(LT, 2 * n);
+        std::vector<int> cat;
+        for (unsigned i = 0; i < 2 * n; i++) cat.push_back((int)i);
+        uint32_t lo = shuffle(t2, vt, v[0], v[1], cat);
+        uint32_t hi = N == 2 ? lo : shuffle(t2, vt, v[2], N == 4 ? v[3] : v[2], cat);
+        std::vector<int> mask;
+        for (unsigned i = 0; i < n; i++)
+            for (unsigned k = 0; k < N; k++) mask.push_back((int)(k < 2 ? k * n + i : 2 * n + (k - 2) * n + i));
+        uint16_t wt = vty(LT, N * n);
+        uint32_t w = shuffle(wt, t2, lo, hi, mask);
+        emit(GIR_STORE, GIR_T_VOID, 0, 0, wt, w, p, 0, RA | RB);
+    }
+    // tblN / tbxN: the N table registers concatenated into one table value.
+    void a64_tbl(const CallBase &CB, unsigned N, bool tbx) {
+        unsigned first = tbx ? 1 : 0;
+        uint32_t tab = ref(CB.getArgOperand(first));
+        Type *BT = Type::getInt8Ty(M.getContext());
+        if (N > 1) {
+            std::vector<uint32_t> regs;
+            for (unsigned k = 0; k < N; k++) regs.push_back(ref(CB.getArgOperand(first + k)));
+            uint16_t t16 = vty(BT, 16), t32 = vty(BT, 32);
+            std::vector<int> cat32;
+            for (int i = 0; i < 32; i++) cat32.push_back(i);
+            uint32_t c01 = shuffle(t32, t16, regs[0], regs[1], cat32);
+            if (N == 2) tab = c01;
+            else {
+                uint32_t c23 = shuffle(t32, t16, regs[2], N == 4 ? regs[3] : regs[2], cat32);
+                std::vector<int> m;
+                for (unsigned i = 0; i < 16 * N; i++) m.push_back((int)i);
+                tab = shuffle(vty(BT, 16 * N), t32, c01, c23, m);
+            }
+        }
+        uint32_t idx = ref(CB.getArgOperand(first + N));
+        uint16_t rt = ty(CB.getType());
+        uint32_t fb = tbx ? ref(CB.getArgOperand(0)) : zero32();
+        vmap[&CB] = a64_op(tbx ? GIR_A64_TBX : GIR_A64_TBL, rt, ty(CB.getArgOperand(first)->getType()), tab, idx, fb);
+    }
+    // The 16-bit MRS / MSR operand (op0:op1:CRn:CRm:op2) of system register `name`
+    // (a name as the assembler knows it, or the "o0:op1:CRn:CRm:op2" form).
+    uint32_t a64_sysreg(const std::string &name) {
+        unsigned f[5];
+        if (sscanf(name.c_str(), "%u:%u:%u:%u:%u", &f[0], &f[1], &f[2], &f[3], &f[4]) == 5)
+            return (f[0] << 14) | (f[1] << 11) | (f[2] << 7) | (f[3] << 3) | f[4];   // (as LLVM: op0 = the first field)
+        std::vector<uint8_t> code;
+        std::string err;
+        static const char *feats[] = {"", "+v9.5a,+rand,+mte,+sve,+sme,+ras,+spe,+tme,+ls64,+brbe"};
+        for (const char *fs : feats) {
+            code.clear();
+            if (gir_assemble(M.getTargetTriple(), "mrs x0, " + name, false, code, err, fs) && code.size() == 4) {
+                uint32_t w = code[0] | (code[1] << 8) | (code[2] << 16) | ((uint32_t)code[3] << 24);
+                return (w >> 5) & 0xFFFF;
+            }
+        }
+        fail("unknown AArch64 system register \"" + name + "\" in llvm.read_register / write_register");
+    }
+    bool a64_intrinsic(const CallBase &CB, Intrinsic::ID id) {
+        int k = -1;
+        switch (id) {
+        case Intrinsic::read_register:
+        case Intrinsic::read_volatile_register:
+        case Intrinsic::write_register: {
+            auto *MD = cast<MDNode>(cast<MetadataAsValue>(CB.getArgOperand(0))->getMetadata());
+            std::string name = cast<MDString>(MD->getOperand(0))->getString().lower();
+            uint32_t sr = cint(a64_sysreg(name), GIR_T_I32);
+            if (id == Intrinsic::write_register) {
+                Value *v = CB.getArgOperand(1);
+                a64_op(GIR_A64_MSR, GIR_T_VOID, ty(v->getType()), sr, ref(v), zero32());
+            } else {
+                uint16_t rt = ty(CB.getType());
+                vmap[&CB] = a64_op(GIR_A64_MRS, rt, rt, sr, zero32(), zero32());
+            }
+            return true;
+        }
+        case Intrinsic::aarch64_get_fpcr:
+        case Intrinsic::aarch64_get_fpsr: {
+            uint16_t rt = ty(CB.getType());
+            uint32_t sr = cint(id == Intrinsic::aarch64_get_fpcr ? 0xDA20 : 0xDA21, GIR_T_I32);
+            vmap[&CB] = a64_op(GIR_A64_MRS, rt, rt, sr, zero32(), zero32());
+            return true;
+        }
+        case Intrinsic::aarch64_set_fpcr:
+        case Intrinsic::aarch64_set_fpsr: {
+            Value *v = CB.getArgOperand(0);
+            uint32_t sr = cint(id == Intrinsic::aarch64_set_fpcr ? 0xDA20 : 0xDA21, GIR_T_I32);
+            a64_op(GIR_A64_MSR, GIR_T_VOID, ty(v->getType()), sr, ref(v), zero32());
+            return true;
+        }
+        case Intrinsic::aarch64_ldxr:
+        case Intrinsic::aarch64_ldaxr: {
+            Type *mt = CB.getParamElementType(0);
+            if (!mt || !mt->isIntegerTy() || mt->getIntegerBitWidth() > 64) fail("llvm.aarch64.ldxr without an integer elementtype");
+            vmap[&CB] = a64_op(id == Intrinsic::aarch64_ldxr ? GIR_A64_LDXR : GIR_A64_LDAXR, ty(CB.getType()), ty(mt),
+                               ref(CB.getArgOperand(0)), zero32(), zero32());
+            return true;
+        }
+        case Intrinsic::aarch64_stxr:
+        case Intrinsic::aarch64_stlxr: {
+            Type *mt = CB.getParamElementType(1);
+            if (!mt || !mt->isIntegerTy() || mt->getIntegerBitWidth() > 64) fail("llvm.aarch64.stxr without an integer elementtype");
+            vmap[&CB] = a64_op(id == Intrinsic::aarch64_stxr ? GIR_A64_STXR : GIR_A64_STLXR, ty(CB.getType()), ty(mt),
+                               ref(CB.getArgOperand(0)), ref(CB.getArgOperand(1)), zero32());
+            return true;
+        }
+        case Intrinsic::aarch64_clrex: k = GIR_A64_CLREX; break;
+        case Intrinsic::aarch64_cls:
+        case Intrinsic::aarch64_cls64: k = GIR_A64_CLS; break;   // (scalar: the GPR instruction)
+        case Intrinsic::aarch64_crc32b: k = GIR_A64_CRC32B; break;
+        case Intrinsic::aarch64_crc32h: k = GIR_A64_CRC32H; break;
+        case Intrinsic::aarch64_crc32w: k = GIR_A64_CRC32W; break;
+        case Intrinsic::aarch64_crc32x: k = GIR_A64_CRC32X; break;
+        case Intrinsic::aarch64_crc32cb: k = GIR_A64_CRC32CB; break;
+        case Intrinsic::aarch64_crc32ch: k = GIR_A64_CRC32CH; break;
+        case Intrinsic::aarch64_crc32cw: k = GIR_A64_CRC32CW; break;
+        case Intrinsic::aarch64_crc32cx: k = GIR_A64_CRC32CX; break;
+        case Intrinsic::aarch64_crypto_aese: k = GIR_A64_AESE; break;
+        case Intrinsic::aarch64_crypto_aesd: k = GIR_A64_AESD; break;
+        case Intrinsic::aarch64_crypto_aesmc: k = GIR_A64_AESMC; break;
+        case Intrinsic::aarch64_crypto_aesimc: k = GIR_A64_AESIMC; break;
+        case Intrinsic::aarch64_crypto_sha1c: k = GIR_A64_SHA1C; break;
+        case Intrinsic::aarch64_crypto_sha1p: k = GIR_A64_SHA1P; break;
+        case Intrinsic::aarch64_crypto_sha1m: k = GIR_A64_SHA1M; break;
+        case Intrinsic::aarch64_crypto_sha1h: k = GIR_A64_SHA1H; break;
+        case Intrinsic::aarch64_crypto_sha1su0: k = GIR_A64_SHA1SU0; break;
+        case Intrinsic::aarch64_crypto_sha1su1: k = GIR_A64_SHA1SU1; break;
+        case Intrinsic::aarch64_crypto_sha256h: k = GIR_A64_SHA256H; break;
+        case Intrinsic::aarch64_crypto_sha256h2: k = GIR_A64_SHA256H2; break;
+        case Intrinsic::aarch64_crypto_sha256su0: k = GIR_A64_SHA256SU0; break;
+        case Intrinsic::aarch64_crypto_sha256su1: k = GIR_A64_SHA256SU1; break;
+        case Intrinsic::aarch64_neon_sdot: k = GIR_A64_SDOT; break;
+        case Intrinsic::aarch64_neon_udot: k = GIR_A64_UDOT; break;
+#define A(I, G) case Intrinsic::aarch64_neon_##I: k = GIR_A64_##G; break;
+        A(sqadd, SQADD) A(uqadd, UQADD) A(sqsub, SQSUB) A(uqsub, UQSUB) A(shadd, SHADD) A(uhadd, UHADD)
+        A(srhadd, SRHADD) A(urhadd, URHADD) A(shsub, SHSUB) A(uhsub, UHSUB) A(smax, SMAX) A(umax, UMAX)
+        A(smin, SMIN) A(umin, UMIN) A(sabd, SABD) A(uabd, UABD) A(sshl, SSHL) A(ushl, USHL)
+        A(sqshl, SQSHL) A(uqshl, UQSHL) A(srshl, SRSHL) A(urshl, URSHL) A(sqrshl, SQRSHL) A(uqrshl, UQRSHL)
+        A(addp, ADDP) A(smaxp, SMAXP) A(umaxp, UMAXP) A(sminp, SMINP) A(uminp, UMINP) A(sqdmulh, SQDMULH)
+        A(sqrdmulh, SQRDMULH) A(pmul, PMUL) A(fmax, FMAX) A(fmin, FMIN) A(fmaxnm, FMAXNM) A(fminnm, FMINNM)
+        A(fmulx, FMULX) A(frecps, FRECPS) A(frsqrts, FRSQRTS) A(facge, FACGE) A(facgt, FACGT)
+        A(faddp, FADDP) A(fmaxp, FMAXP) A(fminp, FMINP) A(fmaxnmp, FMAXNMP) A(fminnmp, FMINNMP)
+        A(suqadd, SUQADD) A(usqadd, USQADD) A(sqabs, SQABS) A(sqneg, SQNEG) A(abs, ABS) A(cls, CLS)
+        A(frecpe, FRECPE) A(frsqrte, FRSQRTE) A(urecpe, URECPE) A(ursqrte, URSQRTE) A(fcvtzs, FCVTZS)
+        A(fcvtzu, FCVTZU) A(fcvtns, FCVTNS) A(fcvtnu, FCVTNU) A(fcvtms, FCVTMS) A(fcvtmu, FCVTMU)
+        A(fcvtps, FCVTPS) A(fcvtpu, FCVTPU) A(fcvtas, FCVTAS) A(fcvtau, FCVTAU) A(saddlp, SADDLP)
+        A(uaddlp, UADDLP) A(sqxtn, SQXTN) A(uqxtn, UQXTN) A(sqxtun, SQXTUN) A(fcvtxn, FCVTXN)
+        A(scalar_sqxtn, SQXTN) A(scalar_uqxtn, UQXTN) A(scalar_sqxtun, SQXTUN)
+        A(saddv, ADDV) A(uaddv, ADDV) A(smaxv, SMAXV) A(umaxv, UMAXV) A(sminv, SMINV) A(uminv, UMINV)
+        A(saddlv, SADDLV) A(uaddlv, UADDLV) A(fmaxv, FMAXV) A(fminv, FMINV) A(fmaxnmv, FMAXNMV)
+        A(fminnmv, FMINNMV) A(faddv, FADDV) A(smull, SMULL) A(umull, UMULL) A(sqdmull, SQDMULL)
+        A(sqdmulls_scalar, SQDMULL) A(pmull, PMULL) A(raddhn, RADDHN) A(rsubhn, RSUBHN)
+        A(sqshlu, SQSHLU) A(rshrn, RSHRN) A(sqshrn, SQSHRN) A(uqshrn, UQSHRN) A(sqrshrn, SQRSHRN)
+        A(uqrshrn, UQRSHRN) A(sqshrun, SQSHRUN) A(sqrshrun, SQRSHRUN) A(vsli, SLI) A(vsri, SRI)
+        A(vcvtfxs2fp, SCVTF_FX) A(vcvtfxu2fp, UCVTF_FX) A(vcvtfp2fxs, FCVTZS_FX) A(vcvtfp2fxu, FCVTZU_FX)
+        A(sqdmulh_lane, SQDMULH_LANE) A(sqdmulh_laneq, SQDMULH_LANE) A(sqrdmulh_lane, SQRDMULH_LANE)
+        A(sqrdmulh_laneq, SQRDMULH_LANE)
+#undef A
+        case Intrinsic::aarch64_sisd_fabd: k = GIR_A64_FABD; break;
+        case Intrinsic::aarch64_neon_fabd: k = GIR_A64_FABD; break;
+        case Intrinsic::aarch64_sisd_fcvtxn: k = GIR_A64_FCVTXN; break;
+        case Intrinsic::aarch64_neon_ld2: a64_ldst(CB, 2, 0, false); return true;
+        case Intrinsic::aarch64_neon_ld3: a64_ldst(CB, 3, 0, false); return true;
+        case Intrinsic::aarch64_neon_ld4: a64_ldst(CB, 4, 0, false); return true;
+        case Intrinsic::aarch64_neon_ld2r: a64_ldst(CB, 2, 1, false); return true;
+        case Intrinsic::aarch64_neon_ld3r: a64_ldst(CB, 3, 1, false); return true;
+        case Intrinsic::aarch64_neon_ld4r: a64_ldst(CB, 4, 1, false); return true;
+        case Intrinsic::aarch64_neon_ld2lane: a64_ldst(CB, 2, 2, false); return true;
+        case Intrinsic::aarch64_neon_ld3lane: a64_ldst(CB, 3, 2, false); return true;
+        case Intrinsic::aarch64_neon_ld4lane: a64_ldst(CB, 4, 2, false); return true;
+        case Intrinsic::aarch64_neon_st2: a64_ldst(CB, 2, 0, true); return true;
+        case Intrinsic::aarch64_neon_st3: a64_ldst(CB, 3, 0, true); return true;
+        case Intrinsic::aarch64_neon_st4: a64_ldst(CB, 4, 0, true); return true;
+        case Intrinsic::aarch64_neon_st2lane: a64_ldst(CB, 2, 2, true); return true;
+        case Intrinsic::aarch64_neon_st3lane: a64_ldst(CB, 3, 2, true); return true;
+        case Intrinsic::aarch64_neon_st4lane: a64_ldst(CB, 4, 2, true); return true;
+        case Intrinsic::aarch64_neon_tbl1: a64_tbl(CB, 1, false); return true;
+        case Intrinsic::aarch64_neon_tbl2: a64_tbl(CB, 2, false); return true;
+        case Intrinsic::aarch64_neon_tbl3: a64_tbl(CB, 3, false); return true;
+        case Intrinsic::aarch64_neon_tbl4: a64_tbl(CB, 4, false); return true;
+        case Intrinsic::aarch64_neon_tbx1: a64_tbl(CB, 1, true); return true;
+        case Intrinsic::aarch64_neon_tbx2: a64_tbl(CB, 2, true); return true;
+        case Intrinsic::aarch64_neon_tbx3: a64_tbl(CB, 3, true); return true;
+        case Intrinsic::aarch64_neon_tbx4: a64_tbl(CB, 4, true); return true;
+        case Intrinsic::aarch64_neon_ld1x2:
+        case Intrinsic::aarch64_neon_ld1x3:
+        case Intrinsic::aarch64_neon_ld1x4: {
+            // consecutive vectors (no interleaving)
+            auto *ST = cast<StructType>(CB.getType());
+            uint16_t vt = ty(ST->getElementType(0));
+            uint32_t p = ref(CB.getArgOperand(0));
+            std::vector<uint32_t> vals;
+            for (unsigned i = 0; i < ST->getNumElements(); i++)
+                vals.push_back(emit(GIR_LOAD, vt, 0, 0, 0, ptr_add(p, i * (uint64_t)T.types[vt].size), 0, 0, RA));
+            vmap[&CB] = make_struct(ST, vals);
+            return true;
+        }
+        case Intrinsic::aarch64_neon_st1x2:
+        case Intrinsic::aarch64_neon_st1x3:
+        case Intrinsic::aarch64_neon_st1x4: {
+            unsigned n = CB.arg_size() - 1;
+            uint32_t p = ref(CB.getArgOperand(n));
+            for (unsigned i = 0; i < n; i++) {
+                uint16_t vt = ty(CB.getArgOperand(i)->getType());
+                emit(GIR_STORE, GIR_T_VOID, 0, 0, vt, ref(CB.getArgOperand(i)), ptr_add(p, i * (uint64_t)T.types[vt].size),
+                     0, RA | RB);
+            }
+            return true;
+        }
+        case Intrinsic::aarch64_dmb: k = GIR_A64_DMB; break;
+        case Intrinsic::aarch64_dsb: k = GIR_A64_DSB; break;
+        case Intrinsic::aarch64_isb: k = GIR_A64_ISB; break;
+        case Intrinsic::aarch64_hint: k = GIR_A64_HINT; break;
+        case Intrinsic::thread_pointer: k = GIR_A64_THREAD_POINTER; break;
+        // generic intrinsics with an AArch64 instruction (scalar or vector)
+        case Intrinsic::floor: k = GIR_A64_FRINTM; break;
+        case Intrinsic::ceil: k = GIR_A64_FRINTP; break;
+        case Intrinsic::trunc: k = GIR_A64_FRINTZ; break;
+        case Intrinsic::round: k = GIR_A64_FRINTA; break;
+        case Intrinsic::roundeven: k = GIR_A64_FRINTN; break;
+        case Intrinsic::rint: k = GIR_A64_FRINTX; break;
+        case Intrinsic::nearbyint: k = GIR_A64_FRINTI; break;
+        case Intrinsic::minnum: k = GIR_A64_FMINNM; break;
+        case Intrinsic::maxnum: k = GIR_A64_FMAXNM; break;
+        case Intrinsic::minimum: k = GIR_A64_FMIN; break;
+        case Intrinsic::maximum: k = GIR_A64_FMAX; break;
+        case Intrinsic::ctlz:
+        case Intrinsic::ctpop:
+        case Intrinsic::bitreverse:
+            if (!CB.getType()->isVectorTy()) return false;
+            k = id == Intrinsic::ctlz ? GIR_A64_CLZ : id == Intrinsic::ctpop ? GIR_A64_CNT : GIR_A64_RBIT;
+            break;
+        case Intrinsic::sadd_sat: k = GIR_A64_SQADD; break;
+        case Intrinsic::uadd_sat: k = GIR_A64_UQADD; break;
+        case Intrinsic::ssub_sat: k = GIR_A64_SQSUB; break;
+        case Intrinsic::usub_sat: k = GIR_A64_UQSUB; break;
+        default: return false;
+        }
+        // the generic ones only on the types the instructions take
+        Type *rty = CB.getType();
+        if (id == Intrinsic::floor || id == Intrinsic::ceil || id == Intrinsic::trunc || id == Intrinsic::round ||
+            id == Intrinsic::roundeven || id == Intrinsic::rint || id == Intrinsic::nearbyint ||
+            id == Intrinsic::minnum || id == Intrinsic::maxnum || id == Intrinsic::minimum || id == Intrinsic::maximum) {
+            Type *e = rty->getScalarType();
+            if (!e->isFloatTy() && !e->isDoubleTy()) return false;
+            if (rty->isVectorTy() && DL.getTypeStoreSize(rty) != 8 && DL.getTypeStoreSize(rty) != 16) return false;
+        }
+        if (id == Intrinsic::sadd_sat || id == Intrinsic::uadd_sat || id == Intrinsic::ssub_sat || id == Intrinsic::usub_sat) {
+            if (!rty->isVectorTy() || (DL.getTypeStoreSize(rty) != 8 && DL.getTypeStoreSize(rty) != 16)) return false;
+        }
+        if ((k == GIR_A64_CLZ || k == GIR_A64_CNT || k == GIR_A64_RBIT) &&
+            DL.getTypeStoreSize(rty) != 8 && DL.getTypeStoreSize(rty) != 16)
+            return false;
+        uint16_t rt = rty->isVoidTy() ? (uint16_t)GIR_T_VOID : ty(rty);
+        unsigned na = CB.arg_size();
+        if (k == GIR_A64_CLZ) na = 1;   // (llvm.ctlz's is_zero_poison flag)
+        uint16_t at = na ? ty(CB.getArgOperand(0)->getType()) : rt;
+        uint32_t ops[3] = {zero32(), zero32(), zero32()};
+        if (na > 3) fail("AArch64 intrinsic with more than three operands");
+        for (unsigned i = 0; i < na; i++) ops[i] = ref(CB.getArgOperand(i));
+        uint32_t r = a64_op((uint8_t)k, rt, at, ops[0], ops[1], ops[2]);
+        if (rt != GIR_T_VOID) vmap[&CB] = r;
+        return true;
+    }
+
+    // AArch64 llvm.fma / llvm.fmuladd: GIR_FMA for f32, f64 and their vectors;
+    // half in float (as LLVM promotes it); fp128 llvm.fmuladd as an fmul and
+    // an fadd (LLVM expands it: FMA is not faster there), fp128 llvm.fma by
+    // libm's fmal (false: not handled here).
+    bool fma_a64(const CallBase &CB, bool muladd) {
+        uint16_t t = ty(CB.getType());
+        const GirTypeDef &d = T.types[t];
+        uint16_t lt = d.kind == GIR_TK_VECTOR ? (uint16_t)d.elems : t;
+        uint32_t a = ref(CB.getArgOperand(0));
+        uint32_t b = ref(CB.getArgOperand(1));
+        uint32_t c = ref(CB.getArgOperand(2));
+        if (lt == GIR_T_F32 || lt == GIR_T_F64) {
+            vmap[&CB] = emit(GIR_FMA, t, 0, 0, t, a, b, c, RA | RB | RC);
+            return true;
+        }
+        if (t == GIR_T_F16) {
+            uint32_t x = half_to(a, GIR_T_F32), y = half_to(b, GIR_T_F32), z = half_to(c, GIR_T_F32);
+            uint32_t r = emit(GIR_FMA, GIR_T_F32, 0, 0, GIR_T_F32, x, y, z, 0);
+            vmap[&CB] = to_half(r, GIR_T_F32);
+            return true;
+        }
+        if (t == GIR_T_F128 && muladd) {
+            uint32_t m = emit(GIR_FMUL, t, 0, 0, 0, a, b, 0, 0);
+            vmap[&CB] = emit(GIR_FADD, t, 0, 0, 0, m, c, 0, 0);
+            return true;
+        }
+        if (t == GIR_T_F128) return false;
+        fail("fma/fmuladd on this type");
+    }
+
     void intrinsic(const CallBase &CB, Intrinsic::ID id) {
         // Calls with constant arguments fold, as LLVM's code generator folds
         // them (a test may rely on floor(2.5) needing no libm).
@@ -1252,6 +1726,15 @@ struct Exporter : GirDwarfHost {
                     return;
                 }
         }
+        if (a64 && id == Intrinsic::fma && fma_a64(CB, false)) return;
+        if (a64 && id == Intrinsic::clear_cache) {
+            // AArch64 needs the cache maintenance: libgcc's __clear_cache (LLVM's lowering)
+            uint32_t a = ref(CB.getArgOperand(0));
+            uint32_t b = ref(CB.getArgOperand(1));
+            libcall("__clear_cache", GIR_T_VOID, {a, b});
+            return;
+        }
+        if (a64 && a64_intrinsic(CB, id)) return;
         if (libm_intrinsic(CB, id)) return;
         switch (id) {
         case Intrinsic::eh_typeid_for:
@@ -1423,6 +1906,8 @@ struct Exporter : GirDwarfHost {
             return;
         }
         case Intrinsic::fmuladd: {
+            // AArch64: fmadd/fmla, as LLVM (FMA is faster than fmul + fadd).
+            if (a64 && fma_a64(CB, true)) return;
             // No FMA in the x86-64 baseline: LLVM -O0 computes a * b + c with two roundings.
             uint16_t t = ty(CB.getType());
             if (t == GIR_T_F16) fail("half fmuladd");
@@ -1461,9 +1946,21 @@ struct Exporter : GirDwarfHost {
             vmap[&CB] = cint(ci->getZExtValue(), ty(CB.getType()));
             return;
         }
-        case Intrinsic::is_constant:
-            vmap[&CB] = cint(isa<Constant>(CB.getArgOperand(0)) ? 1 : 0, GIR_T_I1);
+        case Intrinsic::is_constant: {
+            // at -O1.. the middle-end decides after inlining and constant
+            // folding (GIR_ISCONST, its operand in a, b and c); at -O0 as
+            // LLVM's -O0 pipeline (LowerConstantIntrinsics) does
+            const Value *x = CB.getArgOperand(0);
+            if (T.header.opt_level && !isa<Constant>(x)) {
+                uint32_t a = ref(x);
+                if (!is_placeholder(a)) {
+                    vmap[&CB] = emit(GIR_ISCONST, GIR_T_I1, 0, 0, 0, a, a, a, RA);
+                    return;
+                }
+            }
+            vmap[&CB] = cint(isa<Constant>(x) ? 1 : 0, GIR_T_I1);
             return;
+        }
         case Intrinsic::load_relative: {
             // (E1, LLVM -O2 IR: relative lookup tables) p + sext(load i32 (p + off))
             if (ty(CB.getArgOperand(1)->getType()) != GIR_T_I64) fail("load.relative with a narrow offset");
@@ -1522,7 +2019,7 @@ struct Exporter : GirDwarfHost {
         case Intrinsic::vacopy: {
             uint32_t d = ref(CB.getArgOperand(0));
             uint32_t s = ref(CB.getArgOperand(1));
-            emit(GIR_MEMCPY, GIR_T_VOID, 0, 0, 0, d, s, 24, RA | RB);
+            emit(GIR_MEMCPY, GIR_T_VOID, 0, 0, 0, d, s, a64 ? 32 : 24, RA | RB);
             return;
         }
         case Intrinsic::x86_sse_max_ps:
@@ -1605,6 +2102,7 @@ struct Exporter : GirDwarfHost {
     // as (%reg) holding the address, constant "i" as $imm), substitute them
     // into the template and assemble it with LLVM's MC layer.
     void asm_code(const CallBase &CB) {
+        if (a64) return asm_code_a64(CB);
         const auto *IA = cast<InlineAsm>(CB.getCalledOperand());
         if (IA->getDialect() != InlineAsm::AD_ATT) fail("Intel-syntax inline assembly");
         InlineAsm::ConstraintInfoVector cons = IA->ParseConstraints();
@@ -1835,6 +2333,222 @@ struct Exporter : GirDwarfHost {
         if (rty != GIR_T_VOID) vmap[&CB] = r;
     }
 
+    // AArch64 inline assembly (milestone F1): the same scheme as x86-64.
+    // Operands are bound to registers ("r" from x0..x15, "w" from v0..v7 and
+    // v16..v30, "x" v0..v15, "y" v0..v7, fixed {x0}/{w0}/{v0}/{d0}/... as
+    // given, "m"/"Q" as [xN] holding the address, constants for "i", "n",
+    // "I".."N", "Z" as immediates) and printed as AArch64AsmPrinter does: a
+    // GPR as xN (w/x modifiers), an FP/SIMD register as vN (b/h/s/d/q
+    // modifiers), an immediate as a bare number. The function's
+    // "target-features" go to the assembler.
+    static int fixed_reg_a64(StringRef c) {
+        if (!c.starts_with("{") || !c.ends_with("}")) return -1;
+        StringRef n = c.drop_front().drop_back();
+        if (n == "sp" || n == "wsp") return 31;
+        if (n == "fp") return 29;
+        if (n == "lr") return 30;
+        unsigned k;
+        if ((n.starts_with("x") || n.starts_with("w")) && !n.drop_front().getAsInteger(10, k) && k <= 30) return (int)k;
+        if ((n.starts_with("v") || n.starts_with("q") || n.starts_with("d") || n.starts_with("s") ||
+             n.starts_with("h") || n.starts_with("b")) &&
+            !n.drop_front().getAsInteger(10, k) && k < 32)
+            return (int)GIR_ASMREG_V0 + (int)k;
+        return -1;
+    }
+    void asm_code_a64(const CallBase &CB) {
+        const auto *IA = cast<InlineAsm>(CB.getCalledOperand());
+        InlineAsm::ConstraintInfoVector cons = IA->ParseConstraints();
+        struct Op { int kind; int reg; unsigned size; int64_t imm; const Value *v; };  // kind: 0 reg, 1 mem, 2 imm
+        enum { K_REG = 0, K_MEM = 1, K_IMM = 2 };
+        std::vector<Op> ops;
+        std::vector<int> op_of_con(cons.size(), -1);
+        uint64_t used = 0;   // bit r (0..63: x0..x30, v0..v31 at 32..63)
+        for (const auto &c : cons) {
+            if (c.Type == InlineAsm::isClobber) {
+                for (const std::string &code : c.Codes) {
+                    int r = fixed_reg_a64(code);
+                    if (r >= 0) used |= 1ull << r;
+                }
+            } else if (c.Codes.size() == 1) {
+                int r = fixed_reg_a64(c.Codes[0]);
+                if (r >= 0) used |= 1ull << r;
+            }
+        }
+        auto alloc_from = [&](uint64_t pool, const char *what) -> int {
+            for (int r = 0; r < 64; r++)
+                if ((pool >> r & 1) && !(used >> r & 1)) {
+                    used |= 1ull << r;
+                    return r;
+                }
+            fail(std::string("inline assembly needs too many ") + what + " registers");
+        };
+        const uint64_t GPOOL = 0xFFFFull;                                   // x0..x15
+        const uint64_t WPOOL = 0x7FFF00FF00000000ull;                       // v0..v7, v16..v30
+        const uint64_t XPOOL = 0x0000FFFF00000000ull;                       // v0..v15
+        const uint64_t YPOOL = 0x000000FF00000000ull;                       // v0..v7
+        auto has = [](const InlineAsm::ConstraintInfo &c, const char *k) {
+            for (const std::string &x : c.Codes)
+                if (x == k) return true;
+            return false;
+        };
+        auto reg_for = [&](const InlineAsm::ConstraintInfo &c) -> int {
+            int r = c.Codes.size() == 1 ? fixed_reg_a64(c.Codes[0]) : -1;
+            if (r >= 0) return r;
+            if (has(c, "w")) return alloc_from(WPOOL, "FP/SIMD");
+            if (has(c, "x")) return alloc_from(XPOOL, "FP/SIMD");
+            if (has(c, "y")) return alloc_from(YPOOL, "FP/SIMD");
+            if (has(c, "r") || has(c, "g") || has(c, "rm") || has(c, "ir") || has(c, "rZ") || has(c, "rI") ||
+                has(c, "rK") || has(c, "rL") || has(c, "rJ") || has(c, "rM") || has(c, "rN"))
+                return alloc_from(GPOOL, "general");
+            return -1;
+        };
+        unsigned argi = 0;
+        Type *rt = CB.getType();
+        unsigned n_direct = 0;
+        SmallVector<int, 4> direct_op;
+        for (unsigned ci = 0; ci < cons.size(); ci++) {
+            const auto &c = cons[ci];
+            if (c.Type == InlineAsm::isClobber) continue;
+            if (c.Type == InlineAsm::isLabel) fail("asm goto");
+            Op o{K_REG, -1, 8, 0, nullptr};
+            if (c.Type == InlineAsm::isOutput) {
+                if (c.isIndirect) {
+                    o.v = CB.getArgOperand(argi++);
+                    o.kind = K_MEM;
+                    o.reg = alloc_from(GPOOL, "general");
+                } else {
+                    Type *ot = rt->isStructTy() ? cast<StructType>(rt)->getElementType(n_direct) : rt;
+                    o.size = (unsigned)DL.getTypeStoreSize(ot);
+                    o.reg = reg_for(c);
+                    if (o.reg < 0) fail("inline-asm output constraint '" + (c.Codes.empty() ? std::string() : c.Codes[0]) + "'");
+                    if (o.reg < (int)GIR_ASMREG_V0 && o.size > 8) fail("inline-asm output wider than a register");
+                    direct_op.push_back((int)ops.size());
+                    n_direct++;
+                }
+            } else {
+                o.v = CB.getArgOperand(argi++);
+                if (c.isIndirect) {
+                    o.kind = K_MEM;
+                    o.reg = alloc_from(GPOOL, "general");
+                } else if (!c.Codes.empty() && isdigit((unsigned char)c.Codes[0][0])) {
+                    unsigned n = (unsigned)std::stoul(c.Codes[0]);
+                    if (n >= ops.size() || ops[n].kind != K_REG) fail("inline-asm input tied to a memory output");
+                    o.reg = ops[n].reg;
+                    o.size = ops[n].size;
+                } else {
+                    const auto *ci_ = dyn_cast<ConstantInt>(o.v);
+                    bool imm_ok = has(c, "i") || has(c, "n") || has(c, "I") || has(c, "J") || has(c, "K") ||
+                                  has(c, "L") || has(c, "M") || has(c, "N") || has(c, "Z") || has(c, "ir") ||
+                                  has(c, "rZ") || has(c, "rI") || has(c, "rK") || has(c, "rL") || has(c, "rJ") ||
+                                  has(c, "rM") || has(c, "rN") || has(c, "g");
+                    int fixed = c.Codes.size() == 1 ? fixed_reg_a64(c.Codes[0]) : -1;
+                    if (fixed < 0 && ci_ && imm_ok && ci_->getBitWidth() <= 64) {
+                        o.kind = K_IMM;
+                        o.imm = ci_->getSExtValue();
+                    } else if (fixed < 0 && (has(c, "m") || has(c, "Q") || has(c, "o") || has(c, "V") || has(c, "Ump"))) {
+                        // a memory input given by value: the exporter cannot spill it; LLVM passes it indirectly
+                        fail("inline-asm memory input by value");
+                    } else {
+                        o.reg = reg_for(c);
+                        if (o.reg < 0) fail("inline-asm input constraint '" + (c.Codes.empty() ? std::string() : c.Codes[0]) + "'");
+                        o.size = (unsigned)DL.getTypeStoreSize(o.v->getType());
+                        if (o.reg < (int)GIR_ASMREG_V0 && o.size > 8) fail("inline-asm input wider than a register");
+                    }
+                }
+            }
+            op_of_con[ci] = (int)ops.size();
+            ops.push_back(o);
+        }
+        // Substitute operands into the template.
+        StringRef s = IA->getAsmString();
+        std::string text;
+        for (size_t i = 0; i < s.size(); i++) {
+            char ch = s[i];
+            if (ch != '$') {
+                text += ch;
+                continue;
+            }
+            if (i + 1 >= s.size()) fail("inline-asm template ends in '$'");
+            char nx = s[i + 1];
+            if (nx == '$') { text += '$'; i++; continue; }
+            if (nx == '(' || nx == ')' || nx == '|') fail("inline-asm dialect alternatives");
+            unsigned n = 0;
+            char mod = 0;
+            size_t k = i + 1;
+            if (nx == '{') {
+                k++;
+                while (k < s.size() && isdigit((unsigned char)s[k])) n = n * 10 + (s[k++] - '0');
+                if (k < s.size() && s[k] == ':') { mod = s[k + 1]; k += 2; }
+                if (k >= s.size() || s[k] != '}') fail("inline-asm operand reference");
+                i = k;
+            } else if (isdigit((unsigned char)nx)) {
+                while (k < s.size() && isdigit((unsigned char)s[k])) n = n * 10 + (s[k++] - '0');
+                i = k - 1;
+            } else {
+                fail("inline-asm template escape '$" + std::string(1, nx) + "'");
+            }
+            if (n >= ops.size()) fail("inline-asm operand number out of range");
+            const Op &o = ops[n];
+            if (o.kind == K_IMM) {
+                if ((mod == 'w' || mod == 'x') && o.imm == 0) text += mod == 'w' ? "wzr" : "xzr";
+                else if (mod == 'n') text += std::to_string(-o.imm);
+                else if (mod == 0 || mod == 'c' || mod == 'w' || mod == 'x') text += std::to_string(o.imm);
+                else fail(std::string("inline-asm modifier '") + mod + "' on an immediate");
+            } else if (o.kind == K_MEM) {
+                if (mod != 0 && mod != 'a') fail(std::string("inline-asm modifier '") + mod + "' on memory");
+                text += "[x" + std::to_string(o.reg) + "]";
+            } else if (o.reg >= (int)GIR_ASMREG_V0) {
+                int v = o.reg - (int)GIR_ASMREG_V0;
+                char pfx = 'v';
+                if (mod == 'b' || mod == 'h' || mod == 's' || mod == 'd' || mod == 'q') pfx = mod;
+                else if (mod != 0) fail(std::string("inline-asm modifier '") + mod + "' on an FP/SIMD register");
+                text += pfx + std::to_string(v);
+            } else {
+                if (o.reg == 31) { text += mod == 'w' ? "wsp" : "sp"; continue; }
+                if (mod == 'w') text += "w" + std::to_string(o.reg);
+                else if (mod == 0 || mod == 'x') text += "x" + std::to_string(o.reg);
+                else fail(std::string("inline-asm modifier '") + mod + "' on a general register");
+            }
+        }
+        std::string features;
+        if (F) features = F->getFnAttribute("target-features").getValueAsString().str();
+        std::vector<uint8_t> code;
+        std::string err;
+        if (!gir_assemble(M.getTargetTriple(), text, false, code, err, features))
+            fail("inline assembly '" + s.substr(0, 60).str() + "': " + err);
+        GirAsm a{};
+        a.code = (uint32_t)T.data.size();
+        a.code_len = (uint32_t)code.size();
+        T.data.insert(T.data.end(), code.begin(), code.end());
+        SmallVector<uint32_t, 16> ins;
+        for (unsigned ci = 0; ci < cons.size(); ci++) {
+            int oi = op_of_con[ci];
+            if (oi < 0) continue;
+            const Op &o = ops[oi];
+            if (o.kind == K_IMM || !o.v) continue;
+            ins.push_back(ref(o.v));
+            ins.push_back((uint32_t)o.reg);
+            ty(o.v->getType());
+        }
+        a.n_in = (uint32_t)ins.size() / 2;
+        uint16_t rty = ret_ty(rt);
+        a.ops = (uint32_t)T.opnds.size();
+        for (size_t i = 0; i < ins.size(); i += 2) {
+            push_ref(ins[i]);
+            T.opnds.push_back(ins[i + 1]);
+        }
+        const StructLayout *SL = rt->isStructTy() ? DL.getStructLayout(cast<StructType>(rt)) : nullptr;
+        for (unsigned k = 0; k < n_direct; k++) {
+            T.opnds.push_back((uint32_t)ops[direct_op[k]].reg);
+            T.opnds.push_back(SL ? (uint32_t)SL->getElementOffset(k).getFixedValue() : 0);
+        }
+        a.n_out = n_direct;
+        a.x87_pop = 0;
+        T.asms.push_back(a);
+        uint32_t r = emit(GIR_ASM, rty, 0, 0, 0, (uint32_t)T.asms.size() - 1, 0, 0, 0);
+        if (rty != GIR_T_VOID) vmap[&CB] = r;
+    }
+
     // Inline assembly with an empty template is an optimization barrier
     // only: a direct output tied to an input gets that input, other outputs
     // are undefined, indirect outputs are untouched.
@@ -1844,10 +2558,17 @@ struct Exporter : GirDwarfHost {
         // Strip whitespace and comments.
         std::string body;
         for (size_t i = 0; i < s.size(); i++) {
-            if (s[i] == '#') {
+            // comments: '#' on x86-64, '//' on AArch64 (where '#' starts an
+            // immediate and ';' separates statements)
+            if (!a64 && s[i] == '#') {
                 while (i < s.size() && s[i] != '\n') i++;
                 continue;
             }
+            if (a64 && s[i] == '/' && i + 1 < s.size() && s[i + 1] == '/') {
+                while (i < s.size() && s[i] != '\n') i++;
+                continue;
+            }
+            if (a64 && s[i] == ';') continue;
             if (s[i] == '/' && i + 1 < s.size() && s[i + 1] == '*') {
                 size_t e = s.find("*/", i + 2);
                 i = e == StringRef::npos ? s.size() : e + 1;
@@ -2149,7 +2870,7 @@ struct Exporter : GirDwarfHost {
                           (L.isAtomic() ? atomic_flags(L.getOrdering(), L.getSyncScopeID()) : 0);
             if (L.isAtomic() && cls(t) != GIR_C_INT && cls(t) != GIR_C_FP) fail("atomic load of this type");
             uint32_t p = ref(L.getPointerOperand());
-            vmap[&I] = emit(GIR_LOAD, t, 0, fl, 0, p, 0, 0, RA);
+            vmap[&I] = emit(GIR_LOAD, t, 0, fl, 0, p, tbaa_of(I), 0, RA);
             return;
         }
         case Instruction::Store: {
@@ -2162,7 +2883,7 @@ struct Exporter : GirDwarfHost {
             if (S.isAtomic() && cls(t) != GIR_C_INT && cls(t) != GIR_C_FP) fail("atomic store of this type");
             uint32_t v = ref(S.getValueOperand());
             uint32_t p = ref(S.getPointerOperand());
-            emit(GIR_STORE, GIR_T_VOID, 0, fl, t, v, p, 0, RA | RB);
+            emit(GIR_STORE, GIR_T_VOID, 0, fl, t, v, p, tbaa_of(I), RA | RB);
             return;
         }
         case Instruction::GetElementPtr: {
@@ -2481,12 +3202,19 @@ struct Exporter : GirDwarfHost {
         GirFunc gf{};
         gf.global = g;
         fn_flags = (Fn.hasLocalLinkage() ? GIR_FN_INTERNAL : 0) | (FT->isVarArg() ? GIR_FN_VARARG : 0);
-        // inlining hints for the optimizer (-O1); clang -O0 puts noinline on
-        // every function together with optnone, so that noinline is not the
-        // source's and is not exported
-        if (Fn.hasFnAttribute(Attribute::NoInline) && !Fn.hasFnAttribute(Attribute::OptimizeNone))
-            fn_flags |= GIR_FN_NOINLINE;
+        // LLVM's function attributes as the optimizer honors them (E1, E2;
+        // ignored at -O0): clang -O0 IR has optnone noinline on every
+        // function, which the optimizer then leaves alone, as LLVM's would
+        if (Fn.hasFnAttribute(Attribute::NoInline)) fn_flags |= GIR_FN_NOINLINE;
         if (Fn.hasFnAttribute(Attribute::AlwaysInline)) fn_flags |= GIR_FN_ALWAYSINLINE;
+        if (Fn.hasFnAttribute(Attribute::OptimizeNone)) fn_flags |= GIR_FN_OPTNONE | GIR_FN_NOINLINE;
+        if (Fn.hasFnAttribute(Attribute::OptimizeForSize)) fn_flags |= GIR_FN_OPTSIZE;
+        if (Fn.hasFnAttribute(Attribute::MinSize)) fn_flags |= GIR_FN_MINSIZE | GIR_FN_OPTSIZE;
+        if (Fn.hasFnAttribute(Attribute::Cold)) fn_flags |= GIR_FN_COLD;
+        if (Fn.hasFnAttribute(Attribute::Hot)) fn_flags |= GIR_FN_HOT;
+        if (Fn.hasFnAttribute(Attribute::InlineHint)) fn_flags |= GIR_FN_INLINEHINT;
+        if (avail_body(Fn)) fn_flags |= GIR_FN_AVAILEXT;
+        if (Fn.mustProgress()) fn_flags |= GIR_FN_MUSTPROGRESS;
         uint64_t falign = Fn.getAlign() ? Fn.getAlign()->value() : 16;
         if (falign < 16) falign = 16;
         gf.first_block = (uint32_t)T.blocks.size();
@@ -2502,6 +3230,7 @@ struct Exporter : GirDwarfHost {
                              ? abi_word(Fn.getAttributes().getParamAttrs(A.getArgNo()), A.getType(), "parameter")
                              : abi_plain(ty(A.getType()), "parameter");
             if (A.hasStructRetAttr()) sret_arg = A.getArgNo();
+            if (T.header.opt_level && A.hasNoAliasAttr() && A.getType()->isPointerTy()) w |= GIR_ABI_NOALIAS;
             args.push_back(ty(A.getType()));
             args.push_back(w);
         }
@@ -2782,12 +3511,31 @@ struct Exporter : GirDwarfHost {
         }
     }
 
+    // An available_externally function whose body is exported for the
+    // optimizer (E2): LLVM inlines such bodies and then drops them
+    // (EliminateAvailableExternally); at -O0 clang emits none.
+    bool avail_body(const Function &Fn) const {
+        return T.header.opt_level != 0 && Fn.hasAvailableExternallyLinkage() && !Fn.isDeclaration();
+    }
+
     // ---------------------------------------------------------------- module
     void run() {
         T.header.version = GIR_VERSION;
         T.header.tls_get_addr = GIR_NONE;
         pie = M.getPIELevel() != PIELevel::Default;
         T.header.flags = pie ? GIR_MF_PIE : 0;
+        {
+            Triple tr(M.getTargetTriple());
+            if (a64) {
+                if (tr.isOSDarwin() || tr.isOSWindows() || tr.getArch() != Triple::aarch64 ||
+                    tr.isArch32Bit())
+                    throw GirUnsupported{"unsupported: target " + M.getTargetTriple() +
+                                         " (AArch64: aarch64-linux-gnu only)"};
+                T.header.target = GIR_TARGET_AARCH64;
+            } else if (tr.getArch() != Triple::x86_64 && !M.getTargetTriple().empty()) {
+                throw GirUnsupported{"unsupported: target " + M.getTargetTriple()};
+            }
+        }
         T.strtab.push_back(0);
         T.dstr.push_back(0);
         T.dlocs.push_back(GirDLoc{0, 0, 0, 0});
@@ -2901,13 +3649,16 @@ struct Exporter : GirDwarfHost {
         dw = std::make_unique<GirDwarfBuilder>(M, T, *this);
         dw_on = dw->enabled();
         if (dw_on) dw->begin_module();
-        // Pass 3: function bodies.
+        // Pass 3: function bodies (and at -O1.. the bodies of available_externally
+        // functions, for the inliner only: GIR_FN_AVAILEXT, the symbol stays undefined)
         for (const Function &Fn : M.functions()) {
             auto it = gmap.find(&Fn);
-            if (it == gmap.end() || !(T.globals[it->second].flags & GIR_GF_DEFINED)) continue;
+            if (it == gmap.end()) continue;
+            if (!(T.globals[it->second].flags & GIR_GF_DEFINED) && !avail_body(Fn)) continue;
             function(Fn, it->second);
         }
         if (dw_on) dw->end_module();
+        tbaa_table();
         T.header.n_llvm_insts = (uint32_t)T.n_llvm_insts;
         if (!T.gcomdat.empty()) T.gcomdat.resize(T.globals.size(), GIR_NONE);
     }
@@ -2939,6 +3690,27 @@ struct Exporter : GirDwarfHost {
 
 }  // namespace
 
+void gir_prepare(Module &m) {
+    bool matrix = false;
+    for (const Function &F : m)
+        if (F.isDeclaration() && F.getName().starts_with("llvm.matrix.")) matrix = true;
+    if (!matrix) return;
+    PassBuilder PB;
+    LoopAnalysisManager LAM;
+    FunctionAnalysisManager FAM;
+    CGSCCAnalysisManager CGAM;
+    ModuleAnalysisManager MAM;
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+    FunctionPassManager FPM;
+    FPM.addPass(LowerMatrixIntrinsicsPass(/*Minimal=*/true));   // as LLVM's -O0 pipeline
+    for (Function &F : m)
+        if (!F.isDeclaration()) FPM.run(F, FAM);
+}
+
 void gir_export(const Module &m, GirTables &out, size_t size_hint) {
     // Bitcode takes 6 to 11 bytes per instruction (more with debug info);
     // over-reserving only costs address space.
@@ -2962,13 +3734,14 @@ static const char *op_name(unsigned op) {
         "insertelt", "shuffle", "dynalloca", "stacksave", "stackrestore", "vastart", "memcpy", "memset", "ctlz",
         "cttz", "ctpop", "bswap", "bitreverse", "fshl", "fshr", "ovf", "scmp", "ucmp", "fabs", "copysign", "fsqrt",
         "isfpclass", "cmpxchg", "atomicrmw", "fence", "tlsaddr", "frameaddr", "retaddr", "sjlj_setjmp",
-        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm", "landingpad"};
+        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm", "landingpad", "fma", "a64", "isconst"};
     static_assert(sizeof(names) / sizeof(names[0]) == GIR_OP_COUNT, "op names");
     return op < GIR_OP_COUNT ? names[op] : "?";
 }
 static std::string ty_name(const GirModule &m, unsigned t) {
-    static const char *names[] = {"void", "i1", "i8", "i16", "i32", "i64", "ptr", "f32", "f64", "f80", "i128", "f16"};
-    if (t <= GIR_T_F16) return names[t];
+    static const char *names[] = {"void", "i1", "i8", "i16", "i32", "i64", "ptr", "f32", "f64", "f80", "i128", "f16",
+                                  "f128"};
+    if (t <= GIR_T_F128) return names[t];
     if (t >= m.n_types) return "?";
     const GirTypeDef &d = m.types[t];
     switch (d.kind) {

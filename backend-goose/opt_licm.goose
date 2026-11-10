@@ -3,15 +3,17 @@
 // all the edges that come from outside the loop), then the pure
 // instructions of the loop whose operands are all defined outside it move
 // to the preheader, inner loops first, so an invariant leaves a nest level
-// by level. Division only by a constant that cannot trap. Loads only when
-// the loop writes no memory and the load either is in the header (which
-// runs whenever the preheader does) or reads an alloca or a global (always
-// addressable).
+// by level. Division only by a constant that cannot trap. Loads (E2) when
+// no memory write of the loop may alias them (opt_aa.goose) and the load
+// either is in the header (which runs whenever the preheader does) or reads
+// an alloca or a global (always addressable).
 
 var lc_hdr: u32[>..] = [];
 var lc_mark: u32[>..] = [];
 var lc_epoch: u32 = 0;
 var lc_tmp: u32[>..] = [];
+var lc_w: u32[>..] = [];        // the memory writes of the loop being hoisted from
+let LC_MAXW: i64 = 256;
 
 // Whether instruction I may be executed in the preheader (no trap, no effect).
 fn licm_op(I: Inst) -> bool {
@@ -29,19 +31,20 @@ fn licm_op(I: Inst) -> bool {
     if op >= GIR_CTLZ && op <= GIR_BITREVERSE { return true; }
     return false;
 }
-// Whether p certainly points to addressable memory (an alloca, a global, a
-// constant-offset GEP of one).
-fn always_addr(p0: u32) -> bool {
-    var p = res(p0);
-    loop {
-        if gir_kind(p) == GIR_V_GLOBAL { return true; }
-        if !is_inst(p) { return false; }
-        let I = o_ins[p];
-        if I.op == GIR_ALLOCA { return true; }
-        if I.op != GIR_GEP || I.c != 0 { return false; }
-        p = res(I.a);
+// Whether sz bytes at p are certainly addressable memory: inside an alloca
+// or a defined global variable, at a constant offset (a load from there may
+// run speculatively).
+fn always_addr(p0: u32, sz: u32) -> bool {
+    let b, off, known = aa_decompose(p0);
+    if !known || off < 0 { return false; }
+    var size: i64 = -1;
+    if gir_kind(b) == GIR_V_GLOBAL {
+        let G = M.globals[gir_idx(b)];
+        if G.kind == G_VAR && G.flags & (GF_DEFINED | GF_COMMON) != 0 && G.flags & GF_WEAK == 0 { size = G.size; }
+    } else if is_inst(b) && o_ins[b].op == GIR_ALLOCA {
+        size = o_ins[b].a;
     }
-    return false;
+    return size >= 0 && off + sz as i64 <= size;
 }
 
 fn licm() -> bool {
@@ -70,6 +73,7 @@ fn licm() -> bool {
         if licm_preheader(h) { made = true; }
     }
     if made { ensure_cfg(); }
+    aa_prepare();
     // 2. hoisting, inner loops (later headers in RPO) first
     var moved = false;
     lc_hdr.clear();
@@ -226,16 +230,27 @@ fn licm_loop(h: u32) -> bool {
     }
     if pre == NIL || s_start[pre + 1] - s_start[pre] != 1 { return false; }
     let pt = b_last[pre];
-    // does the loop write memory?
-    var writes = false;
+    // the loop's memory writes (any: one the alias analysis cannot place)
+    var any_write = false;
+    lc_w.clear();
     for b in rpo {
         if lc_mark[b] != ep { continue; }
         var i = b_first[b];
         while i != NIL {
-            if writes_mem(o_ins[i]) { writes = true; }
+            let W = o_ins[i];
+            if writes_mem(W) {
+                let op: u32 = W.op;
+                if (op == GIR_STORE || op == GIR_MEMCPY || op == GIR_MEMSET) && W.flags & (IF_VOLATILE | IF_ORD_MASK) == 0
+                   || op == GIR_CALL {
+                    lc_w.push(i);
+                } else {
+                    any_write = true;
+                }
+            }
             i = o_nxt[i];
         }
     }
+    if lc_w.len > LC_MAXW { any_write = true; }
     var moved = false;
     for b in rpo {
         if lc_mark[b] != ep { continue; }
@@ -245,7 +260,14 @@ fn licm_loop(h: u32) -> bool {
             let I = o_ins[i];
             var ok = false;
             if I.op == GIR_LOAD {
-                ok = !writes && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && (b == h || always_addr(I.a));
+                ok = !any_write && I.flags & (IF_VOLATILE | IF_ORD_MASK) == 0 && (b == h || always_addr(I.a, store_of(I.ty)));
+                if ok {
+                    let p = res(I.a);
+                    let sz = store_of(I.ty);
+                    for w in lc_w {
+                        if aa_clobbers(w, p, sz, I.b) { ok = false; break; }
+                    }
+                }
             } else {
                 ok = licm_op(I);
             }
@@ -771,7 +793,7 @@ fn gp_loop(h: u32) -> bool {
             let I = o_ins[i];
             let op: u32 = I.op;
             if op == GIR_CALL || op == GIR_ASM || op == GIR_SJLJ_SETJMP || op == GIR_SJLJ_LONGJMP || op == GIR_LANDINGPAD
-               || op == GIR_VASTART {
+               || op == GIR_VASTART || op == GIR_A64 && a64_effect(I.sub) {
                 for g in gp_list {
                     gp_ty[g] = NIL;
                     gp_st[g] = NIL;

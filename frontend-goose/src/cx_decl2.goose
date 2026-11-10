@@ -166,6 +166,7 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
         let fs = enclosing_ns(cur_scope);
         s = find_redecl(fs, key, ft);
     }
+    let created = s < 0;
     if s < 0 {
         s = csym(SK_FUNC, key, ft, loc);
         if target >= 0 { scope_add(target, s); }
@@ -189,7 +190,13 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
         // a template entity in D1 (not lowered, not in the oracles)
         cxs[s].flags = cxs[s].flags | CF_SPEC | CF_PATTERN;
     }
-    if ctx == DC_FRIEND && cxs[s].flags & CF_MEMBER == 0 { cxs[s].flags = cxs[s].flags | CF_FRIEND; }
+    if ctx == DC_FRIEND && cxs[s].flags & CF_MEMBER == 0 && created {
+        cxs[s].flags = cxs[s].flags | CF_FRIEND;
+        if cur_class >= 0 { friend_class.insert(s as u64, cur_class as u32); }
+    } else if ctx != DC_FRIEND && cxs[s].flags & CF_FRIEND != 0 {
+        // declared at namespace scope too: found by ordinary lookup
+        cxs[s].flags = cxs[s].flags & ~(CF_FRIEND as! u32);
+    }
     if extern_c && !is_member && cxs[s].flags & CF_MEMBER == 0 { cxs[s].flags = cxs[s].flags | CF_EXTERN_C; }
     if dependent_ctx() || (target >= 0 && scopes[target].flags & SCF_PATTERN != 0) { cxs[s].flags = cxs[s].flags | CF_PATTERN; }
     if target >= 0 && scopes[target].flags & SCF_INST != 0 && cxs[s].flags & CF_PATTERN == 0 && !d.qn.qual {
@@ -214,10 +221,82 @@ fn find_fn_template(sc: i64, name: u32, ft: u32, hdr: i64) -> i64 {
         if syms[s].kind as i64 == SK_TEMPLATE && cxs[s].tmpl >= 0 && tmpls[cxs[s].tmpl].kind as i64 == TT_FUNC {
             let t = cxs[s].tmpl as i64;
             let pf = tmpls[t].pattern as i64;
-            if pf >= 0 && syms[pf].ty == ft && tmpls[t].nparams == tmpls[hdr].nparams && same_header(t, hdr) { return s; }
+            if pf >= 0 && tmpls[t].nparams == tmpls[hdr].nparams && same_header(t, hdr) && types_equiv(syms[pf].ty, ft, t, hdr) { return s; }
         }
         s = cxs[s].nnext as i64;
     }
+    return -1;
+}
+
+// Are a and b the same type, as declared under template headers ha and hb
+// (C++ [temp.over.link]: decltype expressions compared token by token,
+// template parameters by position)?
+recursive fn types_equiv(a: u32, b: u32, ha: i64, hb: i64) -> bool {
+    if a == b { return true; }
+    if quals(a) != quals(b) { return false; }
+    let k = kind_of(a);
+    if k != kind_of(b) { return false; }
+    if k == TY_DEPEXPR { return tokens_equiv(types[a >> 4].n, types[b >> 4].n, ha, hb); }
+    if k == TY_POINTER || k == TY_LREF || k == TY_RREF || k == TY_PACKEXP { return types_equiv(tbase(a), tbase(b), ha, hb); }
+    if k == TY_ARRAY { return types[a >> 4].n == types[b >> 4].n && types_equiv(tbase(a), tbase(b), ha, hb); }
+    if k == TY_FUNC {
+        let fa = types[a >> 4];
+        let fb = types[b >> 4];
+        if fa.n != fb.n || fa.flags != fb.flags { return false; }
+        if !types_equiv(fa.base, fb.base, ha, hb) { return false; }
+        for i in fa.n { if !types_equiv(tparams[fa.extra + i], tparams[fb.extra + i], ha, hb) { return false; } }
+        return true;
+    }
+    if k == TY_DEPNAME {
+        if types[a >> 4].extra != types[b >> 4].extra || types[a >> 4].n != types[b >> 4].n { return false; }
+        return types_equiv(tbase(a), tbase(b), ha, hb);
+    }
+    if k == TY_DEPSPEC {
+        let la = types[a >> 4].n;
+        let lb = types[b >> 4].n;
+        if types[a >> 4].extra != types[b >> 4].extra || tl_count(la) != tl_count(lb) { return false; }
+        for i in tl_count(la) {
+            let x = tl_arg(la, i);
+            let y = tl_arg(lb, i);
+            if x.kind != y.kind { return false; }
+            if x.ty != 0 || y.ty != 0 { if !types_equiv(x.ty, y.ty, ha, hb) { return false; } }
+            if x.kind as i64 != TA_TYPE && x.v != y.v && kind_of(x.ty) != TY_DEPEXPR { return false; }
+        }
+        return true;
+    }
+    return false;
+}
+
+// The tokens of the parenthesized operands starting at token pa and pb
+// (decltype( ... )) are the same, template parameter names mapped by position.
+fn tokens_equiv(pa: i64, pb: i64, ha: i64, hb: i64) -> bool {
+    var i = pa;
+    var j = pb;
+    var depth = 0;
+    var n = 0;
+    loop {
+        if i >= tu_toks.len || j >= tu_toks.len { return false; }
+        let x = tu_toks[i];
+        let y = tu_toks[j];
+        if x.kind != y.kind { return false; }
+        let k = x.kind as i64;
+        if k == TK_IDENT && x.val != y.val {
+            let ia = tparam_index(ha, x.val);
+            if ia < 0 || ia != tparam_index(hb, y.val) { return false; }
+        } else if (k == TK_NUMBER || k == TK_STRING || k == TK_CHAR) && src[x.spell..x.spell + x.val] != src[y.spell..y.spell + y.val] { return false; }
+        if k == TK_L_PAREN { depth++; }
+        if k == TK_R_PAREN { depth--; if depth == 0 && n > 0 { return true; } }
+        if k == TK_EOF { return false; }
+        i++;
+        j++;
+        n++;
+    }
+    return false;
+}
+
+fn tparam_index(h: i64, name: u32) -> i64 {
+    if h < 0 { return -1; }
+    for i in tmpls[h].nparams as i64 { if tps[tmpls[h].params as i64 + i].name == name { return i; } }
     return -1;
 }
 
@@ -291,6 +370,7 @@ fn note_main_decl(s: i64, d: CD&) {
 // Keeps the parameters of a function's latest declaration (with the
 // default arguments of earlier ones).
 fn note_params(s: i64, d: CD&) {
+    if inst_debug() { write_stderr(str("note_params ", s, " ", ident_text(syms[s].name as i64), " params=", d.params, " n=", d.nparams, "\n")); }
     if d.params < 0 { return; }
     let g = fn_params.get(s as u64);
     if g {
@@ -507,6 +587,9 @@ recursive fn parse_simple_decl(ctx0: i64) {
         init_ok = (ctx == DC_NS || ctx == DC_BLOCK || ctx == DC_COND) && ds.sc != SC_TYPEDEF;
         parse_cdeclr(if base0 == 0 { t_void } else { base }, 0, d);
         init_ok = sv_init;
+        if base0 == 0 && !no_type_ok(d, ctx) {
+            error_at((if d.qn.loc != 0 { d.qn.loc } else { dloc }) as i64, "a type specifier is required for all declarations");
+        }
         if d.qn.kind as i64 == QK_CONV && is_func(d.ty) { d.ty = func_with_ret(d.ty, d.qn.conv); }
         cx_attrs(a);
         parse_asm_label_cx(a);
@@ -525,7 +608,7 @@ recursive fn parse_simple_decl(ctx0: i64) {
         if ds.sc == SC_TYPEDEF {
             if pending_tmpl >= 0 { pending_tmpl = -1; }
             if d.qn.name != 0 { declare_typedef(d.qn.name, apply_type_attrs(d.ty, a, dloc), dloc, ctx); }
-        } else if d.is_fn && is_func(d.ty) && !(ctx == DC_BLOCK && !first_paren_decl(d)) {
+        } else if is_func(d.ty) && (d.is_fn || !is_opaque(d.ty)) && !(ctx == DC_BLOCK && !first_paren_decl(d)) {
             if pending_inst {
                 // an explicit instantiation of a function template: nothing in D1
                 if !accept(TK_COMMA) { break; }
@@ -568,6 +651,19 @@ recursive fn parse_simple_decl(ctx0: i64) {
 }
 
 // [explicit] X ( ... ) -> where X names a class template.
+// A declarator without decl-specifier types is valid only for constructors,
+// destructors and conversion functions (C++ [dcl.type]/2).
+fn no_type_ok(d: CD&, ctx: i64) -> bool {
+    let k = d.qn.kind as i64;
+    if k == QK_DTOR || k == QK_CONV { return true; }
+    if d.qn.dep != 0 || (d.qn.qual && d.qn.scope < 0) { return true; }
+    if k != QK_IDENT || !d.is_fn { return false; }
+    let cls = member_scope(d, ctx);
+    if cls >= 0 && scopes[cls].kind as i64 == CS_CLASS { return d.qn.name == scopes[cls].name; }
+    // friend X::X() resolved elsewhere; a namespace-scope declaration is not a constructor
+    return false;
+}
+
 fn deduction_guide_ahead() -> bool {
     var j = pc;
     if tu_toks[j].kind as i64 == TK_KW + KW_EXPLICIT {
@@ -674,9 +770,58 @@ var decl_is_extern: bool = false;    // the variable declaration being parsed sa
 recursive fn declare_var(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     decl_is_extern = ds.sc == SC_EXTERN;
     var ty = apply_type_attrs(d.ty, a, d.loc);
+    // a constexpr variable is const (C++ [dcl.constexpr]p10)
+    if ds.is_constexpr && !is_ref(ty) && !is_opaque(ty) { ty = with_q(ty, Q_CONST); }
     if ds.sc != SC_EXTERN && ctx != DC_CLASS && !is_ref(ty) && !dependent_ctx() { need_complete(ty); }
     if ctx != DC_NS { cur_init_prio = 65535; }
     let name = d.qn.name;
+    if inst_var_tmpl >= 0 {
+        // D2: a variable template specialization's declaration
+        let vt = inst_var_tmpl;
+        inst_var_tmpl = -1;
+        pending_tmpl = -1;
+        let s = csym(SK_VAR, name, ty, d.loc);
+        syms[s].flags = SF_FILESCOPE | SF_INLINE;
+        cxs[s].dscope = tmpls[vt].scope;
+        cxs[s].flags = (CF_SPEC | (if ds.is_constexpr { CF_CONSTEXPR } else { 0 })) as! u32;
+        if ctx == DC_CLASS { cxs[s].flags = cxs[s].flags | CF_MEMBER | CF_STATIC; }
+        cxs[s].tmpl = vt as! i32;
+        cxs[s].targs = inst_var_binds;
+        inst_var_result = s;
+        return s;
+    }
+    if (pending_tmpl >= 0 || pending_explicit) && d.qn.has_targs && !d.qn.qual {
+        // D2: a partial or explicit specialization of a variable template
+        let vs = var_template_of(name);
+        if vs >= 0 {
+            let vt = cxs[vs].tmpl as i64;
+            if pending_tmpl >= 0 && args_dependent(d.qn.targs) {
+                let pt = pending_tmpl;
+                pending_tmpl = -1;
+                tmpls[pt].kind = TT_VAR as! u8;
+                tmpls[pt].sym = vs as! i32;
+                tmpls[pt].spec_args = d.qn.targs;
+                tmpls[pt].sargs_t = d.qn.targs_t as! i32;
+                tmpls[pt].primary = vt as! i32;
+                tmpls[vt].specs = link_add(tmpls[vt].specs, pt);
+                let pv = csym(SK_VAR, name, ty, d.loc);
+                cxs[pv].flags = CF_PATTERN;
+                tmpls[pt].pattern = pv as! i32;
+                return pv;
+            }
+            pending_tmpl = -1;
+            let full = complete_args(vt, d.qn.targs);
+            let s = csym(SK_VAR, name, ty, d.loc);
+            syms[s].flags = SF_FILESCOPE;
+            cxs[s].dscope = cur_scope as! i32;
+            cxs[s].flags = (CF_SPEC | (if ds.is_constexpr { CF_CONSTEXPR } else { 0 })) as! u32;
+            cxs[s].tmpl = vt as! i32;
+            cxs[s].targs = full;
+            if ds.is_inline || ds.is_constexpr { syms[s].flags = syms[s].flags | SF_INLINE; }
+            var_specs.insert(((vt as u64) << 32) | (full as u64), s as! u32);
+            return s;
+        }
+    }
     if pending_tmpl >= 0 {
         // a variable template (or a static data member of a class template)
         if !d.qn.qual {
@@ -1085,7 +1230,7 @@ fn func_with_ret(ft: u32, ret: u32) -> u32 {
 fn builtin_template(name: const u8[:]) {
     let t = tmpls.len;
     tmpls.push(Tmpl { kind: TT_CLASS as! u8, depth: 1, rsv: 0, sym: -1, params: 0, nparams: 0, scope: 0, pos: 0, t0: 0, t1: 0,
-        pattern: -1, specs: -1, outer: -1, spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: -1, pat_t: -1 });
+        pattern: -1, specs: -1, outer: -1, spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: -1, pat_t: -1, sargs_t: 0 });
     let s = csym(SK_TEMPLATE, intern(name), 0, 0);
     cxs[s].tmpl = t as! i32;
     cxs[s].flags = CF_TEMPLATE;
@@ -1096,6 +1241,7 @@ fn builtin_template(name: const u8[:]) {
 // The parser's start: the C++ types and the global namespace.
 fn cx_init() {
     rec_inst_hook = true;
+    matrix_unknown_t = mk_depname(t_unknown, intern("__matrix_type"), -1);
     id_this = intern("this");
     cx_types_init();
     names_init();

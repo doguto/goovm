@@ -23,7 +23,14 @@
 //              each to the first register of its class that is free over
 //              all its segments (per-register occupancy bitmaps over the
 //              positions), its PHI partner's or its argument register first;
-//              no splitting: a value that finds no register stays in memory
+//              a value that finds no register stays in memory
+//   splitting  (E2) a value live across calls may take a caller-saved
+//              register (any xmm register: the SysV ABI has none that is
+//              callee-saved) when its uses weigh more than the calls it
+//              crosses: it is stored to its home where it is defined, gives
+//              up the register before each call it lives across and is
+//              reloaded after it (rq_list), as LLVM's greedy allocator
+//              splits such a range around the calls
 //   registers  rbx r12-r15 (callee-saved) and rsi rdi r8 r9 r10; xmm4-15.
 //              rax rcx rdx r11 and xmm0-3 are never pinned: they are the
 //              fixed registers of division, shifts, returns and indirect
@@ -81,6 +88,16 @@ var rg_weight: u32[>..] = [];      // per global value
 var rg_order: u32[>..] = [];
 var rg_hint: u8[>..] = [];         // per global value: preferred register, NOREG
 var rg_seen: u32[>..] = [];        // per global value: last block stamp seen in the backward scan
+// (E2) values split around calls: per value id 1 if it is reloaded after the
+// calls it lives across; per instruction (CSR) the values reloaded after it
+var rg_rl: u8[>..] = [];
+var rq_start: u32[>..] = [];
+var rq_list: u32[>..] = [];
+var rq_tmp_j: u32[>..] = [];
+var rq_tmp_v: u32[>..] = [];
+var rg_iblk: u32[>..] = [];        // per instruction: its block
+var rg_lpl: u64[>..] = [];         // global values live into a landing pad (bitset)
+var rg_any_rl = false;
 
 inline fn rg_bit(w: u64[>..]&, base: i64, g: u32) -> bool { (w[base + (g >> 6)] >> (g & 63)) & 1 != 0 }
 
@@ -130,11 +147,14 @@ fn rg_alloc(insts: const Inst[:], blocks: const Block[:]) {
     if rg_reg.len < nv {
         rg_reg.resize(nv, NOREG);
         rg_gid.resize(nv, NIL);
+        rg_rl.resize(nv, 0);
     }
     for q in 0..nv {
         rg_reg[q] = NOREG;
         rg_gid[q] = NIL;
+        rg_rl[q] = 0;
     }
+    rg_any_rl = false;
     let F = M.funcs[f_index];
     if F.flags & (FN_SJLJ | FN_RETURNS_TWICE) != 0 { return; }
     let nb: u32 = blocks.len as! u32;
@@ -183,11 +203,13 @@ fn rg_build_cfg(blocks: const Block[:]) {
     rg_sl.clear();
     rg_bfirst.clear();
     rg_blast.clear();
+    rg_iblk.clear();
     for B, b in blocks {
         rg_ss.push(rg_sl.len as! u32);
         rg_succs(b as! u32);
         rg_bfirst.push(B.first_inst - f_first_inst);
         rg_blast.push(B.first_inst - f_first_inst + B.n_inst - 1);
+        for k in 0..B.n_inst { rg_iblk.push(b as! u32); }
     }
     rg_ss.push(rg_sl.len as! u32);
     // loop depth estimate: a retreating edge (to a block at or before the
@@ -478,6 +500,56 @@ fn rg_crossed(g: u32) -> u32 {
     }
     return m;
 }
+// The weight of the calls inside g's segments (its definition exempt): each
+// 8^(loop depth of its block), what reloading g after each of them costs.
+fn rg_cross_weight(g: u32) -> u32 {
+    let id = rg_val[g];
+    var dpos: u32 = NIL;
+    if id < f_nins && M.insts[f_first_inst + id].op != GIR_PHI { dpos = 2 * id + 3; }
+    var w: u32 = 0;
+    for k in vs_start[g]..vs_start[g + 1] {
+        let s = vs_s[k];
+        let e = vs_e[k];
+        var lo: i64 = 0;
+        var hi: i64 = cl_pos.len;
+        while lo < hi {
+            let mid = (lo + hi) >> 1;
+            if cl_pos[mid] < s { lo = mid + 1; } else { hi = mid; }
+        }
+        while lo < cl_pos.len && cl_pos[lo] < e {
+            if cl_pos[lo] != dpos {
+                let j = (cl_pos[lo] - 3) >> 1;
+                let x = w + ((1 as u32) << (3 * rg_bdepth[rg_iblk[j]]));
+                w = if x < w { 0xFFFFFFFF } else { x };
+            }
+            lo++;
+        }
+    }
+    return w;
+}
+// The clobber points inside g's segments, for the reload lists.
+fn rg_note_reloads(g: u32) {
+    let id = rg_val[g];
+    var dpos: u32 = NIL;
+    if id < f_nins && M.insts[f_first_inst + id].op != GIR_PHI { dpos = 2 * id + 3; }
+    for k in vs_start[g]..vs_start[g + 1] {
+        let s = vs_s[k];
+        let e = vs_e[k];
+        var lo: i64 = 0;
+        var hi: i64 = cl_pos.len;
+        while lo < hi {
+            let mid = (lo + hi) >> 1;
+            if cl_pos[mid] < s { lo = mid + 1; } else { hi = mid; }
+        }
+        while lo < cl_pos.len && cl_pos[lo] < e {
+            if cl_pos[lo] != dpos {
+                rq_tmp_j.push((cl_pos[lo] - 3) >> 1);
+                rq_tmp_v.push(id);
+            }
+            lo++;
+        }
+    }
+}
 // Whether register r is free over g's segments.
 fn rg_free(r: u32, g: u32) -> bool {
     let base: i64 = rg_pw * r as i64;
@@ -555,6 +627,20 @@ fn rg_assign() {
             rg_block_range(r, 1, 3);
         }
     }
+    // values live into a landing pad are not split (the unwinder restores
+    // only the callee-saved registers)
+    let w = rg_words;
+    rg_lpl.clear();
+    rg_lpl.resize(w, 0);
+    for b in 0..rg_nb {
+        let B = M.blocks[f_first_block + b];
+        if B.n_inst == 0 || M.insts[B.first_inst].op != GIR_LANDINGPAD { continue; }
+        let base: i64 = w * b as i64;
+        for x in 0..w { rg_lpl[x] |= rg_lin[base + x]; }
+    }
+    rq_tmp_j.clear();
+    rq_tmp_v.clear();
+    let split = !opt_off("split");
     // registers that arguments arrive in: other values take them last
     var argm: u32 = 0;
     for g in 0..ng { if rg_hint[g] != NOREG { argm |= bit(rg_hint[g]); } }
@@ -570,15 +656,22 @@ fn rg_assign() {
         let cr = rg_crossed(g);
         var cand: u32 = 0;
         var pref: u32 = 0;
+        // splitting around the calls: allowed when the calls it crosses
+        // weigh less than its uses and definition
+        var rld = false;
+        let calls = cr & ((1 as u32) << CL_CALL) != 0;
+        let can_split = split && calls && cr & ((1 as u32) << CL_ALL) == 0 && !rg_bit(rg_lpl, 0, g)
+                        && rg_cross_weight(g) < rg_weight[g];
         if c == RC_GPR {
             if cr & ((1 as u32) << CL_ALL) != 0 { continue; }
-            if cr & ((1 as u32) << CL_CALL) != 0 { cand = GP_CALLEE; pref = GP_CALLEE; }
+            if calls { cand = GP_CALLEE; pref = GP_CALLEE; }
             else { cand = GP_CALLEE | RG_GPR_CALLER; pref = RG_GPR_CALLER; }
             if cr & ((1 as u32) << CL_REP) != 0 { cand &= ~(bit(RSI) | bit(RDI)); }
         } else {
-            if cr & ((1 as u32) << CL_ALL | (1 as u32) << CL_CALL) != 0 { continue; }
+            if cr & ((1 as u32) << CL_ALL) != 0 || calls && !can_split { continue; }
             cand = RG_XMM;
             pref = RG_XMM;
+            rld = calls;
         }
         var r: u32 = 32;
         let h: u32 = rg_phi_hint(g);
@@ -603,9 +696,26 @@ fn rg_assign() {
                 if rg_free(x, g) { r = x; }
             }
         }
+        if r == 32 && c == RC_GPR && can_split {
+            // no callee-saved register left: a caller-saved one, split
+            var m = RG_GPR_CALLER;
+            if cr & ((1 as u32) << CL_REP) != 0 { m &= ~(bit(RSI) | bit(RDI)); }
+            if h < 32 && m & bit(h) != 0 && rg_free(h, g) { r = h; }
+            while m != 0 && r == 32 {
+                let x = ctz32(m);
+                m &= m - 1;
+                if rg_free(x, g) { r = x; }
+            }
+            rld = r != 32;
+        }
         if r == 32 { continue; }
         rg_take(r, g);
         rg_reg[id] = r as! u8;
+        if rld {
+            rg_rl[id] = 1;
+            rg_any_rl = true;
+            rg_note_reloads(g);
+        }
         if bit(r) & GP_CALLEE != 0 { rg_cs |= bit(r); }
         any = true;
     }
@@ -655,6 +765,19 @@ fn rg_finish(insts: const Inst[:], blocks: const Block[:]) {
         if rg_reg[id] == NOREG { continue; }
         let j = kl_tmp_j[k];
         kl_list[rg_fill[j]] = id;
+        rg_fill[j]++;
+    }
+    // reloads after the calls, grouped by instruction
+    rq_start.clear();
+    rq_start.resize(f_nins + 1, 0);
+    for j in rq_tmp_j { rq_start[j + 1]++; }
+    for j in 0..f_nins { rq_start[j + 1] += rq_start[j]; }
+    rq_list.clear();
+    rq_list.resize(rq_start[f_nins], 0);
+    for j in 0..f_nins { rg_fill[j] = rq_start[j]; }
+    for k in 0..rq_tmp_j.len {
+        let j = rq_tmp_j[k];
+        rq_list[rg_fill[j]] = rq_tmp_v[k];
         rg_fill[j]++;
     }
     // pinned live-ins per block
@@ -758,7 +881,42 @@ fn rg_entry_moves() {
         let ext = vi[id].st & ST_EXT != 0;
         rg_put(id);
         if ext { zext_reg(rg_reg[id], bits_of(vtype(id))); }
+        if rg_rl[id] != 0 { ra_store_home(id, rg_reg[id]); }
     }
+}
+// (E2) Before clobbering instruction j: the split values it lives across
+// give up their registers (their home holds them since their definition).
+fn rg_drop_rl(j: u32) {
+    for k in rq_start[j]..rq_start[j + 1] {
+        let id = rq_list[k];
+        let r: u32 = rg_reg[id];
+        if r_val[r] == id {
+            r_val[r] = RV_NONE;
+            r_free |= bit(r);
+        }
+        vi[id].reg = NOREG;
+        rg_pin &= ~bit(r);
+    }
+}
+// After it: they are reloaded.
+fn rg_reload_rl(j: u32) {
+    for k in rq_start[j]..rq_start[j + 1] {
+        let id = rq_list[k];
+        let r: u32 = rg_reg[id];
+        let occ = r_val[r];
+        if occ < RV_TEMP && occ != id { ra_evacuate(occ, r); }
+        ra_load_from(r, ra_home(id), vtype(id));
+        r_val[r] = id;
+        r_free &= ~bit(r);
+        r_temp &= ~bit(r);
+        vi[id].reg = r as! u8;
+        vi[id].st &= ~ST_EXT;
+        rg_pin |= bit(r);
+    }
+}
+// After the instruction that defines split value j: its home is written.
+fn rg_def_store(j: u32) {
+    if rg_rl[j] != 0 { ra_store_home(j, rg_reg[j]); }
 }
 // Instruction j defines pinned value j: its register is reserved for it (a
 // local value there moves away).

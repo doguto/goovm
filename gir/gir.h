@@ -3,7 +3,8 @@
  * GIR is the hand-off format between LLVM and goovm's fast back-end. The
  * C++ exporter (tools/goovm-llc/gir_export.cpp) walks an llvm::Module once
  * and fills these tables; the Goose back-end (backend-goose/) reads them
- * and writes an ELF64 x86-64 relocatable object.
+ * and writes an ELF64 x86-64 or (milestone F1, GirHeader.target) AArch64
+ * relocatable object.
  *
  * Every record is a fixed-size struct whose fields are naturally aligned
  * with no padding, so the same bytes are valid as a C struct and as the
@@ -57,7 +58,11 @@
  *    conversions between i128 and floating point, frem, half <-> float,
  *    the libm intrinsics, large or variable-size memcpy/memmove/memset) are
  *    already explicit CALLs of that function: a back-end never has to name
- *    a symbol that is not in the globals table.
+ *    a symbol that is not in the globals table. (AArch64, additive: the
+ *    back-end names the soft-float routines of fp128 arithmetic, compares
+ *    and conversions (__addtf3, __lttf2, __extenddftf2, ...) and the
+ *    outline-atomics helpers (__aarch64_ldadd4_acq_rel, ...) itself, as
+ *    LLVM's AArch64 back-end does.)
  *  - ABI details are lowered as far as the IR allows: arguments with the
  *    LLVM `signext` attribute arrive as an explicit SEXT to i32; a function
  *    whose return has `signext` returns an explicit SEXT to i32 (so RET's
@@ -65,6 +70,14 @@
  *    parameter returns that parameter (Func.ret_ty = GIR_T_PTR). What is
  *    left is the plain LLVM x86-64 C calling convention on the argument and
  *    return types, plus the byval words of CALL and Func arguments.
+ *    On AArch64 (additive, F1) it is the LLVM AAPCS64 convention
+ *    (CC_AArch64_AAPCS) on the types: INT, FP and vector values of 8 or 16
+ *    bytes in x0-x7 / v0-v7; i128 in an even-numbered register pair; an
+ *    array whose members are all of one type (HFA [n x float], HVA,
+ *    [n x i64]) in consecutive registers of one class, or entirely on the
+ *    stack; the GIR_ABI_SRET argument in x8 (not returned); aggregate
+ *    returns split into their members (x0-x7, v0-v7). Variadic arguments
+ *    are passed like the others.
  */
 #ifndef GIR_H
 #define GIR_H
@@ -91,7 +104,8 @@ enum GirType {
     GIR_T_I32 = 4,  GIR_T_I64 = 5, GIR_T_PTR = 6,
     GIR_T_F32 = 7,  GIR_T_F64 = 8, GIR_T_F80 = 9, GIR_T_I128 = 10,
     GIR_T_F16 = 11,              /* IEEE half (_Float16) */
-    GIR_T_FIRST_USER = 16        /* 12..15 are reserved (kind VOID) */
+    GIR_T_F128 = 12,             /* additive (F1): IEEE quad (fp128, AArch64 `long double`) */
+    GIR_T_FIRST_USER = 16        /* 13..15 are reserved (kind VOID) */
 };
 
 /* Type kinds (GirTypeDef.kind). */
@@ -105,7 +119,8 @@ enum GirClass {
     GIR_C_NONE = 0,  /* void */
     GIR_C_INT = 1,   /* integer of 1..64 bits or pointer: one general register */
     GIR_C_INT2 = 2,  /* integer of 65..128 bits: two general registers (lo, hi) */
-    GIR_C_FP = 3,    /* f16, f32, f64: low part of one SSE register */
+    GIR_C_FP = 3,    /* f16, f32, f64 (and f128 on AArch64): low part of one SSE register
+                        (x86-64) or one SIMD&FP register (AArch64) */
     GIR_C_X87 = 4,   /* f80: x87 stack */
     GIR_C_VEC = 5,   /* fixed vector */
     GIR_C_MEM = 6    /* struct or array (first-class aggregate value) */
@@ -119,7 +134,7 @@ enum GirClass {
  * them, so the in-memory bit packing never matters.
  *   INT    bits = width
  *   PTR    bits = 64
- *   FLOAT  bits = 16, 32, 64 or 80
+ *   FLOAT  bits = 16, 32, 64, 80 or 128
  *   VECTOR n = lanes, elems = lane type id (an INT of 1/8/16/32/64 bits or
  *          F32/F64); lane k is at byte offset k * types[elems].size
  *   ARRAY  n = elements, elems = element type id
@@ -166,8 +181,9 @@ enum GirOp {
     GIR_ALLOCA,        /* a = size in bytes, b = alignment (immediates);      */
                        /*   entry block only; ty = ptr                       */
     GIR_LOAD,          /* a = pointer; ty = loaded type; flags: VOLATILE,     */
-                       /*   atomic ordering                                  */
-    GIR_STORE,         /* a = value, b = pointer; aux = stored type; flags    */
+                       /*   atomic ordering; b = TBAA node (E2, 0 = none)    */
+    GIR_STORE,         /* a = value, b = pointer; aux = stored type; flags;   */
+                       /*   c = TBAA node (E2, 0 = none)                     */
     GIR_GEP,           /* a = base pointer, b = s, c = n: ops[s], ops[s+1] = */
                        /*   constant byte offset (lo, hi of an i64), then n  */
                        /*   pairs (index value, scale in bytes); result      */
@@ -198,7 +214,8 @@ enum GirOp {
                        /*   ty = ptr; memory below the current stack         */
     GIR_STACKSAVE,     /* ty = ptr                                           */
     GIR_STACKRESTORE,  /* a = value from STACKSAVE                           */
-    GIR_VASTART,       /* a = pointer to a va_list (SysV: 24 bytes)          */
+    GIR_VASTART,       /* a = pointer to a va_list (SysV: 24 bytes; AAPCS64: */
+                       /*   32 bytes)                                        */
     GIR_MEMCPY,        /* a = dst, b = src, c = byte count (imm, <= 4096);   */
                        /*   non-overlapping                                  */
     GIR_MEMSET,        /* a = dst, b = byte value (i8 value), c = count (imm,*/
@@ -247,6 +264,22 @@ enum GirOp {
                        /*   function's GirEh type table, k < 0 the exception */
                        /*   specification at byte -k-1 of its spec table,    */
                        /*   k = 0 (last only) cleanup; n = 0: cleanup only   */
+                       /*   (AArch64: from x0/w1)                            */
+    /* --- version 2, AArch64 (additive, milestone F1; x86-64 producers do
+     * not emit these) --- */
+    GIR_FMA,           /* a * b + c with a single rounding (llvm.fma,        */
+                       /*   llvm.fmuladd on AArch64); ty = f32, f64 or a     */
+                       /*   vector of them                                   */
+    GIR_A64,           /* AArch64 intrinsic (NEON, ACLE): sub = GirA64;      */
+                       /*   ty = result type, aux = type of a; a, b, c =     */
+                       /*   operands (an unused one is the constant i32 0)   */
+    /* --- version 2, optimizer (additive, milestone E2; emitted at opt_level
+     * >= 1 only) --- */
+    GIR_ISCONST,       /* a = b = c = a value of any type; ty = i1: whether  */
+                       /*   it is a constant once optimized (LLVM            */
+                       /*   llvm.is.constant, __builtin_constant_p): the     */
+                       /*   middle-end folds it after inlining; never reaches */
+                       /*   code generation                                  */
     GIR_OP_COUNT
 };
 
@@ -287,6 +320,71 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
     GIR_X86_PSRAID         /* llvm.x86.sse2.psrai.d                           */
 };
 
+/* GIR_A64.sub (additive, milestone F1): AArch64 NEON and ACLE operations
+ * that are not generic IR (llvm.aarch64.neon.*, llvm.aarch64.*), each the
+ * Arm instruction of that name. ty is the result type, aux the type of
+ * operand a; a vector type gives the arrangement (lanes, 64 or 128 bits),
+ * a scalar type (i32, i64, f32, f64) the scalar (SISD) form, computed in a
+ * SIMD&FP register. a, b, c are value references; an operand that is not
+ * used is the constant i32 0; "#" marks operands that must be constants
+ * (shift amounts, lane numbers, fraction bits; a splat vector constant for
+ * SQSHLU, whose lane 0 is the amount). Structure loads and stores (ld2..ld4,
+ * their lane and replicate forms, st2..st4) are generic loads, stores and
+ * shuffles in GIR (the exporter expands them). */
+enum GirA64 {
+    /* same type: (a, b) -> ty */
+    GIR_A64_SQADD = 0, GIR_A64_UQADD, GIR_A64_SQSUB, GIR_A64_UQSUB, GIR_A64_SHADD, GIR_A64_UHADD,
+    GIR_A64_SRHADD, GIR_A64_URHADD, GIR_A64_SHSUB, GIR_A64_UHSUB, GIR_A64_SMAX, GIR_A64_UMAX,
+    GIR_A64_SMIN, GIR_A64_UMIN, GIR_A64_SABD, GIR_A64_UABD, GIR_A64_SSHL, GIR_A64_USHL,
+    GIR_A64_SQSHL, GIR_A64_UQSHL, GIR_A64_SRSHL, GIR_A64_URSHL, GIR_A64_SQRSHL, GIR_A64_UQRSHL,
+    GIR_A64_ADDP, GIR_A64_SMAXP, GIR_A64_UMAXP, GIR_A64_SMINP, GIR_A64_UMINP, GIR_A64_SQDMULH,
+    GIR_A64_SQRDMULH, GIR_A64_PMUL, GIR_A64_FMAX, GIR_A64_FMIN, GIR_A64_FMAXNM, GIR_A64_FMINNM,
+    GIR_A64_FABD, GIR_A64_FMULX, GIR_A64_FRECPS, GIR_A64_FRSQRTS, GIR_A64_FACGE, GIR_A64_FACGT,
+    GIR_A64_FADDP, GIR_A64_FMAXP, GIR_A64_FMINP, GIR_A64_FMAXNMP, GIR_A64_FMINNMP,
+    GIR_A64_SUQADD, GIR_A64_USQADD,          /* (accumulator a, operand b) */
+    /* unary: a -> ty (same lane count; fp <-> int conversions round as named) */
+    GIR_A64_SQABS, GIR_A64_SQNEG, GIR_A64_ABS, GIR_A64_CLS, GIR_A64_FRECPE, GIR_A64_FRSQRTE,
+    GIR_A64_URECPE, GIR_A64_URSQRTE, GIR_A64_FCVTZS, GIR_A64_FCVTZU, GIR_A64_FCVTNS, GIR_A64_FCVTNU,
+    GIR_A64_FCVTMS, GIR_A64_FCVTMU, GIR_A64_FCVTPS, GIR_A64_FCVTPU, GIR_A64_FCVTAS, GIR_A64_FCVTAU,
+    GIR_A64_SADDLP, GIR_A64_UADDLP,          /* pairwise add long */
+    GIR_A64_SQXTN, GIR_A64_UQXTN, GIR_A64_SQXTUN, GIR_A64_FCVTXN,   /* narrow */
+    GIR_A64_FRINTN, GIR_A64_FRINTP, GIR_A64_FRINTM, GIR_A64_FRINTZ, GIR_A64_FRINTA, GIR_A64_FRINTX,
+    GIR_A64_FRINTI, GIR_A64_CLZ, GIR_A64_CNT, GIR_A64_RBIT,
+    /* across lanes: vector a -> scalar ty (signed results sign-extended) */
+    GIR_A64_ADDV, GIR_A64_SMAXV, GIR_A64_UMAXV, GIR_A64_SMINV, GIR_A64_UMINV, GIR_A64_SADDLV,
+    GIR_A64_UADDLV, GIR_A64_FMAXV, GIR_A64_FMINV, GIR_A64_FMAXNMV, GIR_A64_FMINNMV,
+    GIR_A64_FADDV,                           /* (pairwise adds down to one lane) */
+    /* long (a, b narrow -> ty wide) and high-narrow (a, b wide -> ty narrow) */
+    GIR_A64_SMULL, GIR_A64_UMULL, GIR_A64_SQDMULL, GIR_A64_PMULL, GIR_A64_RADDHN, GIR_A64_RSUBHN,
+    /* shift by immediate: (a, #b); SLI / SRI: (a, b, #c) */
+    GIR_A64_SQSHLU, GIR_A64_RSHRN, GIR_A64_SQSHRN, GIR_A64_UQSHRN, GIR_A64_SQRSHRN, GIR_A64_UQRSHRN,
+    GIR_A64_SQSHRUN, GIR_A64_SQRSHRUN, GIR_A64_SLI, GIR_A64_SRI,
+    GIR_A64_SCVTF_FX, GIR_A64_UCVTF_FX, GIR_A64_FCVTZS_FX, GIR_A64_FCVTZU_FX,   /* (a, #fbits) */
+    /* by element: (a, b, #c lane of b) */
+    GIR_A64_SQDMULH_LANE, GIR_A64_SQRDMULH_LANE,
+    /* table lookup: a = table (16, 32, 48 or 64 bytes of i8), b = indices; TBX: c = the
+       vector whose lanes out-of-range indices keep */
+    GIR_A64_TBL, GIR_A64_TBX,
+    /* system (ACLE): barriers and hints (#a = the CRm / hint number), the thread pointer,
+       system registers (#a = op0:op1:CRn:CRm:op2 as in MRS/MSR, 16 bits; MSR: b = value) */
+    GIR_A64_DMB, GIR_A64_DSB, GIR_A64_ISB, GIR_A64_HINT, GIR_A64_THREAD_POINTER, GIR_A64_MRS,
+    GIR_A64_MSR,
+    /* CRC32 (ACLE __crc32*, +crc): (a = accumulator i32, b = data) -> i32 */
+    GIR_A64_CRC32B, GIR_A64_CRC32H, GIR_A64_CRC32W, GIR_A64_CRC32X,
+    GIR_A64_CRC32CB, GIR_A64_CRC32CH, GIR_A64_CRC32CW, GIR_A64_CRC32CX,
+    /* exclusives (ACLE __builtin_arm_ldrex / strex / ldaex / stlex / clrex): aux = the
+       memory type (i8..i64); LDXR / LDAXR: a = pointer -> i64 (zero-extended);
+       STXR / STLXR: (a = value i64, b = pointer) -> i32 status (0: stored) */
+    GIR_A64_LDXR, GIR_A64_LDAXR, GIR_A64_STXR, GIR_A64_STLXR, GIR_A64_CLREX,
+    /* cryptographic extension (+aes, +sha2), operands as llvm.aarch64.crypto.* */
+    GIR_A64_AESE, GIR_A64_AESD, GIR_A64_AESMC, GIR_A64_AESIMC, GIR_A64_SHA1C, GIR_A64_SHA1P,
+    GIR_A64_SHA1M, GIR_A64_SHA1H, GIR_A64_SHA1SU0, GIR_A64_SHA1SU1, GIR_A64_SHA256H, GIR_A64_SHA256H2,
+    GIR_A64_SHA256SU0, GIR_A64_SHA256SU1,
+    /* dot product (+dotprod): (a = accumulator, b, c bytes) -> ty */
+    GIR_A64_SDOT, GIR_A64_UDOT,
+    GIR_A64_COUNT
+};
+
 /* GirInst.flags */
 #define GIR_IF_VOLATILE      0x0001u
 #define GIR_IF_ORD_SHIFT     1        /* bits 1..3: atomic ordering (LLVM AtomicOrdering) */
@@ -305,6 +403,17 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
 #define GIR_IF_NSW           0x1000u  /* additive (E1): ADD, SUB, MUL, SHL whose signed   */
                                       /*   overflow is undefined (LLVM nsw); a hint for  */
                                       /*   the optimizer, ignored by -O0 code generation */
+/* additive (milestone E2), CALL only, hints for the optimizer: */
+#define GIR_IF_NOINLINE_CALL 0x2000u  /* call-site noinline ([[clang::noinline]],         */
+                                      /*   -fno-inline's calls): never inlined           */
+#define GIR_IF_ALWAYSINLINE_CALL 0x4000u /* call-site always_inline ([[clang::always_inline]]) */
+#define GIR_IF_CALL_NOWRITE  0x8000u  /* the call writes no memory (LLVM readonly/readnone, */
+                                      /*   memory(read)); not on invokes or variadic calls */
+#define GIR_IF_CALL_NOREAD   0x0040u  /* with NOWRITE: it reads none either (memory(none)) */
+#define GIR_IF_CALL_PURE     0x0020u  /* nounwind and willreturn: with NOWRITE, a call      */
+                                      /*   whose result is unused may be deleted           */
+                                      /* (0x0020 and 0x0040 are cmpxchg's failure ordering */
+                                      /*   bits on other instructions)                     */
 
 /* ABI words of CALL arguments and Func arguments. 0 = passed by value as
  * its type says. GIR_ABI_BYVAL: the argument is a pointer whose pointee
@@ -313,7 +422,12 @@ enum GirX86 {          /* GIR_X86.sub: operands and result are 16-byte vectors *
 #define GIR_ABI_BYVAL        0x80000000u
 #define GIR_ABI_SIZE(w)      ((w) & 0x00FFFFFFu)        /* byval size (< 16 MiB) */
 #define GIR_ABI_ALIGN_LOG2(w) (((w) >> 24) & 0x1Fu)     /* byval alignment       */
-#define GIR_ABI_SRET         0x40000000u  /* informational: the sret pointer */
+#define GIR_ABI_NOALIAS      0x20000000u  /* additive (E2, opt_level >= 1, Func arguments):
+                                             a pointer parameter with LLVM's noalias (C
+                                             restrict): no other pointer of the function
+                                             that is not based on it accesses what it does */
+#define GIR_ABI_SRET         0x40000000u  /* the sret pointer: informational on x86-64
+                                             (rdi), passed in x8 on AArch64 */
 
 /* One instruction: 24 bytes. Instructions of a block are contiguous, and
  * blocks of a function are contiguous, in layout order. */
@@ -341,10 +455,25 @@ typedef struct GirBlock {
                                /*   a frame slot must not be shared between values */
 /* additive (milestone E1), hints for the optimizer (opt_level >= 1); an -O0
  * back-end ignores them */
-#define GIR_FN_NOINLINE 64u    /* do not inline calls of this function (the source said
-                                  noinline; clang -O0's implied noinline, which comes with
-                                  optnone, is not exported) */
+#define GIR_FN_NOINLINE 64u    /* do not inline calls of this function (LLVM noinline; E2:
+                                  also when it comes with optnone, which E1 did not export) */
 #define GIR_FN_ALWAYSINLINE 128u /* always_inline */
+/* additive (milestone E2): LLVM's function attributes as the optimizer honors
+ * them (backend-goose/DESIGN.md §15); an -O0 back-end ignores them */
+#define GIR_FN_OPTNONE   256u  /* optnone: the function is not optimized (-O0 code generation
+                                  for it, whatever the module's opt_level); implies noinline */
+#define GIR_FN_OPTSIZE   512u  /* optsize (clang -Os, -Oz, and __attribute__((cold))) */
+#define GIR_FN_MINSIZE  1024u  /* minsize (clang -Oz, __attribute__((minsize))) */
+#define GIR_FN_COLD     2048u  /* cold: calls of it are unlikely; .text.unlikely. at -O1+ */
+#define GIR_FN_HOT      4096u  /* hot: .text.hot. at -O1+ */
+#define GIR_FN_INLINEHINT 8192u /* inlinehint (an `inline` function) */
+#define GIR_FN_AVAILEXT 16384u /* the body of an available_externally function (exported at
+                                  opt_level >= 1 only): for inlining, never emitted; its global
+                                  is not GIR_GF_DEFINED (calls that remain call the external
+                                  symbol), but Global.func names this record */
+#define GIR_FN_MUSTPROGRESS 32768u /* mustprogress (C++): a loop without side effects ends */
+/* bits 16..23 are reserved for back-ends (backend-goose: FN_DEAD = bit 23 in the
+ * optimizer's output tables) */
 #define GIR_FN_ALIGN_SHIFT 24  /* bits 24..31: log2 of the function alignment (>= 4) */
 
 /* 40 bytes. Functions are also globals (Func.global is their entry in the
@@ -405,7 +534,9 @@ typedef struct GirGlobal {
                                  /*   (size is also set for ZERO/COMMON)   */
     uint32_t align;              /* power of two >= 1 */
     uint32_t func;               /* functions: index into funcs (GIR_NONE if */
-                                 /*   undefined); aliases: the aliased global; */
+                                 /*   undefined; E2: an undefined function may */
+                                 /*   have a GIR_FN_AVAILEXT body); aliases: the */
+                                 /*   aliased global; */
                                  /*   variables: GIR_NONE                  */
     uint32_t section;            /* GIR_NONE = the default section for its */
                                  /*   kind; else index into sections       */
@@ -466,6 +597,9 @@ typedef struct GirDataReloc {
  * st(0)..st(7). x87 inputs are pushed deepest first; after the code the x87
  * stack holds the st outputs (st(0) first) followed by x87_pop values that
  * the back-end pops. An empty template needs no GIR_ASM (see the exporter).
+ * AArch64 (target GIR_TARGET_AARCH64): 0..30 x0..x30, 32..63 v0..v31 (an
+ * input or output of a v register is its low 1/2/4/8/16 bytes, by the
+ * value's size); x87_pop is 0.
  */
 typedef struct GirAsm {          /* 24 bytes */
     uint32_t code, code_len;     /* machine code in data[] */
@@ -475,6 +609,7 @@ typedef struct GirAsm {          /* 24 bytes */
 } GirAsm;
 #define GIR_ASMREG_XMM0 16u
 #define GIR_ASMREG_ST0  32u
+#define GIR_ASMREG_V0   32u      /* AArch64 */
 
 /* ------------------------------------------------------------ debug info
  * Locations and scopes: the back-end's .debug_line and lexical-block
@@ -602,9 +737,23 @@ typedef struct GirHeader {
                                     producers): 0 = -O0 code generation; >= 1 = the
                                     back-end runs its middle-end on the tables and
                                     allocates registers globally (backend-goose/DESIGN.md
-                                    §15, §16) */
-    uint32_t reserved[3];
+                                    §15, §16). E2: bits 0..7 are the level (1, 2, 3 for
+                                    -O1, -O2, -O3; -Os and -Oz are 2), bits 8..9 the size
+                                    level (GIR_OPT_SIZE: 1 = -Os, 2 = -Oz) */
+    uint32_t target;             /* additive (milestone F1; was reserved, so 0 from older
+                                    producers): GIR_TARGET_* */
+    uint32_t tbaa;               /* additive (milestone E2, opt_level >= 1; 0 = none): the
+                                    TBAA type tree of the TBAA nodes that LOAD.b and STORE.c
+                                    name: opnds[tbaa] = n, opnds[tbaa + k] = the parent of
+                                    node k (1..n; 0 = a root). Two accesses whose nodes have
+                                    a common root and neither of which is an ancestor of the
+                                    other do not alias (LLVM's scalar TBAA) */
+    uint32_t reserved[1];
 } GirHeader;
+#define GIR_OPT_LEVEL(x)   ((x) & 0xFFu)          /* GirHeader.opt_level (E2) */
+#define GIR_OPT_SIZE(x)    (((x) >> 8) & 3u)
+#define GIR_TARGET_X86_64  0u    /* x86-64 Linux, SysV ABI */
+#define GIR_TARGET_AARCH64 1u    /* AArch64 Linux (aarch64-linux-gnu), AAPCS64, LP64 */
 
 /* The whole module, as the host holds it (host-side only: this struct is
  * not shared with Goose, so its padding does not matter). */

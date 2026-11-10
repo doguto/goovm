@@ -1098,7 +1098,7 @@ fn put_lowhigh(sym: u32, off: u64, len: u32) {
 }
 fn put_sec_offset(at: u32, sec: u32, off: u32) {
     ab_add(at, DW_FORM_sec_offset);
-    body_reloc(sec_sym(sec), R_X86_64_32, off);
+    body_reloc(sec_sym(sec), r_abs32(), off);
     bb4(0);
 }
 fn new_rnglist(n: u32) -> u32 {
@@ -1194,7 +1194,7 @@ fn put_attr(A: DAttr) {
     } else if form == DF_FRAME_BASE {
         ab_add(at, DW_FORM_exprloc);
         bb1(1);
-        bb1(0x56);   // DW_OP_reg6 (rbp)
+        bb1(if tgt_a64 { 0x6D } else { 0x56 });   // DW_OP_reg29 (x29) / DW_OP_reg6 (rbp)
     } else if form == DF_LOCAL {
         let k = cur_attr;
         if lv_kind.len == 0 || lv_kind[k] == LOC_NONE { return; }
@@ -1208,11 +1208,13 @@ fn put_attr(A: DAttr) {
         put_extra(A.aux);
     } else if form == DF_GLOBAL {
         let g: i64 = A.val as! i64;
+        // AArch64: no location for a thread-local variable (as LLVM: no DTPREL in DWARF)
+        if tgt_a64 && M.globals[g].flags & GF_TLS != 0 { return; }
         ab_add(at, DW_FORM_exprloc);
         if M.globals[g].flags & GF_TLS != 0 {
             bb_uleb(10 + extra_len(A.aux));
             bb1(0x0e);   // DW_OP_const8u
-            body_reloc(g_sym[g], R_X86_64_DTPOFF64, 0);
+            body_reloc(g_sym[g], r_dtpoff64(), 0);
             o8(b_body, 0);
             bb1(0xe0);   // DW_OP_GNU_push_tls_address
         } else {
@@ -1299,6 +1301,7 @@ fn ab_rehash() {
 
 // The DIEs to write: a lexical block without code is dropped with the
 // variables and labels in it; other DIEs go to the nearest kept ancestor.
+var dk_gone: u8[>..] = [];
 fn mark_dies() {
     let n = dtab_n();
     dk_keep.clear();
@@ -1307,8 +1310,28 @@ fn mark_dies() {
     dk_par.resize(n, GIR_NONE);
     dk_kids.clear();
     dk_kids.resize(n, 0);
+    dk_gone.clear();
+    dk_gone.resize(n, 0);
     for k in 0..n {
         let D = die_at(k);
+        if D.parent != GIR_NONE && dk_gone[D.parent] != 0 {
+            // (in the subtree of a function without code)
+            dk_keep[k] = 0;
+            dk_gone[k] = 1;
+            continue;
+        }
+        if D.tag == DW_TAG_subprogram {
+            // the definition of a function that is not emitted (an
+            // available_externally body, E2) goes with its subtree
+            for q in D.attrs..D.attrs + D.n_attrs {
+                let A = attr_at(q);
+                if A.form == DF_PC && M.funcs[A.val].flags & FN_AVAILEXT != 0 {
+                    dk_keep[k] = 0;
+                    dk_gone[k] = 1;
+                }
+            }
+            if dk_gone[k] != 0 { continue; }
+        }
         if D.parent != GIR_NONE {
             let p: i64 = D.parent;
             dk_par[k] = if dk_keep[p] != 0 { D.parent } else { dk_par[p] };
@@ -1331,7 +1354,7 @@ fn mark_dies() {
             let A = attr_at(q);
             if A.form != DW_FORM_ref4 || A.val >= n as! u64 { continue; }
             let t: i64 = A.val as! i64;
-            if dk_keep[t] == 0 && die_at(t).tag != DW_TAG_lexical_block { dk_keep[t] = 2; }
+            if dk_keep[t] == 0 && dk_gone[t] == 0 && die_at(t).tag != DW_TAG_lexical_block { dk_keep[t] = 2; }
         }
     }
     for k in 0..n {
@@ -1428,7 +1451,7 @@ fn dbg_write() {
     o2(b_info, 5);       // version
     o1(b_info, 1);       // DW_UT_compile
     o1(b_info, 8);       // address size
-    xrel(sec_info, 8, sec_sym(sec_abbrev), R_X86_64_32, 0);
+    xrel(sec_info, 8, sec_sym(sec_abbrev), r_abs32(), 0);
     o4(b_info, 0);       // abbreviation offset
     depth.clear();
     // ref4 values and relocations are patched as the bodies are placed (they
@@ -1495,7 +1518,7 @@ fn dbg_write() {
     o2(b_stroff, 5);
     o2(b_stroff, 0);
     for s in str_list {
-        xrel(sec_stroff, b_stroff.len as u64, sec_sym(sec_str), R_X86_64_32, b_str.len);
+        xrel(sec_stroff, b_stroff.len as u64, sec_sym(sec_str), r_abs32(), b_str.len);
         o4(b_stroff, 0);
         obytes(b_str, dstr_at(s));
         o1(b_str, 0);
@@ -1528,7 +1551,7 @@ fn dbg_write() {
     o1(b_addr, 8);
     o1(b_addr, 0);
     for s, k in ad_sym {
-        xrel(sec_addr, b_addr.len as u64, s, R_X86_64_64, ad_add[k] as! i64);
+        xrel(sec_addr, b_addr.len as u64, s, r_abs64(), ad_add[k] as! i64);
         o8(b_addr, 0);
     }
     // place the sections
@@ -1550,7 +1573,7 @@ fn place_dbg(sec: u32, b: const u8[:]) {
 // ------------------------------------------------------------ .debug_line
 
 fn line_str_bytes(o: u8[>..]&, s: const u8[:]) {
-    xrel(sec_line, o.len as u64, sec_sym(sec_lstr), R_X86_64_32, b_lstr.len);
+    xrel(sec_line, o.len as u64, sec_sym(sec_lstr), r_abs32(), b_lstr.len);
     o4(o, 0);
     obytes(b_lstr, s);
     o1(b_lstr, 0);
@@ -1695,7 +1718,7 @@ fn line_sequence(sec: u32, r0: u32, r1: u32, hi: u32) {
     o1(b_line, 0);
     o1(b_line, 9);
     o1(b_line, 2);
-    xrel(sec_line, b_line.len as u64, sec_sym(sec), R_X86_64_64, rows[r0].pos - base);
+    xrel(sec_line, b_line.len as u64, sec_sym(sec), r_abs64(), rows[r0].pos - base);
     o8(b_line, 0);
     var addr: u32 = rows[r0].pos;
     var line: i64 = 1;
