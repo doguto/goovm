@@ -289,7 +289,7 @@ fn cx_layout(r: i64) {
         if bc.flags & CR_EMPTY != 0 {
             // an empty base: offset 0 if no other empty subobject of its type is there
             off = 0;
-            while !can_place(b.ty, off / 8) { off = round_up(if off == 0 { data_bits } else { off + bal }, bal); }
+            while !can_place(b.ty, off / 8) { off = round_up(if off == 0 && data_bits > 0 { data_bits } else { off + bal }, bal); }
         } else {
             off = round_up(data_bits, bal);
             while !can_place(b.ty, off / 8) { off += bal; }

@@ -882,6 +882,8 @@ recursive fn parse_var_init(s: i64, d: CD&, ctx: i64) {
         return;
     }
     let conv = if init != 0 { init_convert(s, init, form, loc) } else { default_init(s, loc) };
+    // the destructor of a class object is potentially invoked ([class.dtor]p15)
+    if is_record(base_elem_t(syms[s].ty)) && !is_ref(syms[s].ty) { use_dtor(base_elem_t(syms[s].ty)); }
     // const integral (and enum) variables are usable in constant expressions
     if conv != 0 && !is_opq(conv) && (is_integer(syms[s].ty) || kind_of(syms[s].ty) == TY_BOOL) && quals(syms[s].ty) & Q_CONST != 0 &&
        nodes[conv].kind as i64 != N_INITBRACE {
@@ -938,4 +940,16 @@ recursive fn deduce_auto(t: u32, init: u32) -> u32 {
 
 fn cvar_note(s: i64, init: u32) {
     cv_define(s, 0, init);
+}
+
+// The destructor of class type t (user-declared) is odr-used: instantiated.
+fn use_dtor(t: u32) {
+    if is_opaque(t) { return; }
+    need_complete(t);
+    let sc = type_scope(t);
+    if sc < 0 { return; }
+    let d = scope_find(sc, id_dtor);
+    if d < 0 { return; }
+    let f = resolve(d);
+    if f >= 0 && syms[f].kind as i64 == SK_FUNC { inst_use(f); }
 }
