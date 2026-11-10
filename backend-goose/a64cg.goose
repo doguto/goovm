@@ -594,6 +594,7 @@ fn a_gen_inst2(I: Inst, j: u32, k: u32, op: u32, cur: u32, next: u32) {
         GIR_SJLJ_LONGJMP => b_lower_longjmp(I),
         GIR_ASM => b_lower_asm(I, j),
         GIR_LANDINGPAD => b_lower_landingpad(I, j),
+        GIR_A64 => b_lower_a64(I, j),
         _ => a_brk(1),
     }
 }

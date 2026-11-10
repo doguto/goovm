@@ -92,6 +92,20 @@ class Prog:
         return self.cxx and not all(is_cxx(s) for s in self.srcs)
 
 
+def sflags(s):
+    """Extra compiler flags of source s: a "// FLAGS: ..." line among its first lines
+    (tests/a64: -march=... for the ACLE extensions)."""
+    try:
+        with open(s, errors="replace") as f:
+            for _ in range(12):
+                line = f.readline()
+                if line.startswith("// FLAGS:"):
+                    return line[len("// FLAGS:"):].split()
+    except OSError:
+        pass
+    return []
+
+
 def compiler(s, args):
     return args.clangxx if is_cxx(s) else args.clang
 
@@ -116,7 +130,7 @@ def test_one(p, args):
         for i, s in enumerate(p.srcs):
             o = os.path.join(wd, f"ref{i}.o")
             try:
-                step([compiler(s, args)] + TFLAGS + ["-O0", "-w", "-c", s, "-o", o], "reference build")
+                step([compiler(s, args)] + TFLAGS + sflags(s) + ["-O0", "-w", "-c", s, "-o", o], "reference build")
             except Fail as e:
                 if args.target != "aarch64":
                     raise
@@ -135,7 +149,7 @@ def test_one(p, args):
                     objs = []
                     for i, s in enumerate(p.srcs):
                         obj = os.path.join(wd, f"{variant}{i}.o")
-                        r = run([args.goosecc, "-c", "-w"] + TFLAGS + flags + [s, "-o", obj])
+                        r = run([args.goosecc, "-c", "-w"] + TFLAGS + sflags(s) + flags + [s, "-o", obj])
                         if r.returncode != 0:
                             raise Fail(f"goosecc exit {r.returncode}: {r.stderr.decode(errors='replace').strip()[:2000]}")
                         objs.append(obj)
@@ -155,10 +169,10 @@ def test_one(p, args):
                 return base + ".bc"
             if variant in ("O0", "O1", "O1-g"):
                 g = ["-g"] if variant == "O1-g" else []
-                step([cc] + TFLAGS + ["-O0", "-w"] + g + ["-c", "-emit-llvm", s, "-o", base + ".bc"], "clang -emit-llvm")
+                step([cc] + TFLAGS + sflags(s) + ["-O0", "-w"] + g + ["-c", "-emit-llvm", s, "-o", base + ".bc"], "clang -emit-llvm")
                 return base + ".bc"
             raw = base + ".noopt.bc"
-            step([cc] + TFLAGS + ["-O0", "-w", "-Xclang", "-disable-O0-optnone", "-c", "-emit-llvm", s, "-o", raw],
+            step([cc] + TFLAGS + sflags(s) + ["-O0", "-w", "-Xclang", "-disable-O0-optnone", "-c", "-emit-llvm", s, "-o", raw],
                  "clang -emit-llvm")
             passes = "mem2reg" if variant == "mem2reg" else args.opt_passes
             step([args.opt, f"-passes={passes}", raw, "-o", base + ".bc"], "opt")

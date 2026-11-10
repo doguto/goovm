@@ -271,7 +271,8 @@ fn a_flush(mask: u64) {
         m &= m - 1;
         let id = a_rval[r];
         if id >= RV_TEMP { continue; }
-        if vi[id].st & ST_MEM == 0 { a_store_home(id, r); }
+        // (a pinned value's home is never current: PHI moves change its register only)
+        if vi[id].st & (ST_MEM | ST_PIN) != ST_MEM { a_store_home(id, r); }
         vi[id].reg = NOREG;
         a_release(r);
     }

@@ -184,6 +184,58 @@ let GIR_NOPS = 84;            // opcode count of the x86-64 back-end's tables (u
 let GIR_FMA = 84;             // (additive, F1: AArch64)
 let GIR_A64 = 85;             // (additive, F1: AArch64 intrinsics)
 let GIR_NOPS_ALL = 86;        // opcode count (F1)
+// GIR_A64.sub (additive, F1): AArch64 NEON / ACLE operations, as enum GirA64 in gir.h
+let GIR_A64_SQADD = 0; let GIR_A64_UQADD = 1; let GIR_A64_SQSUB = 2; let GIR_A64_UQSUB = 3;
+let GIR_A64_SHADD = 4; let GIR_A64_UHADD = 5; let GIR_A64_SRHADD = 6; let GIR_A64_URHADD = 7;
+let GIR_A64_SHSUB = 8; let GIR_A64_UHSUB = 9; let GIR_A64_SMAX = 10; let GIR_A64_UMAX = 11;
+let GIR_A64_SMIN = 12; let GIR_A64_UMIN = 13; let GIR_A64_SABD = 14; let GIR_A64_UABD = 15;
+let GIR_A64_SSHL = 16; let GIR_A64_USHL = 17; let GIR_A64_SQSHL = 18; let GIR_A64_UQSHL = 19;
+let GIR_A64_SRSHL = 20; let GIR_A64_URSHL = 21; let GIR_A64_SQRSHL = 22; let GIR_A64_UQRSHL = 23;
+let GIR_A64_ADDP = 24; let GIR_A64_SMAXP = 25; let GIR_A64_UMAXP = 26; let GIR_A64_SMINP = 27;
+let GIR_A64_UMINP = 28; let GIR_A64_SQDMULH = 29; let GIR_A64_SQRDMULH = 30; let GIR_A64_PMUL = 31;
+let GIR_A64_FMAX = 32; let GIR_A64_FMIN = 33; let GIR_A64_FMAXNM = 34; let GIR_A64_FMINNM = 35;
+let GIR_A64_FABD = 36; let GIR_A64_FMULX = 37; let GIR_A64_FRECPS = 38; let GIR_A64_FRSQRTS = 39;
+let GIR_A64_FACGE = 40; let GIR_A64_FACGT = 41; let GIR_A64_FADDP = 42; let GIR_A64_FMAXP = 43;
+let GIR_A64_FMINP = 44; let GIR_A64_FMAXNMP = 45; let GIR_A64_FMINNMP = 46;
+let GIR_A64_SUQADD = 47; let GIR_A64_USQADD = 48; let GIR_A64_SQABS = 49; let GIR_A64_SQNEG = 50;
+let GIR_A64_ABS = 51; let GIR_A64_CLS = 52; let GIR_A64_FRECPE = 53; let GIR_A64_FRSQRTE = 54;
+let GIR_A64_URECPE = 55; let GIR_A64_URSQRTE = 56; let GIR_A64_FCVTZS = 57;
+let GIR_A64_FCVTZU = 58; let GIR_A64_FCVTNS = 59; let GIR_A64_FCVTNU = 60; let GIR_A64_FCVTMS = 61;
+let GIR_A64_FCVTMU = 62; let GIR_A64_FCVTPS = 63; let GIR_A64_FCVTPU = 64; let GIR_A64_FCVTAS = 65;
+let GIR_A64_FCVTAU = 66; let GIR_A64_SADDLP = 67; let GIR_A64_UADDLP = 68; let GIR_A64_SQXTN = 69;
+let GIR_A64_UQXTN = 70; let GIR_A64_SQXTUN = 71; let GIR_A64_FCVTXN = 72; let GIR_A64_FRINTN = 73;
+let GIR_A64_FRINTP = 74; let GIR_A64_FRINTM = 75; let GIR_A64_FRINTZ = 76; let GIR_A64_FRINTA = 77;
+let GIR_A64_FRINTX = 78; let GIR_A64_FRINTI = 79; let GIR_A64_CLZ = 80; let GIR_A64_CNT = 81;
+let GIR_A64_RBIT = 82; let GIR_A64_ADDV = 83; let GIR_A64_SMAXV = 84; let GIR_A64_UMAXV = 85;
+let GIR_A64_SMINV = 86; let GIR_A64_UMINV = 87; let GIR_A64_SADDLV = 88; let GIR_A64_UADDLV = 89;
+let GIR_A64_FMAXV = 90; let GIR_A64_FMINV = 91; let GIR_A64_FMAXNMV = 92; let GIR_A64_FMINNMV = 93;
+let GIR_A64_FADDV = 94; let GIR_A64_SMULL = 95; let GIR_A64_UMULL = 96; let GIR_A64_SQDMULL = 97;
+let GIR_A64_PMULL = 98; let GIR_A64_RADDHN = 99; let GIR_A64_RSUBHN = 100;
+let GIR_A64_SQSHLU = 101; let GIR_A64_RSHRN = 102; let GIR_A64_SQSHRN = 103;
+let GIR_A64_UQSHRN = 104; let GIR_A64_SQRSHRN = 105; let GIR_A64_UQRSHRN = 106;
+let GIR_A64_SQSHRUN = 107; let GIR_A64_SQRSHRUN = 108; let GIR_A64_SLI = 109;
+let GIR_A64_SRI = 110; let GIR_A64_SCVTF_FX = 111; let GIR_A64_UCVTF_FX = 112;
+let GIR_A64_FCVTZS_FX = 113; let GIR_A64_FCVTZU_FX = 114; let GIR_A64_SQDMULH_LANE = 115;
+let GIR_A64_SQRDMULH_LANE = 116; let GIR_A64_TBL = 117; let GIR_A64_TBX = 118;
+let GIR_A64_DMB = 119; let GIR_A64_DSB = 120; let GIR_A64_ISB = 121; let GIR_A64_HINT = 122;
+let GIR_A64_THREAD_POINTER = 123; let GIR_A64_MRS = 124; let GIR_A64_MSR = 125;
+let GIR_A64_CRC32B = 126; let GIR_A64_CRC32H = 127; let GIR_A64_CRC32W = 128;
+let GIR_A64_CRC32X = 129; let GIR_A64_CRC32CB = 130; let GIR_A64_CRC32CH = 131;
+let GIR_A64_CRC32CW = 132; let GIR_A64_CRC32CX = 133; let GIR_A64_LDXR = 134;
+let GIR_A64_LDAXR = 135; let GIR_A64_STXR = 136; let GIR_A64_STLXR = 137; let GIR_A64_CLREX = 138;
+let GIR_A64_AESE = 139; let GIR_A64_AESD = 140; let GIR_A64_AESMC = 141; let GIR_A64_AESIMC = 142;
+let GIR_A64_SHA1C = 143; let GIR_A64_SHA1P = 144; let GIR_A64_SHA1M = 145; let GIR_A64_SHA1H = 146;
+let GIR_A64_SHA1SU0 = 147; let GIR_A64_SHA1SU1 = 148; let GIR_A64_SHA256H = 149;
+let GIR_A64_SHA256H2 = 150; let GIR_A64_SHA256SU0 = 151; let GIR_A64_SHA256SU1 = 152;
+let GIR_A64_SDOT = 153; let GIR_A64_UDOT = 154;
+let GIR_A64_COUNT = 155;
+// Whether the GIR_A64 operation `sub` orders memory or system state (barriers,
+// hints, system registers, exclusives): the optimizer treats it like a call that
+// writes memory. The others are pure (as LLVM's IntrNoMem intrinsics).
+inline fn a64_effect(sub: u32) -> bool {
+    (sub >= GIR_A64_DMB && sub <= GIR_A64_MSR && sub != GIR_A64_THREAD_POINTER)
+        || (sub >= GIR_A64_LDXR && sub <= GIR_A64_CLREX)
+}
 let ASMREG_V0 = 32;           // AArch64 inline-asm register numbers: 0..30 x, 32..63 v
 let ASMREG_XMM0 = 16;
 let ASMREG_ST0 = 32;
