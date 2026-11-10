@@ -433,6 +433,7 @@ fn cx_aliases() {
         m_globals[g].func = tg;
         m_globals[g].aux = 0;
         m_globals[g].flags = (m_globals[tg].flags & (GF_WEAK | GF_HIDDEN | GF_INTERNAL | GF_LOCALREF)) | GF_DEFINED;
+        if (cxl[s].flags as i64) & CXL_OWNLINK != 0 { m_globals[g].flags = GF_DEFINED; }
         m_globals[g].align = m_globals[tg].align;
         glob_gen[g].state = 2;
     }

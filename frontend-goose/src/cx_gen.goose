@@ -63,6 +63,7 @@ import .cx_gen_rtti;
 import .cx_gen_new;
 import .cx_gen_stmt;
 import .cx_gen_lambda;
+import .cx_gen_tls;
 
 let CF_DTOR_DELETING = 2147483648;  // the deleting destructor (D0) of a class with a virtual destructor
 
@@ -2369,7 +2370,12 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
     cur_init_prio = 65535;
     if ctx == DC_NS || cxs[s].flags & CF_MEMBER != 0 { syms[s].flags = syms[s].flags | SF_FILESCOPE; }
     // a static local: no linkage (C's lowering names it function.name)
+    // (a block-scope thread_local has static storage too)
+    if ctx != DC_NS && cxs[s].flags & CF_MEMBER == 0 && block_fn_depth > 0 && syms[s].flags & SF_THREAD != 0 && syms[s].sc as i64 != SC_EXTERN {
+        syms[s].sc = SC_STATIC as! u8;
+    }
     let static_local = ctx != DC_NS && cxs[s].flags & CF_MEMBER == 0 && block_fn_depth > 0 && syms[s].sc as i64 == SC_STATIC;
+    let tls = syms[s].flags & SF_THREAD != 0;
     if static_local { syms[s].flags = syms[s].flags & ~SF_FILESCOPE; }
     let fs = syms[s].flags & SF_FILESCOPE != 0;
     if !decl_is_extern && syms[s].sc as i64 == SC_EXTERN { syms[s].sc = 0; }
@@ -2491,7 +2497,8 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
             let lhs = node(N_DECLREF, 0, lower_ty(t), s, 0, 0, loc);
             nodes[lhs].flags = NF_LVALUE;
             dyn = n_expr_stmt(node(N_ASSIGN, 0, unqual(lower_ty(t)), lhs as i64, conv as i64, 0, loc));
-            if !static_local { gi_push(dyn, prio); }
+            if !static_local && tls { tls_push(s, dyn, false, loc); }
+            else if !static_local { gi_push(dyn, prio); }
             conv = 0;
         }
     }
@@ -2503,6 +2510,25 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
     }
     nscratch.push(node(N_DECL, 0, syms[s].ty, s, conv as i64, dloc as i64, loc));
     if static_local { note_static_local(s); }
+    if static_local && tls && (dyn != 0 || cst != 0 || has_dtor) {
+        // a thread_local: once per thread, no locking:
+        // if (guard == 0) { init; __cxa_thread_atexit; guard = 1; }
+        let g = csym(SK_VAR, intern("__guard"), t_char, loc);
+        syms[g].sc = SC_STATIC as! u8;
+        syms[g].scope = syms[s].scope;
+        syms[g].flags = syms[g].flags | SF_THREAD;
+        guard_of.insert(s as u64, g as! u32);
+        nscratch.push(node(N_DECL, 0, t_char, g, 0, loc as i64, loc));
+        let mark = nscratch.len;
+        if dyn != 0 { nscratch.push(dyn); }
+        if cst != 0 { nscratch.push(cst); }
+        if has_dtor { nscratch.push(thread_atexit_stmt(s, loc)); }
+        nscratch.push(n_expr_stmt(node(N_ASSIGN, 0, t_char, n_var(g, loc) as i64, int_node(1, t_char, loc) as i64, 0, loc)));
+        let init = n_block(mark, loc);
+        let test = node(N_BINARY, B_EQ, t_int, icast(rv(n_var(g, loc)), CK_INTEGRAL, t_int) as i64, int_node(0, t_int, loc) as i64, 0, loc);
+        nscratch.push(node(N_IF, 0, 0, test as i64, init as i64, 0, loc));
+        return;
+    }
     if static_local && (dyn != 0 || cst != 0 || has_dtor) {
         // once (Itanium 3.3.2): if (guard byte == 0 && __cxa_guard_acquire(&guard)) {
         //   [EH: __cxa_guard_abort(&guard)] init; atexit; __cxa_guard_release(&guard); }
@@ -2538,6 +2564,8 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
     if local {
         if cst != 0 { nscratch.push(cst); }
         if has_dtor { push_dtor_cleanup(s, loc); }
+    } else if !static_local && !is_extern && tls {
+        if cst != 0 || has_dtor { tls_push(s, cst, has_dtor, loc); }
     } else if !static_local && !is_extern {
         if cst != 0 { gi_push(cst, prio); }
         if has_dtor { gi_push(atexit_stmt(s, loc), prio); }
@@ -2665,6 +2693,19 @@ fn atexit_stmt(s: i64, loc: u32) -> u32 {
         let ft = qt(mk_type(TY_FUNC, 0, t_int, 0, 0, 0) as i64, 0);
         atexit_fn = csym(SK_FUNC, intern("__cxa_atexit"), ft, loc);
         cxs[atexit_fn].flags = CF_EXTERN_C;
+    }
+    let dh = dso_handle_sym(loc);
+    let mark = nscratch.len;
+    let vfp = mk_ptr(fn_type1(t_void, t_voidptr));
+    nscratch.push(node(N_ICAST, CK_BITCAST, vfp, icast(n_ref_fn(d, loc), CK_FUNC2PTR, mk_ptr(abi_type(d))) as i64, 0, 0, loc));
+    nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, n_addr(n_var(s, loc), loc) as i64, 0, 0, loc));
+    nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, n_addr(n_var(dh, loc), loc) as i64, 0, 0, loc));
+    return n_expr_stmt(n_call(atexit_fn, mark, loc));
+}
+
+// __dso_handle (external, hidden).
+fn dso_handle_sym(loc: u32) -> i64 {
+    if dso_handle < 0 {
         dso_handle = csym(SK_VAR, intern("__dso_handle"), t_char, loc);
         syms[dso_handle].flags = SF_FILESCOPE;
         syms[dso_handle].sc = SC_EXTERN as! u8;
@@ -2672,12 +2713,7 @@ fn atexit_stmt(s: i64, loc: u32) -> u32 {
         let ai = get_attr(dso_handle);
         sym_attrs[ai].vis = 1;
     }
-    let mark = nscratch.len;
-    let vfp = mk_ptr(fn_type1(t_void, t_voidptr));
-    nscratch.push(node(N_ICAST, CK_BITCAST, vfp, icast(n_ref_fn(d, loc), CK_FUNC2PTR, mk_ptr(abi_type(d))) as i64, 0, 0, loc));
-    nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, n_addr(n_var(s, loc), loc) as i64, 0, 0, loc));
-    nscratch.push(node(N_ICAST, CK_BITCAST, t_voidptr, n_addr(n_var(dso_handle, loc), loc) as i64, 0, 0, loc));
-    return n_expr_stmt(n_call(atexit_fn, mark, loc));
+    return dso_handle;
 }
 
 fn fn_type1(ret: u32, p: u32) -> u32 {
@@ -3470,6 +3506,7 @@ recursive fn cg_finish(main_file: const u8[:]) -> bool {
                 done_prio = p;
                 gi_function(main_file, p);
             }
+            tls_finish();
         }
         // the translation unit with the extra items
         let tu = nodes[tu0];
@@ -3795,6 +3832,12 @@ recursive fn visit(n: u32) {
             if s < cxs.len && cxs[s].flags & (CF_PATTERN | CF_DELETED) != 0 { bad(n); return; }
             reach_fn(s);
         } else if sk == SK_VAR {
+            if syms[s].flags & SF_THREAD != 0 && nd.c != 1 && tls_use_wrapper(s) {
+                // a thread_local through its wrapper (cx_gen_tls)
+                tls_use(n);
+                visit(n);
+                return;
+            }
             if syms[s].flags & SF_FILESCOPE != 0 { reach_var(s); }
             if !c_type_ok(lower_ty(syms[s].ty)) { bad(n); return; }
             if indirect_params.count > 0 && indirect_params.contains(s as u64) && !is_pointer(nd.ty) {

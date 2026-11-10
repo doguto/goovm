@@ -157,6 +157,7 @@ fn name_syms() {
     for i in 0..complete_pairs.len / 2 { name_complete(complete_pairs[2 * i] as i64, complete_pairs[2 * i + 1] as i64); }
     name_static_locals();
     name_lambdas();
+    name_tls();
     names_done = true;
 }
 
@@ -169,7 +170,7 @@ fn name_one(s: i64) {
         if fl & (CF_PATTERN | CF_TEMPLATE | CF_TPARAM) != 0 { return; }
         if syms[s].attr != 0 && sym_attrs[syms[s].attr].asm_len != 0 { return; }
         if k == SK_FUNC && complete_of.count > 0 && is_complete_variant(s) { return; }
-        if k == SK_FUNC && is_lambda_fn(s) { return; }
+        if is_lambda_fn(s) { return; }
         if k == SK_VAR {
             if syms[s].flags & SF_COMPLIT != 0 || syms[s].name == 0 { return; }
             if fl & CF_MEMBER != 0 { syms[s].sc = 0; syms[s].flags = syms[s].flags | SF_FILESCOPE; }

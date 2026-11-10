@@ -382,6 +382,13 @@ def main():
         sys.exit(files_mode(args, args.rest, flags))
     if not args.work:
         args.work = tempfile.mkdtemp(prefix="abi-oracle-")
+    os.makedirs(args.work, exist_ok=True)
+    args.work = os.path.abspath(args.work)
+    args.fpcmp = os.path.join(args.work, "fpcmp")
+    if not os.path.exists(args.fpcmp):
+        r = sh([args.clang, "-O2", "-w", os.path.join(args.suite, "tools/fpcmp.c"), "-o", args.fpcmp])
+        if r.returncode:
+            sys.exit("cannot build fpcmp: " + r.stderr.decode())
     tests = suite.all_tests(args.suite, args.corpus.split(","))
     if args.rest:
         tests = [t for t in tests if any(f in t.id for f in args.rest)]
