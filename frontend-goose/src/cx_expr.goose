@@ -71,6 +71,7 @@ fn opq_report() -> bool {
 }
 fn opq_note(loc: u32, kind: i64) {
     if dependent_ctx() { return; }
+    if pk_refs.len > 0 { return; }      // the first parse of a pack expansion's element (discarded)
     if opq_mode < 2 && diag_suppress > 0 && diag_suppress != diag_inst_level { return; }
     var o: u8[>..] = [];
     loc_prefix(o, loc as i64);
@@ -235,11 +236,17 @@ recursive fn paren_type_ahead() -> bool {
     let r = looks_like_type_id();
     var ok = false;
     if r {
-        // the type-id must end at the matching ')'
+        // the type-id must end at the matching ')', without errors
+        let wl0 = diag_watch_level;
+        let we0 = diag_watch_errors;
         diag_suppress++;
+        diag_watch_level = diag_suppress;
         let t = parse_type_id();
+        let bad = diag_watch_errors != we0;
+        diag_watch_level = wl0;
+        diag_watch_errors = we0;
         diag_suppress--;
-        ok = at(TK_R_PAREN);
+        ok = at(TK_R_PAREN) && !bad;
         if ok {
             // ( T ) followed by something that cannot start an operand is
             // not a cast: (x) + y where x is a type cannot happen, but
@@ -334,7 +341,8 @@ recursive fn parse_unary_cx() -> u32 {
         unevaluated--;
         expect(TK_R_PAREN, "')'");
         if is_opq(e) || dependent_ctx() { return dep_node(t_bool, loc); }
-        return int_node(0, t_bool, loc);
+        // D2: not potentially-throwing ([except.spec]p6)
+        return int_node(if can_throw(e) { 0 } else { 1 }, t_bool, loc);
     }
     if k == TK_KW + KW_NEW || (k == TK_COLONCOLON && tk_n(1) == TK_KW + KW_NEW) { return parse_new(); }
     if k == TK_KW + KW_DELETE || (k == TK_COLONCOLON && tk_n(1) == TK_KW + KW_DELETE) { return parse_delete(); }
@@ -356,10 +364,17 @@ recursive fn paren_is_type() -> bool {
     let r = looks_like_type_id();
     var ok = false;
     if r {
+        let wl0 = diag_watch_level;
+        let we0 = diag_watch_errors;
         diag_suppress++;
+        diag_watch_level = diag_suppress;
         let t = parse_type_id();
+        let bad = diag_watch_errors != we0;
+        diag_watch_level = wl0;
+        diag_watch_errors = we0;
         diag_suppress--;
-        ok = at(TK_R_PAREN);
+        // a type-id parsed without errors up to the ')'
+        ok = at(TK_R_PAREN) && !bad;
     }
     restore(sv);
     return ok;
@@ -449,6 +464,37 @@ recursive fn parse_call_cx(callee: u32) -> u32 {
     return r;
 }
 
+// x.~T() / p->~T(): a destructor call (class types) or a pseudo-destructor
+// call (scalar types), of type void. ot: the object's type; dt: the named
+// type (0 unknown).
+recursive fn dtor_call_cx(base: u32, arrow: bool, ot: u32, dt: u32, loc: u32) -> u32 {
+    if is_error(base) { return base; }
+    if is_opq(base) || ot == 0 || is_opaque(ot) || is_dep(ot) || dt == 0 || is_opaque(dt) || is_dep(dt) {
+        return dep_node(t_void, loc);
+    }
+    if is_record(ot) {
+        need_complete(ot);
+        let r = rec_of(ot);
+        let sc = crecs[r].scope as i64;
+        let s = scope_find(sc, id_dtor);
+        let ud = if s >= 0 { resolve(s) } else { -1 };
+        if cg_on {
+            let d = class_dtor(r);
+            if d >= 0 {
+                inst_use(d);
+                let obj = if arrow { n_deref(base, loc) } else { base };
+                return lower_call(d, obj, nscratch.len, loc, true);
+            }
+            return mk_cast(t_void, base, loc);
+        }
+        if ud >= 0 && syms[ud].kind as i64 == SK_FUNC { inst_use(ud); resolved_fn = ud; }
+        return typed_result(t_void, loc);
+    }
+    // a pseudo-destructor call: evaluates the object
+    if cg_on { return mk_cast(t_void, base, loc); }
+    return typed_result(t_void, loc);
+}
+
 // a.member / p->member (with template, ~pseudo-destructor, operator names).
 recursive fn parse_member_access(base: u32, arrow: bool, loc: u32) -> u32 {
     var qn = QN { .. };
@@ -467,13 +513,22 @@ recursive fn parse_member_access(base: u32, arrow: bool, loc: u32) -> u32 {
     // ~T pseudo-destructor or destructor call
     if at(TK_TILDE) {
         adv();
-        if at_kw(KW_DECLTYPE) { let t = parse_decltype(); }
+        var dt: u32 = 0;
+        if at_kw(KW_DECLTYPE) { dt = parse_decltype(); }
         else {
             var dq = QN { .. };
             parse_qname(dq);
+            if dq.dep == 0 && !dq.qual && csc >= 0 && dq.kind as i64 == QK_IDENT {
+                // ~X looked up in the object's class first (its injected name)
+                let s = qual_lookup(csc, dq.name);
+                if s >= 0 { dq.sym = s as! i32; }
+                else { lookup_qn(dq); }
+            } else { lookup_qn(dq); }
+            dt = qn_type(dq);
         }
-        if cg_on && !is_opq(base) && !dependent_ctx() { return cg_dtor_ref(base, arrow, loc); }
-        return dep_node(t_unknown, loc);
+        if !at(TK_L_PAREN) || tk_n(1) != TK_R_PAREN { return dep_node(t_unknown, loc); }
+        adv(); adv();
+        return dtor_call_cx(base, arrow, obj_ty, dt, loc);
     }
     if (at(TK_IDENT) || at(TK_COLONCOLON)) && csc >= 0 && !qn.tkw {
         // a qualified member name (a.Base::f) or a plain one, looked up in the class
@@ -486,7 +541,7 @@ recursive fn parse_member_access(base: u32, arrow: bool, loc: u32) -> u32 {
             if at(TK_LESS) && chain_has_template(s) { targs = parse_targs(); }
             if s < 0 {
                 if has_dep_base(csc) || scopes[csc].flags & SCF_PATTERN != 0 || dependent_ctx() { return opaque_node(loc); }
-                if diag_suppress == 0 { err_at(mloc, str("no member named '", ident_text(name as i64), "' in ", tname(obj_ty))); }
+                if diag_suppress == 0 { err_at(mloc, str("no member named '", ident_text(name as i64), "' in ", ctname(obj_ty))); }
                 return opaque_node(loc);
             }
             return mk_member_ref(base, arrow, s, targs, loc);
@@ -545,9 +600,14 @@ recursive fn parse_primary_cx() -> u32 {
         while tu_toks[j].kind as i64 == TK_STRING { if has_udl(tu_toks[j]) { udl = true; } j++; }
         if udl { pc = j; return opaque_node(loc); }
         let s = string_literal();
-        // C++: the elements are const
+        // C++: the elements are const, of the character types of the prefixes
         let st = nodes[s].ty;
-        nodes[s].ty = mk_array(with_quals(tbase(st), Q_CONST), types[st >> 4].n);
+        var el = tbase(st);
+        if el == t_int { el = t_wchar_cxx; }
+        else if el == t_uint { el = t_char32; }
+        else if el == t_ushort { el = t_char16; }
+        else if opt_cxx_std >= 20 && string_has_u8(pc) { el = t_char8; }
+        nodes[s].ty = mk_array(with_quals(el, Q_CONST), types[st >> 4].n);
         strs[nodes[s].a].elem = strs[nodes[s].a].elem;
         return s;
     }
@@ -692,6 +752,54 @@ recursive fn parse_primary_cx() -> u32 {
     perr_expected("an expression");
     if !at(TK_EOF) && !at(TK_SEMI) && !at(TK_R_PAREN) && !at(TK_R_BRACE) && !at(TK_R_SQUARE) && !at(TK_COMMA) { adv(); }
     return opaque_node(loc);
+}
+
+// Does the string literal (adjacent ones) ending before token p have a u8 prefix?
+fn string_has_u8(p: i64) -> bool {
+    var j = p - 1;
+    while j >= 0 && tu_toks[j].kind as i64 == TK_STRING {
+        let t = tu_toks[j];
+        if t.val >= 2 && src[t.spell] == 'u' && src[t.spell + 1] == '8' { return true; }
+        j--;
+    }
+    return false;
+}
+
+// May evaluating e throw (a call of a function without a non-throwing
+// exception specification, a throw, a dynamic_cast to a reference)?
+recursive fn can_throw(e: u32) -> bool {
+    if e == 0 { return false; }
+    let nd = nodes[e];
+    let k = nd.kind as i64;
+    if k == N_THROW { return true; }
+    if k == N_CXX && nd.op == 7 && nd.a != 0 { return fn_can_throw(nd.a as i64); }
+    if k == N_CXX && nd.flags & NF_DEP != 0 { return true; }
+    if k == N_CALL {
+        let c = nodes[nd.a];
+        var f: i64 = -1;
+        if c.kind as i64 == N_DECLREF { f = c.a as i64; }
+        else if c.kind as i64 == N_ICAST && nodes[c.a].kind as i64 == N_DECLREF { f = nodes[c.a].a as i64; }
+        if f < 0 { return true; }
+        if syms[f].kind as i64 == SK_BUILTIN { return false; }
+        if fn_can_throw(f) { return true; }
+        for i in nd.c as i64 { if can_throw(nlist[nd.v + i]) { return true; } }
+        return false;
+    }
+    if k == N_DYNCAST { return nd.flags & NF_LVALUE != 0; }
+    if k == N_CTOR || k == N_NEW { return true; }
+    if k == N_UNARY || k == N_CAST || k == N_ICAST || k == N_MEMBER || k == N_STMTEXPR { return can_throw(nd.a); }
+    if k == N_BINARY || k == N_ASSIGN || k == N_INDEX { return can_throw(nd.a) || can_throw(nd.b); }
+    if k == N_COND { return can_throw(nd.a) || can_throw(nd.b) || can_throw(nd.c); }
+    return false;
+}
+
+fn fn_can_throw(f: i64) -> bool {
+    if f < 0 || f >= cxs.len { return true; }
+    let fl = cxs[f].flags;
+    if fl & CF_NOEXCEPT != 0 { return false; }
+    // destructors are noexcept unless declared otherwise; C functions do not throw in practice: not assumed
+    if fl & CF_DTOR != 0 { return false; }
+    return true;
 }
 
 fn has_udl(t: Tok) -> bool {
@@ -868,6 +976,10 @@ recursive fn parse_trait() -> u32 {
     let mark = trait_args.len;
     var any_dep = false;
     while !at(TK_R_PAREN) && !at(TK_EOF) {
+        let p0 = pc;
+        let pm = pk_refs.len;
+        let am0 = trait_args.len;
+        let dep0 = any_dep;
         if looks_like_type_id() && type_id_then(TK_COMMA, TK_R_PAREN) {
             let t = parse_type_id();
             trait_args.push(t);
@@ -876,6 +988,31 @@ recursive fn parse_trait() -> u32 {
             let e = parse_assign_cx();
             if is_opq(e) { any_dep = true; }
             trait_args.push(nodes[e].ty);
+        }
+        if at(TK_ELLIPSIS) {
+            let ok, nn = pk_count(pm);
+            if ok {
+                // D2: a pack expansion of bound packs
+                adv();
+                let p1 = pc;
+                trait_args.resize(am0);
+                any_dep = dep0;
+                let sm = pk_save(pm);
+                for i in nn {
+                    pc = p0;
+                    gt_pos = -1;
+                    let am = pk_activate_saved(sm, i);
+                    let t2 = parse_type_id();
+                    pk_active.resize(am);
+                    trait_args.push(t2);
+                    if is_opaque(t2) { any_dep = true; }
+                }
+                pk_saved.resize(sm);
+                pc = p1;
+                if !accept(TK_COMMA) { break; }
+                continue;
+            }
+            pk_refs.resize(pm);
         }
         accept(TK_ELLIPSIS);
         if !accept(TK_COMMA) { break; }
@@ -887,7 +1024,7 @@ recursive fn parse_trait() -> u32 {
         trait_args.resize(mark);
         return dep_node(rt, loc);
     }
-    let ok, v = eval_trait(name, mark);
+    let ok, v = eval_trait_cx(name, mark);
     trait_args.resize(mark);
     if !ok { return dep_node(rt, loc); }
     return int_node(v, rt, loc);
@@ -928,6 +1065,31 @@ fn eval_trait(name: const u8[:], mark: i64) -> bool, i64 {
 // ---------------------------------------------------------------------------
 // id-expressions.
 
+// C++ builtins that C's builtin table cannot type (the arguments are at
+// mark): __builtin_addressof (the address, no operator& overload) and
+// __builtin_launder. 0 for others.
+fn cxx_builtin_call(name: u32, mark: i64, loc: u32) -> u32 {
+    let nm = ident_text(name as i64);
+    if nm.len > 17 && nm[..17] == "__builtin_matrix_" {
+        // clang's matrix builtins: matrix types are not implemented (unknown)
+        return dep_node(matrix_unknown_t, loc);
+    }
+    if nscratch.len - mark != 1 { return 0; }
+    let a = nscratch[mark];
+    if nm == "__builtin_addressof" {
+        if is_opq(a) { return dep_node(t_unknown, loc); }
+        if nodes[a].kind as i64 == N_FUNCREF || !is_lvalue(a) { return 0; }
+        let n = node(N_UNARY, U_ADDR, mk_ptr(nodes[a].ty), a as i64, 0, 0, loc);
+        return n;
+    }
+    if nm == "__builtin_launder" {
+        if is_opq(a) { return dep_node(t_unknown, loc); }
+        if !is_pointer(nodes[a].ty) { return 0; }
+        return if cg_on { rv(a) } else { typed_result(unqual(nodes[a].ty), loc) };
+    }
+    return 0;
+}
+
 recursive fn parse_id_expr() -> u32 {
     let loc = tloc();
     var qn = QN { .. };
@@ -965,20 +1127,30 @@ recursive fn parse_id_expr() -> u32 {
     }
     let s0 = qn.sym as i64;
     if s0 < 0 {
-        if qn.kind as i64 == QK_IDENT && at(TK_L_PAREN) {
+        if (qn.kind as i64 == QK_IDENT || qn.kind as i64 == QK_OP) && at(TK_L_PAREN) {
             // an unqualified call to an undeclared name: argument-dependent
-            // lookup may still find it (D1 does not perform ADL)
+            // lookup may still find it
             if !qn.qual {
                 let mark = parse_args();
-                if cg_on && !dependent_ctx() {
-                    // code generation: C's builtins (__builtin_alloca ...)
-                    let b = cg_builtin_call(qn.name, mark, loc);
-                    if b != 0 { nscratch.resize(mark); return b; }
+                if qn.kind as i64 == QK_IDENT {
+                    let bx = cxx_builtin_call(qn.name, mark, loc);
+                    if bx != 0 { nscratch.resize(mark); return bx; }
+                    if !dependent_ctx() {
+                        // code generation: C's builtins (__builtin_alloca ...)
+                        let b = cg_builtin_call(qn.name, mark, loc);
+                        if b != 0 { nscratch.resize(mark); return b; }
+                    }
+                }
+                var known = !dependent_ctx();
+                for i in mark..nscratch.len { if is_opq(nscratch[i]) && nodes[nscratch[i]].kind as i64 != N_FUNCREF { known = false; } }
+                if known {
+                    let c = adl_only_call(qn.name, mark, if qn.has_targs { qn.targs } else { -1 }, loc);
+                    if c != 0 { nscratch.resize(mark); return c; }
+                    if diag_suppress == 0 && lenient == 0 {
+                        err_at(qn.loc, str("use of undeclared identifier '", qn_text(qn), "'"));
+                    }
                 }
                 nscratch.resize(mark);
-                if !dependent_ctx() && diag_suppress == 0 && !adl_could_find(mark) {
-                    err_at(qn.loc, str("use of undeclared identifier '", ident_text(qn.name as i64), "'"));
-                }
                 return opaque_node(loc);
             }
         }
@@ -986,7 +1158,17 @@ recursive fn parse_id_expr() -> u32 {
         if ec >= 0 && (has_dep_base(ec) || scopes[ec].flags & SCF_PATTERN != 0) { return opaque_node(loc); }
         if dependent_ctx() || diag_suppress > 0 || lenient > 0 { return opaque_node(loc); }
         if qn.scope >= 0 && (scopes[qn.scope].flags & SCF_PATTERN != 0 || has_dep_base(qn.scope as i64)) { return opaque_node(loc); }
-        err_at(qn.loc, str("use of undeclared identifier '", ident_text(qn.name as i64), "'"));
+        if qn.qual && qn.kind as i64 == QK_OP && qn.op as i64 == OP_EQUAL && known_class_scope(qn.scope as i64) {
+            // X::operator= of a class without a user-declared one: its
+            // implicitly declared copy (and move) assignment operators
+            let r = scopes[qn.scope].rec as i64;
+            let s6 = implicit_special(r, 6);
+            if implicit_move_declared(r) { let s7 = implicit_special(r, 7); cxs[s6].nnext = s7 as! i32; }
+            let n = node(N_FUNCREF, 0, t_unknown, s6, 0, 0, loc);
+            nodes[n].op = 1;
+            return n;
+        }
+        err_at(qn.loc, str("use of undeclared identifier '", qn_text(qn), "'"));
         return opaque_node(loc);
     }
     // a type: a functional cast
@@ -1008,11 +1190,48 @@ recursive fn parse_id_expr() -> u32 {
 // D1 does not perform argument-dependent lookup; an unqualified call whose
 // arguments have class (or enum, or opaque) types may name a function ADL
 // finds, so no error is given for it.
+var qn_buf: u8[>..] = [];
+// The name of qn as written (operator<<, ~X, x).
+fn qn_text(qn: QN&) -> const u8[:] {
+    let k = qn.kind as i64;
+    qn_buf.clear();
+    if k == QK_DTOR { qn_buf.push('~'); }
+    qn_buf.append(ident_text(qn.name as i64));
+    return qn_buf;
+}
+
 fn adl_could_find(mark: i64) -> bool {
     for i in mark..nscratch.len {
         let t = nodes[nscratch[i]].ty;
         if is_opq(nscratch[i]) || is_record(t) || kind_of(t) == TY_ENUM || is_opaque(t) { return true; }
         if is_pointer(t) && (is_record(tbase(t)) || kind_of(tbase(t)) == TY_ENUM) { return true; }
+    }
+    return true;
+}
+
+// Are class r's move constructor and move assignment operator implicitly
+// declared (no user-declared copy or move constructor, copy or move
+// assignment operator or destructor; C++ [class.copy.assign]p4)?
+fn implicit_move_declared(r: i64) -> bool {
+    let sc = crecs[r].scope as i64;
+    let cls = records[r].ty << 4;
+    var s = scope_find(sc, id_ctor);
+    while s >= 0 {
+        let f = resolve(s);
+        if f >= 0 && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & CF_IMPLICIT == 0 && first_param_ref(f, cls) != 0 { return false; }
+        s = cxs[s].nnext as i64;
+    }
+    s = scope_find(sc, op_ids[OP_EQUAL]);
+    while s >= 0 {
+        let f = resolve(s);
+        if f >= 0 && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & CF_IMPLICIT == 0 { return false; }
+        s = cxs[s].nnext as i64;
+    }
+    s = scope_find(sc, id_dtor);
+    while s >= 0 {
+        let f = resolve(s);
+        if f >= 0 && syms[f].kind as i64 == SK_FUNC && cxs[f].flags & CF_IMPLICIT == 0 { return false; }
+        s = cxs[s].nnext as i64;
     }
     return true;
 }

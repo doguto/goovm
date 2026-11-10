@@ -45,7 +45,7 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     let sc = tmpls[t].scope as i64;
     let mark = nscratch.len;
     inst_what = tmpls[t].sym as i64;
-    let st = inst_enter();
+    let st = inst_enter(false);
     let e0 = diag_inst_errors;
     bind_header(t, binds);
     if sc >= 0 && scopes[sc].kind as i64 == CS_CLASS {
@@ -81,10 +81,10 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     fspec_map.insert(key, if res >= 0 { (res + 1) as! i32 } else { res as! i32 });
     if inst_debug() {
         var o: u8[>..] = [];
-        o.append(str("fspec_decl ", ident_text(syms[tmpls[t].sym].name as i64), " t=", t, " -> ", res, " errs=", errs, " <"));
+        o.append(str("fspec_decl ", ident_text(syms[tmpls[t].sym].name as i64), " in ", if tmpls[t].scope >= 0 && scopes[tmpls[t].scope].name != 0 { ident_text(scopes[tmpls[t].scope].name as i64) } else { "-" }, " t=", t, " -> ", res, " errs=", errs, " <"));
         for i in tl_count(binds as i64) {
             let a = tl_arg(binds as i64, i);
-            if a.kind as i64 == TA_TYPE { o.append(tname(a.ty)); } else { o.append(str("#", a.v)); }
+            if a.kind as i64 == TA_TYPE { o.append(ctname(a.ty)); } else { o.append(str("#", a.v)); }
             o.append(", ");
         }
         o.append(">\n");
@@ -182,7 +182,7 @@ recursive fn inst_fspec_body(f: i64) {
     if tmpls[dt].t1 == 0 { return; }
     let mark = nscratch.len;
     inst_what = f;
-    let st = inst_enter();
+    let st = inst_enter(true);
     if outer >= 0 && tmpls[dt].hdr_outer >= 0 { bind_header(tmpls[dt].hdr_outer as i64, outer); }
     bind_header(dt, binds);
     let sc = tmpls[dt].scope as i64;
@@ -357,7 +357,7 @@ recursive fn deduce_one(p0: u32, e: u32) -> i64 {
     if is_opq(e) && nodes[e].kind as i64 != N_FUNCREF && nodes[e].kind as i64 != N_INITBRACE { return -1; }
     let ek = nodes[e].kind as i64;
     if ek == N_INITBRACE { return -1; }           // std::initializer_list<T> deduction: not yet
-    if ek == N_FUNCREF { return -1; }             // an overload set: not yet
+    if ek == N_FUNCREF { return deduce_from_set(p0, e); }
     var p = p0;
     var a = nodes[e].ty;
     let lv = is_lvalue(e) && nodes[e].flags & NF_XVALUE == 0;
@@ -492,4 +492,157 @@ recursive fn fn_at_least(a: i64, b: i64, nargs: i64) -> bool {
     }
     ded_end(sv);
     return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Variable templates.
+
+var inst_var_tmpl: i64 = -1;    // declare_var: make the specialization of this variable template
+var inst_var_binds: i32 = -1;
+var inst_var_result: i64 = -1;
+var var_specs = dictionary<u64, u32> {};   // (template << 32 | arguments) -> the variable
+
+// The variable template named `name` in the current scope, -1.
+fn var_template_of(name: u32) -> i64 {
+    var s = scope_find(cur_scope, name);
+    while s >= 0 {
+        if syms[s].kind as i64 == SK_TEMPLATE && tmpl_kind(s) == TT_VAR { return s; }
+        s = cxs[s].nnext as i64;
+    }
+    return -1;
+}
+
+// The specialization of variable template tsym for `args` (instantiated
+// from the primary or the most specialized partial specialization), -1
+// when it cannot be made yet.
+recursive fn var_spec(tsym: i64, args0: i32) -> i64 {
+    let t = cxs[tsym].tmpl as i64;
+    if t < 0 || tmpls[t].kind as i64 != TT_VAR { return -1; }
+    let args = complete_args(t, args0);
+    if args_dependent_strict(args as i64) { return -1; }
+    for i in tl_count(args as i64) {
+        let a = tl_arg(args as i64, i);
+        if (a.kind as i64 == TA_TYPE || a.kind as i64 == TA_VALUE) && (a.ty == 0 || is_opaque(a.ty)) { return -1; }
+    }
+    let key = ((t as u64) << 32) | (args as u64);
+    let g = var_specs.get(key);
+    if g { return g as i64; }
+    let pat, binds = select_pattern(t, args);
+    if pat < 0 || tmpls[pat].t1 == 0 || inst_depth > 400 { return -1; }
+    let mark = nscratch.len;
+    inst_what = tsym;
+    let st = inst_enter(true);
+    bind_header(pat, binds);
+    let sc = tmpls[pat].scope as i64;
+    var ctx = DC_NS;
+    if sc >= 0 && scopes[sc].kind as i64 == CS_CLASS { cur_scope = sc; cur_class = sc; cur_access = AC_PUBLIC; ctx = DC_CLASS; }
+    else { cur_scope = if sc >= 0 { sc } else { 0 }; }
+    pc = tmpls[pat].t0 as i64;
+    inst_var_tmpl = t;
+    inst_var_binds = args;
+    inst_var_result = -1;
+    parse_simple_decl(ctx);
+    inst_var_tmpl = -1;
+    let s = inst_var_result;
+    inst_var_result = -1;
+    let bad = inst_leave(st);
+    take_defs(mark);
+    if s >= 0 {
+        if bad { cxs[s].flags2 = cxs[s].flags2 | CF2_DIRTY; }
+        var_specs.insert(key, s as! u32);
+    }
+    return s;
+}
+
+// Deduction from an overload set e (C++ [temp.deduct.call]p6): with a
+// function template among its members (no explicit arguments) it is a
+// non-deduced context; otherwise each member is tried, and only one may
+// succeed.
+recursive fn deduce_from_set(p0: u32, e: u32) -> i64 {
+    if nodes[e].b != 0 { return -1; }
+    let explicit = if nodes[e].c != 0 { (nodes[e].c - 1) as! i32 } else { -1 };
+    let pp = if is_ref(p0) { tbase(p0) } else { unqual(p0) };
+    var hits = 0;
+    var hit_a: u32 = 0;
+    var s = nodes[e].a as i64;
+    while s >= 0 {
+        let f = resolve(s);
+        s = cxs[s].nnext as i64;
+        if f < 0 { continue; }
+        let k = syms[f].kind as i64;
+        var ftype: u32 = 0;
+        if k == SK_TEMPLATE && tmpl_kind(f) == TT_FUNC {
+            if explicit < 0 { return 1; }
+            let sp = deduce_addr(cxs[f].tmpl as i64, explicit, 0);
+            if sp == -2 { return -1; }
+            if sp < 0 { continue; }
+            ftype = syms[sp].ty;
+        } else if k == SK_FUNC && explicit < 0 && cxs[f].flags & CF_PATTERN == 0 {
+            if cxs[f].flags & CF_MEMBER != 0 && cxs[f].flags & CF_STATIC == 0 { return -1; }
+            ftype = syms[f].ty;
+        } else { continue; }
+        let a = if is_ref(p0) { ftype } else { mk_ptr(ftype) };
+        if deduce_test(pp, a) { hits++; hit_a = a; }
+    }
+    if hits == 0 { return 0; }
+    if hits > 1 { return 1; }
+    if deduce_try(pp, hit_a) { return 1; }
+    return 0;
+}
+
+// Would p deduce against a? (The bindings are left unchanged.)
+recursive fn deduce_test(p: u32, a: u32) -> bool {
+    let m = ded_args.len;
+    for i in ded_n { ded_args.push(ded_args[ded_base + i]); }
+    let ok = deduce_type(p, a);
+    for i in ded_n { ded_args[ded_base + i] = ded_args[m + i]; }
+    ded_args.resize(m);
+    return ok;
+}
+
+// The specialization of function template t that the address of its name
+// with explicit arguments `explicit` (-1 none) denotes for the function
+// type `target` (0: the explicit arguments alone) [temp.deduct.funcaddr]:
+// a symbol, -1 none, -2 not known.
+recursive fn deduce_addr(t: i64, explicit: i32, target: u32) -> i64 {
+    let pf = tmpls[t].pattern as i64;
+    if pf < 0 || kind_of(syms[pf].ty) != TY_FUNC { return -2; }
+    if target != 0 && is_opaque(target) { return -2; }
+    let sv = ded_begin(t);
+    var ok = true;
+    var unknown = false;
+    let ne = tl_count(explicit as i64);
+    var i = 0;
+    while i < ne && ok {
+        if i >= ded_n { ok = false; break; }
+        let p = tps[tmpls[t].params as i64 + i];
+        let a = tl_arg(explicit as i64, i);
+        if a.kind as i64 == TA_TYPE && (a.ty == 0 || is_opaque(a.ty)) { unknown = true; }
+        if p.pack {
+            let m2 = targ_scratch.len;
+            var j = i;
+            while j < ne { targ_scratch.push(tl_arg(explicit as i64, j)); j++; }
+            let pl = targ_intern(m2);
+            ded_args[ded_base + i] = TArg { kind: TA_PACK as! u8, rsv: 0, rsv2: 0, ty: 0, v: pl as i64 };
+            break;
+        }
+        if (p.kind as i64 == TPK_TYPE && a.kind as i64 != TA_TYPE) || (p.kind as i64 == TPK_VALUE && a.kind as i64 != TA_VALUE) ||
+           (p.kind as i64 == TPK_TEMPLATE && a.kind as i64 != TA_TEMPLATE) { ok = false; break; }
+        var a2 = a;
+        a2.rsv = 1;
+        ded_args[ded_base + i] = a2;
+        i++;
+    }
+    if ok && target != 0 && !deduce_type(syms[pf].ty, unqual(target)) { ok = false; }
+    if ok && !unknown {
+        let full, binds = ded_complete(t);
+        ded_end(sv);
+        if !full { return -1; }
+        let s = fspec_decl(t, binds);
+        if s >= 0 && target != 0 && unqual(syms[s].ty) != unqual(target) { return -1; }
+        return s;
+    }
+    ded_end(sv);
+    if !ok { return -1; }
+    return -2;
 }

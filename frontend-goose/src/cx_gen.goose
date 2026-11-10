@@ -416,7 +416,7 @@ recursive fn class_rv(e: u32, t: u32, loc: u32) -> u32 {
 recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
     if is_opq(e) && nodes[e].kind as i64 != N_FUNCREF && nodes[e].kind as i64 != N_INITBRACE { return opaque_node(loc); }
     if nodes[e].kind as i64 == N_FUNCREF {
-        let a = funcref_addr(e, loc);
+        let a = funcref_addr_to(e, t, loc);
         if is_opq(a) { return opaque_node(loc); }
         return conv_value(a, t, loc);
     }
@@ -1604,7 +1604,9 @@ fn pick_ctor(r: i64, mark: i64) -> i64 {
         let a = nscratch[mark];
         if s >= 0 {
             let f = best_candidate(s, mark, true);
-            if f >= 0 && user_provided(f) && cxs[f].flags & CF_DELETED == 0 && first_param_ref(f, cls) != 0 { return f; }
+            // (a constructor template's specialization is never a copy
+            // constructor: with the same conversions the implicit one wins)
+            if f >= 0 && user_provided(f) && cxs[f].flags & CF_DELETED == 0 && cxs[f].flags2 & CF2_FSPEC == 0 && first_param_ref(f, cls) != 0 { return f; }
         }
         let rvalue = !is_lvalue(a) || nodes[a].flags & NF_XVALUE != 0;
         let c = copy_ctor_of(r, rvalue);

@@ -71,10 +71,16 @@ fn inst_debug() -> bool {
 fn inst_reporting() -> bool {
     if inst_report_mode < 0 {
         var v: u8[>..] = [];
-        inst_report_mode = if env("GOOSECC_INST_ERRORS", v) && v.len > 0 && v[0] == '1' { 1 } else { 0 };
+        inst_report_mode = if env("GOOSECC_INST_ERRORS", v) && v.len > 0 {
+            if v[0] == '1' || v[0] == '2' { 1 } else if v[0] == '0' { 2 } else { 0 }
+        } else { 0 };
+        if v.len > 0 && v[0] == '2' { diag_show_all = true; }
     }
     return inst_report_mode == 1;
 }
+// GOOSECC_INST_ERRORS=0: errors of instantiations are suppressed (D2's
+// earlier behaviour, for comparisons)
+fn inst_hard_errors() -> bool { inst_reporting(); return inst_report_mode != 2; }
 
 // ---------------------------------------------------------------------------
 // Entering and leaving an instantiation.
@@ -113,16 +119,25 @@ struct InstSave {
     spec_decl: bool,
     body_now: bool,
     def_target: i64,
+    var_t: i64,
+    watch: i64,
+    watch_errs: i64,
+    nerr: i64,
 }
 
-fn inst_enter() -> InstSave {
+// hard: errors inside are errors of the program (class and member
+// instantiations); otherwise a substitution failure (SFINAE) suppressed and
+// counted.
+fn inst_enter(hard: bool) -> InstSave {
     let st = InstSave { sv: save(), scope: cur_scope, cls: cur_class, access: cur_access, floor: local_floor, vis: vis_limit,
         tdepth: tmpl_depth, ptmpl: pending_tmpl, pexpl: pending_explicit, pinst: pending_inst, extc: extern_c, nest: class_nest,
         func_cx: cur_func_cx, func: cur_func, this_t: this_type, ret_t: ret_type, ld: loop_depth, bd: break_depth,
         bfd: block_fn_depth, targd: targ_depth, pard: paren_depth, uneval: unevaluated, lenient0: lenient,
         errs: diag_inst_errors, what: inst_what, supp: diag_suppress, level: diag_inst_level,
         spec_t: inst_spec_tmpl, spec_b: inst_spec_binds, spec_res: inst_spec_result, spec_decl: inst_spec_decl,
-        body_now: inst_body_now, def_target: inst_def_target };
+        body_now: inst_body_now, def_target: inst_def_target, var_t: inst_var_tmpl, watch: diag_watch_level, watch_errs: diag_watch_errors, nerr: n_errors };
+    diag_watch_level = -1;
+    inst_var_tmpl = -1;
     inst_spec_tmpl = -1;
     inst_spec_result = -1;
     inst_spec_decl = false;
@@ -150,7 +165,7 @@ fn inst_enter() -> InstSave {
     lenient = 0;
     gt_pos = -1;
     inst_depth++;
-    diag_suppress = if inst_reporting() { 0 } else { 1 };
+    diag_suppress = if inst_reporting() { 0 } else if hard && inst_hard_errors() { st.supp } else { 1 };
     diag_inst_level = diag_suppress;
     return st;
 }
@@ -163,6 +178,10 @@ fn inst_leave(st: InstSave) -> bool {
     inst_spec_decl = st.spec_decl;
     inst_body_now = st.body_now;
     inst_def_target = st.def_target;
+    inst_var_tmpl = st.var_t;
+    diag_watch_level = st.watch;
+    diag_watch_errors = st.watch_errs;
+    let shown = diag_suppress == 0 && n_errors > st.nerr;
     diag_suppress = st.supp;
     diag_inst_level = st.level;
     inst_depth--;
@@ -191,12 +210,14 @@ fn inst_leave(st: InstSave) -> bool {
     lenient = st.lenient0;
     restore(st.sv);
     let bad = diag_inst_errors != st.errs;
+    // an instantiation's errors are its own, not its trigger's
+    diag_inst_errors = st.errs;
     if bad { inst_errors++; }
-    if bad && inst_reporting() && st.what >= 0 {
+    if bad && (inst_reporting() || shown) && st.what >= 0 {
         var o: u8[>..] = [];
         loc_prefix(o, tloc() as i64);
         o.append("note: in instantiation of ");
-        o.append(ident_text(syms[st.what].name as i64));
+        inst_what_text(o, st.what);
         o.append(" requested here\n");
         write_stderr(o);
     }
@@ -297,6 +318,18 @@ recursive fn need_complete(t: u32) {
     if sc >= 0 && scopes[sc].flags & SCF_INST_PENDING != 0 { inst_record(r); }
 }
 
+// Is class scope sc complete with all its members known (no dependent or
+// unknown bases, not a template's pattern, not an instantiation that had
+// errors)? A lookup that fails there is an error, not something unknown.
+fn known_class_scope(sc: i64) -> bool {
+    if sc < 0 || scopes[sc].kind as i64 != CS_CLASS { return false; }
+    if scopes[sc].flags & (SCF_PATTERN | SCF_INST_PENDING) != 0 { return false; }
+    let r = scopes[sc].rec as i64;
+    if r < 0 || records[r].flags & RF_COMPLETE == 0 || records[r].flags & RF_BEING_DEFINED != 0 { return false; }
+    if crecs[r].flags & CR_PATTERN != 0 { return false; }
+    return !has_dep_base(sc);
+}
+
 // Is t (a record) an instantiation whose instantiation had errors (or that
 // could not be instantiated)?
 fn inst_is_dirty(t: u32) -> bool {
@@ -313,7 +346,7 @@ recursive fn inst_record(r: i64) {
     let t = cxs[cs].tmpl as i64;
     let args = cxs[cs].targs;
     let pat, pargs = select_pattern(t, args);
-    if inst_debug() { write_stderr(str("inst_record r=", r, " ", ident_text(records[r].name as i64), " t=", t, " pat=", pat, " pattern=", if pat >= 0 { tmpls[pat].pattern } else { -9 }, "\n")); }
+    if inst_debug() { write_stderr(str("inst_record r=", r, " ", ctname(records[r].ty << 4), " t=", t, " pat=", pat, " pattern=", if pat >= 0 { tmpls[pat].pattern } else { -9 }, "\n")); }
     if pat < 0 || tmpls[pat].pattern < 0 || tmpls[pat].t1 == 0 { return; }
     // the header and tokens of the pattern's definition
     let src = if tmpls[pat].def_t >= 0 { tmpls[pat].def_t as i64 } else { pat };
@@ -322,14 +355,21 @@ recursive fn inst_record(r: i64) {
     scopes[sc].tps = tparam_scope(src, pargs) as! i32;
     inst_pat.insert(r as u64, ((pat as u64) << 32) | (pargs as u64));
     let w = tmpl_class_key(src);
+    if head_has_final(src) { mark_final(r); }
     inst_what = cs;
-    let st = inst_enter();
+    let st = inst_enter(true);
     cur_scope = sc;
     pc = class_head_end(src);
     records[r].pack = pack_now();
     parse_class_body(r, w);
     let bad = inst_leave(st);
     if bad { inst_dirty.insert(r as u64, 1); }
+}
+
+// Is the class-head of t's pattern `... Name final`?
+fn head_has_final(t: i64) -> bool {
+    let e = class_head_end(t);
+    return e > 0 && tu_toks[e - 1].kind as i64 == TK_IDENT && tu_toks[e - 1].val == id_final;
 }
 
 // The token after the class-head of a class template's pattern: its ':' or '{'.
@@ -523,6 +563,11 @@ recursive fn match_spec(pt: i64, args: i32) -> bool, i32 {
     var full = false;
     if ok { full, binds = ded_list(pt); }
     ded_end(sv);
+    if inst_debug() { write_stderr(str("match_spec pt=", pt, " deduced=", ok, " full=", full, "\n")); }
+    if ok && full && !spec_args_check(pt, binds, args) {
+        if inst_debug() { write_stderr(str("  spec_args_check failed pt=", pt, "\n")); }
+        return false, -1;
+    }
     return ok && full, binds;
 }
 
@@ -548,10 +593,31 @@ recursive fn synth_args(l: i64, d: i64) -> i32 {
     return targ_intern(mark);
 }
 
+// A class template's pattern record as the template-id it is (X<T> with
+// X's own parameters), 0 for another type.
+fn pattern_as_depspec(t: u32) -> u32 {
+    let r = rec_of(t);
+    if r >= crecs.len || crecs[r].flags & CR_PATTERN == 0 { return 0; }
+    let cs = crecs[r].sym as i64;
+    if cs < 0 || cxs[cs].tmpl < 0 { return 0; }
+    let tt = cxs[cs].tmpl as i64;
+    if tmpls[tt].kind as i64 != TT_CLASS || tmpls[tt].pattern as i64 != r { return 0; }
+    let ts = tmpls[tt].sym as i64;
+    if ts < 0 { return 0; }
+    // a partial specialization's pattern: X<its argument patterns>
+    if tmpls[tt].spec_args >= 0 { return with_q(mk_depspec(ts, tmpls[tt].spec_args), quals(t)); }
+    return with_q(mk_depspec(ts, own_args(tt)), quals(t));
+}
+
 // t with the template parameters of depth `from` renumbered to depth `to`.
 recursive fn retag(t: u32, from: i64, to: i64) -> u32 {
     let k = kind_of(t);
     let q = quals(t);
+    if k == TY_STRUCT || k == TY_UNION {
+        let pd = pattern_as_depspec(t);
+        if pd != 0 { return retag(pd, from, to); }
+        return t;
+    }
     if k == TY_TPARAM {
         let n = types[t >> 4].n;
         if n >> 16 != from { return t; }
@@ -674,6 +740,15 @@ recursive fn deduce_type(p: u32, a: u32) -> bool {
     if k == TY_DEPNAME || k == TY_DEPEXPR || k == TY_UNKNOWN { return true; }   // non-deduced contexts
     if quals(p) != quals(a) { return false; }
     let ka = kind_of(a);
+    if k == TY_STRUCT || k == TY_UNION {
+        // X<T> written with the template's own parameters names its pattern
+        let pd = pattern_as_depspec(p);
+        if pd != 0 { return deduce_type(pd, a); }
+    }
+    if ka == TY_STRUCT || ka == TY_UNION {
+        let ad = pattern_as_depspec(a);
+        if ad != 0 { return deduce_type(p, ad); }
+    }
     if k == TY_DEPSPEC {
         // X<P...> against a specialization X<A...>
         let ts = types[p >> 4].extra as i64;
@@ -699,32 +774,6 @@ recursive fn deduce_type(p: u32, a: u32) -> bool {
         }
         if !same_template(ts, tmpls[at].sym as i64) { return false; }
         return deduce_list(pl, cxs[cs].targs as i64);
-    }
-    if (k == TY_STRUCT || k == TY_UNION) && (ka == TY_STRUCT || ka == TY_UNION || ka == TY_DEPSPEC) {
-        // X<P...> written with exactly X's own parameters names X's pattern
-        // (cx_tmpl.specialization); in a function template's parameter it
-        // is X<P...> with the function's parameters of the same positions
-        let pr = rec_of(p);
-        if pr < crecs.len && crecs[pr].flags & CR_PATTERN != 0 {
-            let ps = crecs[pr].sym as i64;
-            if ps >= 0 && cxs[ps].tmpl >= 0 {
-                let pt = cxs[ps].tmpl as i64;
-                if tmpls[pt].kind as i64 == TT_CLASS && tmpls[pt].pattern as i64 == pr && tmpls[pt].sym >= 0 {
-                    if ka == TY_DEPSPEC {
-                        if same_template(tmpls[pt].sym as i64, types[a >> 4].extra as i64) { return deduce_list(own_args(pt), types[a >> 4].n); }
-                        return false;
-                    }
-                    let ar = rec_of(a);
-                    if ar < crecs.len {
-                        let cs = crecs[ar].sym as i64;
-                        if cs >= 0 && cxs[cs].flags & CF_SPEC != 0 && cxs[cs].tmpl >= 0 {
-                            let at = cxs[cs].tmpl as i64;
-                            if same_template(tmpls[pt].sym as i64, tmpls[at].sym as i64) { return deduce_list(own_args(pt), cxs[cs].targs as i64); }
-                        }
-                    }
-                }
-            }
-        }
     }
     if k != ka { return false; }
     if k == TY_POINTER || k == TY_LREF || k == TY_RREF || k == TY_COMPLEX || k == TY_VECTOR {
@@ -806,8 +855,13 @@ var inst_defs_taken: i64 = 0;       // how many of them the translation unit alr
 var friend_scope = dictionary<u64, u32> {};   // a friend function defined in an instantiated class -> that class scope
 
 // f is used (called, its address taken, ...): its body is to be instantiated.
-fn inst_use(f: i64) {
+recursive fn inst_use(f: i64) {
     if f < 0 || f >= cxs.len || unevaluated > 0 { return; }
+    if complete_base.count > 0 {
+        // code generation's complete-object variant of a structor: its own
+        let cb = complete_base.get(f as u64);
+        if cb { inst_use(cb as i64); return; }
+    }
     if inst_debug() { write_stderr(str("inst_use ", ident_text(syms[f].name as i64), " f=", f, " fl2=", cxs[f].flags2, "\n")); }
     if cxs[f].flags & CF_CTOR != 0 { vtable_use(cxs[f].dscope as i64); }
     if cxs[f].flags2 & (CF2_LAZY_BODY | CF2_QUEUED | CF2_INST_DONE) != CF2_LAZY_BODY { return; }
@@ -933,7 +987,7 @@ recursive fn inst_body(f: i64) {
         let fsg = friend_scope.get(f as u64);
         let sc = if fsg { fsg as i64 } else { cxs[f].dscope as i64 };
         inst_what = f;
-        let st = inst_enter();
+        let st = inst_enter(true);
         parse_member_body(f, sc);
         let bad = inst_leave(st);
         if bad { cxs[f].flags2 = cxs[f].flags2 | CF2_DIRTY; }
@@ -948,7 +1002,7 @@ recursive fn inst_body(f: i64) {
     let pat, pargs = inst_args_of(cxs[f].dscope as i64);
     if pat < 0 { return; }
     inst_what = f;
-    let st = inst_enter();
+    let st = inst_enter(true);
     bind_header(hdr, pargs);
     cur_scope = tmpls[hdr].scope as i64;
     pc = tmpls[hdr].t0 as i64;
@@ -977,7 +1031,7 @@ recursive fn inst_var_def(s: i64) {
     let pat, pargs = inst_args_of(cxs[s].dscope as i64);
     if pat < 0 { return; }
     let mark = nscratch.len;
-    let st = inst_enter();
+    let st = inst_enter(true);
     bind_header(hdr, pargs);
     cur_scope = tmpls[hdr].scope as i64;
     pc = tmpls[hdr].t0 as i64;
@@ -985,4 +1039,88 @@ recursive fn inst_var_def(s: i64) {
     let bad = inst_leave(st);
     if bad { cxs[s].flags2 = cxs[s].flags2 | CF2_DIRTY; }
     take_defs(mark);
+}
+
+// After deduction: do partial specialization pt's arguments, substituted
+// with its parameters' bindings, give args? Substitution failures (an
+// alias template's unused argument such as void_t<typename T::x>,
+// enable_if_t<false>) and non-deduced contexts (typename T::x) are checked
+// by parsing the argument list again (C++ [temp.class.spec.match]p2-3).
+recursive fn spec_args_check(pt: i64, binds: i32, args: i32) -> bool {
+    let t0 = tmpls[pt].sargs_t as i64;
+    if t0 <= 0 || !spec_args_need_check(pt, t0) { return true; }
+    let l = subst_parse(pt, binds, t0, 2, 0);
+    if subst_failed || subst_list < 0 { return false; }
+    let prim = tmpls[pt].primary as i64;
+    let full = if prim >= 0 && tmpls[prim].kind as i64 == TT_CLASS { complete_args(prim, subst_list) } else { subst_list };
+    if full == args { return true; }
+    if args_dependent(full) || tl_count(full as i64) != tl_count(args as i64) { return true; }
+    for i in tl_count(args as i64) {
+        let a = tl_arg(args as i64, i);
+        let b = tl_arg(full as i64, i);
+        if a.kind != b.kind { return false; }
+        if a.kind as i64 == TA_TYPE {
+            if a.ty != b.ty && !(is_opaque(a.ty) || is_opaque(b.ty)) { return false; }
+        } else if a.kind as i64 == TA_VALUE {
+            if a.v != b.v && a.ty != 0 && b.ty != 0 && !is_opaque(a.ty) && !is_opaque(b.ty) && !is_dep(a.ty) && !is_dep(b.ty) { return false; }
+        } else if a.kind as i64 == TA_TEMPLATE {
+            if a.v != b.v { return false; }
+        }
+    }
+    return true;
+}
+
+// Does the argument list at token t0 (its '<') have parts deduction does
+// not check: qualified names, decltype, nested template-ids (alias
+// templates), expressions?
+fn spec_args_need_check(pt: i64, t0: i64) -> bool {
+    var j = t0 + 1;
+    var depth = 1;
+    loop {
+        let k = tu_toks[j].kind as i64;
+        if k == TK_EOF { return false; }
+        if k == TK_LESS { depth++; }
+        else if k == TK_GREATER { depth--; if depth == 0 { return false; } }
+        else if k == TK_GREATERGREATER { depth -= 2; if depth <= 0 { return depth < 0; } }
+        if k == TK_COLONCOLON || k == TK_LESS || k == TK_KW + KW_DECLTYPE || k == TK_KW + KW_SIZEOF { return true; }
+        j++;
+    }
+    return false;
+}
+
+// clang's wording of what is instantiated: "template class 'X<int>'",
+// "function template specialization 'f<int>'", "member function 'X<int>::f'".
+fn inst_what_text(o: u8[>..]&, s: i64) {
+    let k = syms[s].kind as i64;
+    if k == SK_TAG {
+        o.append("template class '");
+        cx_type_text(o, syms[s].ty);
+        o.push('\'');
+        return;
+    }
+    if k == SK_FUNC && cxs[s].flags2 & CF2_FSPEC != 0 {
+        o.append("function template specialization '");
+        cx_scope_prefix(o, cxs[s].dscope as i64);
+        o.append(ident_text(syms[s].name as i64));
+        if cxs[s].targs >= 0 { cx_targs_text(o, cxs[s].targs as i64); }
+        o.push('\'');
+        return;
+    }
+    if k == SK_FUNC {
+        o.append(if cxs[s].flags & CF_MEMBER != 0 { "member function '" } else { "function '" });
+        cx_scope_prefix(o, cxs[s].dscope as i64);
+        o.append(ident_text(syms[s].name as i64));
+        o.push('\'');
+        return;
+    }
+    if k == SK_VAR {
+        o.append("static data member '");
+        cx_scope_prefix(o, cxs[s].dscope as i64);
+        o.append(ident_text(syms[s].name as i64));
+        o.push('\'');
+        return;
+    }
+    o.push('\'');
+    o.append(ident_text(syms[s].name as i64));
+    o.push('\'');
 }
