@@ -939,6 +939,7 @@ recursive fn parse_braced() -> u32 {
 
 // A lambda-expression: its closure type is not modelled in D1.
 recursive fn parse_lambda() -> u32 {
+    if cg_on && !dependent_ctx() { return cg_parse_lambda(); }
     let loc = tloc();
     skip_group();       // [captures]
     if at(TK_LESS) { skip_angles(); }

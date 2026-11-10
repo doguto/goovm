@@ -199,6 +199,27 @@ fn sym_has_attr(s: i64, m: u32) -> bool {
     return a != 0 && sym_attrs[a].flags & m != 0;
 }
 
+// The function attributes the optimizer honors (E2; ignored at -O0), as
+// clang sets them: optnone implies noinline, cold implies optsize, -Os and
+// -Oz put optsize (and minsize) on every function, -fno-inline noinline on
+// every function that is not always_inline, `inline` is inlinehint.
+fn fn_opt_flags(s: i64) -> u32 {
+    if opt_gir_level == 0 { return 0; }
+    var f: u32 = 0;
+    let ai = sym_has_attr(s, AM_ALWAYS_INLINE);
+    if ai { f = f | FN_ALWAYSINLINE; }
+    if sym_has_attr(s, AM_NOINLINE) || opt_no_inline && !ai { f = f | FN_NOINLINE; }
+    if sym_has_attr(s, AM_OPTNONE) { f = f | FN_OPTNONE | FN_NOINLINE; }
+    if sym_has_attr(s, AM_COLD) { f = f | FN_COLD | FN_OPTSIZE; }
+    if sym_has_attr(s, AM_HOT) { f = f | FN_HOT; }
+    if sym_has_attr(s, AM_MINSIZE) { f = f | FN_MINSIZE | FN_OPTSIZE; }
+    let sz = (opt_gir_level >> 8) & 3;
+    if sz >= 1 { f = f | FN_OPTSIZE; }
+    if sz >= 2 { f = f | FN_MINSIZE; }
+    if syms[s].flags & SF_INLINE != 0 && !opt_no_inline { f = f | FN_INLINEHINT; }
+    return f;
+}
+
 // Linkage flags of a defined or referenced global.
 fn link_flags(s: i64, defined: bool) -> u32 {
     var f: u32 = 0;

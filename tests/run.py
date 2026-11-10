@@ -13,8 +13,11 @@ build compiles the IR with clang -O0 too). For each program:
               clang++) and cxx-goovm (the other way round), so that C++
               exceptions cross frames of the other compiler
 Optional extra variants:
-  --o1           also O1: the O0 bitcode through goovm-llc -O1 (the Goose middle-end and global
-                 register allocation), and O1-g: the -O0 -g bitcode through goovm-llc -O1
+  --o1           also the optimizing variants (milestones E1, E2) O1, O1-g, O2, O2-g, O3, Os, Oz:
+                 clang -O<l> [-g] -Xclang -disable-llvm-passes -emit-llvm (the IR LLVM's own
+                 pipeline starts from) through goovm-llc -O<l> (the Goose middle-end and global
+                 register allocation); with --goosecc goosecc-O1, goosecc-O2, goosecc-O3, goosecc-Os
+  --levels L     with --o1: only these variants (e.g. O1,O2-g)
   --opt-passes P also run opt-20 -passes=P on the mem2reg input (e.g. "sroa,instcombine,simplifycfg")
   --backend B    goovm-llc back-end to test (goose, llvm)
   --tpde PATH    also compile the O0 bitcode with tpde-llc and compare
@@ -40,6 +43,9 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+# the optimizing variants (--o1)
+OPTV = ["O1", "O1-g", "O2", "O2-g", "O3", "Os", "Oz"]
+GOPTV = ["O1", "O2", "O3", "Os"]
 
 
 def run(cmd, timeout=60, **kw):
@@ -143,7 +149,9 @@ def test_one(p, args):
         expect = execute(ref)
 
         if args.goosecc:
-            gvars = [("goosecc", []), ("goosecc-g", ["-g"])] + ([("goosecc-O1", ["-O1"])] if args.o1 else [])
+            gvars = [("goosecc", []), ("goosecc-g", ["-g"])] + (
+                [("goosecc-" + v, ["-" + v[:2]] + (["-g"] if v.endswith("-g") else [])) for v in args.gvariants]
+                if args.o1 else [])
             for variant, flags in gvars:
                 try:
                     objs = []
@@ -163,13 +171,14 @@ def test_one(p, args):
             cc = compiler(s, args)
             base = os.path.join(wd, f"{variant}{i}")
             if is_ll(s):
-                passes = ("verify" if variant in ("O0", "O1", "O1-g") else "mem2reg" if variant == "mem2reg"
+                passes = ("verify" if variant == "O0" or variant in OPTV else "mem2reg" if variant == "mem2reg"
                           else args.opt_passes)
                 step([args.opt, f"-passes={passes}", s, "-o", base + ".bc"], "opt")
                 return base + ".bc"
-            if variant in ("O0", "O1", "O1-g"):
-                g = ["-g"] if variant == "O1-g" else []
-                step([cc] + TFLAGS + sflags(s) + ["-O0", "-w"] + g + ["-c", "-emit-llvm", s, "-o", base + ".bc"], "clang -emit-llvm")
+            if variant == "O0" or variant in OPTV:
+                g = ["-g"] if variant.endswith("-g") else []
+                lv = ["-O0"] if variant == "O0" else ["-" + variant[:2], "-Xclang", "-disable-llvm-passes"]
+                step([cc] + TFLAGS + sflags(s) + lv + ["-w"] + g + ["-c", "-emit-llvm", s, "-o", base + ".bc"], "clang -emit-llvm")
                 return base + ".bc"
             raw = base + ".noopt.bc"
             step([cc] + TFLAGS + sflags(s) + ["-O0", "-w", "-Xclang", "-disable-O0-optnone", "-c", "-emit-llvm", s, "-o", raw],
@@ -186,10 +195,10 @@ def test_one(p, args):
                            f"{r.stderr.decode(errors='replace').strip()}")
             return obj
 
-        variants = ["O0", "mem2reg"] + (["opt"] if args.opt_passes else []) + (["O1", "O1-g"] if args.o1 else [])
+        variants = ["O0", "mem2reg"] + (["opt"] if args.opt_passes else []) + (args.variants if args.o1 else [])
         for variant in variants:
             try:
-                opt = ["-O1"] if variant.startswith("O1") else []
+                opt = ["-" + variant[:2]] if variant in OPTV else []
                 compare(variant, [goovm(bitcode(s, i, variant), opt) for i, s in enumerate(p.srcs)])
                 results.append((variant, True, ""))
             except Fail as e:
@@ -251,7 +260,8 @@ def main():
     ap.add_argument("--clangxx", default="clang++-20")
     ap.add_argument("--opt", default="opt-20")
     ap.add_argument("--opt-passes", dest="opt_passes", default="")
-    ap.add_argument("--o1", action="store_true", help="also the O1 and O1-g variants (goovm-llc -O1)")
+    ap.add_argument("--o1", action="store_true", help="also the optimizing variants (goovm-llc -O1 .. -Oz)")
+    ap.add_argument("--levels", default="", help="with --o1: the optimizing variants to run (default: all)")
     ap.add_argument("--tpde", default="")
     ap.add_argument("--goosecc", default="")
     ap.add_argument("--target", default="x86_64", choices=["x86_64", "aarch64"])
@@ -260,6 +270,9 @@ def main():
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("filter", nargs="*")
     args = ap.parse_args()
+    lv = [v for v in args.levels.split(",") if v]
+    args.variants = [v for v in OPTV if not lv or v in lv]
+    args.gvariants = [v for v in GOPTV if not lv or v in lv]
     if args.target == "aarch64":
         TFLAGS[:] = ["--target=aarch64-linux-gnu"]
         LFLAGS[:] = ["--target=aarch64-linux-gnu", "-fuse-ld=lld"]

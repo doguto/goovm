@@ -439,10 +439,12 @@ fn discard_cx(e: u32) -> u32 {
 
 // The value of a return statement converted to the function's return type.
 recursive fn return_convert(x: u32, loc: u32) -> u32 {
+    if cg_on && ret_type != 0 && has_auto(ret_type) && !is_opq(x) && nodes[x].kind as i64 != N_INITBRACE { cg_deduce_return(x, loc); }
     let rt = ret_type;
     if cg_on && rt != 0 && !is_opaque(rt) && !is_void(rt) {
         if is_ref(rt) || is_record(rt) || nodes[x].kind as i64 == N_INITBRACE { return cg_return(x, rt, loc); }
         if kind_of(rt) == TY_MEMPTR { return conv_value(x, unqual(rt), loc); }
+        if nodes[x].kind as i64 == N_FUNCREF && is_pointer(rt) { return conv_value(x, unqual(rt), loc); }
         if !is_opq(x) && is_record(nodes[x].ty) { return conv_value(x, unqual(rt), loc); }
         if is_pointer(rt) && !is_opq(x) {
             let c = cg_ptr_conv(rv(x), unqual(rt), loc);
@@ -521,6 +523,19 @@ recursive fn parse_for() -> u32 {
         var r: u32 = 0;
         if at(TK_L_BRACE) { r = parse_braced(); } else { r = parse_expr_cx(); }
         expect(TK_R_PAREN, "')'");
+        if cg_on && !dependent_ctx() && d.qn.name != 0 && !is_opq(r) {
+            // code generation: the desugared loop
+            let n = cg_range_for(d.ty, d.qn.name, d.loc, r, loc);
+            if n != 0 {
+                let rest = nscratch.len;
+                if rest > mark {
+                    // (what the declaration parsing left: none expected)
+                    nscratch.resize(mark);
+                }
+                pop_scope();
+                return n;
+            }
+        }
         // the loop variable: its type from the range's elements when known
         var vt = d.ty;
         if has_auto(vt) { vt = range_elem_auto(vt, r); }

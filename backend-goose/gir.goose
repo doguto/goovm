@@ -3,7 +3,7 @@
 // structs with static_asserts. Field names follow gir.h except where gir.h
 // uses a Goose keyword.
 
-// r0 = opt_level (E1), r1 = target (F1: GIR_TARGET_*)
+// r0 = opt_level (E1), r1 = target (F1: GIR_TARGET_*), r2 = tbaa (E2)
 struct Header { version: u32, flags: u32, tls_get_addr: u32, n_llvm_insts: u32,
                 r0: u32, r1: u32, r2: u32, r3: u32 }
 let GIR_TARGET_X86_64 = 0;
@@ -183,7 +183,8 @@ let GIR_LANDINGPAD = 83;
 let GIR_NOPS = 84;            // opcode count of the x86-64 back-end's tables (up to LANDINGPAD)
 let GIR_FMA = 84;             // (additive, F1: AArch64)
 let GIR_A64 = 85;             // (additive, F1: AArch64 intrinsics)
-let GIR_NOPS_ALL = 86;        // opcode count (F1)
+let GIR_ISCONST = 86;         // (additive, E2: llvm.is.constant at opt_level >= 1; folded by the middle-end)
+let GIR_NOPS_ALL = 87;        // opcode count (F1, E2)
 // GIR_A64.sub (additive, F1): AArch64 NEON / ACLE operations, as enum GirA64 in gir.h
 let GIR_A64_SQADD = 0; let GIR_A64_UQADD = 1; let GIR_A64_SQSUB = 2; let GIR_A64_UQSUB = 3;
 let GIR_A64_SHADD = 4; let GIR_A64_UHADD = 5; let GIR_A64_SRHADD = 6; let GIR_A64_URHADD = 7;
@@ -311,11 +312,17 @@ let IF_VARARG = 0x0200;
 let IF_NORETURN = 0x0400;
 let IF_INVOKE = 0x0800;
 let IF_NSW = 0x1000;
+let IF_NOINLINE_CALL = 0x2000;      // (E2) CALL: call-site noinline
+let IF_ALWAYSINLINE_CALL = 0x4000;  // (E2) CALL: call-site always_inline
+let IF_CALL_NOWRITE = 0x8000;       // (E2) CALL: writes no memory
+let IF_CALL_NOREAD = 0x0040;        // (E2) CALL: reads no memory
+let IF_CALL_PURE = 0x0020;          // (E2) CALL: nounwind, willreturn
 let ORD_SEQ_CST = 7;
 
 // ABI words.
 let ABI_BYVAL = 0x80000000;
 let ABI_SRET = 0x40000000;
+let ABI_NOALIAS = 0x20000000;       // (E2) a noalias (restrict) pointer parameter
 
 checkfree fn abi_size(w: u32) -> u32 { w & 0x00FFFFFF }
 checkfree fn abi_align(w: u32) -> u32 { (1 as u32) << ((w >> 24) & 0x1F) }
@@ -326,6 +333,16 @@ let FN_INTERNAL = 4;
 let FN_VASTART = 8;
 let FN_SJLJ = 16;
 let FN_RETURNS_TWICE = 32;
+let FN_NOINLINE: u32 = 64;          // (E1)
+let FN_ALWAYSINLINE: u32 = 128;     // (E1)
+let FN_OPTNONE: u32 = 256;          // (E2) LLVM's function attributes
+let FN_OPTSIZE: u32 = 512;
+let FN_MINSIZE: u32 = 1024;
+let FN_COLD: u32 = 2048;
+let FN_HOT: u32 = 4096;
+let FN_INLINEHINT: u32 = 8192;
+let FN_AVAILEXT: u32 = 16384;       // available_externally body: inlining only, never emitted
+let FN_MUSTPROGRESS: u32 = 32768;   // mustprogress (C++)
 let FN_ALIGN_SHIFT = 24;
 
 // Globals.

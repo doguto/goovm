@@ -61,6 +61,8 @@ import .cx_gen_class;
 import .cx_gen_vt;
 import .cx_gen_rtti;
 import .cx_gen_new;
+import .cx_gen_stmt;
+import .cx_gen_lambda;
 
 let CF_DTOR_DELETING = 2147483648;  // the deleting destructor (D0) of a class with a virtual destructor
 
@@ -1054,6 +1056,8 @@ recursive fn cg_call(f: i64, obj0: u32, mark: i64, loc: u32, qualified: bool) ->
 
 // `this` in a member function (an rvalue).
 fn cg_this_ref(loc: u32) -> u32 {
+    let lt = cg_lambda_this(loc);
+    if lt != 0 { return lt; }
     let n = node(N_DECLREF, 0, syms[cg_this].ty, cg_this, 0, 0, loc);
     nodes[n].flags = NF_LVALUE;
     return rv(n);
@@ -1178,6 +1182,29 @@ recursive fn cg_memptr_conv(e: u32, t: u32, loc: u32, explicit: bool) -> u32 {
     if off == -1 { return 0; }
     if off < 0 { return opaque_node(loc); }
     if off == 0 { return node(N_ICAST, CK_NOOP, unqual(t), v as i64, 0, 0, loc); }
+    // a constant (&X::m, null): folded, as clang does (a static's initializer stays constant)
+    var cv = v;
+    while (nodes[cv].kind as i64 == N_ICAST || nodes[cv].kind as i64 == N_CAST) && (nodes[cv].op as i64 == CK_NOOP || nodes[cv].op as i64 == CK_LVAL2RVAL) { cv = nodes[cv].a; }
+    if !fn_mp && nodes[cv].kind as i64 == N_INT {
+        let x = if nodes[cv].v == -1 { -1 } else { nodes[cv].v + sign * off };
+        let n = int_node(x, t_long, loc);
+        nodes[n].ty = unqual(t);
+        return n;
+    }
+    if fn_mp && nodes[cv].kind as i64 == N_COMPLIT && nodes[nodes[cv].a].kind as i64 == N_INITLIST && nodes[nodes[cv].a].c == 2 {
+        let il = nodes[cv].a;
+        let adj = nlist[nodes[il].v + 1];
+        if nodes[adj].kind as i64 == N_INT {
+            let m0 = nscratch.len;
+            nscratch.push(nlist[nodes[il].v]);
+            nscratch.push(int_node(nodes[adj].v + sign * off, t_long, loc));
+            let start = commit_list(m0);
+            let nl = node_v(N_INITLIST, 0, mfp_type(), 0, 0, 2, loc, start);
+            let r = compound_value(nl, mfp_type(), loc);
+            nodes[r].ty = unqual(t);
+            return r;
+        }
+    }
     let mark = nscratch.len;
     if fn_mp {
         // ({ struct mfp m = e; m.adj += off; m })
@@ -2451,7 +2478,7 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
         if bi != 0 && is_array(t) && types[t >> 4].n < 0 { syms[s].ty = with_q(nodes[bi].ty, quals(t)); }
     } else if init != 0 && kind_of(t) == TY_MEMPTR && !is_opq(init) {
         conv = conv_value(init, unqual(t), loc);
-    } else if init != 0 && conv != 0 && is_pointer(t) && !is_opq(init) {
+    } else if init != 0 && conv != 0 && is_pointer(t) && !is_opq(init) && !is_record(nodes[init].ty) {
         let c = cg_ptr_conv(rv(init), unqual(t), loc);
         if c != 0 { conv = c; }
     } else if init != 0 && conv != 0 && !is_opq(init) && is_record(nodes[init].ty) && cish(t) {
@@ -2471,6 +2498,11 @@ recursive fn cg_decl(s: i64, init: u32, conv0: u32, form: i64, loc: u32, dloc: u
         }
     }
     if !is_extern && (fs || init != 0) { syms[s].flags = syms[s].flags | SF_DEFINED; }
+    // clang: constant data with relocations in .data.rel.ro (cx_comdats)
+    if !local && !is_extern && quals(base_elem_q(t)) & Q_CONST != 0 && dyn == 0 && cst == 0 {
+        cxl_grow();
+        cxl[s].flags = cxl[s].flags | (CXL_RELRO as! u8);
+    }
     nscratch.push(node(N_DECL, 0, syms[s].ty, s, conv as i64, dloc as i64, loc));
     if static_local { note_static_local(s); }
     if static_local && (dyn != 0 || cst != 0 || has_dtor) {
@@ -3779,6 +3811,13 @@ recursive fn visit(n: u32) {
             }
         } else if sk != SK_BUILTIN { bad(n); return; }
     } else if k == N_MEMBER {
+        if nd.c != 0 {
+            // a lambda's capture: its field in the closure (cx_gen_lambda.cap_ref)
+            nodes[n].b = records[nd.c - 1].first + nd.b;
+            nodes[n].c = 0;
+            visit(n);
+            return;
+        }
         if nd.flags & NF_REFDEREF != 0 {
             let c = node(N_MEMBER, nd.op as i64, lower_ty(fields[nd.b].ty), nd.a as i64, nd.b as i64, 0, nd.loc);
             nodes[c].flags = NF_LVALUE;

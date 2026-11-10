@@ -45,6 +45,8 @@
 #include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/Scalar/LowerMatrixIntrinsics.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -1156,6 +1158,44 @@ struct Exporter : GirDwarfHost {
         return 0;
     }
 
+    // ----------------------------------------------------------------- TBAA
+    // (E2, opt_level >= 1) The access type of a load's or store's !tbaa tag
+    // as a node of the scalar type tree, numbered from 1 (0: no tag); the
+    // parents go to the table GirHeader.tbaa names. Struct-path tags count
+    // by their access type (conservative: LLVM also tells apart fields of
+    // one scalar type in unrelated structs).
+    std::map<const MDNode *, uint32_t> tbaa_ids;
+    std::vector<uint32_t> tbaa_parent{0};
+    uint32_t tbaa_node(const MDNode *N, int depth = 0) {
+        if (!N || depth > 64) return 0;
+        auto it = tbaa_ids.find(N);
+        if (it != tbaa_ids.end()) return it->second;
+        // a scalar type node: !{!"name", !parent, i64 offset} (old format) or
+        // !{!parent, i64 size, !"name", ...} (new format); a root: !{!"name"}
+        const MDNode *P = nullptr;
+        if (N->getNumOperands() >= 2 && isa<MDString>(N->getOperand(0))) P = dyn_cast<MDNode>(N->getOperand(1));
+        else if (N->getNumOperands() >= 3 && isa<MDNode>(N->getOperand(0))) P = dyn_cast<MDNode>(N->getOperand(0));
+        uint32_t p = P ? tbaa_node(P, depth + 1) : 0;
+        uint32_t id = (uint32_t)tbaa_parent.size();
+        tbaa_parent.push_back(p);
+        tbaa_ids[N] = id;
+        return id;
+    }
+    uint32_t tbaa_of(const Instruction &I) {
+        if (!T.header.opt_level) return 0;
+        const MDNode *tag = I.getMetadata(LLVMContext::MD_tbaa);
+        if (!tag || tag->getNumOperands() < 2) return 0;
+        // struct-path tag !{base, access, offset[, const]}; a scalar tag is its own access type
+        const MDNode *acc = isa<MDNode>(tag->getOperand(0)) ? dyn_cast<MDNode>(tag->getOperand(1)) : tag;
+        return tbaa_node(acc);
+    }
+    void tbaa_table() {
+        if (tbaa_parent.size() <= 1) return;
+        T.header.tbaa = (uint32_t)T.opnds.size();
+        T.opnds.push_back((uint32_t)tbaa_parent.size() - 1);
+        for (size_t k = 1; k < tbaa_parent.size(); k++) T.opnds.push_back(tbaa_parent[k]);
+    }
+
     // ---------------------------------------------------------------- calls
     // Argument for a call: `signext` narrower than 32 bits gets an explicit
     // SEXT to i32 (the SysV caller-extends rule as clang implements it).
@@ -1185,6 +1225,14 @@ struct Exporter : GirDwarfHost {
             T.opnds.push_back(args[i + 1]);
         }
         uint16_t fl = (vararg ? GIR_IF_VARARG : 0) | (al & AL_NR ? GIR_IF_NORETURN : 0);
+        // call-site inlining attributes and memory effects (E2, for the optimizer)
+        if (CB.getAttributes().hasFnAttr(Attribute::NoInline)) fl |= GIR_IF_NOINLINE_CALL;
+        if (T.header.opt_level && !(fl & GIR_IF_VARARG) && cur_invoke_lp == GIR_NONE) {
+            if (CB.onlyReadsMemory()) fl |= GIR_IF_CALL_NOWRITE;
+            if (CB.doesNotAccessMemory()) fl |= GIR_IF_CALL_NOWRITE | GIR_IF_CALL_NOREAD;
+            if (CB.doesNotThrow() && CB.hasFnAttr(Attribute::WillReturn)) fl |= GIR_IF_CALL_PURE;
+        }
+        if (CB.getAttributes().hasFnAttr(Attribute::AlwaysInline)) fl |= GIR_IF_ALWAYSINLINE_CALL;
         if (cur_invoke_lp != GIR_NONE) {
             fl |= GIR_IF_INVOKE;
             T.opnds.push_back(cur_invoke_lp);
@@ -1898,9 +1946,21 @@ struct Exporter : GirDwarfHost {
             vmap[&CB] = cint(ci->getZExtValue(), ty(CB.getType()));
             return;
         }
-        case Intrinsic::is_constant:
-            vmap[&CB] = cint(isa<Constant>(CB.getArgOperand(0)) ? 1 : 0, GIR_T_I1);
+        case Intrinsic::is_constant: {
+            // at -O1.. the middle-end decides after inlining and constant
+            // folding (GIR_ISCONST, its operand in a, b and c); at -O0 as
+            // LLVM's -O0 pipeline (LowerConstantIntrinsics) does
+            const Value *x = CB.getArgOperand(0);
+            if (T.header.opt_level && !isa<Constant>(x)) {
+                uint32_t a = ref(x);
+                if (!is_placeholder(a)) {
+                    vmap[&CB] = emit(GIR_ISCONST, GIR_T_I1, 0, 0, 0, a, a, a, RA);
+                    return;
+                }
+            }
+            vmap[&CB] = cint(isa<Constant>(x) ? 1 : 0, GIR_T_I1);
             return;
+        }
         case Intrinsic::load_relative: {
             // (E1, LLVM -O2 IR: relative lookup tables) p + sext(load i32 (p + off))
             if (ty(CB.getArgOperand(1)->getType()) != GIR_T_I64) fail("load.relative with a narrow offset");
@@ -2810,7 +2870,7 @@ struct Exporter : GirDwarfHost {
                           (L.isAtomic() ? atomic_flags(L.getOrdering(), L.getSyncScopeID()) : 0);
             if (L.isAtomic() && cls(t) != GIR_C_INT && cls(t) != GIR_C_FP) fail("atomic load of this type");
             uint32_t p = ref(L.getPointerOperand());
-            vmap[&I] = emit(GIR_LOAD, t, 0, fl, 0, p, 0, 0, RA);
+            vmap[&I] = emit(GIR_LOAD, t, 0, fl, 0, p, tbaa_of(I), 0, RA);
             return;
         }
         case Instruction::Store: {
@@ -2823,7 +2883,7 @@ struct Exporter : GirDwarfHost {
             if (S.isAtomic() && cls(t) != GIR_C_INT && cls(t) != GIR_C_FP) fail("atomic store of this type");
             uint32_t v = ref(S.getValueOperand());
             uint32_t p = ref(S.getPointerOperand());
-            emit(GIR_STORE, GIR_T_VOID, 0, fl, t, v, p, 0, RA | RB);
+            emit(GIR_STORE, GIR_T_VOID, 0, fl, t, v, p, tbaa_of(I), RA | RB);
             return;
         }
         case Instruction::GetElementPtr: {
@@ -3142,12 +3202,19 @@ struct Exporter : GirDwarfHost {
         GirFunc gf{};
         gf.global = g;
         fn_flags = (Fn.hasLocalLinkage() ? GIR_FN_INTERNAL : 0) | (FT->isVarArg() ? GIR_FN_VARARG : 0);
-        // inlining hints for the optimizer (-O1); clang -O0 puts noinline on
-        // every function together with optnone, so that noinline is not the
-        // source's and is not exported
-        if (Fn.hasFnAttribute(Attribute::NoInline) && !Fn.hasFnAttribute(Attribute::OptimizeNone))
-            fn_flags |= GIR_FN_NOINLINE;
+        // LLVM's function attributes as the optimizer honors them (E1, E2;
+        // ignored at -O0): clang -O0 IR has optnone noinline on every
+        // function, which the optimizer then leaves alone, as LLVM's would
+        if (Fn.hasFnAttribute(Attribute::NoInline)) fn_flags |= GIR_FN_NOINLINE;
         if (Fn.hasFnAttribute(Attribute::AlwaysInline)) fn_flags |= GIR_FN_ALWAYSINLINE;
+        if (Fn.hasFnAttribute(Attribute::OptimizeNone)) fn_flags |= GIR_FN_OPTNONE | GIR_FN_NOINLINE;
+        if (Fn.hasFnAttribute(Attribute::OptimizeForSize)) fn_flags |= GIR_FN_OPTSIZE;
+        if (Fn.hasFnAttribute(Attribute::MinSize)) fn_flags |= GIR_FN_MINSIZE | GIR_FN_OPTSIZE;
+        if (Fn.hasFnAttribute(Attribute::Cold)) fn_flags |= GIR_FN_COLD;
+        if (Fn.hasFnAttribute(Attribute::Hot)) fn_flags |= GIR_FN_HOT;
+        if (Fn.hasFnAttribute(Attribute::InlineHint)) fn_flags |= GIR_FN_INLINEHINT;
+        if (avail_body(Fn)) fn_flags |= GIR_FN_AVAILEXT;
+        if (Fn.mustProgress()) fn_flags |= GIR_FN_MUSTPROGRESS;
         uint64_t falign = Fn.getAlign() ? Fn.getAlign()->value() : 16;
         if (falign < 16) falign = 16;
         gf.first_block = (uint32_t)T.blocks.size();
@@ -3163,6 +3230,7 @@ struct Exporter : GirDwarfHost {
                              ? abi_word(Fn.getAttributes().getParamAttrs(A.getArgNo()), A.getType(), "parameter")
                              : abi_plain(ty(A.getType()), "parameter");
             if (A.hasStructRetAttr()) sret_arg = A.getArgNo();
+            if (T.header.opt_level && A.hasNoAliasAttr() && A.getType()->isPointerTy()) w |= GIR_ABI_NOALIAS;
             args.push_back(ty(A.getType()));
             args.push_back(w);
         }
@@ -3443,6 +3511,13 @@ struct Exporter : GirDwarfHost {
         }
     }
 
+    // An available_externally function whose body is exported for the
+    // optimizer (E2): LLVM inlines such bodies and then drops them
+    // (EliminateAvailableExternally); at -O0 clang emits none.
+    bool avail_body(const Function &Fn) const {
+        return T.header.opt_level != 0 && Fn.hasAvailableExternallyLinkage() && !Fn.isDeclaration();
+    }
+
     // ---------------------------------------------------------------- module
     void run() {
         T.header.version = GIR_VERSION;
@@ -3574,13 +3649,16 @@ struct Exporter : GirDwarfHost {
         dw = std::make_unique<GirDwarfBuilder>(M, T, *this);
         dw_on = dw->enabled();
         if (dw_on) dw->begin_module();
-        // Pass 3: function bodies.
+        // Pass 3: function bodies (and at -O1.. the bodies of available_externally
+        // functions, for the inliner only: GIR_FN_AVAILEXT, the symbol stays undefined)
         for (const Function &Fn : M.functions()) {
             auto it = gmap.find(&Fn);
-            if (it == gmap.end() || !(T.globals[it->second].flags & GIR_GF_DEFINED)) continue;
+            if (it == gmap.end()) continue;
+            if (!(T.globals[it->second].flags & GIR_GF_DEFINED) && !avail_body(Fn)) continue;
             function(Fn, it->second);
         }
         if (dw_on) dw->end_module();
+        tbaa_table();
         T.header.n_llvm_insts = (uint32_t)T.n_llvm_insts;
         if (!T.gcomdat.empty()) T.gcomdat.resize(T.globals.size(), GIR_NONE);
     }
@@ -3612,6 +3690,27 @@ struct Exporter : GirDwarfHost {
 
 }  // namespace
 
+void gir_prepare(Module &m) {
+    bool matrix = false;
+    for (const Function &F : m)
+        if (F.isDeclaration() && F.getName().starts_with("llvm.matrix.")) matrix = true;
+    if (!matrix) return;
+    PassBuilder PB;
+    LoopAnalysisManager LAM;
+    FunctionAnalysisManager FAM;
+    CGSCCAnalysisManager CGAM;
+    ModuleAnalysisManager MAM;
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+    FunctionPassManager FPM;
+    FPM.addPass(LowerMatrixIntrinsicsPass(/*Minimal=*/true));   // as LLVM's -O0 pipeline
+    for (Function &F : m)
+        if (!F.isDeclaration()) FPM.run(F, FAM);
+}
+
 void gir_export(const Module &m, GirTables &out, size_t size_hint) {
     // Bitcode takes 6 to 11 bytes per instruction (more with debug info);
     // over-reserving only costs address space.
@@ -3635,7 +3734,7 @@ static const char *op_name(unsigned op) {
         "insertelt", "shuffle", "dynalloca", "stacksave", "stackrestore", "vastart", "memcpy", "memset", "ctlz",
         "cttz", "ctpop", "bswap", "bitreverse", "fshl", "fshr", "ovf", "scmp", "ucmp", "fabs", "copysign", "fsqrt",
         "isfpclass", "cmpxchg", "atomicrmw", "fence", "tlsaddr", "frameaddr", "retaddr", "sjlj_setjmp",
-        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm", "landingpad", "fma", "a64"};
+        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm", "landingpad", "fma", "a64", "isconst"};
     static_assert(sizeof(names) / sizeof(names[0]) == GIR_OP_COUNT, "op names");
     return op < GIR_OP_COUNT ? names[op] : "?";
 }
