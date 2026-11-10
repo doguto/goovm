@@ -154,6 +154,7 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
             if s >= 0 { return tag_type_of(s); }
             if pending_tmpl >= 0 { return declare_class_template(qn.name, is_union, loc, false); }
             let ns = declare_tag(qn.name, is_union, loc, in_block, cur_scope);
+            if inst_depth > 0 && scopes[cur_scope].kind as i64 == CS_CLASS && scopes[cur_scope].flags & SCF_INST != 0 { member_class_declared(ns); }
             return syms[ns].ty;
         }
         lookup_qn(qn);
@@ -190,6 +191,11 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
         } else if f >= 0 && is_record(syms[f].ty) {
             s = f;
             r = rec_of(syms[f].ty);
+            // D2: template<class T> class Outer<T>::Inner { }: the member
+            // class of the pattern defined out of its class, instantiated
+            // with each instantiation of Outer that needs it complete
+            let rs = crecs[r].scope as i64;
+            if pending_tmpl >= 0 && rs >= 0 && scopes[rs].flags & SCF_PATTERN != 0 { cxs[s].odef = pending_tmpl as! i32; }
         } else {
             // a member of an opaque class: parse and drop
             s = declare_tag(qn.name, is_union, loc, false, cur_scope);
