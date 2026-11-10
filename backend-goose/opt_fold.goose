@@ -160,6 +160,11 @@ fn simp(i: u32) -> u32 {
         return simp_fcmp(i);
     }
     if op >= GIR_FADD && op <= GIR_FDIV { return simp_fbin(i); }
+    if op == GIR_ISCONST {
+        let k = gir_kind(res(o_ins[i].a));
+        if k == GIR_V_CONST || k == GIR_V_GLOBAL { return bool_c(true); }
+        return NIL;
+    }
     if op == GIR_CALL { return simp_call(i); }
     return NIL;
 }

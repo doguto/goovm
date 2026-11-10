@@ -702,6 +702,7 @@ fn opt_module() {
             x_funcs[xb_f + fi].flags |= FN_DEAD;
         }
     }
+    isconst_lower();
     remap_dies();
     if opt_dump_on() { dump_module(); }
     // (field by field: the other tables stay the host's)
@@ -713,6 +714,22 @@ fn opt_module() {
     M.asms = x_asms[xb_a..];
     M.dies = x_dies[xb_d..];
     M.dattrs = x_dattrs[xb_t..];
+}
+
+// The is.constant tests left after all optimization (their operand did not
+// become a constant) are false: each becomes `or i1 0, 0` (and a test of a
+// constant `or i1 1, 0`), which code generation handles.
+fn isconst_lower() {
+    for k in xb_i..x_insts.len {
+        if x_insts[k].op != GIR_ISCONST { continue; }
+        let a = x_insts[k].a;
+        let kd = gir_kind(a);
+        let v: u64 = if kd == GIR_V_CONST || kd == GIR_V_GLOBAL { 1 } else { 0 };
+        x_insts[k].op = GIR_OR as! u8;
+        x_insts[k].a = mk_const(GIR_T_I1, v, 0);
+        x_insts[k].b = mk_const(GIR_T_I1, 0, 0);
+        x_insts[k].c = 0;
+    }
 }
 
 // The order functions are optimized in: callees before callers (a
@@ -808,6 +825,21 @@ fn opt_function(fi: u32) {
         if mem2reg() { simplify_phis(); }
     }
     opt_round();
+    if !opt_off("unroll") && loop_unroll() {
+        resolve_all();
+        ensure_cfg();
+        simplify_phis();
+        opt_round();
+        if !opt_off("sroa") {
+            build_uses();
+            if sroa() {
+                resolve_all();
+                build_uses();
+                if mem2reg() { simplify_phis(); }
+                opt_round();
+            }
+        }
+    }
     if !opt_off("licm") && licm() {
         if !opt_off("iv") && indvars() { licm(); }
         opt_round();

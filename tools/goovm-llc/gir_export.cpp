@@ -1602,9 +1602,21 @@ struct Exporter : GirDwarfHost {
             vmap[&CB] = cint(ci->getZExtValue(), ty(CB.getType()));
             return;
         }
-        case Intrinsic::is_constant:
-            vmap[&CB] = cint(isa<Constant>(CB.getArgOperand(0)) ? 1 : 0, GIR_T_I1);
+        case Intrinsic::is_constant: {
+            // at -O1.. the middle-end decides after inlining and constant
+            // folding (GIR_ISCONST, its operand in a, b and c); at -O0 as
+            // LLVM's -O0 pipeline (LowerConstantIntrinsics) does
+            const Value *x = CB.getArgOperand(0);
+            if (T.header.opt_level && !isa<Constant>(x)) {
+                uint32_t a = ref(x);
+                if (!is_placeholder(a)) {
+                    vmap[&CB] = emit(GIR_ISCONST, GIR_T_I1, 0, 0, 0, a, a, a, RA);
+                    return;
+                }
+            }
+            vmap[&CB] = cint(isa<Constant>(x) ? 1 : 0, GIR_T_I1);
             return;
+        }
         case Intrinsic::load_relative: {
             // (E1, LLVM -O2 IR: relative lookup tables) p + sext(load i32 (p + off))
             if (ty(CB.getArgOperand(1)->getType()) != GIR_T_I64) fail("load.relative with a narrow offset");
@@ -3378,7 +3390,7 @@ static const char *op_name(unsigned op) {
         "insertelt", "shuffle", "dynalloca", "stacksave", "stackrestore", "vastart", "memcpy", "memset", "ctlz",
         "cttz", "ctpop", "bswap", "bitreverse", "fshl", "fshr", "ovf", "scmp", "ucmp", "fabs", "copysign", "fsqrt",
         "isfpclass", "cmpxchg", "atomicrmw", "fence", "tlsaddr", "frameaddr", "retaddr", "sjlj_setjmp",
-        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm", "landingpad", "fma", "a64"};
+        "sjlj_longjmp", "trap", "debugtrap", "indirectbr", "blockaddr", "x86", "asm", "landingpad", "fma", "a64", "isconst"};
     static_assert(sizeof(names) / sizeof(names[0]) == GIR_OP_COUNT, "op names");
     return op < GIR_OP_COUNT ? names[op] : "?";
 }

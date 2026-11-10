@@ -379,7 +379,7 @@ fn has_effect(I: Inst) -> bool {
     if op >= GIR_FADD && op <= GIR_SHUFFLE { return false; }  // FP, casts, aggregates, vectors
     if op >= GIR_CTLZ && op <= GIR_ISFPCLASS { return false; } // bit ops, ovf, scmp, fabs, ...
     if op == GIR_BLOCKADDR || op == GIR_X86 || op == GIR_TLSADDR { return false; }
-    if op == GIR_FRAMEADDR || op == GIR_RETADDR || op == GIR_STACKSAVE { return false; }
+    if op == GIR_FRAMEADDR || op == GIR_RETADDR || op == GIR_STACKSAVE || op == GIR_ISCONST { return false; }
     // (E2) a call that writes no memory, does not throw and returns
     if op == GIR_CALL { return I.flags & (IF_CALL_NOWRITE | IF_CALL_PURE | IF_INVOKE) != (IF_CALL_NOWRITE | IF_CALL_PURE); }
     return true;

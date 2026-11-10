@@ -315,3 +315,266 @@ fn loop_delete_one(h: u32) -> bool {
     o_cfg_ok = false;
     return true;
 }
+
+// ---------------------------------------------------------- full unrolling
+//
+// (LLVM's LoopFullUnroll) A loop with a known trip count whose copies fit
+// the threshold (150 instructions at -O1/-O2, 300 at -O3; none for optsize)
+// is replaced by that many copies of its body in sequence: copy k's header
+// PHIs take copy k-1's values from the latch, copy 0's take the preheader's;
+// the exit test of copy k branches straight to copy k+1 (to the exit block
+// after the last copy), and the values used after the loop are the last
+// copy's. Only innermost loops whose one exiting block is the latch (a
+// rotated loop) are unrolled.
+
+var ur_map: u32[>..] = [];      // original instruction -> its copy in the current copy
+var ur_bmap: u32[>..] = [];     // original block -> its copy
+var ur_prev: u32[>..] = [];     // header PHI -> its value at the end of the previous copy
+var ur_last: u32[>..] = [];     // loop value -> its value in the last copy
+var ur_tmp: u32[>..] = [];
+
+fn unroll_threshold() -> u32 {
+    if o_f.flags & (FN_OPTSIZE | FN_MINSIZE) != 0 || opt_sz != 0 { return 0; }
+    return if opt_lv >= 3 { 300 } else { 150 };
+}
+
+fn loop_unroll() -> bool {
+    if o_pinned { return false; }
+    let thr = unroll_threshold();
+    if thr == 0 { return false; }
+    ensure_cfg();
+    loop_headers();
+    var any = false;
+    var k: i64 = 0;
+    while k < lp_hdrs.len {
+        let h = lp_hdrs[k];
+        k++;
+        if rpo_num[h] == NIL { continue; }
+        if unroll_full(h, thr) {
+            any = true;
+            ensure_cfg();
+            // (the other headers' loops are intact; RPO numbers changed)
+        }
+    }
+    return any;
+}
+
+// The value v of the loop in the current copy.
+inline fn ur_val(v0: u32) -> u32 {
+    let v = res(v0);
+    if is_inst(v) && v < ur_map.len && ur_map[v] != NIL { return ur_map[v]; }
+    return v;
+}
+
+fn unroll_full(h: u32, thr: u32) -> bool {
+    if !loop_collect(h) || lp_pre == NIL || lp_latch == NIL || lp_exit == NIL || lp_exiting != lp_latch { return false; }
+    // innermost only: no other header in the body
+    for b in lp_body {
+        if b == h { continue; }
+        for q in p_start[b]..p_start[b + 1] {
+            let p = p_list[q];
+            if rpo_num[p] != NIL && dominates(b, p) && in_loop(p) { return false; }
+        }
+    }
+    let E = lp_exit;
+    if b_fl[E] & BF_LP != 0 { return false; }
+    // size; nothing that cannot be copied
+    var size: u32 = 0;
+    for b in lp_body {
+        if b_fl[b] & BF_LP != 0 { return false; }
+        var i = b_first[b];
+        while i != NIL {
+            let op: u32 = o_ins[i].op;
+            if op == GIR_ALLOCA || op == GIR_DYNALLOCA || op == GIR_LANDINGPAD || op == GIR_INDIRECTBR
+               || op == GIR_SWITCH || op == GIR_ASM || op == GIR_SJLJ_SETJMP { return false; }
+            if op == GIR_CALL && o_ins[i].flags & IF_INVOKE != 0 { return false; }
+            if op != GIR_PHI && op != GIR_BR { size++; }
+            i = o_nxt[i];
+        }
+    }
+    if !loop_trip(h) { return false; }
+    let n = lp_trip;
+    if n < 1 || n * size > thr || n > 64 { return false; }
+    resolve_all();
+    build_uses();
+    let L = lp_latch;
+    let n0: u32 = o_ins.len as! u32;
+    if ur_map.len < n0 { ur_map.resize(n0, NIL); }
+    for x in 0..n0 { ur_map[x] = NIL; }
+    if ur_bmap.len < cfg_nb { ur_bmap.resize(cfg_nb, NIL); }
+    // the header PHIs: their latch values per copy
+    ur_tmp.clear();
+    var i = b_first[h];
+    while i != NIL && o_ins[i].op == GIR_PHI {
+        ur_tmp.push(i);
+        i = o_nxt[i];
+    }
+    let nphi = ur_tmp.len;
+    ur_prev.clear();
+    for ph in ur_tmp {
+        let I = o_ins[ph];
+        var lv: u32 = NIL;
+        for q in 0..I.c { if o_ops[I.b + 2 * q + 1] == L { lv = res(o_ops[I.b + 2 * q]); } }
+        if lv == NIL { return false; }
+        ur_prev.push(lv);
+    }
+    // copy 0 is the loop itself: its header PHIs keep only the preheader's entry
+    var last_latch = L;
+    // copies 1 .. n-1
+    for c in 1..n {
+        // block copies (in the body's order), linked after the previous latch in layout
+        for b in lp_body { ur_bmap[b] = new_block(); }
+        // instruction copies
+        for b in lp_body {
+            let nb = ur_bmap[b];
+            var j = b_first[b];
+            while j != NIL {
+                let I = o_ins[j];
+                if b == h && I.op == GIR_PHI {
+                    // (not copied: the previous copy's latch value, below)
+                    j = o_nxt[j];
+                    continue;
+                }
+                let x = new_inst(I);
+                ur_map[j] = x;
+                link_end(nb, x);
+                j = o_nxt[j];
+            }
+        }
+        // header PHIs of this copy: the previous copy's latch values
+        for q in 0..nphi {
+            let ph = ur_tmp[q];
+            let pv = ur_prev[q];
+            // (in copy c, uses of the PHI read pv as it was in copy c - 1)
+            ur_map[ph] = pv;
+        }
+        // operands and successors of the copies
+        for b in lp_body {
+            var x = b_first[ur_bmap[b]];
+            while x != NIL {
+                ur_fix(x);
+                x = o_nxt[x];
+            }
+        }
+        // the previous copy's latch goes straight into this copy's header
+        ur_retarget(last_latch, ur_bmap[h]);
+        // the values at this copy's latch for the next copy
+        for q in 0..nphi {
+            let ph = ur_tmp[q];
+            let I = o_ins[ph];
+            var lv: u32 = NIL;
+            for k in 0..I.c { if o_ops[I.b + 2 * k + 1] == L { lv = res(o_ops[I.b + 2 * k]); } }
+            ur_prev[q] = ur_val(lv);
+        }
+        // layout: the copy after the previous latch's place
+        var lb = last_latch;
+        for b in lp_body {
+            let nb = ur_bmap[b];
+            b_lnext[nb] = b_lnext[lb];
+            b_lnext[lb] = nb;
+            lb = nb;
+        }
+        last_latch = ur_bmap[L];
+        // values of the last copy (for the uses after the loop)
+        if c == n - 1 {
+            ur_last.clear();
+            ur_last.resize(n0, NIL);
+            for b in lp_body {
+                var j = b_first[b];
+                while j != NIL {
+                    ur_last[j] = ur_val(j);
+                    j = o_nxt[j];
+                }
+            }
+        }
+    }
+    if n == 1 {
+        ur_last.clear();
+        ur_last.resize(n0, NIL);
+        for b in lp_body {
+            var j = b_first[b];
+            while j != NIL {
+                ur_last[j] = j;
+                j = o_nxt[j];
+            }
+        }
+    }
+    // the last latch leaves for the exit
+    let T = b_last[last_latch];
+    o_ins[T].op = GIR_BR as! u8;
+    o_ins[T].a = E;
+    o_ins[T].b = 0;
+    o_ins[T].c = 0;
+    // copy 0's header PHIs: only the preheader's value
+    phi_remove_pred(h, L);
+    // the exit's PHIs and the other uses after the loop: the last copy's values
+    var e = b_first[E];
+    while e != NIL && o_ins[e].op == GIR_PHI {
+        let I = o_ins[e];
+        for q in 0..I.c {
+            if o_ops[I.b + 2 * q + 1] == L {
+                let v = res(o_ops[I.b + 2 * q]);
+                o_ops[I.b + 2 * q + 1] = last_latch;
+                if is_inst(v) && v < n0 && ur_last[v] != NIL { o_ops[I.b + 2 * q] = ur_last[v]; }
+            }
+        }
+        e = o_nxt[e];
+    }
+    for b in lp_body {
+        var j = b_first[b];
+        while j != NIL {
+            let lv = ur_last[j];
+            if lv != j && lv != NIL {
+                for q in u_start[j]..u_start[j + 1] {
+                    let u = u_list[q];
+                    if o_blk[u] == NIL || u >= n0 { continue; }
+                    let ub = o_blk[u];
+                    if ub < lp_mark.len as! u32 && in_loop(ub) || ub == E && o_ins[u].op == GIR_PHI { continue; }
+                    each_slot(u) { s =>
+                        if res(vget(u, s)) == j { vset(u, s, lv); }
+                    };
+                }
+            }
+            j = o_nxt[j];
+        }
+    }
+    o_cfg_ok = false;
+    return true;
+}
+// The operands of copy x mapped to the current copy, its successors to the
+// copies of the blocks (the runs of PHIs, GEPs and calls copied first: the
+// copy shares them with the original).
+fn ur_fix(x: u32) {
+    let I = o_ins[x];
+    let op: u32 = I.op;
+    if op == GIR_PHI || op == GIR_GEP || op == GIR_CALL {
+        let n: u32 = if op == GIR_GEP { 2 + 2 * I.c } else { 2 * I.c };
+        let s = new_run(n);
+        for k in 0..n { o_ops[s + k] = o_ops[I.b + k]; }
+        o_ins[x].b = s;
+    }
+    each_slot(x) { sl =>
+        let v = vget(x, sl);
+        vset(x, sl, ur_val(v));
+    };
+    if op == GIR_BR { o_ins[x].a = ur_blk(I.a); }
+    else if op == GIR_CONDBR {
+        o_ins[x].b = ur_blk(I.b);
+        o_ins[x].c = ur_blk(I.c);
+    } else if op == GIR_PHI {
+        let s = o_ins[x].b;
+        for k in 0..I.c { o_ops[s + 2 * k + 1] = ur_blk(o_ops[s + 2 * k + 1]); }
+    }
+}
+inline fn ur_blk(b: u32) -> u32 {
+    if b < lp_mark.len as! u32 && in_loop(b) { return ur_bmap[b]; }
+    return b;
+}
+// Latch t (its exit test) becomes a branch to block to.
+fn ur_retarget(latch: u32, to: u32) {
+    let T = b_last[latch];
+    o_ins[T].op = GIR_BR as! u8;
+    o_ins[T].a = to;
+    o_ins[T].b = 0;
+    o_ins[T].c = 0;
+}

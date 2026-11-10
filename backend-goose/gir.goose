@@ -183,7 +183,8 @@ let GIR_LANDINGPAD = 83;
 let GIR_NOPS = 84;            // opcode count of the x86-64 back-end's tables (up to LANDINGPAD)
 let GIR_FMA = 84;             // (additive, F1: AArch64)
 let GIR_A64 = 85;             // (additive, F1: AArch64 intrinsics)
-let GIR_NOPS_ALL = 86;        // opcode count (F1)
+let GIR_ISCONST = 86;         // (additive, E2: llvm.is.constant at opt_level >= 1; folded by the middle-end)
+let GIR_NOPS_ALL = 87;        // opcode count (F1, E2)
 let ASMREG_V0 = 32;           // AArch64 inline-asm register numbers: 0..30 x, 32..63 v
 let ASMREG_XMM0 = 16;
 let ASMREG_ST0 = 32;

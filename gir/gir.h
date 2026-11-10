@@ -274,6 +274,13 @@ enum GirOp {
                        /*   ty = result type, aux = operand type; a, b, c =  */
                        /*   operands, or for the forms marked "run" in       */
                        /*   GirA64: b = s, c = n: ops[s..s+n) (a unused)     */
+    /* --- version 2, optimizer (additive, milestone E2; emitted at opt_level
+     * >= 1 only) --- */
+    GIR_ISCONST,       /* a = b = c = a value of any type; ty = i1: whether  */
+                       /*   it is a constant once optimized (LLVM            */
+                       /*   llvm.is.constant, __builtin_constant_p): the     */
+                       /*   middle-end folds it after inlining; never reaches */
+                       /*   code generation                                  */
     GIR_OP_COUNT
 };
 
