@@ -409,6 +409,7 @@ recursive fn lambda_fnptr(f: i64, csc: i64, cls: u32, pst: i64, pn: i64, loc: u3
     let c = lower_call(f, n_var(tmp, loc), am, loc, false);
     if is_opq(c) { nscratch.resize(bm); return -1, -1; }
     if is_void(rt) { nscratch.push(n_expr_stmt(c)); }
+    else if is_ref(rt) { nscratch.push(node(N_RETURN, 0, rt, n_addr(c, loc) as i64, 0, 0, loc)); }
     else { nscratch.push(node(N_RETURN, 0, rt, c as i64, 0, 0, loc)); }
     let body = n_block(bm, loc);
     let ifd = node_v(N_FUNCDEF, 0, it, inv, body as i64, pn, loc, ip);
@@ -477,19 +478,59 @@ fn name_closure(li: i64, r: i64, f: i64, encl: i64) {
         lam_names.append("E");
         if n > 0 { format(lam_names, n - 1); }
         lam_names.append("_");
-    } else {
-        let key = if encl >= 0 { encl as u64 } else { 0xFFFFFFFF };
-        var n: i64 = 0;
-        let g = lam_nums.get(key);
-        if g { n = g as i64; }
-        lam_nums.insert(key, (n + 1) as! u32);
-        var d: u8[>..] = [];
-        d.append("$_");
-        format(d, n);
-        format(lam_names, d.len);
-        lam_names.append(d);
     }
+    // ($_<n>: numbered when first used, as clang numbers them when it
+    // first mangles them: lam_dollar_name)
     lam_rec.insert(r as u64, ((li as u64) << 40) | ((off as u64) << 16) | ((lam_names.len - off) as u64));
+}
+
+var lam_dnum = dictionary<u64, u32> {};    // a $_ closure -> its number
+// A use of the closure of record r (a call of its functions, a
+// specialization named with it): its $_<n> number now if it has none.
+fn note_lambda_use(r: i64) {
+    let g = lam_rec.get(r as u64);
+    if !g || (g & 0xFFFF) != 0 || lam_dnum.contains(r as u64) { return; }
+    let li = (g >> 40) as i64;
+    let e = lam_infos[li].encl;
+    let key = if e >= 0 { e as u64 } else { 0xFFFFFFFF };
+    var n: i64 = 0;
+    let h = lam_nums.get(key);
+    if h { n = h as i64; }
+    lam_nums.insert(key, (n + 1) as! u32);
+    lam_dnum.insert(r as u64, n as! u32);
+}
+
+// Closures named in a call of function f (its class, its template arguments).
+fn note_lambda_uses(f: i64) {
+    if lam_rec.count == 0 || f < 0 || f >= cxs.len { return; }
+    if cxs[f].dscope > 0 && scopes[cxs[f].dscope].kind as i64 == CS_CLASS && scopes[cxs[f].dscope].rec >= 0 { note_lambda_use(scopes[cxs[f].dscope].rec as i64); }
+    if cxs[f].flags2 & CF2_FSPEC != 0 && cxs[f].targs >= 0 {
+        let l = cxs[f].targs as i64;
+        for i in tl_count(l) {
+            let a = tl_arg(l, i);
+            if a.kind as i64 != TA_TYPE { continue; }
+            var t = a.ty;
+            while is_pointer(t) || is_ref(t) { t = tbase(t); }
+            if is_record(t) { note_lambda_use(rec_of(t)); }
+        }
+    }
+}
+
+// The closure name of record r (offset/length in lam_names; a $_ one
+// written now).
+fn closure_name(r: i64, out: u8[>..]&) {
+    let g = lam_rec.get(r as u64);
+    if !g { return; }
+    let off = ((g >> 16) & 0xFFFFFF) as i64;
+    let len = (g & 0xFFFF) as i64;
+    if len > 0 { out.append(lam_names[off..off + len]); return; }
+    note_lambda_use(r);
+    var d: u8[>..] = [];
+    d.append("$_");
+    let n = lam_dnum.get(r as u64);
+    if n { format(d, n as i64); }
+    format(out, d.len);
+    out.append(d);
 }
 
 // The enclosing function's part of a local name: Z<encoding>E (empty at
@@ -530,7 +571,7 @@ fn closure_mangled(r: i64) -> bool {
     cm_name.clear();
     let e = lam_infos[li].encl;
     if !encl_enc(e, cm_buf) { return false; }
-    cm_name.append(lam_names[off..off + len]);
+    closure_name(r, cm_name);
     cm_enc_len = cm_buf.len;
     cm_buf.append(cm_name);
     if !(e >= 0 && cxl_link(e) == LK_LINKONCE && syms[e].sc as i64 != SC_STATIC) { cm_no_linkage = true; }
@@ -561,7 +602,7 @@ fn name_lambdas() {
         if g { gv = g; }
         let off = ((gv >> 16) & 0xFFFFFF) as i64;
         let len = (gv & 0xFFFF) as i64;
-        cn.append(lam_names[off..off + len]);
+        closure_name(L.rec, cn);
         var enc: u8[>..] = [];
         encl_enc(L.encl, enc);
         // operator(): [Z<enc>E]N[K]<closure>clE<params>
@@ -599,7 +640,9 @@ fn name_lambdas() {
 }
 
 fn lam_link(f: i64, nm: u8[>..]&, linkonce: bool) {
-    set_label(f, nm);
+    // the mangler's name when it has one (its substitutions count the
+    // closure's name), else the one built here
+    if mangle_sym(f) { set_label(f, mg); } else { set_label(f, nm); }
     cxl_grow();
     if linkonce {
         syms[f].sc = 0;

@@ -977,8 +977,13 @@ recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u3
     let total = nscratch.len - cm;
     for i in total { nscratch[mark + i] = nscratch[cm + i]; }
     nscratch.resize(mark + total);
+    note_lambda_uses(f);
     var call: u32 = 0;
-    if virt && cxs[f].flags & CF_VIRTUAL != 0 && is_this_fn(f) {
+    if proxy_fns.contains(f as u64) {
+        // a call through a function pointer (cg_call_ptr)
+        let fp = proxy_fps.pop();
+        call = n_call_ptr(node(N_ICAST, CK_BITCAST, mk_ptr(abi_type(f)), fp as i64, 0, 0, loc), mark, loc);
+    } else if virt && cxs[f].flags & CF_VIRTUAL != 0 && is_this_fn(f) {
         let fp = vfunc_ptr(f, nscratch[mark + (if dst != 0 { 1 } else { 0 })], 0, loc);
         if fp == 0 { nscratch.resize(mark); return opaque_node(loc); }
         call = n_call_ptr(fp, mark, loc);
@@ -989,6 +994,40 @@ recursive fn lower_call(f: i64, obj: u32, mark: i64, loc: u32, virt: bool) -> u3
     if kind_of(ft.base) == TY_MEMPTR { nodes[call].ty = unqual(ft.base); }
     if dst != 0 { return node(N_XPRV, 0, unqual(ft.base), call as i64, dst as i64, 0, loc); }
     return wrap_ref_result(call, ft.base);
+}
+
+// A call through a pointer to a function of C++ type ft (callee: the
+// pointer, or a function lvalue) with the arguments nscratch[mark..]: as
+// lower_call does it for a function of that type (a symbol standing for
+// the type), the callee the pointer.
+var proxy_fns = dictionary<u64, u8> {};
+var proxy_of = dictionary<u64, u32> {};
+var proxy_fps: u32[>..<] = [];
+recursive fn cg_call_ptr(callee: u32, ft: u32, mark: i64, loc: u32) -> u32 {
+    var fp: u32 = 0;
+    if is_func(nodes[callee].ty) {
+        if !is_lvalue(callee) { nscratch.resize(mark); return opaque_node(loc); }
+        fp = n_addr(callee, loc);
+    } else {
+        fp = rv(callee);
+    }
+    let key = unqual(ft) as u64;
+    var f: i64 = -1;
+    let g = proxy_of.get(key);
+    if g { f = g as i64; } else {
+        f = csym(SK_FUNC, intern("__call_through_pointer"), unqual(ft), loc);
+        syms[f].sc = SC_EXTERN as! u8;
+        cxs[f].flags = CF_EXTERN_C;
+        cxs[f].dscope = 0;
+        proxy_of.insert(key, f as! u32);
+        proxy_fns.insert(f as u64, 1);
+    }
+    proxy_fps.push(fp);
+    let sv = proxy_fps.len;
+    let c = lower_call(f, 0, mark, loc, false);
+    // (not called: lower_call gave up before the call)
+    if proxy_fps.len == sv { proxy_fps.pop(); }
+    return c;
 }
 
 // A class passed or returned by value must be trivial for calls (Itanium:
@@ -2659,6 +2698,7 @@ fn push_dtor_cleanup(s: i64, loc: u32) {
         if !is_record(t) || is_opaque(t) { return; }
         let d = class_dtor(rec_of(t));
         if d < 0 { return; }
+        inst_use(d);        // (an instantiated class's destructor: its body on use)
         f = complete_sym(d);
     }
     nscratch.push(node(N_XPUSH, XP_CALL, 0, s, 0, f, loc));
@@ -3614,6 +3654,7 @@ var var_decls = dictionary<u64, u32> {};   // file-scope variable -> its N_DECL
 var n_bad: i64 = 0;
 
 recursive fn reach_fn(f: i64) {
+    if syms[f].def < 0 && f < cxs.len && cxs[f].flags2 & CF2_LAZY_BODY != 0 { inst_use(f); }
     if syms[f].def < 0 {
         let b = complete_base.get(f as u64);
         if b { reach_fn(b as i64); }
