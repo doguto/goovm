@@ -181,6 +181,7 @@ fn simp(i: u32) -> u32 {
     }
     if op == GIR_CALL { return simp_call(i); }
     if op == GIR_OBJSIZE { return simp_objsize(i); }
+    if op == GIR_LOAD { return simp_load_const(i); }
     return NIL;
 }
 
@@ -230,6 +231,8 @@ fn simp_fcmp(i: u32) -> u32 {
         if x != x || y != y { o = 8; } else if x < y { o = 4; } else if x > y { o = 2; }
         return bool_c(p & o != 0);
     }
+    // a NaN operand: unordered
+    if (I.aux == GIR_T_F32 || I.aux == GIR_T_F64) && (ka && x != x || kb && y != y) { return bool_c(p & 8 != 0); }
     if gir_kind(b) == GIR_V_CONST && is_inst(a) && o_ins[a].op == GIR_FABS {
         let C = x_consts[xb_c + gir_idx(b)];
         if C.data == GIR_NONE && C.lo == 0 && C.hi == 0 && (C.ty == GIR_T_F32 || C.ty == GIR_T_F64) {

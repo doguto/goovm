@@ -3623,7 +3623,8 @@ struct Exporter : GirDwarfHost {
                 {"__vsprintf_chk", "vsprintf"}, {"__snprintf_chk", "snprintf"}, {"__sprintf_chk", "sprintf"},
                 {"__memcpy_chk", "memcpy"}, {"__memmove_chk", "memmove"}, {"__memset_chk", "memset"},
                 {"__strcpy_chk", "strcpy"}, {"__stpcpy_chk", "stpcpy"}, {"__strcat_chk", "strcat"},
-                {"__strncpy_chk", "strncpy"}, {"__strncat_chk", "strncat"}};
+                {"__strncpy_chk", "strncpy"}, {"__strncat_chk", "strncat"}, {"stpcpy", "strcpy"},
+                {"strpbrk", "strchr"}, {"strcspn", "strlen"}, {"bcopy", "memmove"}};
             for (const auto &c : companions) {
                 const Function *f = M.getFunction(c[0]);
                 if (!f || f->hasLocalLinkage() || M.getNamedValue(c[1])) continue;

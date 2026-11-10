@@ -75,7 +75,8 @@ let LB_MALLOC: u32 = 54;         // malloc, valloc, operator new (n)
 let LB_CALLOC: u32 = 55;         // calloc (n, m)
 let LB_REALLOC: u32 = 56;        // realloc, reallocf (p, n)
 let LB_ALIGNED: u32 = 57;        // aligned_alloc, memalign (a, n)
-let LB_N: u32 = 58;
+let LB_BCOPY: u32 = 58;
+let LB_N: u32 = 59;
 
 var lb_kind: u8[>..] = [];      // per global: LB_*, 0
 var lb_sym: u32[>..] = [];      // per LB_*: a global of that name, NIL
@@ -141,12 +142,14 @@ fn lb_name(nm: const u8[:]) -> u32 {
         return LB_MALLOC;
     }
     if nm == "calloc" { return LB_CALLOC; }
+    if nm == "bcopy" { return LB_BCOPY; }
     if nm == "realloc" || nm == "reallocf" { return LB_REALLOC; }
     if nm == "aligned_alloc" || nm == "memalign" { return LB_ALIGNED; }
     return 0;
 }
 
 fn lb_init() {
+    lb_dr_on = false;
     lb_kind.clear();
     lb_sym.clear();
     lb_sym.resize(LB_N, NIL);
@@ -174,6 +177,108 @@ fn lb_ptr(p: u32) -> bool, i64, i64 {
     if G.flags & GF_ZERO != 0 { return true, -1, G.size as i64 - off; }
     return true, G.data as i64 + off, G.size as i64 - off;
 }
+// The length of the string at p when it is known: a constant string, or
+// selects and PHIs of strings of one length (LLVM's GetStringLength).
+var lb_budget: u32 = 0;
+recursive fn lb_slen(p0: u32, depth: u32) -> bool, i64 {
+    if depth == 0 { lb_budget = 512; }
+    if lb_budget == 0 { return false, 0; }
+    lb_budget--;
+    let p = res(p0);
+    let ok, d, n = lb_str(p);
+    if ok { return true, n; }
+    if depth >= 64 || !is_inst(p) { return false, 0; }
+    let I = o_ins[p];
+    if I.op == GIR_SELECT {
+        let ka, la = lb_slen(I.b, depth + 1);
+        if !ka { return false, 0; }
+        let kb, lb = lb_slen(I.c, depth + 1);
+        if !kb || la != lb { return false, 0; }
+        return true, la;
+    }
+    if I.op == GIR_PHI {
+        var first = true;
+        var l: i64 = 0;
+        for q in 0..I.c {
+            let v = res(o_ops[I.b + 2 * q]);
+            if v == p { continue; }
+            let kv, lv = lb_slen(v, depth + 1);
+            if !kv || !first && lv != l { return false, 0; }
+            l = lv;
+            first = false;
+        }
+        return !first, l;
+    }
+    return false, 0;
+}
+// (E2) Loads from constant variables (LLVM's ConstantFoldLoadFromConstPtr):
+// the bytes of the initializer as an integer, FP or vector constant; a
+// pointer that a data relocation puts there: the target (plus the addend).
+var lb_dr_start: u32[>..] = [];   // per global: its first data relocation in lb_dr (counting sort)
+var lb_dr: u32[>..] = [];
+var lb_dr_on = false;
+var lb_dr_fill: u32[>..] = [];
+fn lb_dr_index() {
+    lb_dr_on = true;
+    lb_dr_start.clear();
+    lb_dr_start.resize(M.globals.len + 1, 0);
+    for d in M.drelocs { if d.owner < M.globals.len as! u32 { lb_dr_start[d.owner + 1]++; } }
+    for g in 0..M.globals.len { lb_dr_start[g + 1] += lb_dr_start[g]; }
+    lb_dr.clear();
+    lb_dr.resize(M.drelocs.len, 0);
+    lb_dr_fill.clear();
+    lb_dr_fill.append(lb_dr_start[..M.globals.len]);
+    for d, k in M.drelocs {
+        if d.owner >= M.globals.len as! u32 { continue; }
+        lb_dr[lb_dr_fill[d.owner]] = k as! u32;
+        lb_dr_fill[d.owner]++;
+    }
+}
+fn simp_load_const(i: u32) -> u32 {
+    let I = o_ins[i];
+    if I.flags & (IF_VOLATILE | IF_ORD_MASK) != 0 { return NIL; }
+    let t: u32 = I.ty;
+    let sz: i64 = store_of(t) as i64;
+    let cl = cls_of(t);
+    if sz == 0 || sz > 16 || cl != C_INT && cl != C_FP && cl != C_VEC || sz > 8 && cl != C_VEC { return NIL; }
+    let b, off, known = aa_decompose(I.a);
+    if !known || off < 0 || gir_kind(b) != GIR_V_GLOBAL { return NIL; }
+    let g = gir_idx(b);
+    let G = M.globals[g];
+    if G.kind != G_VAR || G.flags & (GF_CONST | GF_DEFINED) != (GF_CONST | GF_DEFINED) { return NIL; }
+    if G.flags & (GF_WEAK | GF_TLS | GF_COMMON) != 0 || off + sz > G.size as i64 { return NIL; }
+    if G.flags & GF_RELOCS != 0 {
+        if !lb_dr_on { lb_dr_index(); }
+        for q in lb_dr_start[g]..lb_dr_start[g + 1] {
+            let d = M.drelocs[lb_dr[q]];
+            let lo = d.offset as i64;
+            let w: i64 = if d.kind == DR_ABS64 { 8 } else { 4 };
+            if lo + w <= off || lo >= off + sz { continue; }
+            // a pointer exactly there: the target
+            if d.kind != DR_ABS64 || lo != off || t != GIR_T_PTR || d.target >= M.globals.len as! u32 { return NIL; }
+            if M.globals[d.target].kind == G_FUNC && d.blk != 0 { return NIL; }
+            return lb_gep(i, GIR_V_GLOBAL << 30 | d.target, d.addend);
+        }
+    }
+    var bytes: u8[16] = [0; 16];
+    if G.flags & GF_ZERO == 0 {
+        for q in 0..sz { bytes[q] = M.data[G.data as i64 + off + q]; }
+    }
+    if cl == C_VEC { return vec_const(t, bytes[..sz]); }
+    var v: u64 = 0;
+    var q = sz;
+    while q > 0 {
+        q--;
+        v = (v << 8) | bytes[q] as u64;
+    }
+    if t == GIR_T_PTR {
+        if v != 0 { return NIL; }
+        return lb_null();
+    }
+    if cl == C_FP { return mk_const(t, v, 0); }
+    return int_const(t, v);
+}
+
 // The byte at data index d + k (d = -1: a zero object).
 inline fn lb_byte(d: i64, k: i64) -> u8 {
     if d < 0 { return 0; }
@@ -242,7 +347,7 @@ fn lb_null() -> u32 { mk_const(GIR_T_PTR, 0, 0) }
 
 // strlen of p: a constant, a select of constants, or NIL.
 recursive fn lb_strlen_of(at: u32, p: u32, t: u32, depth: u32) -> u32 {
-    let ok, d, n = lb_str(p);
+    let ok, n = lb_slen(p, 0);
     if ok { return int_const(t, n as! u64); }
     if depth < 3 && is_inst(p) && o_ins[p].op == GIR_SELECT {
         let S = o_ins[p];
@@ -342,6 +447,18 @@ fn simp_libcall(i: u32) -> u32 {
         if ok && kn { return int_const(t, if (l as u64) < m { l as u64 } else { m }); }
         // a bound no larger than the string: the bound itself
         if ok && umax_of(lb_arg(I, 1), 0) <= l as u64 { return lb_arg(I, 1); }
+        if ok {
+            // min(bound, length)
+            let bt = otype(lb_arg(I, 1));
+            let lc = int_const(bt, l as! u64);
+            let c = new_inst(Inst { op: GIR_ICMP as! u8, sub: GIR_ULT as! u8, flags: 0, ty: GIR_T_I1, aux: bt as! u16,
+                                    a: lb_arg(I, 1), b: lc, c: 0, dbg: I.dbg });
+            link_before(i, c);
+            let s = new_inst(Inst { op: GIR_SELECT as! u8, sub: 0, flags: 0, ty: bt as! u16, aux: 0, a: c, b: lb_arg(I, 1),
+                                    c: lc, dbg: I.dbg });
+            link_before(i, s);
+            return s;
+        }
         return NIL;
     }
     if (k == LB_STRCMP || k == LB_STRNCMP || k == LB_MEMCMP || k == LB_BCMP) && int_ty(t) {
@@ -425,6 +542,11 @@ fn simp_libcall(i: u32) -> u32 {
         let ok1, d1, l1 = lb_str(s);
         let ok2, d2, l2 = lb_str(lb_arg(I, 1));
         if k == LB_STRSTR && ok2 && l2 == 0 { return s; }
+        if k == LB_STRPBRK && ok2 && l2 == 0 { return lb_null(); }
+        if k == LB_STRPBRK && ok2 && l2 == 1 && !ok1 {
+            // strchr(s, c)
+            return lb_call(i, LB_STRCHR, GIR_T_PTR, s, int_const(GIR_T_I32, lb_byte(d2, 0) as u64), 0, 2);
+        }
         if !ok1 || !ok2 { return NIL; }
         var q: i64 = 0;
         while q <= l1 {
@@ -448,6 +570,9 @@ fn simp_libcall(i: u32) -> u32 {
     if (k == LB_STRSPN || k == LB_STRCSPN) && n == 2 && int_ty(t) {
         let ok1, d1, l1 = lb_str(lb_arg(I, 0));
         let ok2, d2, l2 = lb_str(lb_arg(I, 1));
+        // "" on either side: 0, except strcspn(s, ""): strlen(s)
+        if ok1 && l1 == 0 || k == LB_STRSPN && ok2 && l2 == 0 { return int_const(t, 0); }
+        if k == LB_STRCSPN && ok2 && l2 == 0 && !ok1 { return lb_call(i, LB_STRLEN, t, lb_arg(I, 0), 0, 0, 1); }
         if !ok1 || !ok2 { return NIL; }
         var q: i64 = 0;
         while q < l1 {
@@ -465,8 +590,15 @@ fn simp_libcall(i: u32) -> u32 {
     if (k == LB_STRCPY || k == LB_STPCPY || k == LB_STRCPY_CHK || k == LB_STPCPY_CHK) && t == GIR_T_PTR {
         let dst = lb_arg(I, 0);
         let src = lb_arg(I, 1);
-        let ok, d, l = lb_str(src);
-        if !ok || l + 1 > 4096 { return NIL; }
+        let ok, l = lb_slen(src, 0);
+        if !ok || l + 1 > 4096 {
+            // stpcpy whose result is not used: strcpy
+            if k == LB_STPCPY && lb_sym[LB_STRCPY] != NIL && !nuses_any(i) {
+                lb_call(i, LB_STRCPY, GIR_T_PTR, dst, src, 0, 2);
+                unlink(i);
+            }
+            return NIL;
+        }
         if k == LB_STRCPY_CHK || k == LB_STPCPY_CHK {
             let kz, z = ci(lb_arg(I, 2));
             if !kz || z != wmask(bits_of(otype(lb_arg(I, 2)))) && z < (l + 1) as! u64 { return NIL; }
@@ -478,7 +610,7 @@ fn simp_libcall(i: u32) -> u32 {
     if (k == LB_STRNCPY || k == LB_STRNCPY_CHK) && t == GIR_T_PTR {
         let dst = lb_arg(I, 0);
         let src = lb_arg(I, 1);
-        let ok, d, l = lb_str(src);
+        let ok, l = lb_slen(src, 0);
         let kn, m = ci(lb_arg(I, 2));
         if !ok || !kn || m > 4096 { return NIL; }
         if k == LB_STRNCPY_CHK {
@@ -493,7 +625,7 @@ fn simp_libcall(i: u32) -> u32 {
     if (k == LB_STRCAT || k == LB_STRCAT_CHK) && t == GIR_T_PTR {
         let dst = lb_arg(I, 0);
         let src = lb_arg(I, 1);
-        let ok, d, l = lb_str(src);
+        let ok, l = lb_slen(src, 0);
         if !ok || l + 1 > 4096 { return NIL; }
         if k == LB_STRCAT_CHK {
             let kz, z = ci(lb_arg(I, 2));
@@ -554,6 +686,25 @@ fn simp_libcall(i: u32) -> u32 {
             lb_memset(i, lb_gep(i, dst, lim - 1), int_const(GIR_T_I8, 0), 1);
         }
         return int_const(t, len as! u64);
+    }
+    if k == LB_BCOPY && n == 3 && t == GIR_T_VOID && lb_sym[LB_MEMMOVE] != NIL {
+        // bcopy(s, d, n): memmove(d, s, n)
+        lb_call(i, LB_MEMMOVE, GIR_T_PTR, lb_arg(I, 1), lb_arg(I, 0), lb_arg(I, 2), 3);
+        unlink(i);
+        return NIL;
+    }
+    if k == LB_MEMMOVE && n == 3 {
+        let kn, m = ci(lb_arg(I, 2));
+        let dst = lb_arg(I, 0);
+        if kn && m <= 64 && m != 0 && aa_alias(dst, m as! u32, 0, lb_arg(I, 1), m as! u32, 0) {
+            lb_move_small(i, dst, lb_arg(I, 1), m as! i64);
+            if t == GIR_T_VOID { unlink(i); return NIL; }
+            return dst;
+        }
+    }
+    if (k == LB_MEMCMP || k == LB_BCMP) && n == 3 && int_ty(t) {
+        let kn, m = ci(lb_arg(I, 2));
+        if kn && m > 1 && m <= 32 && lb_only_eq0(i) { return lb_cmp_eq(i, lb_arg(I, 0), lb_arg(I, 1), m as! i64, t); }
     }
     if (k == LB_MEMCPY || k == LB_MEMMOVE || k == LB_MEMPCPY || k == LB_MEMCPY_CHK || k == LB_MEMMOVE_CHK) && n >= 3 {
         let dst = lb_arg(I, 0);
@@ -656,6 +807,87 @@ fn lb_call4(at: u32, k: u32, ty: u32, a0: u32, a1: u32, a2: u32, a3: u32) -> u32
     link_before(at, c);
     return c;
 }
+// The chunks of a small copy or compare: 8, 4, 2 and 1 bytes.
+inline fn lb_chunk(left: i64) -> i64 { if left >= 8 { 8 } else if left >= 4 { 4 } else if left >= 2 { 2 } else { 1 } }
+inline fn lb_ity(w: i64) -> u32 { if w == 8 { GIR_T_I64 } else if w == 4 { GIR_T_I32 } else if w == 2 { GIR_T_I16 } else { GIR_T_I8 } }
+var lb_vals: u32[>..] = [];
+// memmove of m <= 64 bytes that may overlap: every chunk is loaded before
+// the first store (as LLVM's inline memmove expansion).
+fn lb_move_small(at: u32, d: u32, s: u32, m: i64) {
+    lb_vals.clear();
+    var off: i64 = 0;
+    while off < m {
+        let w = lb_chunk(m - off);
+        let l = new_inst(Inst { op: GIR_LOAD as! u8, sub: 0, flags: 0, ty: lb_ity(w) as! u16, aux: 0, a: lb_gep(at, s, off),
+                                b: 0, c: 0, dbg: o_ins[at].dbg });
+        link_before(at, l);
+        lb_vals.push(l);
+        off += w;
+    }
+    off = 0;
+    var q: i64 = 0;
+    while off < m {
+        let w = lb_chunk(m - off);
+        let x = new_inst(Inst { op: GIR_STORE as! u8, sub: 0, flags: 0, ty: GIR_T_VOID, aux: lb_ity(w) as! u16, a: lb_vals[q],
+                                b: lb_gep(at, d, off), c: 0, dbg: o_ins[at].dbg });
+        link_before(at, x);
+        off += w;
+        q++;
+    }
+}
+// Whether every use of call i is a test of it against 0 (== or !=); a scan
+// of the function (functions of a moderate size only).
+fn lb_only_eq0(i: u32) -> bool {
+    if o_ins.len > 50000 { return false; }
+    var any = false;
+    for x0 in 0..o_ins.len {
+        let x: u32 = x0 as! u32;
+        if o_blk[x] == NIL { continue; }
+        var uses = false;
+        each_slot(x) { s =>
+            if res(vget(x, s)) == i { uses = true; }
+        };
+        if !uses { continue; }
+        let X = o_ins[x];
+        if X.op != GIR_ICMP || X.sub != GIR_EQ && X.sub != GIR_NE { return false; }
+        let o = if res(X.a) == i { res(X.b) } else { res(X.a) };
+        let k, v = ci(o);
+        if !k || v != 0 { return false; }
+        any = true;
+    }
+    return any;
+}
+// memcmp / bcmp of m bytes, only tested against 0: 0 when the bytes are
+// equal, else 1 (as LLVM's ExpandMemCmp for equality).
+fn lb_cmp_eq(at: u32, a: u32, b: u32, m: i64, t: u32) -> u32 {
+    var acc: u32 = NIL;
+    var off: i64 = 0;
+    let dbg = o_ins[at].dbg;
+    while off < m {
+        let w = lb_chunk(m - off);
+        let it = lb_ity(w);
+        let la = new_inst(Inst { op: GIR_LOAD as! u8, sub: 0, flags: 0, ty: it as! u16, aux: 0, a: lb_gep(at, a, off),
+                                 b: 0, c: 0, dbg: dbg });
+        link_before(at, la);
+        let lb = new_inst(Inst { op: GIR_LOAD as! u8, sub: 0, flags: 0, ty: it as! u16, aux: 0, a: lb_gep(at, b, off),
+                                 b: 0, c: 0, dbg: dbg });
+        link_before(at, lb);
+        var x = ins_new(at, GIR_XOR, it, la, lb);
+        if it != GIR_T_I64 {
+            x = new_inst(Inst { op: GIR_ZEXT as! u8, sub: 0, flags: 0, ty: GIR_T_I64, aux: it as! u16, a: x, b: 0, c: 0, dbg: dbg });
+            link_before(at, x);
+        }
+        acc = if acc == NIL { x } else { ins_new(at, GIR_OR, GIR_T_I64, acc, x) };
+        off += w;
+    }
+    let c = new_inst(Inst { op: GIR_ICMP as! u8, sub: GIR_NE as! u8, flags: 0, ty: GIR_T_I1, aux: GIR_T_I64, a: acc,
+                            b: int_const(GIR_T_I64, 0), c: 0, dbg: dbg });
+    link_before(at, c);
+    let z = new_inst(Inst { op: GIR_ZEXT as! u8, sub: 0, flags: 0, ty: t as! u16, aux: GIR_T_I1, a: c, b: 0, c: 0, dbg: dbg });
+    link_before(at, z);
+    return z;
+}
+
 // A __*_chk call whose check cannot fail (LLVM's FortifiedLibCallSimplifier,
 // isFortifiedCallFoldable): the object size is unknown (-1) or at least the
 // size argument (or the constant source string's length + 1), and the flag
