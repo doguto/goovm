@@ -7,10 +7,13 @@ ctmark-cxx corpora, with their flags), best of N runs, serially:
   back end only (the same bitcode: clang-20 --target=aarch64-linux-gnu -O0 [-g] -emit-llvm):
     llc       llc-20 -O0 -filetype=obj (LLVM's AArch64 back end, FastISel/GlobalISel at -O0)
     goovm     goovm-llc (export + Goose back end; its --time phases are recorded too)
+  optimizing, on clang -O1 -Xclang -disable-llvm-passes IR (the IR LLVM's own pipeline starts from):
+    llvm-O1   opt-20 -O1, then llc-20 -O1
     goovm-O1  goovm-llc -O1 (the Goose middle end and global register allocation)
   whole compile (source to object):
     clang     clang-20 --target=aarch64-linux-gnu -O0 [-g] -c
     cc        goovm-cc --target=aarch64-linux-gnu -O0 [-g] -c (clang's front end, Goose back end)
+    clang-O1, cc-O1  the same at -O1
     goosecc   goosecc --target=aarch64-linux-gnu [-g] -c (C files; with --goosecc)
 
 Per program the sums over its files, and the geometric mean of the per-program
@@ -83,7 +86,17 @@ def main():
             row["goovm"], e = best([a.goovm_llc, bc, "-o", obj], a.n)
             if row["goovm"] is None:
                 print(f"{t.id} {os.path.basename(s)}: goovm-llc failed: {e}", file=sys.stderr)
-            row["goovm-O1"], _ = best([a.goovm_llc, "-O1", bc, "-o", obj], a.n)
+            bc1 = os.path.join(a.work, f"{i}.O1.bc")
+            r = subprocess.run([cc] + T + ["-O1", "-Xclang", "-disable-llvm-passes", "-w"] + g + fl + ["-c", "-emit-llvm", s, "-o", bc1],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if r.returncode == 0:
+                opt1 = os.path.join(a.work, "o1.bc")
+                t1, _ = best(["opt-20", "-O1", bc1, "-o", opt1], a.n)
+                t2, _ = best(["llc-20", "-O1", "-filetype=obj", "-mtriple=aarch64-linux-gnu", opt1, "-o", obj], a.n)
+                row["llvm-O1"] = t1 + t2 if t1 is not None and t2 is not None else None
+                row["goovm-O1"], _ = best([a.goovm_llc, "-O1", bc1, "-o", obj], a.n)
+            row["clang-O1"], _ = best([cc] + T + ["-O1", "-w"] + g + fl + ["-c", s, "-o", obj], a.n)
+            row["cc-O1"], _ = best([a.goovm_cc] + T + ["-O1", "-w"] + g + fl + ["-c", s, "-o", obj], a.n)
             row["clang"], _ = best([cc] + T + ["-O0", "-w"] + g + fl + ["-c", s, "-o", obj], a.n)
             row["cc"], _ = best([a.goovm_cc] + T + ["-O0", "-w"] + g + fl + ["-c", s, "-o", obj], a.n)
             if a.goosecc and not cxx:
@@ -93,36 +106,38 @@ def main():
             prog[s] = row
         res[t.id] = prog
         print(f"{t.id}: {len(prog)} files", file=sys.stderr, flush=True)
-    cols = ["llc", "goovm", "goovm-O1", "clang", "cc"] + (["goosecc"] if a.goosecc else [])
+    cols = ["llc", "goovm", "llvm-O1", "goovm-O1", "clang", "cc", "clang-O1", "cc-O1"] + (["goosecc"] if a.goosecc else [])
     lines = [f"Compile time, aarch64-linux-gnu, -O0{' -g' if a.g else ''}, best of {a.n} (seconds, sums per program; "
              "files a compiler fails on count for none)", "",
-             "| program | files | " + " | ".join(cols) + " | goovm / llc | goovm-O1 / llc | cc / clang |"
+             "| program | files | " + " | ".join(cols) + " | goovm / llc | goovm-O1 / llvm-O1 | cc / clang | cc-O1 / clang-O1 |"
              + (" goosecc / clang |" if a.goosecc else ""),
-             "|---|---:|" + "---:|" * (len(cols) + 3 + (1 if a.goosecc else 0))]
-    ratios = {"goovm": [], "goovm-O1": [], "cc": [], "goosecc": []}
+             "|---|---:|" + "---:|" * (len(cols) + 4 + (1 if a.goosecc else 0))]
+    ratios = {"goovm": [], "goovm-O1": [], "cc": [], "cc-O1": [], "goosecc": []}
     for p, files in res.items():
         tot = {}
         for c in cols:
-            ok = [r for r in files.values() if r.get(c) is not None and all(r.get(x) is not None for x in ("llc", "clang"))]
+            refs = ("llc", "clang", "llvm-O1", "clang-O1")
+            ok = [r for r in files.values() if r.get(c) is not None and all(r.get(x) is not None for x in refs)]
             tot[c] = sum(r[c] for r in ok) if ok else None
             # the reference sums over the same files
-            tot[c + "_ref_llc"] = sum(r["llc"] for r in ok) if ok else None
-            tot[c + "_ref_clang"] = sum(r["clang"] for r in ok) if ok else None
+            for x in refs:
+                tot[c + "_ref_" + x] = sum(r[x] for r in ok) if ok else None
         def ratio(c, ref):
             v, rv = tot.get(c), tot.get(c + "_ref_" + ref)
             return v / rv if v and rv else None
-        rg, ro, rc = ratio("goovm", "llc"), ratio("goovm-O1", "llc"), ratio("cc", "clang")
+        rg, ro, rc = ratio("goovm", "llc"), ratio("goovm-O1", "llvm-O1"), ratio("cc", "clang")
+        rc1 = ratio("cc-O1", "clang-O1")
         rs = ratio("goosecc", "clang") if a.goosecc else None
-        for k, v in (("goovm", rg), ("goovm-O1", ro), ("cc", rc), ("goosecc", rs)):
+        for k, v in (("goovm", rg), ("goovm-O1", ro), ("cc", rc), ("cc-O1", rc1), ("goosecc", rs)):
             if v:
                 ratios[k].append(v)
         f = lambda x: f"{x:.3f}" if x is not None else "-"
         lines.append(f"| {p} | {len(files)} | " + " | ".join(f(tot[c]) for c in cols)
-                     + f" | {f(rg)} | {f(ro)} | {f(rc)} |" + (f" {f(rs)} |" if a.goosecc else ""))
+                     + f" | {f(rg)} | {f(ro)} | {f(rc)} | {f(rc1)} |" + (f" {f(rs)} |" if a.goosecc else ""))
     lines.append("")
     lines.append(f"Geometric means of the per-program ratios: goovm-llc / llc-20 -O0 = {gmean(ratios['goovm']):.3f}, "
-                 f"goovm-llc -O1 / llc-20 -O0 = {gmean(ratios['goovm-O1']):.3f}, "
-                 f"goovm-cc / clang -O0 = {gmean(ratios['cc']):.3f}"
+                 f"goovm-llc -O1 / (opt-20 -O1 + llc-20 -O1) = {gmean(ratios['goovm-O1']):.3f}, "
+                 f"goovm-cc / clang -O0 = {gmean(ratios['cc']):.3f}, goovm-cc -O1 / clang -O1 = {gmean(ratios['cc-O1']):.3f}"
                  + (f", goosecc / clang -O0 = {gmean(ratios['goosecc']):.3f}" if a.goosecc else ""))
     md = "\n".join(lines) + "\n"
     print(md)
