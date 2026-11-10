@@ -57,7 +57,7 @@ scalar("f", "float", "f")
 scalar("d", "double", "f")
 scalar("ld", "long double", "f")
 scalar("h", "_Float16", "f")
-scalar("p", "void *", "p")
+scalar("p", "vp", "p")
 scalar("e", "enum E", "i")
 scalar("cf", "_Complex float", "cf")
 scalar("cd", "_Complex double", "cf")
@@ -97,7 +97,7 @@ struct("Uf", "union { float a; float b[2]; }", [(".b[0]", "f"), (".b[1]", "f")])
 struct("Bf", "struct { int a : 3; unsigned b : 13; long c : 40; }", [(".a", "i"), (".b", "i"), (".c", "i")])
 struct("Pk", "struct __attribute__((packed)) { char a; int b; short c; }", [(".a", "i"), (".b", "i"), (".c", "i")])
 struct("Al", "struct __attribute__((aligned(16))) { long a; }", [(".a", "i")])
-struct("E0", "struct { }", [])
+struct("Emp", "struct { }", [])
 
 KIND_TYPES = {"i": "long long", "f": "long double"}
 
@@ -112,6 +112,7 @@ typedef float v4f __attribute__((vector_size(16)));
 typedef float v8f __attribute__((vector_size(32)));
 typedef float v3f __attribute__((ext_vector_type(3)));
 typedef short v2s __attribute__((vector_size(4)));
+typedef void *vp;
 """ + "\n".join(d for _, d, _, _ in TYPES if d) + "\n"
 
 
@@ -124,7 +125,7 @@ def hash_expr(acc, kind):
     if kind == "f":
         return [f"h = h * 1000003u + (unsigned long long)(long long)(({acc}) * 64);"]
     if kind == "p":
-        return [f"h = h * 1000003u + (unsigned long long)(char *)({acc}) % 4096;"]
+        return [f"h = h * 1000003u + (unsigned long long)((char *)({acc}) - gbuf);"]
     if kind == "cf":
         return [f"h = h * 1000003u + (unsigned long long)(long long)(__real__ ({acc}) * 64);",
                 f"h = h * 1000003u + (unsigned long long)(long long)(__imag__ ({acc}) * 64);"]
