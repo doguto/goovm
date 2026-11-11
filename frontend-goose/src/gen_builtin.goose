@@ -600,6 +600,12 @@ recursive fn ex_builtin2(full: const u8[:], name: const u8[:], n: u32, dst: u32)
     let nd = nodes[n];
     let nargs = nd.c as i64;
     let rq = unqual(nd.ty);
+    if opt_a64 && starts_with(name, "neon_") {
+        let r = neon_builtin(name[5..], n, dst);
+        if r != KEEP_CALL { return r; }
+        err_at(nodes[n].loc, str("goosecc: the NEON builtin __builtin_", name, " is not supported"));
+        return if is_void(rq) { NONE } else { c_zero(vty(rq)) };
+    }
     if opt_a64 && (starts_with(name, "arm_") || name == "thread_pointer" || name == "__clear_cache") {
         let r = a64_builtin(name, n);
         if r != KEEP_CALL { return r; }
