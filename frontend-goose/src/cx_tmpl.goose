@@ -68,13 +68,22 @@ recursive fn parse_template_decl(ctx: i64) {
     let first = tps.len;
     parse_tparams();
     let count = tps.len - first;
-    // C++20 requires-clauses (not used by libstdc++ in C++17): skipped
+    // D2b: a requires-clause (C++20), kept as tokens
+    var req: i64 = 0;
+    if at_kw(KW_REQUIRES) { req = parse_requires_clause(); }
     let t = tmpls.len;
     tmpls.push(Tmpl { kind: 0, depth: tmpl_depth as! u8, rsv: 0, sym: -1, params: first as! u32, nparams: count as! u32,
         scope: cur_scope as! i32, pos: tpos as! u32, t0: pc as! u32, t1: 0, pattern: -1, specs: -1, outer: -1,
         spec_args: -1, primary: -1, inst_scope: -1, def_t: -1, hdr_outer: hdr_outer_next as! i32, pat_t: -1, sargs_t: 0 });
     hdr_outer_next = -1;
+    if req > 0 { tmpl_req.insert(t as u64, req as! u32); }
     let sv_pending = pending_tmpl;
+    if at_kw(KW_CONCEPT) {
+        parse_concept_def(t);
+        tmpl_depth--;
+        pop_scope();
+        return;
+    }
     if at_kw(KW_TEMPLATE) {
         // template<...> template<...> ...: an out-of-line member template
         pending_tmpl = -1;
@@ -108,6 +117,32 @@ recursive fn parse_tparams() {
         var tp = TParam { kind: TPK_TYPE as! u8, pack: false, rsv: 0, name: 0, ty: 0, def0: 0, def1: 0, sym: -1 };
         if (at_kw(KW_CLASS) || at_kw(KW_TYPENAME)) && type_param_ahead() {
             adv();
+            if accept(TK_ELLIPSIS) { tp.pack = true; }
+            if at(TK_IDENT) { tp.name = tu_toks[pc].val; adv(); }
+            let pt = mk_tparam(tmpl_depth, index, tp.name, tp.pack);
+            tp.ty = pt;
+            if at(TK_EQUAL) {
+                adv();
+                tp.def0 = pc as! u32;
+                targ_depth++;
+                diag_suppress++;
+                let dt = parse_type_id();
+                diag_suppress--;
+                targ_depth--;
+                tp.def1 = pc as! u32;
+            }
+            let s = csym(SK_TYPEDEF, tp.name, pt, loc);
+            syms[s].sc = SC_TYPEDEF;
+            cxs[s].flags = CF_TPARAM;
+            if tp.name != 0 { bind_sym(s, false); }
+            tp.sym = s as! i32;
+        } else if opt_cxx_std >= 20 && type_constraint_ahead() {
+            // D2b: a type parameter with a type-constraint (C T, C<A> T, C... T)
+            tparam_tc.insert(tps.len as u64, pc as! u32);
+            var qn = QN { .. };
+            targ_depth++;
+            let okq = parse_qname(qn);
+            targ_depth--;
             if accept(TK_ELLIPSIS) { tp.pack = true; }
             if at(TK_IDENT) { tp.name = tu_toks[pc].val; adv(); }
             let pt = mk_tparam(tmpl_depth, index, tp.name, tp.pack);
@@ -453,6 +488,10 @@ recursive fn subst_parse(t: i64, args: i32, tok: i64, what: i64, upto: i64) -> u
     subst_ok = false;
     if what == 0 {
         ty = parse_type_id();
+    } else if what == 3 {
+        // D2b: constraints (cx_concept)
+        subst_val = cons_subst_eval(t, args);
+        subst_ok = true;
     } else if what == 2 {
         // a template argument list at its '<'
         subst_list = parse_targs();

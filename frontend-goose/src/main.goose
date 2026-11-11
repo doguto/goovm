@@ -55,6 +55,7 @@ import .cx_tmpl;
 import .cx_inst;
 import .cx_fspec;
 import .cx_pack;
+import .cx_concept;
 import .cx_conv;
 import .cx_adl;
 import .cx_traits;

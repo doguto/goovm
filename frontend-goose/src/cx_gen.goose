@@ -364,6 +364,12 @@ recursive fn conv_arg(e: u32, pt: u32, loc: u32) -> u32 {
     if is_opaque(pt) { return opaque_node(loc); }
     if is_ref(pt) {
         let t = tbase(pt);
+        if nodes[e].kind as i64 == N_FUNCREF && is_func(t) {
+            // a reference to function bound to an overload set (D2b): the function it selects
+            let fr = funcref_addr_to(e, pt, loc);
+            if is_opq(fr) { return fr; }
+            return n_ptrcast(n_addr(fr, loc), lower_ty(mk_ptr(t)), loc);
+        }
         if is_lvalue(e) && nodes[e].kind as i64 != N_INITBRACE {
             if unqual(nodes[e].ty) == unqual(t) { return n_ptrcast(n_addr(e, loc), lower_ty(mk_ptr(t)), loc); }
             if is_record(t) && is_record(nodes[e].ty) {

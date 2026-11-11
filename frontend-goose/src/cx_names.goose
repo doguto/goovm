@@ -355,6 +355,13 @@ fn qual_from_type(qn: QN&, t: u32) {
         qn.dep = 0;
         return;
     }
+    if t != 0 && !is_opaque(t) && !is_record(t) && kind_of(t) != TY_ENUM {
+        // D2b: int::x
+        err_at(qn.loc, str("type ", ctname(t), " cannot be used prior to '::' because it has no members"));
+        qn.scope = -1;
+        qn.dep = t_unknown;
+        return;
+    }
     qn.scope = -1;
     qn.dep = if t == 0 { t_unknown } else { t };
 }

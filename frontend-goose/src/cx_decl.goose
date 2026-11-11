@@ -239,6 +239,7 @@ struct CDS {
     any: bool = false,
     typename_kw: bool = false,
     loc: u32 = 0,
+    cons: u32 = 0,              // D2b: a constrained placeholder (C auto): the concept name's first token
 }
 
 fn cds_has_type(ds: CDS&) -> bool {
@@ -340,6 +341,11 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             if !ok || qn.kind as i64 != QK_IDENT { restore(sv); break; }
             lookup_qn(qn);
             var t = qn_type(qn);
+            if t == 0 && (at_kw(KW_AUTO) || at_kw(KW_DECLTYPE)) && concept_of(qn.sym as i64) >= 0 {
+                // D2b: C auto, C decltype(auto)
+                ds.cons = qn.start;
+                continue;
+            }
             if t == 0 && qn.sym < 0 && qn.dep == 0 && !qn.has_targs && unknown_name_is_type(qn, ctx) { t = t_unknown; }
             if t == 0 || (qn.dep != 0 && !ds.typename_kw && !assume_type_after(qn) && !(ctx == DC_TYPEID && !truly_dep(qn.dep))) {
                 restore(sv);
