@@ -78,9 +78,14 @@ fn a_rg_alloc(insts: const Inst[:], blocks: const Block[:]) {
     let ng: u32 = rg_val.len as! u32;
     if ng == 0 { return; }
     rg_words = (ng as i64 + 63) >> 6;
-    if rg_words * nb as i64 * 64 > RG_MAX_BITS { return; }
     rg_build_cfg(blocks);
-    rg_liveness(insts, blocks);
+    // dense bitsets, or (larger functions) a walk from each use (rag.goose)
+    if rg_words * nb as i64 * 64 > RG_MAX_BITS || opt_off("dense") {
+        rg_liveness_sparse(insts);
+    } else {
+        rg_liveness(insts, blocks);
+        rg_lists_from_bits();
+    }
     rg_segments(insts, blocks);
     a_rg_clobbers(insts);
     a_rg_assign();
@@ -233,15 +238,9 @@ fn a_rg_finish(insts: const Inst[:], blocks: const Block[:]) {
     li_list.clear();
     for b in 0..nb {
         li_start.push(li_list.len as! u32);
-        let base: i64 = w * b as i64;
-        for x in 0..w {
-            var m = rg_lin[base + x];
-            while m != 0 {
-                let g: u32 = (x as u32) * 64 + ctz(m) as! u32;
-                m &= m - 1;
-                let id = rg_val[g];
-                if rg_reg[id] != NOREG { li_list.push(id); }
-            }
+        for q in rg_li_s[b]..rg_li_s[b + 1] {
+            let id = rg_val[rg_li[q]];
+            if rg_reg[id] != NOREG { li_list.push(id); }
         }
     }
     li_start.push(li_list.len as! u32);
