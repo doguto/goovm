@@ -121,7 +121,9 @@ recursive fn gen_asm(n: u32) {
 
 let ASM_POOL: i32[9] = [0, 1, 2, 6, 7, 8, 9, 10, 11];
 
-recursive fn gen_asm_code(n: u32, tmpl: const u8[:]) {
+// The x86-64 binding: operands to registers, the substituted template
+// assembled into asm_code; the x87 registers the back-end pops.
+fn x86_asm_bind(n: u32, tmpl: const u8[:]) -> bool, u32 {
     let nd = nodes[n];
     let nops = nd.c as i64;
     asm_ops.clear();
@@ -187,7 +189,7 @@ recursive fn gen_asm_code(n: u32, tmpl: const u8[:]) {
                 used = used | ((1 as u32) << (op.reg as! u32));
             } else {
                 err_at(o.loc, str("goosecc: unsupported inline-asm constraint '", c, "'"));
-                return;
+                return false, 0;
             }
             asm_ops.push(op);
         }
@@ -230,7 +232,7 @@ recursive fn gen_asm_code(n: u32, tmpl: const u8[:]) {
         }
         if num < 0 || num >= asm_ops.len {
             err_at(nd.loc, "goosecc: inline-asm operand number out of range");
-            return;
+            return false, 0;
         }
         let op = asm_ops[num];
         if op.kind == 2 {
@@ -258,7 +260,7 @@ recursive fn gen_asm_code(n: u32, tmpl: const u8[:]) {
     asm_code.clear();
     if !assemble(asm_text) {
         err_at(nd.loc, str("goosecc: cannot assemble inline asm '", asm_text, "'"));
-        return;
+        return false, 0;
     }
     // x87 bookkeeping: inputs on st(k) not tied and not popped are popped by the back-end
     var st_in: u32 = 0;
@@ -272,7 +274,19 @@ recursive fn gen_asm_code(n: u32, tmpl: const u8[:]) {
     }
     var n_st_in: u32 = 0;
     for k in 0..8 { if st_in & ((1 as u32) << (k as! u32)) != 0 { n_st_in++; } }
-    let pop = n_st_in - st_tied - st_popped;
+    return true, n_st_in - st_tied - st_popped;
+}
+
+recursive fn gen_asm_code(n: u32, tmpl: const u8[:]) {
+    let nd = nodes[n];
+    var pop: u32 = 0;
+    if opt_a64 {
+        if !a64_asm_bind(n, tmpl) { return; }
+    } else {
+        let ok, p = x86_asm_bind(n, tmpl);
+        if !ok { return; }
+        pop = p;
+    }
     // inputs: values (addresses for memory operands)
     asm_in.clear();
     for op in asm_ops {

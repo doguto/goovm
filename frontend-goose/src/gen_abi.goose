@@ -461,6 +461,20 @@ recursive fn a64_hfa_members(q0: u32) -> i64 {
         let first = records[r].first as i64;
         let cnt = records[r].count as i64;
         var members: i64 = 0;
+        // a C++ class: its non-empty bases are members too (a dynamic class
+        // has the vtable pointer: not one)
+        if opt_cxx && r < cx::crecs.len {
+            let cr = cx::crecs[r];
+            if cr.flags & cx::CR_DYNAMIC != 0 { return 0; }
+            for bi in cr.nbases {
+                let b = cx::cbases[cr.bases + bi];
+                if b.flags & cx::BF_VIRTUAL != 0 { return 0; }
+                if a64_empty(b.ty) { continue; }
+                let m = a64_hfa_members(b.ty);
+                if m == 0 { return 0; }
+                members += m;
+            }
+        }
         for i in first..first + cnt {
             let f = fields[i];
             if f.width >= 0 {
@@ -499,6 +513,14 @@ recursive fn a64_empty(q0: u32) -> bool {
     let r = rec_of(q);
     let first = records[r].first as i64;
     let cnt = records[r].count as i64;
+    // a C++ class: not dynamic, and every base empty
+    if opt_cxx && r < cx::crecs.len {
+        let cr = cx::crecs[r];
+        if cr.flags & cx::CR_DYNAMIC != 0 { return false; }
+        for bi in cr.nbases {
+            if !a64_empty(cx::cbases[cr.bases + bi].ty) { return false; }
+        }
+    }
     for i in first..first + cnt {
         let f = fields[i];
         if f.width == 0 { continue; }
@@ -531,6 +553,14 @@ recursive fn a64_unadj_align(q0: u32) -> i64 {
             let a = calign(fields[i].ty);
             if a > al { al = a; }
         }
+        if opt_cxx && r < cx::crecs.len {
+            let cr = cx::crecs[r];
+            if cr.flags & cx::CR_DYNAMIC != 0 && al < 8 { al = 8; }
+            for bi in cr.nbases {
+                let a = a64_unadj_align(cx::cbases[cr.bases + bi].ty);
+                if a > al { al = a; }
+            }
+        }
         return al;
     }
     return calign(q);
@@ -538,6 +568,8 @@ recursive fn a64_unadj_align(q0: u32) -> i64 {
 
 fn a64_aggregate(q: u32) -> bool {
     let k = kind_of(q);
+    // (a member function pointer is an aggregate: { ptr, adj })
+    if k == TY_MEMPTR && is_func(tbase(q)) { return true; }
     return k == TY_STRUCT || k == TY_UNION || k == TY_ARRAY || k == TY_COMPLEX;
 }
 
@@ -577,7 +609,11 @@ fn a64_arg_abi(q0: u32) -> Abi {
         return Abi { kind: AK_DIRECT, ext: 0, n: 0, tmp: 0, t0: vty(q), t1: 0, off0: 0, off1: 0, size: size as! u32,
             align: calign(q) as! u32 };
     }
-    if a64_empty(q) || size == 0 { return abi_ignore(); }
+    if a64_empty(q) || size == 0 {
+        // (C++ on Linux: an empty class of size 1 is passed as one byte, as GCC does)
+        if opt_cxx && size != 0 { return a64_coerce(GIR_T_I8, size); }
+        return abi_ignore();
+    }
     let m, bt = a64_hfa(q);
     if m > 0 { return a64_coerce(ty_array(m as! u32, bt), size); }
     if size <= 16 {

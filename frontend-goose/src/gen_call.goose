@@ -294,18 +294,35 @@ recursive fn inline_viable(n: u32) -> bool {
     return true;
 }
 
-// The local variables of a body (their slots are made per expansion).
+// The local variables of a body (their slots are made per expansion),
+// with those of the statement expressions and the compound literals in its
+// expressions (F1: arm_neon.h's always_inline functions use macros that
+// are statement expressions).
 recursive fn inline_locals(n: u32) {
     if n == 0 { return; }
     let nd = nodes[n];
     let k = nd.kind as i64;
     if k == N_COMPOUND { for i in nd.c { inline_locals(nlist[nd.v + i]); } }
-    else if k == N_DECL { inl_locals.push(nd.a as i64); }
-    else if k == N_IF { inline_locals(nd.b); inline_locals(nd.c); }
-    else if k == N_WHILE || k == N_SWITCH { inline_locals(nd.b); }
-    else if k == N_DO { inline_locals(nd.a); }
-    else if k == N_FOR { inline_locals(nd.a); inline_locals(nd.v as! u32); }
+    else if k == N_DECL { inl_locals.push(nd.a as i64); inline_locals_ex(nd.b); }
+    else if k == N_IF { inline_locals_ex(nd.a); inline_locals(nd.b); inline_locals(nd.c); }
+    else if k == N_WHILE || k == N_SWITCH { inline_locals_ex(nd.a); inline_locals(nd.b); }
+    else if k == N_DO { inline_locals(nd.a); inline_locals_ex(nd.b); }
+    else if k == N_FOR { inline_locals(nd.a); inline_locals_ex(nd.b); inline_locals_ex(nd.c); inline_locals(nd.v as! u32); }
     else if k == N_CASE || k == N_DEFAULT { inline_locals(nd.a); }
+    else if k == N_EXPR || k == N_RETURN { inline_locals_ex(nd.a); }
+}
+recursive fn inline_locals_ex(n: u32) {
+    if n == 0 { return; }
+    let nd = nodes[n];
+    let k = nd.kind as i64;
+    if k == N_STMTEXPR { inline_locals(nd.a); }
+    else if k == N_COMPLIT { inl_locals.push(nd.b as i64); inline_locals_ex(nd.a); }
+    else if k == N_UNARY || k == N_CAST || k == N_ICAST || k == N_VAARG || k == N_MEMBER || k == N_SWIZZLE { inline_locals_ex(nd.a); }
+    else if k == N_BINARY || k == N_INDEX || k == N_ASSIGN { inline_locals_ex(nd.a); inline_locals_ex(nd.b); }
+    else if k == N_COND { inline_locals_ex(nd.a); inline_locals_ex(nd.b); inline_locals_ex(nd.c); }
+    else if k == N_CALL { inline_locals_ex(nd.a); for i in nd.c { inline_locals_ex(nlist[nd.v + i]); } }
+    else if k == N_BUILTIN { for i in nd.c { inline_locals_ex(nlist[nd.v + i]); } }
+    else if k == N_INITLIST { for i in nd.c { inline_locals_ex(nlist[nd.v + i]); } inline_locals_ex(nd.b); }
 }
 
 recursive fn count_returns(n: u32) -> i64 {
