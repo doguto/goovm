@@ -471,6 +471,7 @@ recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
     }
     if kind_of(nodes[e].ty) == TY_NULLPTR {
         if is_pointer(t) { return icast(e, CK_NULL2PTR, lower_ty(t)); }
+        if kind_of(t) == TY_NULLPTR { return icast(e, CK_NULL2PTR, t_voidptr); }
         if kind_of(t) == TY_BOOL { return int_node(0, t_bool, loc); }
         return opaque_node(loc);
     }
