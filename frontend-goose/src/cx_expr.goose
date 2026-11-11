@@ -515,7 +515,28 @@ recursive fn parse_member_access(base: u32, arrow: bool, loc: u32) -> u32 {
             // an overloaded operator->: D1 resolves it below; the member
             // name is looked up in the result
             obj_ty = arrow_result(obj_ty);
-        } else { obj_ty = t_unknown; }
+        } else if is_array(obj_ty) { obj_ty = tbase(obj_ty); }
+        else { obj_ty = t_unknown; }
+    }
+    if !is_opq(base) && !dependent_ctx() && !at(TK_TILDE) {
+        // D2b: x.m on a scalar, p->m on a non-pointer
+        let bt = nodes[base].ty;
+        var bad = false;
+        if arrow && !is_pointer(bt) && !is_array(bt) && !is_record(bt) && !is_opaque(bt) {
+            err_at(loc, str("member reference type ", ctname(bt), " is not a pointer"));
+            bad = true;
+        } else if !is_record(obj_ty) && !is_opaque(obj_ty) && (!arrow || is_pointer(bt) || is_array(bt)) {
+            err_at(loc, str("member reference base type ", ctname(obj_ty), " is not a structure or union"));
+            bad = true;
+        }
+        if bad {
+            var q2 = QN { .. };
+            diag_suppress++;
+            if at_kw(KW_TEMPLATE) { adv(); }
+            if at_kw(KW_OPERATOR) { parse_operator_name(q2); } else { let okq = parse_qname(q2); }
+            diag_suppress--;
+            return opaque_node(loc);
+        }
     }
     let csc = if is_record(obj_ty) && !is_opq(base) { type_scope(obj_ty) } else { -1 };
     // ~T pseudo-destructor or destructor call
@@ -754,7 +775,8 @@ recursive fn parse_primary_cx() -> u32 {
         }
         if w == KW_OPERATOR { return parse_id_expr(); }
         if w == KW_TEMPLATE && tk_n(1) == TK_IDENT { return parse_id_expr(); }
-        if w == KW_REQUIRES || w == KW_CO { adv(); if at(TK_L_PAREN) { skip_group(); } if at(TK_L_BRACE) { skip_group(); } return opaque_node(loc); }
+        if w == KW_REQUIRES { return parse_requires_expr(); }
+        if w == KW_CO { adv(); if at(TK_L_PAREN) { skip_group(); } if at(TK_L_BRACE) { skip_group(); } return opaque_node(loc); }
     }
     if k == TK_IDENT || k == TK_COLONCOLON || k == TK_TILDE { return parse_id_expr(); }
     perr_expected("an expression");

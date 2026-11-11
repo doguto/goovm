@@ -213,6 +213,7 @@ recursive fn add_candidate(mc: i64, f: i64, explicit: i32, mark: i64, nargs: i64
         let pf = tmpls[t].pattern as i64;
         let skip = if oper && pf >= 0 && cxs[pf].flags & CF_MEMBER != 0 { 1 } else { 0 };
         let sp = deduce_call(t, explicit, mark + skip, nargs - skip);
+        if inst_debug() { write_stderr(str("add_candidate template t=", t, " -> ", sp, "\n")); }
         if sp >= 0 { add_cand(mc, sp); }
         else if sp == -2 { return false; }
     }
@@ -245,9 +246,12 @@ recursive fn pick_best(cm0: i64, mark: i64, nargs: i64, obj: u32, has_obj: bool,
         var ok = na == np || (variadic && na >= np);
         if !ok && na < np { ok = defaults_from(f, na); }
         if !ok { continue; }
+        // D2b: a member function whose trailing requires-clause is not satisfied is not viable
+        let fr = fn_req_ok(f);
+        if fr == 0 { continue; }
         let st = cand_ics.len;
         var viable = true;
-        var unk = false;
+        var unk = fr != 1;
         // slot 0: the implicit object parameter
         if member && !oper && cxs[f].flags & CF_STATIC == 0 && (has_obj || obj != 0 || this_type != 0) {
             let c0 = ics_object(obj, f);
@@ -682,7 +686,10 @@ recursive fn construct_class(t: u32, mark: i64, loc: u32, braces: bool) -> u32 {
 // T x(args).
 recursive fn mk_construct_init(t: u32, mark: i64, loc: u32) -> u32 {
     if is_opaque(t) { return dep_node(t, loc); }
-    for i in mark..nscratch.len { if is_opq(nscratch[i]) { return dep_node(t, loc); } }
+    for i in mark..nscratch.len {
+        // (an overload set is an argument the constructor's parameter resolves)
+        if is_opq(nscratch[i]) && nodes[nscratch[i]].kind as i64 != N_FUNCREF && nodes[nscratch[i]].kind as i64 != N_INITBRACE { return dep_node(t, loc); }
+    }
     if is_record(t) { return construct_class(t, mark, loc, false); }
     if nscratch.len - mark == 1 { return nscratch[mark]; }
     return dep_node(t, loc);

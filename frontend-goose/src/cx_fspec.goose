@@ -42,13 +42,30 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     if g { return if g > 0 { (g - 1) as i64 } else { g as i64 }; }
     if inst_depth > 400 || tmpls[t].t1 == 0 { return -2; }
     fspec_map.insert(key, -2);
+    // D2b: the associated constraints, checked before the declaration is substituted
+    let cs0 = tmpl_satisfied(t, binds);
+    if cs0 != 1 {
+        let r0: i64 = if cs0 == 0 { -1 } else { -2 };
+        fspec_map.insert(key, r0 as! i32);
+        return r0;
+    }
+    let tr0 = trail_req;
+    trail_req = 1;
     let sc = tmpls[t].scope as i64;
     let mark = nscratch.len;
     inst_what = tmpls[t].sym as i64;
     let st = inst_enter(false);
     let e0 = diag_inst_errors;
     bind_header(t, binds);
-    if sc >= 0 && scopes[sc].kind as i64 == CS_CLASS {
+    let fcg = tmpl_friend_cls.get(t as u64);
+    if fcg {
+        // a friend template: its declaration is in its class
+        var fc: u32 = 0;
+        fc = fcg;
+        cur_scope = fc as i64;
+        cur_class = fc as i64;
+        cur_access = AC_PUBLIC;
+    } else if sc >= 0 && scopes[sc].kind as i64 == CS_CLASS {
         cur_scope = sc;
         cur_class = sc;
         cur_access = AC_PUBLIC;
@@ -66,6 +83,8 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     inst_spec_tmpl = -1;
     let s = inst_spec_result;
     inst_spec_result = -1;
+    let trv = trail_req;
+    trail_req = tr0;
     let errs = diag_inst_errors - e0;
     let bad = inst_leave(st);
     nscratch.resize(mark);
@@ -78,6 +97,7 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     } else if s < 0 && (bad || errs > 0) {
         res = -1;
     }
+    if trv == 0 { res = -1; } else if trv != 1 && res >= 0 { res = -2; }
     fspec_map.insert(key, if res >= 0 { (res + 1) as! i32 } else { res as! i32 });
     if inst_debug() {
         var o: u8[>..] = [];
@@ -185,7 +205,9 @@ recursive fn inst_fspec_body(f: i64) {
     let st = inst_enter(true);
     if outer >= 0 && tmpls[dt].hdr_outer >= 0 { bind_header(tmpls[dt].hdr_outer as i64, outer); }
     bind_header(dt, binds);
-    let sc = tmpls[dt].scope as i64;
+    var sc = tmpls[dt].scope as i64;
+    let fcg = tmpl_friend_cls.get(dt as u64);
+    if fcg { var fc: u32 = 0; fc = fcg; sc = fc as i64; }
     var ctx = DC_NS;
     if sc >= 0 && scopes[sc].kind as i64 == CS_CLASS {
         cur_scope = sc;
@@ -394,6 +416,11 @@ recursive fn deduce_one(p0: u32, e: u32) -> i64 {
     var cls = a;
     var pc0 = p;
     if is_pointer(p) && is_pointer(a) { cls = tbase(a); pc0 = tbase(p); }
+    if is_record(pc0) {
+        // X<T> written with X's own parameters is X's pattern: the template-id it is
+        let pd = pattern_as_depspec(unqual(pc0));
+        if pd != 0 { pc0 = with_q(pd, quals(pc0)); }
+    }
     if kind_of(unqual(pc0)) == TY_DEPSPEC && is_record(cls) {
         need_complete(cls);
         if deduce_from_bases(pc0, cls, 0) { return 1; }
@@ -421,6 +448,7 @@ recursive fn all_explicit(t: u32, depth: i64) -> bool {
         return true;
     }
     if k == TY_DEPSPEC || k == TY_DEPNAME || k == TY_DEPEXPR || k == TY_PACKEXP { return false; }
+    if (k == TY_STRUCT || k == TY_UNION) && pattern_as_depspec(unqual(t)) != 0 { return false; }
     return true;
 }
 
@@ -624,7 +652,9 @@ recursive fn deduce_from_set(p0: u32, e: u32) -> i64 {
             if cxs[f].flags & CF_MEMBER != 0 && cxs[f].flags & CF_STATIC == 0 { return -1; }
             ftype = syms[f].ty;
         } else { continue; }
-        let a = if is_ref(p0) { ftype } else { mk_ptr(ftype) };
+        // (a forwarding reference T&& binds a function lvalue: T is F&)
+        let fwd = kind_of(p0) == TY_RREF && quals(tbase(p0)) == 0 && ded_param(tbase(p0)) >= 0;
+        let a = if fwd { mk_lref(ftype) } else if is_ref(p0) { ftype } else { mk_ptr(ftype) };
         if deduce_test(pp, a) { hits++; hit_a = a; }
     }
     if hits == 0 { return 0; }

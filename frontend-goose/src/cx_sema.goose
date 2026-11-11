@@ -561,6 +561,12 @@ recursive fn mk_name_ref(qn: QN&, s0: i64, loc: u32) -> u32 {
             }
             return dep_node(t_unknown, loc);
         }
+        if k == SK_TEMPLATE && tmpl_kind(s) == TT_CONCEPT {
+            // D2b: a concept-id
+            if qn.has_targs { return concept_id_node(s, qn.targs, loc); }
+            if diag_suppress == 0 && !dependent_ctx() { err_at(loc, "expected '<' after concept name"); }
+            return dep_node(t_bool, loc);
+        }
         let n = node(N_FUNCREF, 0, t_unknown, s0, 0, (if qn.has_targs { qn.targs + 1 } else { 0 }) as i64, loc);
         nodes[n].op = if qn.qual { 1 } else { 0 };
         return n;
