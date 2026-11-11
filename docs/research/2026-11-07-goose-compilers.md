@@ -388,8 +388,8 @@ frontend-goose/tests/cmp_decls_cxx.py --corpus cxx -j 2            # マング�
 frontend-goose/tests/bench_cxx.py -n 3                             # -E と -fsyntax-only の速さ（clang++ と比較）
 tests/suite_goosecc.py --corpus unittests-cxx,regression-cxx,benchmarks-cxx,ctmark-cxx --variants O0,g
 frontend-goose/tests/cmp_bins.py --ref <D1 前の goosecc> --goosecc frontend-goose/build/goosecc   # C の出力が変わらないこと
-# D2（clang の Sema テストのオラクル。clang/test を展開したディレクトリを ROOT に設定する）
-python3 sema_oracle.py -j 4 --save sema.json        # 作業用ディレクトリの bin/sema_oracle.py
+# D2：clang の Sema テストのオラクル（clang 20.1.2 のソースの clang/test を指定する）
+frontend-goose/tests/sema_oracle.py --root <llvm-project>/clang/test -j 4 --save sema.json
 ```
 
 ---
