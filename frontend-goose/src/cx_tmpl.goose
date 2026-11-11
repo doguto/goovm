@@ -32,6 +32,7 @@ import .cx_decl;
 import .cx_class;
 
 var pending_tmpl: i64 = -1;     // the template record the next declaration defines, -1
+var nttp_type_tok = dictionary<u64, u32> {};   // D2: a non-type template parameter (index in tps) -> its type's first token
 var pending_explicit: bool = false;  // template<> : an explicit specialization follows
 var pending_inst: bool = false;      // template X<..>; an explicit instantiation
 var last_tmpl_sym: i64 = -1;
@@ -165,6 +166,7 @@ recursive fn parse_tparams() {
         } else {
             // a non-type template parameter
             tp.kind = TPK_VALUE as! u8;
+            nttp_type_tok.insert(tps.len as u64, pc as! u32);
             var ds = CDS { .. };
             parse_cds(ds, a, DC_PARAM);
             var base = finish_cds(ds);

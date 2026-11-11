@@ -482,6 +482,23 @@ recursive fn ded_complete(t: i64) -> bool, i32 {
     }
     // explicit markers off
     for j in ded_n { ded_args[ded_base + j].rsv = 0; }
+    // the types of non-type parameters substituted: enable_if<C, bool>::type
+    // with C false is a substitution failure (SFINAE)
+    let np = tmpls[t].nparams as i64;
+    var all: i32 = -1;
+    for j in np {
+        let p = tps[tmpls[t].params as i64 + j];
+        if p.kind as i64 != TPK_VALUE || p.pack || !is_dep(p.ty) { continue; }
+        let tok = nttp_type_tok.get((tmpls[t].params as i64 + j) as u64);
+        if !tok { continue; }
+        if all < 0 {
+            let m = targ_scratch.len;
+            for k in ded_n { targ_scratch.push(ded_args[ded_base + k]); }
+            all = targ_intern(m);
+        }
+        let ty = subst_parse(t, all, tok as i64, 0, np);
+        if subst_failed { return false, -1; }
+    }
     return ded_list(t);
 }
 

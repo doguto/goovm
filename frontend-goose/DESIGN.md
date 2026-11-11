@@ -1705,3 +1705,172 @@ new`/`delete`, argument-dependent lookup beyond the operands' namespaces.
   the standard library: the B4 header cache applies as is; the G1 parse
   cache (C's parser state) would need the C++ side tables (`cxs`, `crecs`,
   `nmap`, scopes, templates) in its snapshot.
+
+## 14. C++ templates, overload resolution, constant evaluation (D2)
+
+D2 turns D1's token-stored templates into real instantiations and gives the
+front end the parts of C++ semantic analysis that templates need: deduction,
+partial ordering, SFINAE, overload resolution with implicit conversion
+sequences, argument-dependent lookup, two-phase lookup, packs, and a
+constant evaluator. Sources: `cx_inst.goose` (class and member
+instantiation, deduction), `cx_fspec.goose` (function template
+specializations, variable templates), `cx_pack.goose` (packs, folds),
+`cx_conv.goose` (conversion sequences), `cx_adl.goose` (ADL, operators),
+`cx_traits.goose` (type-trait builtins), `cx_ce.goose` (the evaluator),
+`cx_diag.goose` (C++ spellings for diagnostics).
+
+### 14.1 Instantiation is re-parsing
+
+A template stays a token range (D1). Instantiating it means parsing those
+tokens again with the parameters bound. The bound names live in a scope
+of kind `CS_TPARAMS` (`Scope.tps`), which unqualified lookup visits after
+the class members. The parser state is saved and restored around each
+instantiation (`InstSave`, `inst_enter`/`inst_leave`). Lookup in an
+instantiation is limited to what precedes the token being parsed
+(`vis_limit = VIS_PC`, two-phase lookup), except for class members, which
+are always visible. This one mechanism serves classes, member functions,
+function template specializations, alias templates, variable templates,
+default arguments and partial specialization matching, so the
+instantiated code goes through exactly the same semantic actions as
+ordinary code.
+
+- **Classes are lazy.** Naming `X<int>` creates the record, its scope
+  (`SCF_INST_PENDING`) and its symbol, so it mangles and compares as a
+  type. The body is instantiated when completeness is needed:
+  `need_complete`, a lookup in its scope, `sizeof`, a base clause. The
+  pattern is chosen among the partial specializations by deduction plus a
+  check that substituting the result gives the arguments back
+  (`spec_args_check`). That check is what makes `void_t<...>` and
+  `enable_if_t<...>` partial specializations SFINAE, and what verifies
+  non-deduced contexts.
+- **Member classes defined out of their class**
+  (`template<class T> class X<T>::Inner {...}`) record their header
+  (`odef`). The instantiation's `class Inner;` stays pending until it is
+  needed (`inst_member_class`). Explicit specializations of members of an
+  instantiation (`template<> struct X<int>::Inner`,
+  `template<> void X<int>::f()`) replace the pattern (`CF2_EXPLICIT`).
+- **Member function bodies are lazy** (`CF2_LAZY_BODY`). They are queued
+  by `inst_use` when odr-used: calls, overload choices, a constructor's
+  vtable, a declared object's destructor. They are drained at the end of
+  the translation unit and in code generation's `cg_finish`.
+- **Function template specializations** (`make_fspec`) re-parse the
+  declaration with the deduced arguments, in a mode that skips the body.
+  Errors at that instantiation's own suppression level make the
+  substitution fail (`diag_inst_level`). Errors in tentative parses inside
+  it do not count, and neither do errors in nested instantiations. Errors
+  in an alias template or in a name accepted by `parse_cds` are passed up
+  (`diag_watch_level`, `diag_propagate`). Errors in the types of
+  non-type parameters (`enable_if<C, bool>::type = true`) are also
+  substitution failures.
+- **Hard errors.** Errors inside class and member instantiations are
+  errors of the program, with a note "in instantiation of template class
+  'X<int>' requested here". Only substitution (function template
+  declarations, partial specialization matching) is SFINAE.
+  `GOOSECC_INST_ERRORS=0` restores D1's suppression for comparisons.
+- **Explicit specializations** of function templates find their
+  specialization by deducing from the declared type (`explicit_fn_spec`,
+  the most specialized template's). They then define it with their own
+  body.
+
+### 14.2 Deduction and partial ordering
+
+Deduction binds into a stack (`ded_args`, `ded_begin`/`ded_end`, re-entrant):
+types, values (also through array bounds `T[N]`), template template
+arguments, packs (trailing packs, function parameter packs, explicit pack
+prefixes), base classes of the argument, forwarding references, and
+overload sets as arguments ([temp.deduct.call]p6, `deduce_from_set`).
+`deduce_addr` handles the address of an overloaded template for a target
+type. Partial ordering retags one template's parameters as unique types
+(depth 250) and deduces the other from them (`fn_at_least`,
+`spec_at_least`). A class template's pattern record written with its own
+parameters, or a partial specialization's pattern, is read as the
+template-id it is (`pattern_as_depspec`).
+
+### 14.3 Overload resolution
+
+`cx_conv.goose` computes implicit conversion sequences like clang's
+`SemaOverload`:
+- Standard conversions with rank and qualification adjustment, and
+  reference binding with the temporary rules.
+- User-defined conversions through constructors (templates included) and
+  conversion functions (templates, deduced from the target).
+- List-initialization, `std::initializer_list` included.
+- The implicit object parameter, including ref-qualifiers.
+- Overload sets against function pointer and reference targets.
+
+`pick_best` holds one conversion sequence per slot (slot 0 the implicit
+object) and runs a tournament with clang's tie-breakers: non-template over
+template, more specialized, and declarations of one template merged (a
+template declared twice with return types spelled differently, like
+`std::swap`).
+
+ADL (`cx_adl.goose`) adds the associated namespaces and hidden friends of
+the argument types, for calls whose ordinary lookup finds functions and for
+names ordinary lookup does not find (`adl_only_call`). Operators resolve
+member, non-member and ADL candidates in both modes (`resolve_oper`), and
+the built-in operator applies when none is viable. Enumeration operands
+take part.
+
+### 14.4 The constant evaluator (`cx_ce.goose`)
+
+The evaluator runs the semantic analysis's trees on an abstract machine:
+- **Memory.** Byte memories are laid out as the target lays them out:
+  `type_size` and field offsets. The evaluation's locals and temporaries
+  live in `ce_mem`; string literals and constexpr variables in `ce_g`.
+- **Addresses.** A plain offset, `CE_G` + offset, or `CE_FN` + a function.
+- **Values.** `CeV` holds an int, a float, a pointer, or an object at an
+  address.
+- **Calls.** In semantic-analysis mode a resolved call is an `N_CXX` op 7
+  with its function, object and arguments as written (`typed_call`). The
+  evaluator converts the arguments to the parameter types itself.
+
+Function bodies are parsed again for the evaluation in semantic-analysis
+mode (`ce_body`: `cg_on` off, the instantiation machinery for templates).
+The function's definition, mem-initializers and flags are left as they
+were, so `-c` and `-fsyntax-only` evaluate identically. Since static
+assertions and template arguments only need values, they are parsed with
+code generation off. The evaluator handles:
+- Statements: blocks, locals, `if`, loops, `switch`, `return`, `break`,
+  `continue`.
+- Constructors with mem-initializers and default member initializers,
+  aggregate and value initialization.
+- References and pointer arithmetic within an object.
+- String literals, `__builtin_is_constant_evaluated`,
+  `__builtin_constant_p`, `__builtin_strlen`.
+- Constexpr and const integral variables, static members of class
+  templates included. Their initializers are recorded by `ce_note_var`.
+
+Anything else fails the evaluation (not a constant); there are no guessed
+values. Overflow, division by zero and out-of-range shifts fail too.
+`const_int` falls back to the evaluator when C's folding fails.
+
+### 14.5 Diagnostics
+
+`cx_diag.goose` spells types the way clang does: `'std::vector<int>'`,
+`'const char *'`, `'int (*)(int)'`, template arguments included. It builds
+the text on a global stack, since growable locals cannot live across the
+recursion. Instantiation notes name the template class, member function or
+function template specialization.
+
+### 14.6 State and what remains
+
+Oracles at the end of D2 (bench/results/d2-2026-11-10):
+- The C++ corpus `-fsyntax-only` has 0 errors, with instantiation errors
+  reported.
+- Mangling: 0 wrong, 51 missing. Layout: 0 mismatches over 330,728
+  assertions. C output is byte-identical.
+- The clang Sema test oracle (expected-error lines in
+  `clang/test/{SemaCXX,SemaTemplate,CXX,Parser}`): 25.3% of runs exact,
+  11.0% of expected error lines reported, 0 crashes.
+
+What remains:
+- **C++20:** concepts and `requires` (75 `gnu++20` header runs fail), `<=>`
+  rewriting, designated initializers, coroutines, modules.
+- **The evaluator:** dynamic allocation, virtual calls, lambdas, unions
+  with an active member, member pointers, placement new, diagnostics of
+  non-constant expressions, and constant initialization of globals.
+- **Diagnostics:** the expected errors clang reports and goosecc does not:
+  no viable/ambiguous/deleted calls, access control, narrowing,
+  redefinitions and the like.
+- **Template definition-time checking** of non-dependent constructs.
+- **Matrix types** (`-fenable-matrix`). The type is unknown, i.e. opaque.

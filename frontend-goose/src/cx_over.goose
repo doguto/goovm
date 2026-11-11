@@ -323,6 +323,7 @@ recursive fn pick_best(cm0: i64, mark: i64, nargs: i64, obj: u32, has_obj: bool,
             else { apply_user_convs(best, cand_viable[vm + 2 * w + 1] as i64, mark, nargs, oper); }
         }
     }
+    if inst_debug() { write_stderr(str("  -> ", best, " ambiguous=", cand_ambiguous, " unknown=", cand_unknown, " deleted=", cand_deleted, " fl2=", if best >= 0 { cxs[best].flags2 as i64 } else { -1 }, "\n")); }
     cand_viable.resize(vm);
     cand_ics.resize(im);
     return best;

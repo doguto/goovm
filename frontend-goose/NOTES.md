@@ -906,3 +906,50 @@ knowledge. A visitor passed as a value would have been one function.
 - **The back-end's last two lines** (`export fn gir_codegen: could not resolve
   one concrete function signature`, section 13) still follow every front-end
   error; by D1 they were easy to skip.
+
+## 15. Milestone D2: templates and the semantics behind them
+
+### Re-parsing scales further than expected
+
+Using re-parsing for every instantiation, including the constant evaluator's
+function bodies, kept the semantic actions single, which keeps the two
+modes (semantic analysis, code generation) consistent. The price is state:
+anything a parse touches globally (the definition node `syms.def`,
+mem-initializers, flags, queued work) must be saved and restored by
+whoever parses "on the side". Each such leak showed up as a wrong
+instantiation much later.
+
+### Error levels instead of exceptions
+
+SFINAE needs "did this substitution fail?" without unwinding. A
+suppression depth with a counter per level (`diag_inst_level`,
+`diag_watch_level`) answers it. The subtle part is which levels count. A
+tentative parse inside an instantiation must not count, an alias
+template's failure must, and a nested class instantiation's errors belong
+to that class. Each rule came from a libstdc++ header that broke.
+
+### No growable locals across recursion, again
+
+The type printer for diagnostics wanted `u8[>..]` locals in a recursive
+function. It now builds the text on a global stack with marks (`cts`), as
+the parser does with `nscratch`. The constant evaluator keeps its frames
+the same way (`ce_locals`, `ce_frame`).
+
+### Optional values from dictionaries
+
+`dictionary.get` returns an optional. Binding it to a variable that then
+outlives a mutation of the same dictionary is rejected (the optional may
+point into it). Copying into a plain variable first is the idiom:
+`var x: u32 = 0; let g = d.get(k); if g { x = g; }`.
+
+### What the oracles found
+
+The constant evaluator was the most effective bug finder of D2. Values
+that used to be "unknown, so assume fine" became concrete. They exposed:
+- Explicit specializations of function templates being ignored. This
+  produced wrong code too.
+- Empty-base placement looping on `struct D : B, C {}`.
+- `class C : C` recursing.
+- `std::swap` declared twice making `__is_swappable` false.
+- A non-type template parameter's dependent type never being
+  substituted, which made both `std::pair` constructors viable.
