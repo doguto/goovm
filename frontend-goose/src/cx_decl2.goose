@@ -130,7 +130,12 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     }
     if tmpl >= 0 && (target >= 0 || target == -2) && !d.qn.qual {
         let fs = if target == -2 { enclosing_ns(cur_scope) } else { target };
-        let old = find_fn_template(fs, key, ft, tmpl);
+        var old = find_fn_template(fs, key, ft, tmpl);
+        if old >= 0 && ctx == DC_FRIEND && cur_class >= 0 {
+            // D2b: a friend template of another class (another instantiation) is another template
+            let ofc = tmpl_friend_cls.get(cxs[old].tmpl as u64);
+            if ofc { var oc: u32 = 0; oc = ofc; if oc as i64 != cur_class { old = -1; } }
+        }
         if old >= 0 {
             // D2: a redeclaration of a function template (its definition, maybe)
             let ot = cxs[old].tmpl as i64;
@@ -142,6 +147,13 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
             return tmpls[ot].pattern as i64;
         }
         let ts = func_template_sym(key, fs, loc);
+        // D2b: a friend template declared in a class: its declaration is parsed again there
+        if ctx == DC_FRIEND && cur_class >= 0 {
+            tmpl_friend_cls.insert(cxs[ts].tmpl as u64, cur_class as u32);
+            cxs[ts].flags = cxs[ts].flags | CF_FRIEND;
+            friend_class.insert(ts as u64, cur_class as u32);
+        }
+        if inst_debug() { write_stderr(str("fn template ", ident_text(key as i64), " t=", cxs[ts].tmpl, " ctx=", ctx, " cls=", cur_class, "\n")); }
         let pf = csym(SK_FUNC, key, ft, loc);
         cxs[pf].flags = (CF_PATTERN | (if is_member { CF_MEMBER } else { 0 })) as! u32;
         cxs[pf].dscope = fs as! i32;
@@ -234,6 +246,7 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     return s;
 }
 var inst_def_target: i64 = -1;  // D2: the function whose definition is being parsed again
+var tmpl_friend_cls = dictionary<u64, u32> {};  // D2b: a friend function template -> the class scope declaring it
 
 // D2: the function template named `name` in scope sc whose pattern has the
 // type ft and the template header of hdr's kinds, -1.

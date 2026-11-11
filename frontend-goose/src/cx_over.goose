@@ -213,6 +213,7 @@ recursive fn add_candidate(mc: i64, f: i64, explicit: i32, mark: i64, nargs: i64
         let pf = tmpls[t].pattern as i64;
         let skip = if oper && pf >= 0 && cxs[pf].flags & CF_MEMBER != 0 { 1 } else { 0 };
         let sp = deduce_call(t, explicit, mark + skip, nargs - skip);
+        if inst_debug() { write_stderr(str("add_candidate template t=", t, " -> ", sp, "\n")); }
         if sp >= 0 { add_cand(mc, sp); }
         else if sp == -2 { return false; }
     }
@@ -685,7 +686,10 @@ recursive fn construct_class(t: u32, mark: i64, loc: u32, braces: bool) -> u32 {
 // T x(args).
 recursive fn mk_construct_init(t: u32, mark: i64, loc: u32) -> u32 {
     if is_opaque(t) { return dep_node(t, loc); }
-    for i in mark..nscratch.len { if is_opq(nscratch[i]) { return dep_node(t, loc); } }
+    for i in mark..nscratch.len {
+        // (an overload set is an argument the constructor's parameter resolves)
+        if is_opq(nscratch[i]) && nodes[nscratch[i]].kind as i64 != N_FUNCREF && nodes[nscratch[i]].kind as i64 != N_INITBRACE { return dep_node(t, loc); }
+    }
     if is_record(t) { return construct_class(t, mark, loc, false); }
     if nscratch.len - mark == 1 { return nscratch[mark]; }
     return dep_node(t, loc);
