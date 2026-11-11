@@ -279,7 +279,7 @@ fn vec_loop(h: u32) -> bool {
             if b == a { continue; }
             let B = o_ins[b];
             let pb = res(if B.op == GIR_LOAD { B.a } else { B.b });
-            if vz_same_access(pa, pb) { continue; }
+            if vz_same_access(pa, pb) || vz_far_access(pa, pb) { continue; }
             let ba = res(o_ins[pa].a);
             let bb = if is_inst(pb) && vz_kind[pb] == VZ_ADDR { res(o_ins[pb].a) } else { pb };
             if ba == bb { return false; }       // (another index or offset of the same base)
@@ -314,6 +314,30 @@ fn vz_same_access(pa: u32, pb: u32) -> bool {
         if x != y { return false; }
     }
     return true;
+}
+
+// Whether two addresses of one base and the same index terms are at least
+// a vector apart (constant offsets differing by 16 bytes or more): no lane
+// of one vector access touches the other's in the same vector iteration,
+// and the vector iterations keep their order.
+fn vz_far_access(pa: u32, pb: u32) -> bool {
+    if !is_inst(pa) || !is_inst(pb) { return false; }
+    let A = o_ins[pa];
+    let B = o_ins[pb];
+    if A.op != GIR_GEP || B.op != GIR_GEP || A.c != B.c || res(A.a) != res(B.a) { return false; }
+    for k in 2..2 + 2 * A.c {
+        var x = o_ops[A.b + k];
+        var y = o_ops[B.b + k];
+        if k % 2 == 0 {
+            x = res(x);
+            y = res(y);
+        }
+        if x != y { return false; }
+    }
+    let oa = (o_ops[A.b] as u64 | (o_ops[A.b + 1] as u64 << 32)) as! i64;
+    let ob = (o_ops[B.b] as u64 | (o_ops[B.b + 1] as u64 << 32)) as! i64;
+    let d = if oa > ob { oa - ob } else { ob - oa };
+    return d >= 16;
 }
 
 // ------------------------------------------------------------- building

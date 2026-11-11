@@ -487,6 +487,22 @@ fn inl_any_call() -> bool {
 // A copy of sz bytes from src to dst before instruction at (byval
 // arguments): the inline memcpy up to 4096 bytes, else a call of memcpy
 // is not available here, so such callees are not inlined (inl_record).
+// Location d of the callee inlined at call location cs: a copy whose
+// inlined-at chain ends at cs (memoized per inlined call).
+var inl_dmap: u32[>..] = [];     // per location: inl_dep when inl_dnew holds its copy
+var inl_dnew: u32[>..] = [];
+var inl_dep: u32 = 0;
+recursive fn inl_dloc(d: u32, cs: u32) -> u32 {
+    if d < inl_dmap.len as! u32 && inl_dmap[d] == inl_dep { return inl_dnew[d]; }
+    var L = M.dlocs[d];
+    L.inlined_at = if L.inlined_at == 0 { cs } else { inl_dloc(L.inlined_at, cs) };
+    let n = new_dloc(L);
+    if d < inl_dmap.len as! u32 {
+        inl_dmap[d] = inl_dep;
+        inl_dnew[d] = n;
+    }
+    return n;
+}
 fn inl_copy(at: u32, dst: u32, src: u32, sz: u32, al: u32, dbg: u32) {
     let x = new_inst(Inst { op: GIR_MEMCPY as! u8, sub: 0, flags: 0, ty: GIR_T_VOID as! u16, aux: 0, a: dst, b: src,
                             c: sz, dbg: dbg });
@@ -579,8 +595,18 @@ fn inline_call(c: u32, cfi: u32) {
         }
         a = nx;
     }
-    // the copied code has the call's source location
-    for x in ib..o_ins.len { o_ins[x].dbg = C.dbg; }
+    // the copied code: the callee's locations inlined at the call's (LLVM's
+    // fixupLineNumbers); without a call location they stay as they are
+    if C.dbg != 0 {
+        // (a location of its own for this call: an instance of the callee)
+        let cs = new_dloc(M.dlocs[C.dbg]);
+        inl_dep++;
+        if inl_dmap.len < M.dlocs.len { inl_dmap.resize(M.dlocs.len, 0); inl_dnew.resize(M.dlocs.len, 0); }
+        for x in ib..o_ins.len {
+            let d = o_ins[x].dbg;
+            o_ins[x].dbg = if d == 0 { C.dbg } else { inl_dloc(d, cs) };
+        }
+    }
     // the call becomes a branch to the callee's entry
     let br = new_inst(Inst { op: GIR_BR as! u8, sub: 0, flags: 0, ty: GIR_T_VOID, aux: 0, a: nb0, b: 0, c: 0, dbg: C.dbg });
     link_after(c, br);
