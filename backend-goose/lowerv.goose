@@ -10,6 +10,8 @@
 // Whether vector instruction I (type t, lanes of lb bits, FP if lfp) has a
 // lowering here.
 fn vx_kind_e2(I: Inst, op: u32, t: u32, lb: u32, lfp: bool) -> bool {
+    // (-O0 keeps the legacy lowering: its code stays byte-identical)
+    if !fn_opt { return false; }
     if op == GIR_MUL { return !lfp && lb == 32; }
     if op == GIR_SHL || op == GIR_LSHR || op == GIR_ASHR {
         if lfp || lb == 8 || op == GIR_ASHR && lb == 64 { return false; }

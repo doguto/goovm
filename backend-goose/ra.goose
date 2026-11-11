@@ -216,7 +216,7 @@ fn inst_kind(I: Inst) -> u32 {
     let op: u32 = I.op;
     if op >= GIR_NOPS { return K_B; }
     // (E2) vector shuffles that lowerv.goose does
-    if op == GIR_SHUFFLE && t_rc[I.ty] == RC_VX && vshuf_plan(I) != 0 { return K_A; }
+    if fn_opt && op == GIR_SHUFFLE && t_rc[I.ty] == RC_VX && vshuf_plan(I) != 0 { return K_A; }
     let k: u32 = OP_KIND[op] & 15;
     if k != K_T { return k; }
     if op == GIR_EXTRACTVALUE { return ev_kind(I.ty); }
