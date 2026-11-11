@@ -11,6 +11,7 @@ import os;
 // (--target=aarch64-linux-gnu: AAPCS64, char unsigned, long double binary128).
 var opt_a64: bool = false;
 var char_unsigned: bool = false;   // plain char is unsigned (AArch64 unless -fsigned-char)
+var opt_fp_contract: i64 = 1;      // -ffp-contract=: 0 off, 1 on (clang's default for C), 2 fast (taken as on)
 
 // ---------------------------------------------------------------------------
 // Token kinds. Punctuators each have their own kind; keywords are

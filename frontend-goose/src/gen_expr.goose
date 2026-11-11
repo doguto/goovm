@@ -952,7 +952,7 @@ recursive fn ex_binary(n: u32) -> u32 {
         else if es != 1 { res = ins_bin(GIR_SDIV, GIR_T_I64, d, c_i64(es)); }
         return conv(res, t_long, nd.ty);
     }
-    if opt_a64 && (op == B_ADD || op == B_SUB) && contract_ty(vty(nd.ty)) { return contract_add(n); }
+    if opt_a64 && opt_fp_contract != 0 && (op == B_ADD || op == B_SUB) && contract_ty(vty(nd.ty)) { return contract_add(n); }
     let x = ex_val(nd.a);
     let y = ex_val(nd.b);
     return arith(op, nd.ty, x, y);
@@ -1334,7 +1334,7 @@ recursive fn ex_assign(n: u32) -> u32 {
     let op = nd.op as i64;
     if is_complex(ct) { return assign_cplx_to_real(n); }
     if quals(lq) & Q_ATOMIC != 0 { return atomic_compound(n); }
-    if opt_a64 && (op == B_ADD || op == B_SUB) && contract_ty(vty(ct)) {
+    if opt_a64 && opt_fp_contract != 0 && (op == B_ADD || op == B_SUB) && contract_ty(vty(ct)) {
         let rm, rneg = mul_node(nd.b, ct);
         if rm != NONE {
             // x += b * c: fused (FP contraction, F1); the product's operands first, as clang's RHS

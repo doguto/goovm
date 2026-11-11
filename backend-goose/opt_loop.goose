@@ -89,6 +89,7 @@ fn loop_collect(h: u32) -> bool {
     }
     if nlatch == 0 { return false; }
     if nlatch != 1 { lp_latch = NIL; }
+    if b_fl[h] & BF_ADDR != 0 { return false; }
     while tmp_stack.len != 0 {
         let b = tmp_stack.pop();
         for k in p_start[b]..p_start[b + 1] {
@@ -99,6 +100,7 @@ fn loop_collect(h: u32) -> bool {
             tmp_stack.push(q);
         }
     }
+    for b in lp_body { if b_fl[b] & BF_ADDR != 0 { return false; } }
     if npre != 1 || s_start[lp_pre + 1] - s_start[lp_pre] != 1 || block_invoke(lp_pre) != NIL { lp_pre = NIL; }
     lp_exit = NIL;
     lp_exiting = NIL;
@@ -338,11 +340,25 @@ fn unroll_threshold() -> u32 {
     return if opt_lv >= 3 { 300 } else { 150 };
 }
 
+// Every loop gets a preheader (LLVM's LoopSimplify): a block that only
+// branches to the header, from which the header is entered (a switch that
+// enters the loop, or several edges into it). Then ensure_cfg.
+fn loop_preheaders() {
+    ensure_cfg();
+    loop_headers();
+    var made = false;
+    for h in lp_hdrs {
+        if rpo_num[h] == NIL || h == 0 || b_fl[h] & (BF_LP | BF_ADDR) != 0 { continue; }
+        if licm_preheader(h) { made = true; }
+    }
+    if made { ensure_cfg(); }
+}
+
 fn loop_unroll() -> bool {
     if o_pinned { return false; }
     let thr = unroll_threshold();
     if thr == 0 { return false; }
-    ensure_cfg();
+    loop_preheaders();
     loop_headers();
     var any = false;
     var k: i64 = 0;

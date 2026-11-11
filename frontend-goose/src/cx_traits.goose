@@ -346,6 +346,8 @@ recursive fn eval_trait_cx(name: const u8[:], mark: i64) -> bool, i64 {
 
 recursive fn class_trait(name: const u8[:], t: u32) -> bool, i64 {
     var b = unqual(t);
+    // an array type is an aggregate (its element type need not be complete)
+    if name == "__is_aggregate" && is_array(b) { return true, 1; }
     if name == "__is_trivial" || name == "__is_trivially_copyable" || name == "__is_pod" || name == "__is_standard_layout" ||
        name == "__is_literal_type" || name == "__is_literal" || name == "__has_unique_object_representations" {
         while is_array(b) { b = unqual(tbase(b)); }

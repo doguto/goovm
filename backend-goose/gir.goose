@@ -184,7 +184,8 @@ let GIR_NOPS = 84;            // opcode count of the x86-64 back-end's tables (u
 let GIR_FMA = 84;             // (additive, F1: AArch64)
 let GIR_A64 = 85;             // (additive, F1: AArch64 intrinsics)
 let GIR_ISCONST = 86;         // (additive, E2: llvm.is.constant at opt_level >= 1; folded by the middle-end)
-let GIR_NOPS_ALL = 87;        // opcode count (F1, E2)
+let GIR_OBJSIZE = 87;         // (additive, E2: llvm.objectsize at opt_level >= 1; folded by the middle-end)
+let GIR_NOPS_ALL = 88;        // opcode count (F1, E2)
 // GIR_A64.sub (additive, F1): AArch64 NEON / ACLE operations, as enum GirA64 in gir.h
 let GIR_A64_SQADD = 0; let GIR_A64_UQADD = 1; let GIR_A64_SQSUB = 2; let GIR_A64_UQSUB = 3;
 let GIR_A64_SHADD = 4; let GIR_A64_UHADD = 5; let GIR_A64_SRHADD = 6; let GIR_A64_URHADD = 7;
@@ -317,6 +318,7 @@ let IF_ALWAYSINLINE_CALL = 0x4000;  // (E2) CALL: call-site always_inline
 let IF_CALL_NOWRITE = 0x8000;       // (E2) CALL: writes no memory
 let IF_CALL_NOREAD = 0x0040;        // (E2) CALL: reads no memory
 let IF_CALL_PURE = 0x0020;          // (E2) CALL: nounwind, willreturn
+let IF_CALL_NOBUILTIN = 0x0010;     // (E2) CALL: nobuiltin
 let ORD_SEQ_CST = 7;
 
 // ABI words.

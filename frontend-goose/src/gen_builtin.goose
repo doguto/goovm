@@ -407,10 +407,203 @@ fn fp_suffix_type(name: const u8[:], dflt: u32) -> u32 {
     return dflt;
 }
 
+// ------------------------------------------------------------ ACLE (F1)
+// The AArch64 builtins of arm_acle.h (and __builtin_arm_ldrex & co.) as clang
+// lowers them: GIR_A64 operations (barriers, hints, system registers, CRC32,
+// exclusives, cls) and generic ones (bit reversal, clz). The system register
+// names are the ones of a small table (ACLE's common registers) or the
+// generic forms o0:op1:CRn:CRm:op2 and S<op0>_<op1>_C<n>_C<m>_<op2>.
+
+// The bytes of the string literal under node a (through its decay), or "".
+fn a64_str_arg(a: u32) -> const u8[:] {
+    var m = a;
+    loop {
+        let nd = nodes[m];
+        if (nd.kind == N_ICAST || nd.kind == N_CAST) && (nd.op == CK_ARRAY2PTR || nd.op == CK_NOOP || nd.op == CK_BITCAST) { m = nd.a; continue; }
+        break;
+    }
+    if nodes[m].kind != N_STRING { return ""; }
+    let sl = strs[nodes[m].a];
+    return strbytes[sl.start..sl.start + sl.len - 1];
+}
+
+let A64_SYSREGS = ["fpcr", "fpsr", "nzcv", "tpidr_el0", "tpidrro_el0", "cntvct_el0", "cntfrq_el0", "cntpct_el0",
+                   "ctr_el0", "dczid_el0", "midr_el1", "mpidr_el1", "revidr_el1", "id_aa64isar0_el1",
+                   "id_aa64isar1_el1", "id_aa64pfr0_el1", "id_aa64mmfr0_el1", "cntvctss_el0", "dit", "ssbs",
+                   "rndr", "rndrrs", "daif", "currentel", "spsel", "pan", "uao", "tco"];
+let A64_SYSREG_ENC: u32[28] = [0xDA20, 0xDA21, 0xDA10, 0xDE82, 0xDE83, 0xDF02, 0xDF00, 0xDF01,
+                              0xD801, 0xD807, 0xC000, 0xC005, 0xC006, 0xC030,
+                              0xC031, 0xC020, 0xC038, 0xDF06, 0xDA15, 0xDA16,
+                              0xD920, 0xD921, 0xDA11, 0xC212, 0xC210, 0xC213, 0xC214, 0xDA17];
+
+fn a64_num(s: const u8[:], i0: i64) -> i64, i64 {
+    var i = i0;
+    var v: i64 = 0;
+    while i < s.len && s[i] >= '0' && s[i] <= '9' { v = v * 10 + (s[i] - '0') as i64; i++; }
+    return v, i;
+}
+
+// The 16-bit MRS / MSR operand of system register name s (op0:op1:CRn:CRm:op2), or -1.
+fn a64_sysreg(s: const u8[:]) -> i64 {
+    var low: u8[>..] = [];
+    for c in s { low.push(if c >= 'A' && c <= 'Z' { c + 32 } else { c }); }
+    for nm, k in A64_SYSREGS {
+        if low[..] == nm { return A64_SYSREG_ENC[k] as i64; }
+    }
+    // o0:op1:CRn:CRm:op2 (as LLVM: the first field is op0's value)
+    var f: i64[5] = [0; 5];
+    var i = 0;
+    var k = 0;
+    var ok = true;
+    while k < 5 {
+        let v, j = a64_num(low[..], i);
+        if j == i { ok = false; break; }
+        f[k] = v;
+        i = j;
+        k++;
+        if k < 5 {
+            if i >= low.len || low[i] != ':' { ok = false; break; }
+            i++;
+        }
+    }
+    if ok && i == low.len { return (f[0] << 14) | (f[1] << 11) | (f[2] << 7) | (f[3] << 3) | f[4]; }
+    // s<op0>_<op1>_c<n>_c<m>_<op2>
+    if low.len > 1 && low[0] == 's' {
+        i = 1;
+        k = 0;
+        ok = true;
+        while k < 5 {
+            if (k == 2 || k == 3) {
+                if i >= low.len || low[i] != 'c' { ok = false; break; }
+                i++;
+            }
+            let v, j = a64_num(low[..], i);
+            if j == i { ok = false; break; }
+            f[k] = v;
+            i = j;
+            k++;
+            if k < 5 {
+                if i >= low.len || low[i] != '_' { ok = false; break; }
+                i++;
+            }
+        }
+        if ok && i == low.len { return (f[0] << 14) | (f[1] << 11) | (f[2] << 7) | (f[3] << 3) | f[4]; }
+    }
+    return -1;
+}
+
+fn a64_op(k: i64, t: u32, at: u32, a: u32, b: u32, c: u32) -> u32 {
+    return emit(GIR_A64, t, k, 0, at, a, b, c);
+}
+
+// An AArch64 builtin (name without __builtin_), or KEEP_CALL when it is not one.
+recursive fn a64_builtin(name: const u8[:], n: u32) -> u32 {
+    let nd = nodes[n];
+    let nargs = nd.c as i64;
+    let rq = unqual(nd.ty);
+    let z = c_i32(0);
+    if name == "arm_nop" || name == "arm_yield" || name == "arm_wfe" || name == "arm_wfi" || name == "arm_sev" ||
+       name == "arm_sevl" {
+        let h = if name == "arm_nop" { 0 } else if name == "arm_yield" { 1 } else if name == "arm_wfe" { 2 }
+                else if name == "arm_wfi" { 3 } else if name == "arm_sev" { 4 } else { 5 };
+        a64_op(GIR_A64_HINT, GIR_T_VOID, GIR_T_I32, c_i32(h), z, z);
+        return NONE;
+    }
+    if name == "arm_dmb" || name == "arm_dsb" || name == "arm_isb" {
+        let ok, v = fold_int(barg(n, 0));
+        let k = if name == "arm_dmb" { GIR_A64_DMB } else if name == "arm_dsb" { GIR_A64_DSB } else { GIR_A64_ISB };
+        a64_op(k, GIR_T_VOID, GIR_T_I32, c_i32(v & 15), z, z);
+        return NONE;
+    }
+    if name == "arm_rbit" || name == "arm_rbit64" {
+        let x = ex_val(barg(n, 0));
+        return emit(GIR_BITREVERSE, vtype(x), 0, 0, vtype(x), x, 0, 0);
+    }
+    if name == "arm_clz" || name == "arm_clz64" {
+        let x = ex_val(barg(n, 0));
+        let t = vtype(x);
+        let r = emit(GIR_CTLZ, t, 0, 0, t, x, 0, 0);
+        return int_cast(r, t, vty(rq), false);
+    }
+    if name == "arm_cls" || name == "arm_cls64" {
+        let x = ex_val(barg(n, 0));
+        return a64_op(GIR_A64_CLS, vty(rq), vtype(x), x, z, z);
+    }
+    if starts_with(name, "arm_crc32") {
+        let c = name.len > 10 && name[9] == 'c';
+        let w = name[name.len - 1];
+        var k = if w == 'b' { GIR_A64_CRC32B } else if w == 'h' { GIR_A64_CRC32H } else if w == 'w' { GIR_A64_CRC32W } else { GIR_A64_CRC32X };
+        if c { k = k + 4; }
+        let a = ex_val(barg(n, 0));
+        var b = ex_val(barg(n, 1));
+        if w == 'b' || w == 'h' { b = int_cast(b, vtype(b), GIR_T_I32, false); }
+        return a64_op(k, GIR_T_I32, GIR_T_I32, a, b, z);
+    }
+    if name == "arm_rsr" || name == "arm_rsr64" || name == "arm_rsrp" || name == "arm_wsr" || name == "arm_wsr64" ||
+       name == "arm_wsrp" {
+        let s = a64_str_arg(barg(n, 0));
+        let enc = a64_sysreg(s);
+        if enc < 0 {
+            err_at(nodes[n].loc, str("goosecc: unknown AArch64 system register \"", s, "\""));
+            return if starts_with(name, "arm_r") { c_zero(vty(rq)) } else { NONE };
+        }
+        if starts_with(name, "arm_r") {
+            let r = a64_op(GIR_A64_MRS, GIR_T_I64, GIR_T_I64, c_i32(enc), z, z);
+            if name == "arm_rsrp" { return ins_inttoptr(r); }
+            return int_cast(r, GIR_T_I64, vty(rq), false);
+        }
+        var v = ex_val(barg(n, 1));
+        if vtype(v) == GIR_T_PTR { v = ins_ptrtoint(v, GIR_T_I64); }
+        else { v = int_cast(v, vtype(v), GIR_T_I64, false); }
+        a64_op(GIR_A64_MSR, GIR_T_VOID, GIR_T_I64, c_i32(enc), v, z);
+        return NONE;
+    }
+    if name == "arm_ldrex" || name == "arm_ldaex" {
+        let p = ex_val(barg(n, 0));
+        let mt = vty(rq);
+        let r = a64_op(if name == "arm_ldrex" { GIR_A64_LDXR } else { GIR_A64_LDAXR }, GIR_T_I64,
+                       if mt == GIR_T_PTR { GIR_T_I64 } else { mt }, p, z, z);
+        if mt == GIR_T_PTR { return ins_inttoptr(r); }
+        return int_cast(r, GIR_T_I64, mt, false);
+    }
+    if name == "arm_strex" || name == "arm_stlex" {
+        var v = ex_val(barg(n, 0));
+        let p = ex_val(barg(n, 1));
+        let mt = vtype(v);
+        if mt == GIR_T_PTR { v = ins_ptrtoint(v, GIR_T_I64); } else { v = int_cast(v, mt, GIR_T_I64, false); }
+        return a64_op(if name == "arm_strex" { GIR_A64_STXR } else { GIR_A64_STLXR }, GIR_T_I32,
+                      if mt == GIR_T_PTR { GIR_T_I64 } else { mt }, v, p, z);
+    }
+    if name == "arm_clrex" {
+        a64_op(GIR_A64_CLREX, GIR_T_VOID, GIR_T_I32, z, z, z);
+        return NONE;
+    }
+    if name == "arm_prefetch" {
+        // a hint: nothing (the operands have no side effects in arm_acle.h's uses)
+        for i in nargs { let x = barg(n, i); if has_side_effects(x) { ex_ignore(x); } }
+        return NONE;
+    }
+    if name == "thread_pointer" {
+        return a64_op(GIR_A64_THREAD_POINTER, GIR_T_PTR, GIR_T_PTR, z, z, z);
+    }
+    if name == "__clear_cache" {
+        // AArch64 needs the cache maintenance (libgcc's __clear_cache, as clang calls it)
+        let a = ex_val(barg(n, 0));
+        let b = ex_val(barg(n, 1));
+        libcall2("__clear_cache", GIR_T_VOID, a, b);
+        return NONE;
+    }
+    return KEEP_CALL;
+}
+
 recursive fn ex_builtin2(full: const u8[:], name: const u8[:], n: u32, dst: u32) -> u32 {
     let nd = nodes[n];
     let nargs = nd.c as i64;
     let rq = unqual(nd.ty);
+    if opt_a64 && (starts_with(name, "arm_") || name == "thread_pointer" || name == "__clear_cache") {
+        let r = a64_builtin(name, n);
+        if r != KEEP_CALL { return r; }
+    }
     if name == "expect" || name == "expect_with_probability" || name == "assume_aligned" || name == "launder" ||
        name == "unpredictable" {
         let v = ex_val(barg(n, 0));

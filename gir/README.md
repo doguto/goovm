@@ -401,6 +401,58 @@ generation and byte-identical objects.
    select. (What it still rejects in LLVM -O2 IR is listed in
    `backend-goose/NOTES.md` §12.)
 
+### Additions in milestone F1: AArch64 (backward compatible)
+
+The AArch64 target (`backend-goose/DESIGN.md` §17) is selected by the
+header; a producer that does not know it keeps producing x86-64 tables,
+and x86-64 objects are byte-identical to the ones before F1.
+
+1. **`GirHeader.target`** (was `reserved[0]`, so 0 from older producers):
+   `GIR_TARGET_X86_64` (0) or `GIR_TARGET_AARCH64` (1): aarch64-linux-gnu,
+   ELF64 `EM_AARCH64`, LP64, AAPCS64 (`goovm-llc` sets it from the module's
+   triple, `goosecc --target=aarch64-linux-gnu` from the option).
+2. **Type `GIR_T_F128`** (12, was reserved): IEEE binary128, AArch64's
+   `long double` (fp128). Arithmetic, comparisons and conversions are
+   libcalls (`__addtf3`, `__lttf2`, `__extenddftf2` ...), passed and returned
+   in a V register. `GIR_T_F80` does not occur on AArch64.
+3. **Opcode `GIR_FMA`** (84): `a * b + c` with one rounding on f32/f64 and
+   their vectors (`llvm.fma`, and `llvm.fmuladd`, which LLVM fuses on
+   AArch64; goosecc emits it where clang contracts, -ffp-contract=on).
+4. **Opcode `GIR_A64`** (85): an AArch64 operation that is not generic IR,
+   `sub` one of `enum GirA64` (gir.h): the NEON operations of
+   `llvm.aarch64.neon.*` (saturating, halving, pairwise, across-lanes,
+   long/narrow, shifts by immediate, conversions, rounding, table lookups,
+   by-element multiplies, dot products), the cryptographic extension, CRC32,
+   exclusives (`ldxr`/`stxr` with the memory type in `aux`), barriers,
+   hints and system registers (`MRS`/`MSR` with the 16-bit encoding as a
+   constant). Operands are value references (`a`, `b`, `c`; an unused one
+   is the constant i32 0); immediates (shift amounts, lanes, fraction bits)
+   are constant operands. `ty` is the result type, `aux` the type of `a`.
+   The structure loads and stores (`ld2`..`ld4`, their lane and replicate
+   forms, `st2`..`st4`, `ld1x2`..) are not opcodes: the exporter expands
+   them into loads, stores and shuffles. The optimizer treats the ordering
+   ones (barriers, hints, system registers, exclusives) as memory writes
+   and the others as pure (`a64_effect` in `backend-goose/gir.goose`).
+5. **AAPCS64 in the ABI words**: on AArch64 the back-end classifies the
+   (already lowered) GIR argument types as LLVM's AArch64 back-end does:
+   homogeneous floating-point / vector aggregates (an array or structure of
+   one FP or vector member type, up to four) in consecutive V registers,
+   `i128` in an even register pair, everything else as in
+   `CC_AArch64_AAPCS`. `GIR_ABI_SRET` is passed in x8. `GIR_ABI_BYVAL`
+   keeps its meaning (a copy in the argument area); clang's AAPCS64
+   lowering never uses it - composites over 16 bytes are passed as a
+   pointer to a caller's copy, which is an ordinary pointer argument.
+6. **`VASTART`** fills a 32-byte AAPCS64 `va_list` (`__stack`, `__gr_top`,
+   `__vr_top`, `__gr_offs`, `__vr_offs`) on AArch64; `va_arg` is lowered by
+   the producer (clang's `EmitAAPCSVAArg`).
+7. **Inline assembly**: on AArch64 `GirAsm` register numbers are x0..x30 =
+   0..30, sp/xzr = 31, v0..v31 = `GIR_ASMREG_V0` (32) .. 63; the exporter
+   binds the AArch64 constraints (`r`, `w`, `x`, `y`, `m`, `Q`, `I`..`N`,
+   `Z`, modifiers `w x b h s d q c n`) and assembles the template with
+   LLVM's MC layer with the function's target features.
+8. **Libcall names**: on AArch64 the long double routines are the `tf`
+   ones (`__multf3`, `__fixtfti` ...), and `__clear_cache` is a real call.
+
 ## Debugging aid
 
 `goovm-llc --dump-gir in.bc -o out.o` prints the tables as text: the header,

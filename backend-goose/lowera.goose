@@ -84,7 +84,7 @@ fn def_from(j: u32, a: u32, ra: u32) -> u32 {
     let r = ra_reuse2(a, ra);
     if r == ra { return r; }
     let rd = ra_def(j);
-    mov_rr64(rd, ra);
+    if rd != ra { mov_rr64(rd, ra); }
     return rd;
 }
 
@@ -107,7 +107,13 @@ fn lower_binop_a(I: Inst, j: u32) {
     var a = I.a;
     var b = I.b;
     let comm = op == GIR_ADD || op == GIR_MUL || op == GIR_AND || op == GIR_OR || op == GIR_XOR;
-    if comm && is_const(a) && !is_const(b) {   // (clang -O0 keeps `4 * x` as written)
+    // (E2) an operand that shares the result's register is the destination
+    let sh = rg_shared(j);
+    if sh != NIL && sh == b && sh != a {
+        a = I.b;
+        b = I.a;
+    }
+    if sh == NIL && comm && is_const(a) && !is_const(b) {   // (clang -O0 keeps `4 * x` as written)
         a = I.b;
         b = I.a;
     }
@@ -151,7 +157,7 @@ fn lower_binop_a(I: Inst, j: u32) {
         return;
     }
     // register (or memory) second operand
-    if comm && ra_reuse(a) == 32 && ra_reuse(b) != 32 {
+    if sh == NIL && comm && ra_reuse(a) == 32 && ra_reuse(b) != 32 {
         let t = a;
         a = b;
         b = t;
@@ -601,6 +607,16 @@ fn lower_fcmp_a(I: Inst, j: u32) {
         ra_set(j, rd, false);
         return;
     }
+    // (E2) x > y ? x : y and the like: maxss / minss in the select
+    if fn_opt && fuse_flags(j) {
+        let k = fminmax_kind(I, M.insts[f_first_inst + j + 1]);
+        if k != 0 {
+            flags_id = j;
+            flags_cc = k;
+            flags_comb = 3;
+            return;
+        }
+    }
     let swap, cc1, cc2, comb = fcmp_plan(p);
     if swap { emit_ucomis(dbl, I.b, I.a); } else { emit_ucomis(dbl, I.a, I.b); }
     if fuse_flags(j) && (comb == 0 || M.insts[f_first_inst + j + 1].op == GIR_CONDBR) {
@@ -691,9 +707,47 @@ fn lower_isfpclass_a(I: Inst, j: u32) {
 
 // ------------------------------------------------------------- select
 
+// (E2) A select of F's operands by F, an FP compare, that x86's maxss /
+// minss compute exactly (NaN and equal operands give the second operand,
+// as select(false) does): 1 max(x, y), 2 min(x, y), 3 min(y, x), 4 max(y,
+// x) (first operand the destination); 0 none.
+fn fminmax_kind(F: Inst, S: Inst) -> u32 {
+    if S.op != GIR_SELECT || S.ty != F.aux || (F.aux != GIR_T_F32 && F.aux != GIR_T_F64) { return 0; }
+    let p: u32 = F.sub;
+    if S.b == F.a && S.c == F.b {
+        if p == F_OGT { return 1; }
+        if p == F_OLT { return 2; }
+    }
+    if S.b == F.b && S.c == F.a {
+        if p == F_OGT { return 3; }
+        if p == F_OLT { return 4; }
+    }
+    return 0;
+}
+fn lower_fminmax(I: Inst, j: u32, k: u32) {
+    let F = M.insts[f_first_inst + flags_id];
+    let dbl = F.aux == GIR_T_F64;
+    let d = if k <= 2 { F.a } else { F.b };
+    let s = if k <= 2 { F.b } else { F.a };
+    let xs = ra_xmm(s);
+    let xd0 = ra_xmm(d);
+    var xd = ra_xreuse(d);
+    if xd != xd0 {
+        xd = ra_xdef(j);
+        movaps_rr(xd, xd0);
+    }
+    sse_arith(if k == 1 || k == 4 { 0x5F } else { 0x5D }, dbl, xd, xs);
+    ra_xset(j, xd);
+}
 fn lower_select_a(I: Inst, j: u32) {
     var cc: u32 = CC_NE;
     let fused = flags_id != RV_NONE && I.a == inst_ref(flags_id);
+    if fused && flags_comb == 3 {
+        let k = flags_cc;
+        lower_fminmax(I, j, k);
+        flags_id = RV_NONE;
+        return;
+    }
     if fused { cc = flags_cc; }
     else {
         let rc = ra_gpr(I.a, true);
@@ -1041,8 +1095,10 @@ fn lower_load_a(I: Inst, j: u32) {
             return;
         }
         if vi[j].last == j + 1 && pend_reg_ok(j + 1) {
-            ra_pend_add(j, ra_addr(I.a));
+            let mp = ra_addr(I.a);
+            ra_pend_add(j, mp);
             ra_carry = true;
+            carry_keep |= m_regs(mp);
             return;
         }
         if rg_on && vi[j].last == j + 1 && vi[j + 1].st & ST_PIN != 0 && pend_reg_ok2(j + 1) {
@@ -1052,6 +1108,7 @@ fn lower_load_a(I: Inst, j: u32) {
             if m_regs(m) & bit(pr) == 0 {
                 ra_pend_add(j, m);
                 ra_carry = true;
+                carry_keep |= m_regs(m);
                 return;
             }
             load_into_def(I, j, m);
@@ -1287,6 +1344,7 @@ fn lower_gep_a(I: Inst, j: u32) {
             vi[j].reg = PADDR;
             paddr_m = m;
             ra_carry = true;
+            carry_keep |= m_regs(m);
             return;
         }
     }
@@ -1324,7 +1382,11 @@ fn lower_fbin_a(I: Inst, j: u32) {
     let op: u32 = I.op;
     var a = I.a;
     var b = I.b;
-    if (op == GIR_FADD || op == GIR_FMUL) && ra_xreuse(a) == 32 && ra_xreuse(b) != 32 {
+    let sh = rg_shared(j);
+    if sh != NIL && sh == b && sh != a {
+        a = I.b;
+        b = I.a;
+    } else if sh == NIL && (op == GIR_FADD || op == GIR_FMUL) && ra_xreuse(a) == 32 && ra_xreuse(b) != 32 {
         a = I.b;
         b = I.a;
     }
@@ -1338,7 +1400,7 @@ fn lower_fbin_a(I: Inst, j: u32) {
     var xd = ra_xreuse(a);
     if xd != xa {
         xd = ra_xdef(j);
-        movaps_rr(xd, xa);
+        if xd != xa { movaps_rr(xd, xa); }
     }
     if okm { sse_arith_m(sse_op(op), dbl, xd, mb); }
     else if cm { sse_arith_m(sse_op(op), dbl, xd, const_mem(gir_idx(b))); }
@@ -1468,11 +1530,18 @@ fn lower_vbin_a(I: Inst, j: u32) {
     let lfp = cls_of(lt) == C_FP;
     let lb = bits_of(lt);
     let op: u32 = I.op;
+    // (E2, lowerv.goose)
+    if op == GIR_MUL && lb == 32 { lower_vmul32(I, j); return; }
+    if op == GIR_SHL || op == GIR_LSHR || op == GIR_ASHR { lower_vshift(I, j, lb); return; }
     var a = I.a;
     var b = I.b;
     let comm = op == GIR_FADD || op == GIR_FMUL || op == GIR_ADD || op == GIR_MUL || op == GIR_AND
                || op == GIR_OR || op == GIR_XOR;
-    if comm && ra_xreuse(a) == 32 && ra_xreuse(b) != 32 {
+    let sh = rg_shared(j);
+    if sh != NIL && sh == b && sh != a {
+        a = I.b;
+        b = I.a;
+    } else if sh == NIL && comm && ra_xreuse(a) == 32 && ra_xreuse(b) != 32 {
         a = I.b;
         b = I.a;
     }
@@ -1481,7 +1550,7 @@ fn lower_vbin_a(I: Inst, j: u32) {
     var xd = ra_xreuse(a);
     if xd != xa {
         xd = ra_xdef(j);
-        movaps_rr(xd, xa);
+        if xd != xa { movaps_rr(xd, xa); }
     }
     if lfp {
         sse_packed(sse_op(op), lb == 64, xd, xb);

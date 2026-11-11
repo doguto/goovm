@@ -280,8 +280,18 @@ enum GirOp {
                        /*   llvm.is.constant, __builtin_constant_p): the     */
                        /*   middle-end folds it after inlining; never reaches */
                        /*   code generation                                  */
+    GIR_OBJSIZE,       /* a = b = c = a pointer; ty = i64 or i32; sub =      */
+                       /*   GIR_OBJSIZE_* : the bytes from the pointer to    */
+                       /*   the end of its object (LLVM llvm.objectsize,     */
+                       /*   __builtin_object_size): the middle-end folds it  */
+                       /*   once the object is known, else it is unknown (-1, */
+                       /*   0 for MIN); never reaches code generation        */
     GIR_OP_COUNT
 };
+
+#define GIR_OBJSIZE_MIN      1u   /* the minimum (unknown: 0), else the maximum (-1) */
+#define GIR_OBJSIZE_NULLUNK  2u   /* null is of unknown size (else 0 bytes)          */
+#define GIR_OBJSIZE_DYNAMIC  4u   /* may be computed at run time                     */
 
 enum GirPred {         /* ICMP predicates */
     GIR_EQ = 0, GIR_NE, GIR_UGT, GIR_UGE, GIR_ULT, GIR_ULE,
@@ -410,9 +420,10 @@ enum GirA64 {
 #define GIR_IF_CALL_NOWRITE  0x8000u  /* the call writes no memory (LLVM readonly/readnone, */
                                       /*   memory(read)); not on invokes or variadic calls */
 #define GIR_IF_CALL_NOREAD   0x0040u  /* with NOWRITE: it reads none either (memory(none)) */
+#define GIR_IF_CALL_NOBUILTIN 0x0010u /* nobuiltin (-fno-builtin): not a library function */
 #define GIR_IF_CALL_PURE     0x0020u  /* nounwind and willreturn: with NOWRITE, a call      */
                                       /*   whose result is unused may be deleted           */
-                                      /* (0x0020 and 0x0040 are cmpxchg's failure ordering */
+                                      /* (0x0010..0x0040 are cmpxchg's failure ordering    */
                                       /*   bits on other instructions)                     */
 
 /* ABI words of CALL arguments and Func arguments. 0 = passed by value as
