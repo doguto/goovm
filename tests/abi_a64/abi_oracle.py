@@ -20,8 +20,15 @@ compilers (caller, callee) out of
 builds the two objects, links them with clang and runs the program under
 qemu-aarch64; the output must be the clang/clang output.
 
+With --cxx the program is C++ (the functions extern "C"), goovm-cc is left
+out and C++ classes with bases are added (HFAs split across base and
+derived, empty bases, non-HFA bases, several bases, an over-aligned base);
+an empty class is passed as one byte there. (C++ leaves out the vector types
+and the variadic functions: goosecc's C++ has no vector_size types and no
+AArch64 va_list yet.)
+
 usage: tests/abi_a64/abi_oracle.py [--goovm-llc P] [--goovm-cc P] [--goosecc P]
-                                   [--work DIR] [--o1] [--keep]
+                                   [--work DIR] [--o1] [--cxx] [--comps LIST]
 """
 import argparse, itertools, os, subprocess, sys
 
@@ -99,6 +106,31 @@ struct("Pk", "struct __attribute__((packed)) { char a; int b; short c; }", [(".a
 struct("Al", "struct __attribute__((aligned(16))) { long a; }", [(".a", "i")])
 struct("Emp", "struct { }", [])
 
+# C++ classes with bases (--cxx): bases are classified with the class (an HFA
+# split across base and derived, empty bases, a base that is not floating
+# point, several bases, an over-aligned base)
+CXX_TYPES = []
+
+
+def cxx(name, body, members):
+    CXX_TYPES.append((name, body, name, members))
+
+
+cxx("D0", "struct B0 {}; struct D0 : B0 {};", [])
+cxx("DF", "struct BF { float a; }; struct DF : BF { float b; };", [(".a", "f"), (".b", "f")])
+cxx("DFI", "struct BI { int a; }; struct DFI : BI { float b; };", [(".a", "i"), (".b", "f")])
+cxx("DMix", "struct BD { double a; }; struct DMix : BD { float b; };", [(".a", "f"), (".b", "f")])
+cxx("DE", "struct E0 {}; struct DE : E0 { double a, b; };", [(".a", "f"), (".b", "f")])
+cxx("D4", "struct B2 { float x, y; }; struct D4 : B2 { float z, w; };", [(f".{x}", "f") for x in "xyzw"])
+cxx("D5", "struct D5 : B2 { float z, w, v; };", [(f".{x}", "f") for x in "xyzwv"])
+cxx("MM", "struct BG { float g; }; struct MM : BF, BG { float c; };", [(".a", "f"), (".g", "f"), (".c", "f")])
+cxx("DEE", "struct E1 {}; struct DEE : E0, E1 { float a; };", [(".a", "f")])
+cxx("BL", "struct BL : BI { long l; };", [(".a", "i"), (".l", "i")])
+cxx("DA", "struct alignas(16) BA { long a; }; struct DA : BA { long b; };", [(".a", "i"), (".b", "i")])
+cxx("DDd", "struct BDd { double a; }; struct DDd : BDd { double b[3]; };", [(".a", "f")] + [(f".b[{k}]", "f") for k in range(3)])
+cxx("DH", "struct BH { _Float16 a; }; struct DH : BH { _Float16 b, c; };", [(".a", "f"), (".b", "f"), (".c", "f")])
+cxx("DEm", "struct DEm : B0, E0 {};", [])
+
 KIND_TYPES = {"i": "long long", "f": "long double"}
 
 
@@ -130,7 +162,7 @@ def hash_expr(acc, kind):
         return [f"h = h * 1000003u + (unsigned long long)(long long)(__real__ ({acc}) * 64);",
                 f"h = h * 1000003u + (unsigned long long)(long long)(__imag__ ({acc}) * 64);"]
     n = {"v8": 8, "v16": 4, "v32": 8, "v3": 3, "v2s": 2}[kind]
-    return [f"for (int k = 0; k < {n}; k++) h = h * 1000003u + (unsigned long long)(long long)(({acc})[k] * 4);"]
+    return [f"for (int k = 0; k < {n}; k++) h = h * 1000003u + (unsigned long long)(long long)((({ELT[kind]} *)&({acc}))[k] * 4);"]
 
 
 def setter(acc, kind, seed):
@@ -145,13 +177,26 @@ def setter(acc, kind, seed):
     if kind == "cf":
         return [f"__real__ {acc} = seed + {seed} + 0.5; __imag__ {acc} = -seed - {seed};"]
     n = {"v8": 8, "v16": 4, "v32": 8, "v3": 3, "v2s": 2}[kind]
-    return [f"for (int k = 0; k < {n}; k++) {acc}[k] = seed + {seed} + k;"]
+    return [f"for (int k = 0; k < {n}; k++) (({ELT[kind]} *)&({acc}))[k] = seed + {seed} + k;"]
 
 
-def gen(dirn):
-    callee = [defs(), "char gbuf[64];"]
-    caller = [defs(), "extern char gbuf[64];"]
-    for name, _, ct, members in TYPES:
+VEC_KINDS = ("v8", "v16", "v32", "v3", "v2s")
+
+
+# vector lanes through an element pointer (goosecc's C++ has no vector subscripts)
+ELT = {"v8": "unsigned char", "v16": "float", "v32": "float", "v3": "float", "v2s": "short"}
+
+
+def gen(dirn, cxx_mode=False):
+    types = TYPES + (CXX_TYPES if cxx_mode else [])
+    if cxx_mode:
+        # (no vector types: goosecc's C++ does not have vector_size types yet)
+        types = [(n, d, "bool" if ct == "_Bool" else ct, m) for n, d, ct, m in types
+                 if not any(k in VEC_KINDS for _, k in m)]
+    d = defs() + ("\n".join(b for _, b, _, _ in CXX_TYPES) + "\nextern \"C\" {\n" if cxx_mode else "")
+    callee = [d, "char gbuf[64];"]
+    caller = [d, "extern char gbuf[64];"]
+    for name, _, ct, members in types:
         # hash_T, make_T (in both units: static)
         for out in (callee, caller):
             out.append(f"static unsigned long long hash_{name}({ct} v) {{ unsigned long long h = 7; (void)v;")
@@ -160,16 +205,20 @@ def gen(dirn):
             out.append("  return h; }")
             out.append(f"static {ct} make_{name}(int seed) {{ {ct} v; memset(&v, 0, sizeof v); (void)seed;")
             for k, (acc, kind) in enumerate(members):
-                out += ["  " + x for x in setter("v" + acc, kind, k + 1)]
+                st = setter("v" + acc, kind, k + 1)
+                if ct.startswith("enum"):
+                    st = [f"v = ({ct})(seed * 37 + {k + 1});"]
+                out += ["  " + x for x in st]
             out.append("  return v; }")
-        # callee functions
-        callee.append(f"""
-{ct} ret_{name}(int seed) {{ return make_{name}(seed); }}
-unsigned long long args_{name}({ct} a, int x, {ct} b, double y, {ct} c) {{
-  return hash_{name}(a) * 3 + hash_{name}(b) * 5 + hash_{name}(c) * 7 + x + (long long)(y * 2); }}
-unsigned long long stack_{name}(long r0, long r1, long r2, long r3, long r4, long r5, long r6,
-    double f0, double f1, double f2, double f3, double f4, double f5, double f6, {ct} a, char z, {ct} b) {{
-  return hash_{name}(a) * 11 + hash_{name}(b) * 13 + z + r0 + r6 + (long long)(f0 + f6); }}
+        # callee functions; the variadic ones (C++: stubs: classes with bases
+        # are not POD for va_arg, and goosecc's C++ does not take AArch64's
+        # va_list yet)
+        if cxx_mode:
+            callee.append(f"""
+unsigned long long va_{name}(int n, ...) {{ return 0; }}
+unsigned long long vafwd_{name}(int n, ...) {{ return 0; }}""")
+        else:
+            callee.append(f"""
 unsigned long long va_{name}(int n, ...) {{
   va_list ap; va_start(ap, n);
   unsigned long long h = 0;
@@ -183,6 +232,14 @@ unsigned long long vafwd_{name}(int n, ...) {{
   va_list ap, aq; va_start(ap, n); va_copy(aq, ap);
   unsigned long long h = vl_{name}(n, ap) + 3 * vl_{name}(n, aq);
   va_end(aq); va_end(ap); return h; }}
+""")
+        callee.append(f"""
+{ct} ret_{name}(int seed) {{ return make_{name}(seed); }}
+unsigned long long args_{name}({ct} a, int x, {ct} b, double y, {ct} c) {{
+  return hash_{name}(a) * 3 + hash_{name}(b) * 5 + hash_{name}(c) * 7 + x + (long long)(y * 2); }}
+unsigned long long stack_{name}(long r0, long r1, long r2, long r3, long r4, long r5, long r6,
+    double f0, double f1, double f2, double f3, double f4, double f5, double f6, {ct} a, char z, {ct} b) {{
+  return hash_{name}(a) * 11 + hash_{name}(b) * 13 + z + r0 + r6 + (long long)(f0 + f6); }}
 unsigned long long cb_{name}({ct} (*f)(int, {ct}), {ct} a) {{ return hash_{name}(f(5, a)); }}
 """)
         caller.append(f"""
@@ -199,16 +256,20 @@ static void test_{name}(void) {{
   printf("{name} ret %llx\\n", hash_{name}(ret_{name}(4)));
   printf("{name} args %llx\\n", args_{name}(a, 9, b, 2.5, c));
   printf("{name} stack %llx\\n", stack_{name}(1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7, a, 'z', b));
-  printf("{name} va %llx\\n", va_{name}(3, a, 10, b, 20, c, 30));
-  printf("{name} vafwd %llx\\n", vafwd_{name}(3, a, b, c));
+  printf("{name} va %llx\\n", {"va_" + name + "(0)" if cxx_mode else "va_" + name + "(3, a, 10, b, 20, c, 30)"});
+  printf("{name} vafwd %llx\\n", {"vafwd_" + name + "(0)" if cxx_mode else "vafwd_" + name + "(3, a, b, c)"});
   printf("{name} cb %llx\\n", cb_{name}(back_{name}, b));
 }}""")
+    if cxx_mode:
+        callee.append("}")
+        caller.append("}")
     caller.append("int main(void) {")
-    for name, _, _, _ in TYPES:
+    for name, _, _, _ in types:
         caller.append(f"  test_{name}();")
     caller.append("  return 0; }")
-    open(os.path.join(dirn, "callee.c"), "w").write("\n".join(callee) + "\n")
-    open(os.path.join(dirn, "caller.c"), "w").write("\n".join(caller) + "\n")
+    ext = ".cpp" if cxx_mode else ".c"
+    open(os.path.join(dirn, "callee" + ext), "w").write("\n".join(callee) + "\n")
+    open(os.path.join(dirn, "caller" + ext), "w").write("\n".join(caller) + "\n")
 
 
 def run(cmd, **kw):
@@ -218,6 +279,11 @@ def run(cmd, **kw):
 def build(comp, src, obj, args):
     if comp == "clang":
         r = run(["clang-20"] + T + ["-O0", "-w", "-c", src, "-o", obj])
+    elif comp == "llc" and src.endswith(".cpp"):
+        bc = obj + ".bc"
+        r = run(["clang-20"] + T + ["-O0", "-w", "-c", "-emit-llvm", src, "-o", bc])
+        if r.returncode == 0:
+            r = run([args.goovm_llc] + (["-O1"] if args.o1 else []) + [bc, "-o", obj])
     elif comp == "llc":
         bc = obj + ".bc"
         r = run(["clang-20"] + T + ["-O0", "-w", "-c", "-emit-llvm", src, "-o", bc])
@@ -240,10 +306,12 @@ def main():
     ap.add_argument("--work", default="/tmp/abi_a64")
     ap.add_argument("--o1", action="store_true", help="goovm-llc -O1")
     ap.add_argument("--comps", default="", help="comma-separated subset of clang,llc,cc,gcc")
+    ap.add_argument("--cxx", action="store_true", help="C++ (extern \"C\" functions; adds classes with bases; no goovm-cc)")
     a = ap.parse_args()
     os.makedirs(a.work, exist_ok=True)
-    gen(a.work)
-    comps = ["clang", "llc", "cc"] + (["gcc"] if a.goosecc else [])
+    gen(a.work, a.cxx)
+    ext = ".cpp" if a.cxx else ".c"
+    comps = ["clang", "llc"] + ([] if a.cxx else ["cc"]) + (["gcc"] if a.goosecc else [])
     if a.comps:
         comps = a.comps.split(",")
     objs = {}
@@ -251,7 +319,7 @@ def main():
     for c in comps:
         for part in ("caller", "callee"):
             o = os.path.join(a.work, f"{part}.{c}.o")
-            err = build(c, os.path.join(a.work, part + ".c"), o, a)
+            err = build(c, os.path.join(a.work, part + ext), o, a)
             if err:
                 print(f"BUILD FAIL {c} {part}:\n{err}")
                 fails += 1
@@ -262,7 +330,7 @@ def main():
         if (x, "caller") not in objs or (y, "callee") not in objs:
             continue
         exe = os.path.join(a.work, f"t.{x}.{y}")
-        r = run(["clang-20"] + T + ["-fuse-ld=lld", objs[(x, "caller")], objs[(y, "callee")], "-o", exe])
+        r = run(["clang++-20" if a.cxx else "clang-20"] + T + ["-fuse-ld=lld", objs[(x, "caller")], objs[(y, "callee")], "-o", exe])
         if r.returncode:
             print(f"LINK FAIL {x}/{y}: {r.stderr.decode()[-500:]}")
             fails += 1
