@@ -766,6 +766,7 @@ fn rg_note_reloads(g: u32) {
 }
 // The instructions whose result may share a dying operand's register.
 fn rg_share_op(I: Inst) -> bool {
+    if tgt_a64 { return false; }    // (F1: three-address: the AArch64 allocator does not share)
     let op: u32 = I.op;
     let c = rc_of(I.ty);
     if c == RC_GPR {
