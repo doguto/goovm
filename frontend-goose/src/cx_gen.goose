@@ -315,10 +315,16 @@ var cg_extend = false;
 // A temporary of class t initialized from e (a class prvalue, or what
 // constructs one): N_XTEMP, an lvalue.
 recursive fn xtemp_of(e: u32, t: u32, loc: u32) -> u32 {
+    if conv_depth > 400 {
+        if cg_debug { conv_recursion_note(t, e); }
+        return opaque_node(loc);
+    }
     let s = csym(SK_VAR, intern("__tmp"), unqual(t), loc);
     syms[s].flags = SF_COMPLIT;
     syms[s].scope = 1;
+    conv_depth++;
     let init = init_into(n_var(s, loc), e, loc);
+    conv_depth--;
     if init == 0 { return opaque_node(loc); }
     var d: i64 = -1;
     if is_record(t) { let x = class_dtor(rec_of(t)); if x >= 0 { d = complete_sym(x); } }
@@ -326,6 +332,11 @@ recursive fn xtemp_of(e: u32, t: u32, loc: u32) -> u32 {
     nodes[n].flags = NF_LVALUE;
     if d >= 0 { n_xtemps++; }
     return n;
+}
+
+// Is e a call returning a class prvalue in registers?
+fn reg_class_call(e: u32) -> bool {
+    return nodes[e].kind as i64 == N_CALL && !is_lvalue(e) && is_record(nodes[e].ty) && !is_opaque(nodes[e].ty);
 }
 
 // Is e a class prvalue built in place (by a constructor or a call
@@ -341,6 +352,13 @@ fn is_class_prv(e: u32) -> bool {
 
 // e converted to parameter type pt (C++ types; the result has the
 // lowered type), or an opaque node.
+var conv_depth: i64 = 0;    // nested temporaries (a guard against a constructor loop)
+fn conv_recursion_note(ct: u32, e: u32) {
+    var f: i64 = -1;
+    if nodes[e].kind as i64 == N_CTOR { f = nodes[e].a as i64; }
+    write_stderr(str("xtemp_of: recursion at ", tname(ct), " from ", tname(nodes[e].ty), " kind ", nodes[e].kind, " op ", nodes[e].op, " ctor ", if f > 0 { ident_text(syms[f].name as i64) } else { "-" }, " c ", nodes[e].c, "\n"));
+    if nodes[e].kind as i64 == N_CTOR && nodes[e].c > 0 { let a = nlist[nodes[e].v] as u32; write_stderr(str("  arg kind ", nodes[a].kind, " type ", tname(nodes[a].ty), " lv ", is_lvalue(a), "\n")); }
+}
 recursive fn conv_arg(e: u32, pt: u32, loc: u32) -> u32 {
     if is_opq(e) && nodes[e].kind as i64 != N_FUNCREF && nodes[e].kind as i64 != N_INITBRACE { return opaque_node(loc); }
     if is_opaque(pt) { return opaque_node(loc); }
@@ -391,7 +409,7 @@ recursive fn conv_arg(e: u32, pt: u32, loc: u32) -> u32 {
 // derived from it: sliced), or a converting constructor.
 recursive fn class_rv(e: u32, t: u32, loc: u32) -> u32 {
     let k = nodes[e].kind as i64;
-    if is_class_prv(e) && unqual(nodes[e].ty) == unqual(t) { return e; }
+    if (is_class_prv(e) || reg_class_call(e)) && unqual(nodes[e].ty) == unqual(t) { return e; }
     if k == N_INITBRACE {
         if c_initializable(t) {
             let bi = brace_init(t, e, loc);
@@ -424,7 +442,14 @@ recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
     if is_record(t) {
         let r = rec_of(t);
         if is_opaque(t) { return opaque_node(loc); }
-        if !class_trivial_copy(r) { return class_rv(e, t, loc); }
+        if !class_trivial_copy(r) {
+            let c = class_rv(e, t, loc);
+            // a value passed or returned in registers (trivial for calls:
+            // a reference member, a defaulted copy, a non-trivial
+            // assignment): constructed in a temporary, then read
+            if !pass_indirect(t) && !is_opq(c) && nodes[c].kind as i64 == N_CTOR { return ctor_value(c, loc); }
+            return c;
+        }
         if nodes[e].kind as i64 == N_CTOR { return ctor_value(e, loc); }
         if nodes[e].kind as i64 == N_INITBRACE {
             let bi = brace_init(t, e, loc);
@@ -471,6 +496,7 @@ recursive fn conv_value(e: u32, t: u32, loc: u32) -> u32 {
     }
     if kind_of(nodes[e].ty) == TY_NULLPTR {
         if is_pointer(t) { return icast(e, CK_NULL2PTR, lower_ty(t)); }
+        if kind_of(t) == TY_NULLPTR { return icast(e, CK_NULL2PTR, t_voidptr); }
         if kind_of(t) == TY_BOOL { return int_node(0, t_bool, loc); }
         return opaque_node(loc);
     }
@@ -719,6 +745,11 @@ recursive fn init_into(dst: u32, e: u32, loc: u32) -> u32 {
         let bi = brace_init(t, e, loc);
         if bi == 0 { return 0; }
         return node(N_ASSIGN, 0, unqual(t), dst as i64, compound_value(bi, unqual(t), loc) as i64, 0, loc);
+    }
+    // a call returning the class in registers (trivial for calls, whatever
+    // its assignment): its value stored
+    if reg_class_call(e) && unqual(nodes[e].ty) == unqual(t) {
+        return node(N_ASSIGN, 0, unqual(t), dst as i64, e as i64, 0, loc);
     }
     if is_record(t) && ((k == N_CTOR && nodes[e].op == 2) || (k == N_INITBRACE && is_aggregate_class(rec_of(t)))) {
         return agg_init(dst, nodes[e].v, nodes[e].c as i64, loc);
@@ -1046,10 +1077,20 @@ recursive fn default_arg(f: i64, p: i64) -> u32 {
     let s_class = cur_class;
     cur_scope = if cxs[f].dscope >= 0 { cxs[f].dscope as i64 } else { cur_scope };
     cur_class = -1;
+    // a function template specialization's: its template parameters bound
+    let fsp = cxs[f].flags2 & CF2_FSPEC != 0 && cxs[f].tmpl >= 0 && cxs[f].targs >= 0;
+    if fsp {
+        push_scope();
+        let t = cxs[f].tmpl as i64;
+        let dt, outer = fspec_def_source(t);
+        if outer >= 0 && tmpls[dt].hdr_outer >= 0 { bind_header(tmpls[dt].hdr_outer as i64, outer); }
+        bind_header(t, cxs[f].targs);
+    }
     pc = cxs[p].body as i64;
     gt_pos = -1;
     var e: u32 = 0;
     if at(TK_L_BRACE) { e = parse_braced(); } else { e = parse_assign_cx(); }
+    if fsp { pop_scope(); }
     cur_scope = s_scope;
     cur_class = s_class;
     restore(sv);
