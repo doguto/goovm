@@ -1046,10 +1046,20 @@ recursive fn default_arg(f: i64, p: i64) -> u32 {
     let s_class = cur_class;
     cur_scope = if cxs[f].dscope >= 0 { cxs[f].dscope as i64 } else { cur_scope };
     cur_class = -1;
+    // a function template specialization's: its template parameters bound
+    let fsp = cxs[f].flags2 & CF2_FSPEC != 0 && cxs[f].tmpl >= 0 && cxs[f].targs >= 0;
+    if fsp {
+        push_scope();
+        let t = cxs[f].tmpl as i64;
+        let dt, outer = fspec_def_source(t);
+        if outer >= 0 && tmpls[dt].hdr_outer >= 0 { bind_header(tmpls[dt].hdr_outer as i64, outer); }
+        bind_header(t, cxs[f].targs);
+    }
     pc = cxs[p].body as i64;
     gt_pos = -1;
     var e: u32 = 0;
     if at(TK_L_BRACE) { e = parse_braced(); } else { e = parse_assign_cx(); }
+    if fsp { pop_scope(); }
     cur_scope = s_scope;
     cur_class = s_class;
     restore(sv);
