@@ -110,7 +110,13 @@ fn gv_lget(e: u32, p: u32, ps: u32, pt: u32) -> u32 {
     let s: i64 = gv_lpos[x];
     if gv_wlog.len - s > GV_SCAN { return NIL; }
     for k in s..gv_wlog.len {
-        if aa_clobbers(gv_wlog[k], p, ps, pt) { return NIL; }
+        // (bit 31: a write of the loop whose header this walk passed, maybe
+        // of an earlier iteration)
+        let w = gv_wlog[k];
+        aa_cross = w & 0x80000000 != 0;
+        let c = aa_clobbers(w & 0x7FFFFFFF, p, ps, pt);
+        aa_cross = false;
+        if c { return NIL; }
     }
     return gv_lval[x];
 }
@@ -271,6 +277,7 @@ fn gvn() -> bool {
     resolve_all();
     gv_grow();
     aa_prepare();
+    aa_cross = false;
     gv_alias();
     let n = o_ins.len;
     gv_lval.clear();
@@ -340,6 +347,7 @@ fn gvn() -> bool {
             c = dt_next[c];
         }
     }
+    aa_cross = true;
     return gv_changed;
 }
 
@@ -360,6 +368,11 @@ fn gv_region_writes(b: u32) -> bool {
     gv_rwl.clear();
     let w0 = gv_wlog.len;
     var nblk: i64 = 0;
+    // (a loop header: the region holds the loop's body, earlier iterations)
+    var cross: u32 = 0;
+    for k in p_start[b]..p_start[b + 1] {
+        if rpo_num[p_list[k]] != NIL && dominates(b, p_list[k]) { cross = 0x80000000; }
+    }
     for k in p_start[b]..p_start[b + 1] {
         let p = p_list[k];
         if p == d || rpo_num[p] == NIL || gv_rmark[p] == ep { continue; }
@@ -372,7 +385,7 @@ fn gv_region_writes(b: u32) -> bool {
         if nblk > GV_RBLOCKS { break; }
         var i = b_first[x];
         while i != NIL {
-            if writes_mem(o_ins[i]) { gv_wlog.push(i); }
+            if writes_mem(o_ins[i]) { gv_wlog.push(i | cross); }
             i = o_nxt[i];
         }
         if gv_wlog.len - w0 > GV_RWRITES { break; }

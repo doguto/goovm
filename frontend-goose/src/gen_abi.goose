@@ -138,6 +138,17 @@ recursive fn classify(q: u32, off: i64) -> i64, i64 {
     if k == TY_VOID { return lo, hi; }
     if k == TY_INT128 || k == TY_UINT128 { return CL_INT, CL_INT; }
     if (k >= TY_BOOL && k <= TY_ULLONG) || k == TY_POINTER { return set_cur(off, lo, hi, CL_INT); }
+    // D3: C++ members: references and std::nullptr_t are pointers, a data
+    // member pointer a long, a member function pointer { ptr, adj }
+    if k == TY_LREF || k == TY_RREF || k == TY_NULLPTR { return set_cur(off, lo, hi, CL_INT); }
+    if k == TY_MEMPTR {
+        if is_func(tbase(q)) {
+            if off % 64 != 0 { return set_cur(off, lo, hi, CL_MEM); }
+            if off == 0 { return CL_INT, CL_INT; }
+            return set_cur(off, lo, hi, CL_MEM);
+        }
+        return set_cur(off, lo, hi, CL_INT);
+    }
     if k == TY_ENUM { return classify(enum_underlying(q), off); }
     if k == TY_FLOAT || k == TY_DOUBLE || k == TY_FLOAT16 || k == TY_BF16 { return set_cur(off, lo, hi, CL_SSE); }
     if k == TY_FLOAT128 { return CL_SSE, CL_SSEUP; }
@@ -214,6 +225,19 @@ recursive fn classify(q: u32, off: i64) -> i64, i64 {
         if is_flex_record(q) { return set_cur(off, lo, hi, CL_MEM); }
         let r = rec_of(q);
         let is_union = k == TY_UNION;
+        // D3: a C++ class's (non-virtual) bases are classified first, at their
+        // offsets (a class with virtual bases is passed by invisible reference)
+        if opt_cxx && r < cx::crecs.len {
+            let cr = cx::crecs[r];
+            for i in cr.nbases {
+                let b = cx::cbases[cr.bases + i];
+                if b.flags & cx::BF_VIRTUAL != 0 { return set_cur(off, lo, hi, CL_MEM); }
+                let bl, bh = classify(b.ty, off + b.offset * 8);
+                lo = cl_merge(lo, bl);
+                hi = cl_merge(hi, bh);
+                if lo == CL_MEM || hi == CL_MEM { return post_merge(size, lo, hi); }
+            }
+        }
         let first = records[r].first as i64;
         let cnt = records[r].count as i64;
         for i in first..first + cnt {
