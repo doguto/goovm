@@ -34,7 +34,41 @@ fn fold_branches() -> bool {
         } else if I.op == GIR_SWITCH {
             let c = res(I.a);
             let k, v = ci(c);
-            if !k && I.c != 0 { continue; }
+            if !k && I.c != 0 {
+                // (E2) cases that go to the default are dropped; one case
+                // left: a conditional branch (LLVM's SimplifyCFG)
+                let d = o_ops[I.b];
+                var w: u32 = 0;
+                for q in 0..I.c {
+                    let s = o_ops[I.b + 2 + 2 * q];
+                    if s == d {
+                        phi_remove_one(d, b);
+                        o_cfg_ok = false;
+                        any = true;
+                        continue;
+                    }
+                    o_ops[I.b + 1 + 2 * w] = o_ops[I.b + 1 + 2 * q];
+                    o_ops[I.b + 2 + 2 * w] = s;
+                    w++;
+                }
+                o_ins[t].c = w;
+                if w == 1 {
+                    let e = new_inst(Inst { op: GIR_ICMP as! u8, sub: GIR_EQ as! u8, flags: 0, ty: GIR_T_I1,
+                                            aux: otype(c) as! u16, a: c, b: o_ops[I.b + 1], c: 0, dbg: I.dbg });
+                    link_before(t, e);
+                    let ct = o_ops[I.b + 2];
+                    o_ins[t].op = GIR_CONDBR as! u8;
+                    o_ins[t].a = e;
+                    o_ins[t].b = ct;
+                    o_ins[t].c = d;
+                    o_ins[t].sub = 0;
+                    o_ins[t].aux = 0;
+                    o_cfg_ok = false;
+                    any = true;
+                }
+                if w == 0 { to_br(t, d); }
+                continue;
+            }
             var taken = o_ops[I.b];
             if k {
                 for q in 0..I.c {
@@ -76,7 +110,7 @@ fn merge_blocks() -> bool {
             let t = b_last[b];
             if t == NIL || o_ins[t].op != GIR_BR || block_invoke(b) != NIL { break; }
             let s = o_ins[t].a;
-            if s == b || s == 0 || b_fl[s] & (BF_LP | BF_DEAD) != 0 || p_start[s + 1] - p_start[s] != 1 { break; }
+            if s == b || s == 0 || b_fl[s] & (BF_LP | BF_DEAD | BF_ADDR) != 0 || p_start[s + 1] - p_start[s] != 1 { break; }
             // PHIs of a block with one predecessor are their value
             var i = b_first[s];
             while i != NIL && o_ins[i].op == GIR_PHI {
@@ -119,7 +153,7 @@ fn forward_empty() -> bool {
     fe_epoch++;
     for e in rpo {
         // (a block that gained predecessors this round has a stale predecessor list)
-        if e == 0 || b_fl[e] & (BF_LP | BF_DEAD) != 0 || fe_dirty[e] == fe_epoch { continue; }
+        if e == 0 || b_fl[e] & (BF_LP | BF_DEAD | BF_ADDR) != 0 || fe_dirty[e] == fe_epoch { continue; }
         let t = b_first[e];
         if t == NIL || t != b_last[e] || o_ins[t].op != GIR_BR { continue; }
         let tg = o_ins[t].a;
@@ -210,7 +244,7 @@ fn spec_op(I: Inst) -> bool {
 // The number of instructions block b (only reached from a) would speculate,
 // or NIL if it cannot be.
 fn spec_block(b: u32, a: u32) -> u32 {
-    if b == a || b == 0 || b_fl[b] & (BF_LP | BF_DEAD) != 0 { return NIL; }
+    if b == a || b == 0 || b_fl[b] & (BF_LP | BF_DEAD | BF_ADDR) != 0 { return NIL; }
     if p_start[b + 1] - p_start[b] != 1 || p_list[p_start[b]] != a { return NIL; }
     let t = b_last[b];
     if t == NIL || o_ins[t].op != GIR_BR { return NIL; }
@@ -303,7 +337,12 @@ fn fold_selects() -> bool {
             let vy = phi_in(i, py);
             if vx == NIL || vy == NIL { ok = false; break; }
             if res(vx) != res(vy) {
-                if !int_ty(o_ins[i].ty) || bits_of(o_ins[i].ty) > 64 { ok = false; break; }
+                let pt = o_ins[i].ty;
+                // (E2) FP values when the condition is an FP compare (a
+                // select of its operands is maxss / minss)
+                let c0 = res(o_ins[t].a);
+                let fp = (pt == GIR_T_F32 || pt == GIR_T_F64) && is_inst(c0) && o_ins[c0].op == GIR_FCMP;
+                if !(int_ty(pt) && bits_of(pt) <= 64) && !fp { ok = false; break; }
                 ns++;
             }
             i = o_nxt[i];
@@ -313,7 +352,8 @@ fn fold_selects() -> bool {
         // so that the compare sets the flags for the select)
         let c = res(o_ins[t].a);
         var at = t;
-        if is_inst(c) && o_nxt[c] == t && o_ins[c].op == GIR_ICMP && !spec_uses(x, px != a, c) && !spec_uses(y, py != a, c) {
+        if is_inst(c) && o_nxt[c] == t && (o_ins[c].op == GIR_ICMP || o_ins[c].op == GIR_FCMP) && !spec_uses(x, px != a, c)
+           && !spec_uses(y, py != a, c) {
             at = c;
         }
         if px != a { spec_hoist(x, at); }
@@ -441,7 +481,7 @@ fn thread_phis() -> bool {
 }
 // P if block m is a candidate (only PHIs and a condbr on one of them), else NIL.
 fn thread_cand(m: u32) -> u32 {
-    if m == 0 || b_fl[m] & (BF_LP | BF_DEAD) != 0 { return NIL; }
+    if m == 0 || b_fl[m] & (BF_LP | BF_DEAD | BF_ADDR) != 0 { return NIL; }
     let t = b_last[m];
     if t == NIL || o_ins[t].op != GIR_CONDBR || block_invoke(m) != NIL { return NIL; }
     let c = res(o_ins[t].a);

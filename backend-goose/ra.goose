@@ -60,6 +60,11 @@ var r_temp: u32 = 0;     // scratch registers of the current instruction
 var r_alloc: u32 = 0;    // the registers this function may allocate
 var r_cs_used: u32 = 0;  // callee-saved registers that were allocated (the prologue saves them)
 var ra_carry = false;    // the current instruction's registers stay locked into the next one
+// (E2) what a carried address keeps: the registers of the carried memory
+// operands, and the scratch registers still held at the start of the
+// current instruction (from the instructions that carried into it)
+var carry_keep: u32 = 0;
+var carry_temp: u32 = 0;
 
 // Per value (id: local instruction index, or f_nins + argument number):
 //   reg   the register holding it (0..31), NOREG, PEND or PADDR
@@ -210,6 +215,8 @@ let OP_KIND: u8[84] = [
 fn inst_kind(I: Inst) -> u32 {
     let op: u32 = I.op;
     if op >= GIR_NOPS { return K_B; }
+    // (E2) vector shuffles that lowerv.goose does
+    if op == GIR_SHUFFLE && t_rc[I.ty] == RC_VX && vshuf_plan(I) != 0 { return K_A; }
     let k: u32 = OP_KIND[op] & 15;
     if k != K_T { return k; }
     if op == GIR_EXTRACTVALUE { return ev_kind(I.ty); }
@@ -243,7 +250,7 @@ fn vx_kind(I: Inst, op: u32, t: u32) -> u32 {
     if op == GIR_LOAD || op == GIR_STORE { return K_A; }
     if op >= GIR_FADD && op <= GIR_FDIV || op == GIR_FNEG || op == GIR_FABS { return if lfp { K_A } else { K_B }; }
     if op == GIR_ADD || op == GIR_SUB || op == GIR_AND || op == GIR_OR || op == GIR_XOR { return if lfp { K_B } else { K_A }; }
-    if op == GIR_MUL { return if !lfp && lb == 16 { K_A } else { K_B }; }
+    if op == GIR_MUL { return if !lfp && (lb == 16 || vx_kind_e2(I, op, t, lb, lfp)) { K_A } else { K_B }; }
     if op == GIR_INSERTELT { return if gir_kind(I.c) == GIR_V_CONST && lb != 8 { K_A } else { K_B }; }
     if op == GIR_EXTRACTELT { return if gir_kind(I.b) == GIR_V_CONST && lb != 8 { K_A } else { K_B }; }
     if op == GIR_BITCAST {
@@ -252,6 +259,7 @@ fn vx_kind(I: Inst, op: u32, t: u32) -> u32 {
         return K_A;
     }
     if op == GIR_SELECT { return if rc_of(type_of(I.a)) == RC_GPR { K_A } else { K_B }; }
+    if vx_kind_e2(I, op, t, lb, lfp) { return K_A; }
     return K_B;
 }
 fn inst_kind2(I: Inst, op: u32, t: u32, rc: u8) -> u32 {
@@ -426,7 +434,7 @@ fn ra_prepass(insts: const Inst[:], blocks: const Block[:]) {
             let op: u32 = I.op;
             let kd: u32 = if op < GIR_NOPS { OP_KIND[op] } else { K_B };
             var k2 = kd & 15;
-            if k2 == K_T { k2 = inst_kind(I); }
+            if k2 == K_T || op == GIR_SHUFFLE { k2 = inst_kind(I); }
             let nodef = k2 == K_B || k2 == K_ALL;
             let m: u32 = if op < GIR_NOPS { OP_USES[op] } else { U_A | U_B | U_C };
             if m & U_A != 0 { pp_use(I.a, j, lo, ncl, mw, nodef); }
@@ -600,8 +608,33 @@ fn ra_alloc(xm: u32, pref: u32) -> u32 {
 // farthest (a value that is also in its home costs nothing).
 fn ra_evict(xm: u32) -> u32 {
     var m = ~r_free & ~r_lock & xm & r_alloc & ~rg_pin;   // (pinned global values stay)
+    if m == 0 && carry_temp & ~carry_keep & r_lock & xm != 0 {
+        // (E2) a chain of carried addresses (GEP -> load -> store) holds the
+        // scratch registers of every instruction in it; those that no carried
+        // address uses are free again (only when nothing else is left, so that
+        // the code is otherwise what it was)
+        let rel = carry_temp & ~carry_keep & r_lock & r_temp;
+        var mm = rel;
+        while mm != 0 {
+            let r = ctz32(mm);
+            mm &= mm - 1;
+            r_val[r] = RV_NONE;
+        }
+        r_free |= rel;
+        r_temp &= ~rel;
+        r_lock &= ~rel;
+        carry_temp &= ~rel;
+        let c = r_free & ~r_lock & xm;
+        if c != 0 { return ctz32(c); }
+        m = ~r_free & ~r_lock & xm & r_alloc & ~rg_pin;
+    }
     if m == 0 && rg_on { return rg_borrow(xm); }
-    if m == 0 { assert(false); }   // every register is locked: a lowering asks for too many
+    if m == 0 {
+        // every register is locked: a lowering asks for too many
+        write_stderr(str("goovm: no register to evict: function ", f_index, " instruction ", cur_pos, " op ",
+                         M.insts[f_first_inst + cur_pos].op, " lock ", r_lock, " free ", r_free, "\n"));
+        assert(false);
+    }
     var best: u32 = 32;
     var best_last: u32 = 0;
     while m != 0 {
@@ -935,7 +968,12 @@ fn ra_xmm(v: u32) -> u32 {
         let id = vid(v);
         let r: u32 = vi[id].reg;
         if r < 32 {
-            if r < 16 { assert(false); }    // a general-register value: a class mix-up
+            if r < 16 {
+                // a general-register value: a class mix-up
+                write_stderr(str("goovm: general register for an XMM operand: function ", f_index, " instruction ", cur_pos,
+                                 " value ", id, " type ", vtype(id), "\n"));
+                assert(false);
+            }
             r_lock |= bit(r);
             ra_note(id);
             return r - 16;
@@ -1074,8 +1112,11 @@ fn ra_block_start() {
 fn ra_end_inst() {
     if ra_carry {
         ra_carry = false;
+        carry_temp = r_temp;
         return;
     }
+    carry_keep = 0;
+    carry_temp = 0;
     for id in dying {
         let r: u32 = vi[id].reg;
         if r < 32 && r_val[r] == id {

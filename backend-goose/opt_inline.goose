@@ -137,7 +137,7 @@ fn opt_order() {
 // Before the OIR function is stored: its size and whether it may be inlined.
 fn inl_record() {
     var n: u32 = 0;
-    var ok = !o_pinned;
+    var ok = !o_addr;
     let fl = o_f.flags;
     if fl & (FN_VASTART | FN_SJLJ | FN_RETURNS_TWICE | FN_NOINLINE | FN_OPTNONE) != 0 { ok = false; }
     for a in 0..o_f.n_args {
