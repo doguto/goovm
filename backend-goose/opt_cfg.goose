@@ -349,7 +349,8 @@ fn remove_unreachable() -> bool {
         }
         b_first[b] = NIL;
         b_last[b] = NIL;
-        if o_pinned {
+        if b_fl[b] & BF_ADDR != 0 {
+            // (a block whose address is taken stays, empty)
             let u = new_inst(Inst { op: GIR_UNREACHABLE, sub: 0, flags: 0, ty: GIR_T_VOID, aux: 0, a: 0, b: 0, c: 0, dbg: 0 });
             link_end(b, u);
         } else {

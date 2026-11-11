@@ -32,6 +32,21 @@ var x_asms: Asm[>..] = [];       // M.asms, then one record per stored ASM
 var x_dies: Die[>..] = [];
 var x_dattrs: DAttr[>..] = [];
 var in2out: u32[>..] = [];       // input instruction index -> output index (debug info), NIL
+var x_from: u32[>..] = [];       // per x_insts entry: the input instruction it stands for, NIL (E2)
+// (E2) types and data the optimizer adds (the vectorizers' vector types and
+// constants): copies of M.types and M.data with the additions, which M
+// then views; made on the first addition only
+var x_types: TypeDef[>..] = [];
+var x_data: u8[>..] = [];
+var xb_ty: i64 = 0;
+var xb_dt: i64 = 0;
+var xt_on = false;
+var xd_on = false;
+// (E2) source locations the inliner adds (the callee's locations inlined at
+// the call's): a copy of M.dlocs with the additions, which M then views
+var x_dlocs: DLoc[>..] = [];
+var xb_dl: i64 = 0;
+var xl_on = false;
 // Where this call's region of each output array starts (M views x_*[xb_*..]).
 var xb_i: i64 = 0;
 var xb_b: i64 = 0;
@@ -56,12 +71,15 @@ var b_lnext: u32[>..] = [];      // next block in layout order
 var b_fl: u8[>..] = [];          // BF_*
 let BF_DEAD: u8 = 1;
 let BF_LP: u8 = 2;               // landing pad (starts with LANDINGPAD; no PHIs allowed)
+let BF_ADDR: u8 = 4;             // (E2) named by a block address: kept, never merged away
+let BF_VECD: u8 = 8;             // (E2) the scalar loop left by the vectorizer: not vectorized again
 
 var o_cfg_ok = false;            // the CFG analyses (opt_cfg.goose) describe the current CFG
 var o_fwd_dirty = false;         // some o_fwd was set since the last resolve_all
 var o_fi: u32 = 0;               // funcs index of the function being optimized
 var o_f: Func;                   // its record (input)
-var o_pinned = false;            // its blocks are named elsewhere (block addresses): no CFG changes
+var o_pinned = false;            // (E1: no CFG changes; E2: never set, the blocks are remapped)
+var o_addr = false;              // its blocks are named by block addresses (BF_ADDR): not inlined
 var o_dbg = false;               // the module has debug information entries
 var opt_lv: u32 = 1;             // the optimization level (GIR opt_level bits 0..7: 1, 2, 3)
 var opt_sz: u32 = 0;             // the size level (bits 8..9: 1 = -Os, 2 = -Oz)
@@ -330,9 +348,59 @@ checkfree fn wmask(bits: u32) -> u64 {
 }
 // An integer constant of type t (INT, <= 64 bits) with value x (truncated).
 fn int_const(t: u32, x: u64) -> u32 { mk_const(t, x & wmask(bits_of(t)), 0) }
+// (E2) The vector type of n lanes of type e (a new type if the module has none).
+fn vec_type(n: u32, e: u32) -> u32 {
+    for T, k in M.types {
+        if T.kind == TK_VECTOR && T.n == n && T.elems == e { return k as! u32; }
+    }
+    if !xt_on {
+        xt_on = true;
+        xb_ty = x_types.len;
+        x_types.append(M.types);
+        M.types = x_types[xb_ty..];
+    }
+    let es = M.types[e].size;
+    let sz = n * es;
+    var al: u32 = 1;
+    while al < sz && al < 16 { al *= 2; }
+    x_types.push(TypeDef { kind: TK_VECTOR as! u8, cls: C_VEC as! u8, bits: 0, size: sz, align: al, store: sz, n: n, elems: e });
+    M.types = x_types[xb_ty..];
+    build_type_rc();
+    return (x_types.len - xb_ty - 1) as! u32;
+}
+// (E2) A new source location (M.dlocs views the copy with it).
+fn new_dloc(L: DLoc) -> u32 {
+    if !xl_on {
+        xl_on = true;
+        xb_dl = x_dlocs.len;
+        x_dlocs.append(M.dlocs);
+    }
+    x_dlocs.push(L);
+    M.dlocs = x_dlocs[xb_dl..];
+    return (x_dlocs.len - xb_dl - 1) as! u32;
+}
+// (E2) A vector constant of type t whose bytes are b (16 at most).
+fn vec_const(t: u32, b: const u8[:]) -> u32 {
+    var zero = true;
+    for x in b { if x != 0 { zero = false; } }
+    if zero { return undef_of(t); }
+    if !xd_on {
+        xd_on = true;
+        xb_dt = x_data.len;
+        x_data.append(M.data);
+        M.data = x_data[xb_dt..];
+    }
+    while (x_data.len - xb_dt) % 16 != 0 { x_data.push(0); }
+    let off: u32 = (x_data.len - xb_dt) as! u32;
+    x_data.append(b);
+    M.data = x_data[xb_dt..];
+    let k: u32 = (x_consts.len - xb_c) as! u32;
+    x_consts.push(Const { lo: 0, hi: 0, ty: t, data: off });
+    return GIR_V_CONST << 30 | k;
+}
 // The undefined (zero) value of type t.
 fn undef_of(t: u32) -> u32 {
-    if undef_c.len <= t { undef_c.resize(M.types.len, NIL); }
+    if undef_c.len <= t { undef_c.resize(M.types.len + 1, NIL); }
     let u = undef_c[t];
     if u != NIL { return u; }
     var r: u32 = 0;
@@ -507,12 +575,17 @@ fn oir_store(fi: u32) {
             var i = b_first[b];
             while i != NIL {
                 x_insts.push(store_inst(i));
+                x_from.push(o_old[i]);
                 if o_old[i] != NIL { in2out[o_old[i]] = st_map[i]; }
                 i = o_nxt[i];
             }
             x_blocks.push(Block { first_inst: first, n_inst: (x_insts.len - xb_i) as! u32 - first });
         }
         b = b_lnext[b];
+    }
+    if o_addr && fn_bmap[fi] == NIL {
+        fn_bmap[fi] = x_bmap.len as! u32;
+        for k in 0..M.funcs[fi].n_blocks { x_bmap.push(st_bnum[k]); }
     }
     x_funcs[xb_f + fi].first_block = fb;
     x_funcs[xb_f + fi].n_blocks = nb;
@@ -640,8 +713,15 @@ fn remap_dies() {
 // ---------------------------------------------------------------- driver
 
 // Blocks of function fi named by block addresses (BLOCKADDR anywhere, data
-// relocations): its block numbers must not change.
+// relocations): marked BF_ADDR while it is optimized; their new numbers are
+// recorded (fn_bmap) and the block addresses rewritten at the end (E2).
 var fn_pinned: u8[>..] = [];
+var fn_ab_f: u32[>..] = [];      // (function, local block) pairs named by block addresses
+var fn_ab_b: u32[>..] = [];
+var fn_bmap: u32[>..] = [];      // per function: start in x_bmap, NIL
+var x_bmap: u32[>..] = [];       // input block -> output block (NIL: deleted)
+var x_drelocs: DataReloc[>..] = [];
+var xb_dr: i64 = 0;
 
 fn opt_module() {
     // (the output arrays never shrink, because M holds views of them: a
@@ -655,6 +735,7 @@ fn opt_module() {
     xb_f = x_funcs.len;
     x_funcs.append(M.funcs);
     xb_i = x_insts.len;
+    while x_from.len < x_insts.len { x_from.push(NIL); }
     xb_b = x_blocks.len;
     xb_d = x_dies.len;
     xb_t = x_dattrs.len;
@@ -664,6 +745,9 @@ fn opt_module() {
     ch_n = 0;
     ch_grow();
     undef_c.clear();
+    xt_on = false;
+    xd_on = false;
+    xl_on = false;
     build_type_rc();
     o_dbg = M.dies.len != 0;
     opt_lv = M.header[0].r0 & 0xFF;
@@ -671,16 +755,32 @@ fn opt_module() {
     opt_sz = (M.header[0].r0 >> 8) & 3;
     fn_pinned.clear();
     fn_pinned.resize(M.funcs.len, 0);
+    fn_ab_f.clear();
+    fn_ab_b.clear();
+    fn_bmap.clear();
+    fn_bmap.resize(M.funcs.len, NIL);
     for d in M.drelocs {
         if d.kind == DR_BLOCK || d.kind == DR_BLOCKDIFF32 {
             let g = M.globals[d.target];
-            if g.kind == G_FUNC && g.func != GIR_NONE { fn_pinned[g.func] = 1; }
+            if g.kind == G_FUNC && g.func != GIR_NONE {
+                fn_pinned[g.func] = 1;
+                fn_ab_f.push(g.func);
+                fn_ab_b.push(d.blk);
+                if d.kind == DR_BLOCKDIFF32 {
+                    fn_ab_f.push(g.func);
+                    fn_ab_b.push(d.blk2);
+                }
+            }
         }
     }
     for I in M.insts {
         if I.op == GIR_BLOCKADDR {
             let g = M.globals[I.a];
-            if g.func != GIR_NONE { fn_pinned[g.func] = 1; }
+            if g.func != GIR_NONE {
+                fn_pinned[g.func] = 1;
+                fn_ab_f.push(g.func);
+                fn_ab_b.push(I.b);
+            }
         }
     }
     opt_off("");    // (reads GOOVM_OPT)
@@ -689,12 +789,17 @@ fn opt_module() {
     inl_scan();
     gp_scan();
     aa_module_init();
+    lb_init();
     sroa_init();
     opt_order();
     for fi in fn_order { opt_function(fi); }
-    // internal functions whose calls were all inlined are not emitted
-    // (kept with debug information, whose subprograms name them)
-    if !o_dbg && !opt_off("inline") {
+    // (E2) the is.constant tests left in an emitted function are false,
+    // the object sizes left unknown; the function is simplified once more
+    // without them (the inliner, done now, saw them unfolded)
+    for fi in fn_order { isconst_refine(fi); }
+    // internal functions whose calls were all inlined are not emitted (with
+    // debug information, their subprograms become abstract: opt_dbg.goose)
+    if !opt_off("inline") {
         for fi in 0..M.funcs.len {
             let F = M.funcs[fi];
             if F.flags & FN_INTERNAL == 0 || fn_calls[fi] != 0 || fn_addr[fi] != 0 { continue; }
@@ -703,7 +808,9 @@ fn opt_module() {
         }
     }
     isconst_lower();
+    blockaddr_remap();
     remap_dies();
+    od_inlined_dies();
     if opt_dump_on() { dump_module(); }
     // (field by field: the other tables stay the host's)
     M.funcs = x_funcs[xb_f..];
@@ -716,11 +823,98 @@ fn opt_module() {
     M.dattrs = x_dattrs[xb_t..];
 }
 
+// The object sizes known before SROA and mem2reg (of allocas, globals):
+// their pointer is then no use of the alloca.
+fn objsize_early() {
+    let n: u32 = o_ins.len as! u32;
+    for i in 0..n {
+        if o_blk[i] == NIL || o_ins[i].op != GIR_OBJSIZE { continue; }
+        let v = simp_objsize(i as! u32);
+        if v != NIL { replace(i as! u32, v); }
+    }
+}
+
+fn isconst_refine(fi: u32) {
+    let F2 = x_funcs[xb_f + fi];
+    if F2.flags & (FN_AVAILEXT | FN_OPTNONE) != 0 || fn_done[fi] == 0 || fn_pinned[fi] != 0 { return; }
+    var any = false;
+    for k in F2.first_inst..F2.first_inst + F2.n_inst {
+        let op: u32 = x_insts[xb_i + k].op;
+        if op == GIR_ISCONST || op == GIR_OBJSIZE { any = true; }
+    }
+    if !any { return; }
+    o_fi = fi;
+    o_f = M.funcs[fi];
+    o_pinned = false;
+    o_addr = false;
+    oir_reset();
+    amap_on = false;
+    oir_load(x_insts[xb_i..], x_blocks[xb_b..], F2, true);
+    for id in 0..o_ins.len {
+        // (o_old: the output index; back to the input instruction it stands for)
+        let x = o_old[id];
+        o_old[id] = if x == NIL { NIL } else { x_from[xb_i + x] };
+        if o_ins[id].op == GIR_ISCONST {
+            let k = gir_kind(res(o_ins[id].a));
+            replace(id as! u32, mk_const(GIR_T_I1, if k == GIR_V_CONST || k == GIR_V_GLOBAL { 1 } else { 0 }, 0));
+        } else if o_ins[id].op == GIR_OBJSIZE {
+            // (the object still unknown: LLVM's LowerConstantIntrinsics)
+            let v = simp_objsize(id as! u32);
+            replace(id as! u32, if v != NIL { v } else { objsize_unknown(id as! u32) });
+        }
+    }
+    opt_round();
+    opt_round();
+    oir_store(fi);
+}
+
+// (E2) Block addresses name the blocks by their new numbers: BLOCKADDR
+// instructions, and the data relocations (a copy of M.drelocs).
+fn ba_map(fi: u32, b: u32) -> u32 {
+    let s = fn_bmap[fi];
+    if s == NIL { return b; }
+    let x = x_bmap[s + b];
+    // (a deleted block: its address is never used; any block of the function)
+    return if x == NIL { 0 } else { x };
+}
+fn blockaddr_remap() {
+    var any = false;
+    for fi in 0..fn_bmap.len { if fn_bmap[fi] != NIL { any = true; } }
+    if !any { return; }
+    for k in xb_i..x_insts.len {
+        if x_insts[k].op != GIR_BLOCKADDR { continue; }
+        let g = M.globals[x_insts[k].a];
+        if g.func != GIR_NONE { x_insts[k].b = ba_map(g.func, x_insts[k].b); }
+    }
+    xb_dr = x_drelocs.len;
+    x_drelocs.append(M.drelocs);
+    for k in xb_dr..x_drelocs.len {
+        let d = x_drelocs[k];
+        if d.kind != DR_BLOCK && d.kind != DR_BLOCKDIFF32 { continue; }
+        let g = M.globals[d.target];
+        if g.kind != G_FUNC || g.func == GIR_NONE { continue; }
+        x_drelocs[k].blk = ba_map(g.func, d.blk);
+        if d.kind == DR_BLOCKDIFF32 { x_drelocs[k].blk2 = ba_map(g.func, d.blk2); }
+    }
+    M.drelocs = x_drelocs[xb_dr..];
+}
+
 // The is.constant tests left after all optimization (their operand did not
 // become a constant) are false: each becomes `or i1 0, 0` (and a test of a
-// constant `or i1 1, 0`), which code generation handles.
+// constant `or i1 1, 0`), which code generation handles. Object sizes left
+// (functions not refined): `or c, 0` of the unknown size.
 fn isconst_lower() {
     for k in xb_i..x_insts.len {
+        if x_insts[k].op == GIR_OBJSIZE {
+            // (functions not refined: unknown)
+            let ty: u32 = x_insts[k].ty;
+            x_insts[k].op = GIR_OR as! u8;
+            x_insts[k].a = mk_const(ty, if x_insts[k].sub & 1 != 0 { 0 } else { wmask(bits_of(ty)) }, 0);
+            x_insts[k].b = mk_const(ty, 0, 0);
+            x_insts[k].c = 0;
+            x_insts[k].sub = 0;
+            continue;
+        }
         if x_insts[k].op != GIR_ISCONST { continue; }
         let a = x_insts[k].a;
         let kd = gir_kind(a);
@@ -776,16 +970,21 @@ fn opt_dump_on() -> bool {
 fn opt_function(fi: u32) {
     o_fi = fi;
     o_f = M.funcs[fi];
-    o_pinned = fn_pinned[fi] != 0;
+    o_pinned = false;
+    o_addr = fn_pinned[fi] != 0;
     oir_reset();
     amap_on = false;
     oir_load(M.insts, M.blocks, o_f, true);
+    if o_addr {
+        for k in 0..fn_ab_f.len { if fn_ab_f[k] == fi { b_fl[fn_ab_b[k]] |= BF_ADDR; } }
+    }
     if o_f.flags & FN_OPTNONE != 0 {
         // optnone: not optimized (and -O0 code generation, cg.goose fn_opt)
         inl_record();
         oir_store(fi);
         return;
     }
+    objsize_early();
     if !opt_off("m2r") {
         ensure_cfg();
         if remove_unreachable() { ensure_cfg(); }
@@ -849,6 +1048,18 @@ fn opt_function(fi: u32) {
         ensure_cfg();
         build_uses();
         if mem2reg() { simplify_phis(); }
+        opt_round();
+    }
+    if !opt_off("mprom") && promote_mem() {
+        resolve_all();
+        ensure_cfg();
+        build_uses();
+        if mem2reg() { simplify_phis(); }
+        opt_round();
+    }
+    if !opt_off("vec") && vectorize_loops() {
+        resolve_all();
+        ensure_cfg();
         opt_round();
     }
     if !opt_off("rotate") {

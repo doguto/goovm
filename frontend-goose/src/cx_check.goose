@@ -88,6 +88,10 @@ fn dump_decls(out_path: const u8[:]) -> bool {
         let sc = cxs[s].dscope as i64;
         if sc < 0 || f & CF_MAINDECL == 0 { continue; }
         if scopes[sc].flags & SCF_PATTERN != 0 { continue; }
+        // D2: implicit instantiations (members of instantiated classes, function
+        // template specializations) are not declarations libclang lists
+        if scopes[sc].flags & SCF_INST != 0 && cxs[s].flags2 & CF2_EXPLICIT == 0 { continue; }
+        if cxs[s].flags2 & CF2_FSPEC != 0 && cxs[s].flags2 & CF2_EXPLICIT == 0 { continue; }
         if s0.name == 0 { continue; }
         if !mangle_sym(s) {
             if dbg_decls {

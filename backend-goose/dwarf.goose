@@ -1325,7 +1325,7 @@ fn mark_dies() {
             // available_externally body, E2) goes with its subtree
             for q in D.attrs..D.attrs + D.n_attrs {
                 let A = attr_at(q);
-                if A.form == DF_PC && M.funcs[A.val].flags & FN_AVAILEXT != 0 {
+                if A.form == DF_PC && M.funcs[A.val].flags & (FN_AVAILEXT | FN_DEAD) != 0 {
                     dk_keep[k] = 0;
                     dk_gone[k] = 1;
                 }

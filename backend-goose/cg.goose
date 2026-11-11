@@ -40,6 +40,10 @@ import opt_iv;
 import opt_aa;
 import opt_cgp;
 import opt_loop;
+import opt_libc;
+import opt_vec;
+import opt_dbg;
+import lowerv;
 import opt_verify;
 import opt_dump;
 import a64enc;
@@ -612,6 +616,7 @@ fn gen_inst(gi: u32, cur: u32) {
             GIR_MEMCPY, GIR_MEMSET => lower_memcpy_a(I),
             GIR_EXTRACTVALUE => lower_extractvalue_a(I, j),
             GIR_ISFPCLASS => lower_isfpclass_a(I, j),
+            GIR_SHUFFLE => lower_vshuf_a(I, j),
             _ => ud2(),
         }
         if rg_on && vi[j].st & ST_PIN != 0 {

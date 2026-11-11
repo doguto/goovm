@@ -102,6 +102,59 @@ fn aa_decompose(p0: u32) -> u32, i64, bool {
     }
     return p, off, known;
 }
+// The variable index terms (value, scale) of a GEP chain and its constant
+// offset; at most 8 terms.
+var aa_tv: u32[>..] = [];
+var aa_ts: u32[>..] = [];
+fn aa_terms(p0: u32) -> bool, i64 {
+    aa_tv.clear();
+    aa_ts.clear();
+    var p = res(p0);
+    var off: i64 = 0;
+    var n = 0;
+    while is_inst(p) && n < 32 {
+        let I = o_ins[p];
+        if I.op != GIR_GEP { break; }
+        off += (o_ops[I.b] as u64 | (o_ops[I.b + 1] as u64 << 32)) as! i64;
+        for k in 0..I.c {
+            if aa_tv.len >= 8 { return false, 0; }
+            aa_tv.push(res(o_ops[I.b + 2 + 2 * k]));
+            aa_ts.push(o_ops[I.b + 3 + 2 * k]);
+        }
+        p = res(I.a);
+        n++;
+    }
+    return true, off;
+}
+var aa_qv: u32[>..] = [];
+var aa_qs: u32[>..] = [];
+var aa_used: u8[>..] = [];
+// Whether p and q (one base) have the same variable terms: (yes, the
+// offset of q minus that of p).
+fn aa_same_terms(p: u32, q: u32) -> bool, i64 {
+    let okq, oq = aa_terms(q);
+    if !okq { return false, 0; }
+    aa_qv.clear();
+    aa_qv.append(aa_tv);
+    aa_qs.clear();
+    aa_qs.append(aa_ts);
+    let okp, op = aa_terms(p);
+    if !okp || aa_tv.len != aa_qv.len { return false, 0; }
+    aa_used.clear();
+    aa_used.resize(aa_qv.len, 0);
+    for k in 0..aa_tv.len {
+        var found = false;
+        for m in 0..aa_qv.len {
+            if aa_used[m] == 0 && aa_qv[m] == aa_tv[k] && aa_qs[m] == aa_ts[k] && aa_one_value(aa_tv[k]) {
+                aa_used[m] = 1;
+                found = true;
+                break;
+            }
+        }
+        if !found { return false, 0; }
+    }
+    return true, oq - op;
+}
 fn aa_kind(b: u32) -> u32 {
     let k = gir_kind(b);
     if k == GIR_V_INST {
@@ -135,7 +188,14 @@ fn aa_alias(p: u32, ps: u32, pt: u32, q: u32, qs: u32, qt: u32) -> bool {
     let pb, po, pk = aa_decompose(p);
     let qb, qo, qk = aa_decompose(q);
     if pb == qb {
-        if !pk || !qk || ps == 0 || qs == 0 { return true; }
+        if ps == 0 || qs == 0 { return true; }
+        if !pk || !qk {
+            // (E2) the same variable index terms on both sides: the constant
+            // offsets decide (LLVM's BasicAA on GEPs with equal indices)
+            let ok, d = aa_same_terms(p, q);
+            if !ok { return true; }
+            return d < ps as i64 && -d < qs as i64;
+        }
         return po < qo + qs as i64 && qo < po + ps as i64;
     }
     let kp = aa_kind(pb);
@@ -200,20 +260,35 @@ fn aa_clobbers(w: u32, p: u32, ps: u32, pt: u32) -> bool {
 }
 
 // Escapes and captures of the function's allocas and noalias parameters.
+// Whether value v is one value wherever it is used: not defined in a cycle
+// (an index defined in a loop differs between the iterations that the
+// accesses compared may come from; LLVM's isValueEqualInPotentialCycles).
+var aa_cyc: u8[>..] = [];       // per block (at aa_prepare): in a loop
+// Whether the accesses compared may come from different iterations of a
+// loop (true unless the client knows better: GVN on its dominator path).
+var aa_cross = true;
+fn aa_one_value(v: u32) -> bool {
+    if !aa_cross || !is_inst(v) { return true; }
+    let b = o_blk[v];
+    return b != NIL && b < aa_cyc.len as! u32 && aa_cyc[b] == 0;
+}
 fn aa_prepare() {
+    aa_cyc.clear();
+    if o_cfg_ok {
+        build_loops();
+        for b in 0..cfg_nb { aa_cyc.push(if lp_depth[b] != 0 { 1 } else { 0 }); }
+    }
     let n = o_ins.len;
     aa_n = n;
     aa_esc.clear();
     aa_esc.resize(n, 0);
     aa_args_cap.clear();
     aa_args_cap.resize(o_f.n_args, 0);
-    let setjmp = o_f.flags & (FN_RETURNS_TWICE | FN_SJLJ) != 0;
     for i0 in 0..n {
         if o_blk[i0] == NIL { continue; }
         let i: u32 = i0 as! u32;
         let I = o_ins[i];
         let op: u32 = I.op;
-        if op == GIR_ALLOCA && setjmp { aa_esc[i] = 1; }
         each_slot(i) { s =>
             let v = res(vget(i, s));
             var ok = false;

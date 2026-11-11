@@ -845,6 +845,7 @@ fn ty_decl_of(e: u32) -> u32 {
 // The initializer of variable s (at pc after its declarator), and its N_DECL.
 recursive fn parse_var_init(s: i64, d: CD&, ctx: i64) {
     let loc = d.loc;
+    let tok0 = pc;
     var init: u32 = 0;
     var form = 0;       // 0 none, 1 =, 2 (args), 3 {list}
     if at(TK_EQUAL) {
@@ -879,9 +880,13 @@ recursive fn parse_var_init(s: i64, d: CD&, ctx: i64) {
         if init != 0 && is_integer(syms[s].ty) && quals(syms[s].ty) & Q_CONST != 0 && cish_node(init) && !is_opq(init) {
             cvar_note(s, assign_convert(rv(init), syms[s].ty, loc, 1));
         }
+        if ctx == DC_CLASS && init != 0 && cxs[s].flags & CF_PATTERN == 0 && !dependent_ctx() { ce_note_var(s, init, 0, tok0, form, loc); }
         return;
     }
     let conv = if init != 0 { init_convert(s, init, form, loc) } else { default_init(s, loc) };
+    if init != 0 { ce_note_var(s, init, conv, tok0, form, loc); }
+    // the destructor of a class object is potentially invoked ([class.dtor]p15)
+    if is_record(base_elem_t(syms[s].ty)) && !is_ref(syms[s].ty) { use_dtor(base_elem_t(syms[s].ty)); }
     // const integral (and enum) variables are usable in constant expressions
     if conv != 0 && !is_opq(conv) && (is_integer(syms[s].ty) || kind_of(syms[s].ty) == TY_BOOL) && quals(syms[s].ty) & Q_CONST != 0 &&
        nodes[conv].kind as i64 != N_INITBRACE {
@@ -938,4 +943,51 @@ recursive fn deduce_auto(t: u32, init: u32) -> u32 {
 
 fn cvar_note(s: i64, init: u32) {
     cv_define(s, 0, init);
+}
+
+// The destructor of class type t (user-declared) is odr-used: instantiated.
+fn use_dtor(t: u32) {
+    if is_opaque(t) { return; }
+    need_complete(t);
+    let sc = type_scope(t);
+    if sc < 0 { return; }
+    let d = scope_find(sc, id_dtor);
+    if d < 0 { return; }
+    let f = resolve(d);
+    if f >= 0 && syms[f].kind as i64 == SK_FUNC { inst_use(f); }
+}
+
+// D2: the initializer of a variable usable in constant expressions
+// (constexpr, or const non-volatile integral / enumeration), as a
+// semantic-analysis tree for the constant evaluator: the one just built,
+// or (code generation builds lowered trees) the initializer parsed again
+// with code generation off.
+recursive fn ce_note_var(s: i64, init: u32, conv: u32, tok0: i64, form: i64, loc: u32) {
+    let t = syms[s].ty;
+    let q = quals(nonref(t));
+    let cx = cxs[s].flags & CF_CONSTEXPR != 0;
+    if !cx && !(q & Q_CONST != 0 && q & Q_VOLATILE == 0 && !is_ref(t) && (is_integer(t) || kind_of(t) == TY_ENUM || kind_of(t) == TY_BOOL)) { return; }
+    if !cg_on {
+        ce_var_init.insert(s as u64, if conv != 0 { conv } else { init });
+        return;
+    }
+    let sv = save();
+    pc = tok0;
+    gt_pos = -1;
+    cg_on = false;
+    var x: u32 = 0;
+    if form == 2 {
+        let mark = parse_args();
+        x = mk_construct_init(syms[s].ty, mark, loc);
+        nscratch.resize(mark);
+    } else {
+        if at(TK_EQUAL) { adv(); }
+        if at(TK_L_BRACE) { x = parse_braced(); } else { x = parse_assign_cx(); }
+    }
+    if x != 0 && !is_opq(x) && !is_record(nonref(t)) && !is_array(t) && !is_ref(t) && cish_node(x) && cish(t) {
+        x = assign_convert(rv(x), t, loc, 1);
+    }
+    cg_on = true;
+    restore(sv);
+    if x != 0 { ce_var_init.insert(s as u64, x); }
 }

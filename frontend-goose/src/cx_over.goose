@@ -286,7 +286,9 @@ recursive fn pick_best(cm0: i64, mark: i64, nargs: i64, obj: u32, has_obj: bool,
         o.append(str("pick_best ncand=", cand_syms.len - cm0, " nviable=", nv, " unknown=", any_unknown, " :"));
         for v in nv {
             let f = cand_syms[cand_viable[vm + 2 * v]] as i64;
-            o.append(str(" ", ident_text(syms[f].name as i64), "#", f, "["));
+            o.append(str(" ", ident_text(syms[f].name as i64), "#", f, "@"));
+            loc_prefix(o, syms[f].loc as i64);
+            o.append("[");
             let st = cand_viable[vm + 2 * v + 1] as i64;
             for k in nargs + 1 { let c = cand_ics[st + k]; o.append(str(c.kind, "/", c.rank, "/", c.flags, " ")); }
             o.append("]");
@@ -321,6 +323,7 @@ recursive fn pick_best(cm0: i64, mark: i64, nargs: i64, obj: u32, has_obj: bool,
             else { apply_user_convs(best, cand_viable[vm + 2 * w + 1] as i64, mark, nargs, oper); }
         }
     }
+    if inst_debug() { write_stderr(str("  -> ", best, " ambiguous=", cand_ambiguous, " unknown=", cand_unknown, " deleted=", cand_deleted, " fl2=", if best >= 0 { cxs[best].flags2 as i64 } else { -1 }, "\n")); }
     cand_viable.resize(vm);
     cand_ics.resize(im);
     return best;
@@ -354,8 +357,31 @@ recursive fn cand_better(vm: i64, i: i64, j: i64, nargs: i64) -> i64 {
         let b = fn_at_least(cxs[fj].tmpl as i64, cxs[fi].tmpl as i64, nargs);
         if a && !b { return 1; }
         if b && !a { return -1; }
+        // D2: one template declared twice with return types spelled
+        // differently (std::swap: _Require<...> in <type_traits>,
+        // enable_if<...>::type in <bits/move.h>; equivalent once the alias
+        // is expanded, which token comparison of the declarations misses):
+        // the same specialization type, the same scope, at most one of them
+        // defined
+        let x = cxs[fi].tmpl as i64;
+        let y = cxs[fj].tmpl as i64;
+        if syms[fi].ty == syms[fj].ty && syms[fi].name == syms[fj].name && cxs[fi].dscope == cxs[fj].dscope &&
+           x >= 0 && y >= 0 && tmpls[x].nparams == tmpls[y].nparams {
+            let dx = tmpl_defined(x);
+            let dy = tmpl_defined(y);
+            if dx && !dy { return 1; }
+            if dy && !dx { return -1; }
+            if !dx && !dy { return if x < y { 1 } else { -1 }; }
+        }
     }
     return 0;
+}
+
+// Does function template t have a definition?
+fn tmpl_defined(t: i64) -> bool {
+    if tmpls[t].def_t >= 0 { return true; }
+    let pf = tmpls[t].pattern as i64;
+    return pf >= 0 && cxs[pf].body != 0;
 }
 
 // The chosen candidate's user-defined conversions applied to the arguments.
@@ -392,6 +418,7 @@ recursive fn apply_user_conv(e: u32, uf: i64, p: u32) -> u32 {
     }
     let rt = types[syms[uf].ty >> 4].base;
     resolved_fn = uf;
+    if !cg_on { let m0 = nscratch.len; return typed_call(uf, e, m0, loc); }
     if cg_on {
         resolved_fn = -1;
         var o = e;
@@ -460,6 +487,9 @@ recursive fn mk_call_cx(callee: u32, mark: i64, loc: u32) -> u32 {
     if (is_pointer(t) && is_func(tbase(t))) || is_func(t) {
         let ft = if is_func(t) { t } else { tbase(t) };
         if !cish_call(ft, mark) {
+            // code generation: C++ parameter and result types (references,
+            // classes by invisible reference)
+            if cg_on { return cg_call_ptr(callee, ft, mark, loc); }
             return typed_result(types[ft >> 4].base, loc);
         }
         return mk_call(callee, mark, loc);
@@ -504,7 +534,21 @@ recursive fn build_call(f: i64, obj: u32, mark: i64, loc: u32, qualified: bool) 
         syms[f].flags = syms[f].flags | SF_USED;
         return mk_call(r, mark, loc);
     }
-    return typed_result(types[ft >> 4].base, loc);
+    return typed_call(f, obj, mark, loc);
+}
+
+// A call of f (resolved) in semantic-analysis mode: N_CXX op 7 of its
+// result type, a = f, b = the object (0 none), v/c = the arguments as
+// written (the constant evaluator converts them).
+fn typed_call(f: i64, obj: u32, mark: i64, loc: u32) -> u32 {
+    resolved_fn = f;
+    let n = typed_result(types[syms[f].ty >> 4].base, loc);
+    nodes[n].b = obj;
+    let st = nlist.len;
+    for j in mark..nscratch.len { nlist.push(nscratch[j]); }
+    nodes[n].v = st;
+    nodes[n].c = (nscratch.len - mark) as! u32;
+    return n;
 }
 
 fn has_defaults_needed(f: i64, mark: i64) -> bool { (nscratch.len - mark) < types[syms[f].ty >> 4].n }

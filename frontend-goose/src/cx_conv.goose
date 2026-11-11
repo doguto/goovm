@@ -643,7 +643,8 @@ recursive fn std_compare(a: Ics, b: Ics) -> i64 {
         }
     }
     // qualification conversions to similar types: the less qualified result
-    if fa & IF_QUAL != 0 && fb & IF_QUAL != 0 && fa & IF_REF == 0 && fb & IF_REF == 0 && is_pointer(a.to) && is_pointer(b.to) &&
+    // (D* -> B* a proper subsequence of D* -> const B*)
+    if (fa | fb) & IF_QUAL != 0 && fa & IF_REF == 0 && fb & IF_REF == 0 && is_pointer(a.to) && is_pointer(b.to) &&
        unqual(tbase(a.to)) == unqual(tbase(b.to)) {
         let qa = quals(tbase(a.to)) & (Q_CONST | Q_VOLATILE);
         let qb = quals(tbase(b.to)) & (Q_CONST | Q_VOLATILE);

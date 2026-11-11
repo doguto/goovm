@@ -109,7 +109,24 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
     let tmpl = pending_tmpl;
     if inst_spec_tmpl >= 0 {
         // D2: a function template specialization's declaration
-        return make_fspec(d, ds, key, ft, ctor, is_member, loc);
+        let fsx = make_fspec(d, ds, key, ft, ctor, is_member, loc);
+        if fsx >= 0 { record_attrs(fsx, a, 0); }       // (D3: always_inline, section ... of the template)
+        return fsx;
+    }
+    if pending_explicit && tmpl < 0 && !dependent_ctx() && ctx != DC_FRIEND {
+        // D2: template<> R f<args>(params) / template<> R f(params): the
+        // explicit specialization of a function template, the
+        // specialization its type deduces
+        let sc = if d.qn.qual { (if d.qn.scope >= 0 { d.qn.scope as i64 } else { -1 }) } else if target == -2 { enclosing_ns(cur_scope) } else { target };
+        let sp = if sc >= 0 { explicit_fn_spec(sc, key, ft, if d.qn.has_targs { d.qn.targs } else { -1 }) } else { -1 };
+        if sp >= 0 {
+            cxs[sp].flags2 = (cxs[sp].flags2 | CF2_EXPLICIT | CF2_INST_DONE) & ~(CF2_LAZY_BODY | CF2_QUEUED);
+            cxs[sp].flags = cxs[sp].flags & ~(CF_PATTERN as! u32);
+            set_fn_flags(sp, d, ds, ctor, is_member || cxs[sp].flags & CF_MEMBER != 0);
+            record_attrs(sp, a, 0);
+            note_params(sp, d);
+            return sp;
+        }
     }
     if tmpl >= 0 && (target >= 0 || target == -2) && !d.qn.qual {
         let fs = if target == -2 { enclosing_ns(cur_scope) } else { target };
@@ -182,6 +199,11 @@ recursive fn declare_function(d: CD&, ds: CDS&, a: Attrs&, ctx: i64) -> i64 {
         if is_member && ctx == DC_CLASS { cmscratch.push(s as! u32); }
     } else if target == -2 {
         bind_sym(s, false);
+    }
+    if !created && pending_explicit && cxs[s].flags2 & CF2_LAZY_BODY != 0 {
+        // D2: template<> R X<int>::f(...) { }: an explicit specialization
+        // of a member of an instantiation, not instantiated from the pattern
+        cxs[s].flags2 = (cxs[s].flags2 | CF2_EXPLICIT | CF2_INST_DONE) & ~(CF2_LAZY_BODY | CF2_QUEUED);
     }
     set_fn_flags(s, d, ds, ctor, is_member || cxs[s].flags & CF_MEMBER != 0);
     note_main_decl(s, d);
@@ -453,6 +475,8 @@ recursive fn function_body(s: i64, d: CD&, in_class: bool) {
     // sees that scope
     let sv_scope = cur_scope;
     if d.qn.qual && d.qn.scope >= 0 { cur_scope = d.qn.scope as i64; }
+    // D2: where a constexpr function's body is, for the constant evaluator
+    if cxs[s].flags & CF_CONSTEXPR != 0 && !ce_capturing { ce_note_body(s, b0, cur_scope); }
     let n = parse_function_body(s, d.params, d.nparams);
     cur_scope = sv_scope;
     if n != 0 { nscratch.push(n); }
@@ -517,9 +541,13 @@ recursive fn parse_decl_cx(ctx: i64) {
     if at_kw(KW_USING) { parse_using(ctx); return; }
     if at_kw(KW_TEMPLATE) { parse_template_decl(ctx); return; }
     if at_kw(KW_EXTERN) && tk_n(1) == TK_KW + KW_TEMPLATE {
-        // extern template ...: an explicit instantiation declaration (no effect in D1)
+        // extern template ...: an explicit instantiation declaration (code
+        // generation: what it names is not emitted here, cx_gen_link)
         adv();
+        let sv_ext = cur_extern_inst;
+        cur_extern_inst = true;
         parse_template_decl(ctx);
+        cur_extern_inst = sv_ext;
         return;
     }
     if at_kw(KW_EXTERN) && tk_n(1) == TK_STRING { parse_linkage_spec(ctx); return; }
@@ -610,7 +638,8 @@ recursive fn parse_simple_decl(ctx0: i64) {
             if d.qn.name != 0 { declare_typedef(d.qn.name, apply_type_attrs(d.ty, a, dloc), dloc, ctx); }
         } else if is_func(d.ty) && (d.is_fn || !is_opaque(d.ty)) && !(ctx == DC_BLOCK && !first_paren_decl(d)) {
             if pending_inst {
-                // an explicit instantiation of a function template: nothing in D1
+                // an explicit instantiation of a function template (code generation: noted)
+                if cg_on { note_fn_inst(d.qn, d.ty, cur_extern_inst); }
                 if !accept(TK_COMMA) { break; }
                 continue;
             }
@@ -1155,7 +1184,11 @@ recursive fn parse_static_assert_cx() {
     expect(TK_L_PAREN, "'('");
     let sp = paren_depth;
     paren_depth = 1;
+    // only its value is needed: a semantic-analysis tree (no code)
+    let cg0 = cg_on;
+    cg_on = false;
     let e = parse_assign_cx();
+    cg_on = cg0;
     paren_depth = sp;
     if accept(TK_COMMA) {
         if at(TK_STRING) { while at(TK_STRING) { adv(); } } else { skip_to(TK_R_PAREN); }
@@ -1274,4 +1307,24 @@ fn implicit_alloc_fn(op: i64, ret: u32, param: u32) {
     cxs[s].flags = CF_OPERATOR | CF_IMPLICIT;
     cxs[s].op = op as! u8;
     scope_add(0, s);
+}
+
+// The specialization of a function template named `name` in scope sc whose
+// type is ft (explicit: the written template arguments, -1 none) for an
+// explicit specialization: the most specialized template's; -1 none.
+recursive fn explicit_fn_spec(sc: i64, name: u32, ft: u32, explicit: i32) -> i64 {
+    var best: i64 = -1;
+    var s = scope_find(sc, name);
+    while s >= 0 {
+        let x = resolve(s);
+        s = cxs[s].nnext as i64;
+        if x < 0 || syms[x].kind as i64 != SK_TEMPLATE || tmpl_kind(x) != TT_FUNC { continue; }
+        let sp = deduce_addr(cxs[x].tmpl as i64, explicit, ft);
+        if sp < 0 { continue; }
+        if best < 0 { best = sp; continue; }
+        let a = fn_at_least(cxs[sp].tmpl as i64, cxs[best].tmpl as i64, types[ft >> 4].n as i64);
+        let b = fn_at_least(cxs[best].tmpl as i64, cxs[sp].tmpl as i64, types[ft >> 4].n as i64);
+        if a && !b { best = sp; }
+    }
+    return best;
 }
