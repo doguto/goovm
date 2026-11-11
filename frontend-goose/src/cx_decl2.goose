@@ -615,6 +615,8 @@ recursive fn parse_simple_decl(ctx0: i64) {
         init_ok = (ctx == DC_NS || ctx == DC_BLOCK || ctx == DC_COND) && ds.sc != SC_TYPEDEF;
         parse_cdeclr(if base0 == 0 { t_void } else { base }, 0, d);
         init_ok = sv_init;
+        trail_req_pos = 0;
+        if d.is_fn && at_kw(KW_REQUIRES) { parse_trailing_requires(d.params as i64, d.nparams as i64); }
         if base0 == 0 && !no_type_ok(d, ctx) {
             error_at((if d.qn.loc != 0 { d.qn.loc } else { dloc }) as i64, "a type specifier is required for all declarations");
         }
@@ -644,6 +646,7 @@ recursive fn parse_simple_decl(ctx0: i64) {
                 continue;
             }
             let s = declare_function(d, ds, a, ctx);
+            note_trailing_requires(s);
             if first && (at(TK_L_BRACE) || at(TK_COLON) || at_kw(KW_TRY)) {
                 syms[s].loc = d.loc;
                 function_body(s, d, ctx == DC_CLASS || ctx == DC_FRIEND);

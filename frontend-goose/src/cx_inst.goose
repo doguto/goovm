@@ -570,6 +570,8 @@ recursive fn match_spec(pt: i64, args: i32) -> bool, i32 {
         if inst_debug() { write_stderr(str("  spec_args_check failed pt=", pt, "\n")); }
         return false, -1;
     }
+    // D2b: a constrained partial specialization matches only when satisfied
+    if ok && full && tmpl_satisfied(pt, binds) != 1 { return false, -1; }
     return ok && full, binds;
 }
 

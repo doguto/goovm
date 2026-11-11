@@ -245,9 +245,12 @@ recursive fn pick_best(cm0: i64, mark: i64, nargs: i64, obj: u32, has_obj: bool,
         var ok = na == np || (variadic && na >= np);
         if !ok && na < np { ok = defaults_from(f, na); }
         if !ok { continue; }
+        // D2b: a member function whose trailing requires-clause is not satisfied is not viable
+        let fr = fn_req_ok(f);
+        if fr == 0 { continue; }
         let st = cand_ics.len;
         var viable = true;
-        var unk = false;
+        var unk = fr != 1;
         // slot 0: the implicit object parameter
         if member && !oper && cxs[f].flags & CF_STATIC == 0 && (has_obj || obj != 0 || this_type != 0) {
             let c0 = ics_object(obj, f);

@@ -42,6 +42,15 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     if g { return if g > 0 { (g - 1) as i64 } else { g as i64 }; }
     if inst_depth > 400 || tmpls[t].t1 == 0 { return -2; }
     fspec_map.insert(key, -2);
+    // D2b: the associated constraints, checked before the declaration is substituted
+    let cs0 = tmpl_satisfied(t, binds);
+    if cs0 != 1 {
+        let r0: i64 = if cs0 == 0 { -1 } else { -2 };
+        fspec_map.insert(key, r0 as! i32);
+        return r0;
+    }
+    let tr0 = trail_req;
+    trail_req = 1;
     let sc = tmpls[t].scope as i64;
     let mark = nscratch.len;
     inst_what = tmpls[t].sym as i64;
@@ -66,6 +75,8 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     inst_spec_tmpl = -1;
     let s = inst_spec_result;
     inst_spec_result = -1;
+    let trv = trail_req;
+    trail_req = tr0;
     let errs = diag_inst_errors - e0;
     let bad = inst_leave(st);
     nscratch.resize(mark);
@@ -78,6 +89,7 @@ recursive fn fspec_decl(t: i64, binds: i32) -> i64 {
     } else if s < 0 && (bad || errs > 0) {
         res = -1;
     }
+    if trv == 0 { res = -1; } else if trv != 1 && res >= 0 { res = -2; }
     fspec_map.insert(key, if res >= 0 { (res + 1) as! i32 } else { res as! i32 });
     if inst_debug() {
         var o: u8[>..] = [];
