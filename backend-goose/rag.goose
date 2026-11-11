@@ -40,7 +40,7 @@ let ST_PIN: u8 = 64;     // vi[].st: a pinned global value (rg_reg holds its reg
 let ST_KEEP: u8 = 128;   // vi[].st: the value must stay in its home (a debug variable's address)
 let RG_GPR_CALLER: u32 = 0x07C0;   // rsi rdi r8 r9 r10
 let RG_XMM: u32 = 0xFFF00000;      // xmm4..xmm15
-let RG_MAX_BITS: i64 = 1 << 26;    // liveness bitsets larger than this: no global allocation
+let RG_MAX_BITS: i64 = 1 << 26;    // liveness bitsets larger than this: sparse liveness (E2)
 
 var rg_on = false;                 // pinned values in this function
 var rg_reg: u8[>..] = [];          // per value id: its register, NOREG
@@ -171,7 +171,6 @@ fn rg_alloc(insts: const Inst[:], blocks: const Block[:]) {
     // longjmp restores the callee-saved registers to their values at the
     // setjmp, which is what C allows for the non-volatile variables changed in
     // between; __builtin_setjmp clobbers every register (CL_ALL)
-    if F.flags == 0xFFFFFFFF { return; }
     let nb: u32 = blocks.len as! u32;
     rg_nb = nb;
     // candidates
@@ -210,9 +209,14 @@ fn rg_alloc(insts: const Inst[:], blocks: const Block[:]) {
     let ng: u32 = rg_val.len as! u32;
     if ng == 0 { return; }
     rg_words = (ng as i64 + 63) >> 6;
-    if rg_words * nb as i64 * 64 > RG_MAX_BITS { return; }
     rg_build_cfg(blocks);
-    rg_liveness(insts, blocks);
+    // (E2) dense bitsets, or (larger functions) a walk from each use
+    if rg_words * nb as i64 * 64 > RG_MAX_BITS || opt_off("dense") {
+        rg_liveness_sparse(insts);
+    } else {
+        rg_liveness(insts, blocks);
+        rg_lists_from_bits();
+    }
     rg_segments(insts, blocks);
     rg_clobbers(insts);
     rg_assign();
@@ -339,6 +343,182 @@ fn rg_liveness(insts: const Inst[:], blocks: const Block[:]) {
     }
 }
 
+// (E2) The live-in and live-out sets as lists per block (CSR, values in
+// increasing order), from the bitsets (which are then released).
+var rg_li_s: u32[>..] = [];
+var rg_li: u32[>..] = [];
+var rg_lo_s: u32[>..] = [];
+var rg_lo: u32[>..] = [];
+fn rg_lists_from_bits() {
+    let w = rg_words;
+    rg_li_s.clear();
+    rg_li.clear();
+    rg_lo_s.clear();
+    rg_lo.clear();
+    for b in 0..rg_nb {
+        rg_li_s.push(rg_li.len as! u32);
+        rg_lo_s.push(rg_lo.len as! u32);
+        let base: i64 = w * b as i64;
+        for x in 0..w {
+            var m = rg_lin[base + x];
+            while m != 0 {
+                rg_li.push((x as u32) * 64 + ctz(m) as! u32);
+                m &= m - 1;
+            }
+            m = rg_lout[base + x];
+            while m != 0 {
+                rg_lo.push((x as u32) * 64 + ctz(m) as! u32);
+                m &= m - 1;
+            }
+        }
+    }
+    rg_li_s.push(rg_li.len as! u32);
+    rg_lo_s.push(rg_lo.len as! u32);
+    rg_lin.clear();
+    rg_lout.clear();
+    rg_gen.clear();
+    rg_def.clear();
+}
+
+// (E2) Liveness without bitsets, for functions whose bitsets would be too
+// large: from each use, backwards through the predecessors until the
+// definition's block (the same sets as rg_liveness: a value is live into a
+// block when a path from it reaches a use without passing the definition;
+// live out of a block when live into a successor; a PHI's incoming value
+// is used at the end of its predecessor).
+var rg_ps: u32[>..] = [];
+var rg_pl: u32[>..] = [];
+var rg_us_s: u32[>..] = [];    // per value: its uses (block; bit 31: a PHI edge)
+var rg_us: u32[>..] = [];
+var rg_us_tg: u32[>..] = [];
+var rg_us_tb: u32[>..] = [];
+var rg_mk_in: u32[>..] = [];   // per block: value + 1 marked live in / out
+var rg_mk_out: u32[>..] = [];
+var rg_stk: u32[>..] = [];
+var rg_pin_b: u32[>..] = [];   // pairs (block, value), in increasing value order
+var rg_pin_g: u32[>..] = [];
+var rg_pout_b: u32[>..] = [];
+var rg_pout_g: u32[>..] = [];
+fn rg_liveness_sparse(insts: const Inst[:]) {
+    let nb = rg_nb;
+    let ng: u32 = rg_val.len as! u32;
+    // predecessors
+    rg_ps.clear();
+    rg_ps.resize(nb + 1, 0);
+    for b in 0..nb { for k in rg_ss[b]..rg_ss[b + 1] { rg_ps[rg_sl[k] + 1]++; } }
+    for b in 0..nb { rg_ps[b + 1] += rg_ps[b]; }
+    rg_pl.clear();
+    rg_pl.resize(rg_ps[nb], 0);
+    if rg_fill.len < nb { rg_fill.resize(nb, 0); }
+    for b in 0..nb { rg_fill[b] = rg_ps[b]; }
+    for b in 0..nb {
+        for k in rg_ss[b]..rg_ss[b + 1] {
+            let s = rg_sl[k];
+            rg_pl[rg_fill[s]] = b;
+            rg_fill[s]++;
+        }
+    }
+    // uses, grouped by value
+    rg_us_tg.clear();
+    rg_us_tb.clear();
+    for b in 0..nb {
+        for j in rg_bfirst[b]..rg_blast[b] + 1 {
+            let I = insts[j];
+            if I.op != GIR_PHI {
+                rg_each_use(I) { g =>
+                    rg_us_tg.push(g);
+                    rg_us_tb.push(b);
+                };
+            }
+        }
+        rg_each_phi_use(b) { g =>
+            rg_us_tg.push(g);
+            rg_us_tb.push(b | 0x80000000);
+        };
+    }
+    rg_us_s.clear();
+    rg_us_s.resize(ng + 1, 0);
+    for g in rg_us_tg { rg_us_s[g + 1]++; }
+    for g in 0..ng { rg_us_s[g + 1] += rg_us_s[g]; }
+    rg_us.clear();
+    rg_us.resize(rg_us_s[ng], 0);
+    if rg_fill.len < ng { rg_fill.resize(ng, 0); }
+    for g in 0..ng { rg_fill[g] = rg_us_s[g]; }
+    for k in 0..rg_us_tg.len {
+        let g = rg_us_tg[k];
+        rg_us[rg_fill[g]] = rg_us_tb[k];
+        rg_fill[g]++;
+    }
+    rg_mk_in.clear();
+    rg_mk_in.resize(nb, 0);
+    rg_mk_out.clear();
+    rg_mk_out.resize(nb, 0);
+    rg_pin_b.clear();
+    rg_pin_g.clear();
+    rg_pout_b.clear();
+    rg_pout_g.clear();
+    for g in 0..ng {
+        let id = rg_val[g];
+        let d: u32 = if id >= f_nins { 0 } else { rg_iblk[id] };
+        let stamp: u32 = g + 1;
+        rg_stk.clear();
+        for q in rg_us_s[g]..rg_us_s[g + 1] {
+            let u = rg_us[q] & 0x7FFFFFFF;
+            // (a use in the definition's block comes after the definition;
+            // a PHI edge from it is used at its end)
+            if u == d || rg_mk_in[u] == stamp { continue; }
+            rg_mk_in[u] = stamp;
+            rg_pin_b.push(u);
+            rg_pin_g.push(g);
+            rg_stk.push(u);
+        }
+        while rg_stk.len != 0 {
+            let x = rg_stk.pop();
+            for k in rg_ps[x]..rg_ps[x + 1] {
+                let p = rg_pl[k];
+                if rg_mk_out[p] != stamp {
+                    rg_mk_out[p] = stamp;
+                    rg_pout_b.push(p);
+                    rg_pout_g.push(g);
+                }
+                if p == d || rg_mk_in[p] == stamp { continue; }
+                rg_mk_in[p] = stamp;
+                rg_pin_b.push(p);
+                rg_pin_g.push(g);
+                rg_stk.push(p);
+            }
+        }
+    }
+    // per block, in increasing value order (a stable counting sort)
+    rg_csr(rg_pin_b, rg_pin_g, nb);
+    rg_li_s.clear();
+    rg_li_s.append(rg_cs_st);
+    rg_li.clear();
+    rg_li.append(rg_cs_out);
+    rg_csr(rg_pout_b, rg_pout_g, nb);
+    rg_lo_s.clear();
+    rg_lo_s.append(rg_cs_st);
+    rg_lo.clear();
+    rg_lo.append(rg_cs_out);
+}
+var rg_cs_st: u32[>..] = [];
+var rg_cs_out: u32[>..] = [];
+fn rg_csr(bs: const u32[:], gs: const u32[:], nb: u32) {
+    rg_cs_st.clear();
+    rg_cs_st.resize(nb + 1, 0);
+    for b in bs { rg_cs_st[b + 1]++; }
+    for b in 0..nb { rg_cs_st[b + 1] += rg_cs_st[b]; }
+    rg_cs_out.clear();
+    rg_cs_out.resize(rg_cs_st[nb], 0);
+    if rg_fill.len < nb { rg_fill.resize(nb, 0); }
+    for b in 0..nb { rg_fill[b] = rg_cs_st[b]; }
+    for k in 0..bs.len {
+        let b = bs[k];
+        rg_cs_out[rg_fill[b]] = gs[k];
+        rg_fill[b]++;
+    }
+}
+
 // Live segments of every global value, and the kill points (where a
 // segment ends inside a block).
 fn rg_segments(insts: const Inst[:], blocks: const Block[:]) {
@@ -364,14 +544,10 @@ fn rg_segments(insts: const Inst[:], blocks: const Block[:]) {
         let be: u32 = 2 * rg_blast[b] + 3;
         let fq: u32 = (1 as u32) << (3 * rg_bdepth[b]);
         // live-out values end at the block end
-        for x in 0..w {
-            var m = rg_lout[base + x];
-            while m != 0 {
-                let g: u32 = (x as u32) * 64 + ctz(m) as! u32;
-                m &= m - 1;
-                rg_seen[g] = b;
-                rg_tmpe[g] = be;
-            }
+        for q in rg_lo_s[b]..rg_lo_s[b + 1] {
+            let g = rg_lo[q];
+            rg_seen[g] = b;
+            rg_tmpe[g] = be;
         }
         // PHI incoming values used at the terminator
         let tj = rg_blast[b];
@@ -437,15 +613,11 @@ fn rg_segments(insts: const Inst[:], blocks: const Block[:]) {
             j--;
         }
         // values live into the block: a segment from its start
-        for x in 0..w {
-            var m = rg_lin[base + x];
-            while m != 0 {
-                let g: u32 = (x as u32) * 64 + ctz(m) as! u32;
-                m &= m - 1;
-                sg_v.push(g);
-                sg_s.push(bs);
-                sg_e.push(rg_tmpe[g]);
-            }
+        for q in rg_li_s[b]..rg_li_s[b + 1] {
+            let g = rg_li[q];
+            sg_v.push(g);
+            sg_s.push(bs);
+            sg_e.push(rg_tmpe[g]);
         }
         // arguments: live from the entry
         if b == 0 {
@@ -712,8 +884,7 @@ fn rg_assign() {
     for b in 0..rg_nb {
         let B = M.blocks[f_first_block + b];
         if B.n_inst == 0 || M.insts[B.first_inst].op != GIR_LANDINGPAD { continue; }
-        let base: i64 = w * b as i64;
-        for x in 0..w { rg_lpl[x] |= rg_lin[base + x]; }
+        for q in rg_li_s[b]..rg_li_s[b + 1] { rg_lpl[rg_li[q] >> 6] |= (1 as u64) << (rg_li[q] & 63); }
     }
     rq_tmp_j.clear();
     rq_tmp_v.clear();
@@ -864,15 +1035,9 @@ fn rg_finish(insts: const Inst[:], blocks: const Block[:]) {
     li_list.clear();
     for b in 0..nb {
         li_start.push(li_list.len as! u32);
-        let base: i64 = w * b as i64;
-        for x in 0..w {
-            var m = rg_lin[base + x];
-            while m != 0 {
-                let g: u32 = (x as u32) * 64 + ctz(m) as! u32;
-                m &= m - 1;
-                let id = rg_val[g];
-                if rg_reg[id] != NOREG { li_list.push(id); }
-            }
+        for q in rg_li_s[b]..rg_li_s[b + 1] {
+            let id = rg_val[rg_li[q]];
+            if rg_reg[id] != NOREG { li_list.push(id); }
         }
     }
     li_start.push(li_list.len as! u32);
