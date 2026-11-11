@@ -197,6 +197,12 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
             // with each instantiation of Outer that needs it complete
             let rs = crecs[r].scope as i64;
             if pending_tmpl >= 0 && rs >= 0 && scopes[rs].flags & SCF_PATTERN != 0 { cxs[s].odef = pending_tmpl as! i32; }
+            if member_cls.contains(r as u64) {
+                // template<> struct X<int>::Inner { }: an explicit specialization
+                // of the member class of an instantiation
+                member_cls.remove(r as u64);
+                if rs >= 0 { scopes[rs].flags = scopes[rs].flags & ~(SCF_INST_PENDING as! u8); }
+            }
         } else {
             // a member of an opaque class: parse and drop
             s = declare_tag(qn.name, is_union, loc, false, cur_scope);
@@ -340,6 +346,16 @@ recursive fn parse_class_body(r: i64, w: i64) {
             }
             if accept(TK_ELLIPSIS) { bt = mk_packexp(bt); }
             need_complete(bt);
+            if is_record(bt) && !is_opaque(bt) && !dependent_ctx() && records[rec_of(bt)].flags & RF_COMPLETE == 0 &&
+               crecs[rec_of(bt)].flags & CR_PATTERN == 0 && !inst_is_dirty(bt) {
+                // (the class itself among them: class C : C)
+                let bsc = crecs[rec_of(bt)].scope as i64;
+                if bsc < 0 || scopes[bsc].flags & (SCF_PATTERN | SCF_INST_PENDING) == 0 {
+                    if diag_suppress == 0 { err_at(tloc(), str("base class has incomplete type")); }
+                    if !accept(TK_COMMA) { break; }
+                    continue;
+                }
+            }
             cbscratch.push(Base { ty: bt, flags: bf, access: acc, rsv: 0, offset: 0 });
             if !accept(TK_COMMA) { break; }
         }
@@ -477,7 +493,8 @@ recursive fn parse_enum_spec_cx(ds: CDS&, ctx: i64) -> u32 {
     }
     cx_attrs(ea);
     var fixed: u32 = 0;
-    if at(TK_COLON) && (scoped || has_name || tk_n(1) != TK_IDENT || true) {
+    // (in a type-id, `enum E : ...` is not an enum-base: new enum E : E{} is ?:)
+    if at(TK_COLON) && !(ctx == DC_TYPEID && has_name && !scoped) {
         // : type-specifier-seq (not a bit-field width: that would need a declarator first)
         if !(ctx == DC_CLASS && !has_name && !scoped && !at_type_after_colon()) {
             adv();

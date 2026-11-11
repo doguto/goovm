@@ -417,6 +417,7 @@ recursive fn apply_user_conv(e: u32, uf: i64, p: u32) -> u32 {
     }
     let rt = types[syms[uf].ty >> 4].base;
     resolved_fn = uf;
+    if !cg_on { let m0 = nscratch.len; return typed_call(uf, e, m0, loc); }
     if cg_on {
         resolved_fn = -1;
         var o = e;
@@ -532,7 +533,21 @@ recursive fn build_call(f: i64, obj: u32, mark: i64, loc: u32, qualified: bool) 
         syms[f].flags = syms[f].flags | SF_USED;
         return mk_call(r, mark, loc);
     }
-    return typed_result(types[ft >> 4].base, loc);
+    return typed_call(f, obj, mark, loc);
+}
+
+// A call of f (resolved) in semantic-analysis mode: N_CXX op 7 of its
+// result type, a = f, b = the object (0 none), v/c = the arguments as
+// written (the constant evaluator converts them).
+fn typed_call(f: i64, obj: u32, mark: i64, loc: u32) -> u32 {
+    resolved_fn = f;
+    let n = typed_result(types[syms[f].ty >> 4].base, loc);
+    nodes[n].b = obj;
+    let st = nlist.len;
+    for j in mark..nscratch.len { nlist.push(nscratch[j]); }
+    nodes[n].v = st;
+    nodes[n].c = (nscratch.len - mark) as! u32;
+    return n;
 }
 
 fn has_defaults_needed(f: i64, mark: i64) -> bool { (nscratch.len - mark) < types[syms[f].ty >> 4].n }

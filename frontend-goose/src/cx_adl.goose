@@ -233,9 +233,18 @@ recursive fn resolve_oper(op: i64, l: u32, r: u32, post: bool, loc: u32) -> u32 
         nscratch.resize(mark);
         return c;
     }
+    // semantic analysis: the call with its operands (a member's object first)
+    if member {
+        let obj = nscratch[mark];
+        let m2 = nscratch.len;
+        for i in mark + 1..m2 { nscratch.push(nscratch[i]); }
+        let c = typed_call(f, obj, m2, loc);
+        nscratch.resize(mark);
+        return c;
+    }
+    let c = typed_call(f, 0, mark, loc);
     nscratch.resize(mark);
-    resolved_fn = f;
-    return typed_result(types[syms[f].ty >> 4].base, loc);
+    return c;
 }
 
 // Unqualified lookup of `name` skipping class scopes (non-member operator
