@@ -42,6 +42,11 @@ var xb_ty: i64 = 0;
 var xb_dt: i64 = 0;
 var xt_on = false;
 var xd_on = false;
+// (E2) source locations the inliner adds (the callee's locations inlined at
+// the call's): a copy of M.dlocs with the additions, which M then views
+var x_dlocs: DLoc[>..] = [];
+var xb_dl: i64 = 0;
+var xl_on = false;
 // Where this call's region of each output array starts (M views x_*[xb_*..]).
 var xb_i: i64 = 0;
 var xb_b: i64 = 0;
@@ -362,6 +367,17 @@ fn vec_type(n: u32, e: u32) -> u32 {
     M.types = x_types[xb_ty..];
     build_type_rc();
     return (x_types.len - xb_ty - 1) as! u32;
+}
+// (E2) A new source location (M.dlocs views the copy with it).
+fn new_dloc(L: DLoc) -> u32 {
+    if !xl_on {
+        xl_on = true;
+        xb_dl = x_dlocs.len;
+        x_dlocs.append(M.dlocs);
+    }
+    x_dlocs.push(L);
+    M.dlocs = x_dlocs[xb_dl..];
+    return (x_dlocs.len - xb_dl - 1) as! u32;
 }
 // (E2) A vector constant of type t whose bytes are b (16 at most).
 fn vec_const(t: u32, b: const u8[:]) -> u32 {
@@ -731,6 +747,7 @@ fn opt_module() {
     undef_c.clear();
     xt_on = false;
     xd_on = false;
+    xl_on = false;
     build_type_rc();
     o_dbg = M.dies.len != 0;
     opt_lv = M.header[0].r0 & 0xFF;
@@ -780,9 +797,9 @@ fn opt_module() {
     // the object sizes left unknown; the function is simplified once more
     // without them (the inliner, done now, saw them unfolded)
     for fi in fn_order { isconst_refine(fi); }
-    // internal functions whose calls were all inlined are not emitted
-    // (kept with debug information, whose subprograms name them)
-    if !o_dbg && !opt_off("inline") {
+    // internal functions whose calls were all inlined are not emitted (with
+    // debug information, their subprograms become abstract: opt_dbg.goose)
+    if !opt_off("inline") {
         for fi in 0..M.funcs.len {
             let F = M.funcs[fi];
             if F.flags & FN_INTERNAL == 0 || fn_calls[fi] != 0 || fn_addr[fi] != 0 { continue; }
@@ -793,6 +810,7 @@ fn opt_module() {
     isconst_lower();
     blockaddr_remap();
     remap_dies();
+    od_inlined_dies();
     if opt_dump_on() { dump_module(); }
     // (field by field: the other tables stay the host's)
     M.funcs = x_funcs[xb_f..];

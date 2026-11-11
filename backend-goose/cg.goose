@@ -42,6 +42,7 @@ import opt_cgp;
 import opt_loop;
 import opt_libc;
 import opt_vec;
+import opt_dbg;
 import lowerv;
 import opt_verify;
 import opt_dump;
