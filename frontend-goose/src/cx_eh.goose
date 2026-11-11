@@ -186,7 +186,20 @@ fn cleanup_code(c: Cleanup, below: i64) {
         start_block(d);
         ins_store(GIR_T_I8, c_i8(0), c.val, false);
     }
-    if c.kind == 2 {
+    if c.kind == 2 && always_inline_dtor(c.fsym) {
+        // an always_inline destructor: a call the lowering expands (clang does, even at -O0)
+        let loc = syms[c.sym].loc;
+        let fr = node(N_DECLREF, 0, syms[c.fsym].ty, c.fsym, 0, 0, loc);
+        nodes[fr].flags = NF_LVALUE;
+        let cal = node(N_ICAST, CK_FUNC2PTR, mk_ptr(syms[c.fsym].ty), fr as i64, 0, 0, loc);
+        let vr = node(N_DECLREF, 0, syms[c.sym].ty, c.sym, 0, 0, loc);
+        nodes[vr].flags = NF_LVALUE;
+        let m = nscratch.len;
+        nscratch.push(node(N_UNARY, U_ADDR, mk_ptr(syms[c.sym].ty), vr as i64, 0, 0, loc));
+        let start = commit_list(m);
+        let call = node_v(N_CALL, 0, t_void, cal as i64, 0, 1, loc, start);
+        gen_stmt(node(N_EXPR, 0, 0, call as i64, 0, 0, loc));
+    } else if c.kind == 2 {
         let fg = func_global(c.fsym);
         let addr = var_addr(c.sym);
         let s = m_opnds.len as! u32;
@@ -204,6 +217,20 @@ fn cleanup_code(c: Cleanup, below: i64) {
         start_block(skip);
     }
     eh_top = saved;
+}
+
+// Is destructor f (or the base variant it stands for) always_inline?
+fn always_inline_dtor(f: i64) -> bool {
+    if f < 0 || syms[f].kind != SK_FUNC { return false; }
+    var d = f;
+    if syms[d].def < 0 {
+        if d < cxl.len && cxl[d].alias >= 0 { d = cxl[d].alias as i64; }
+        else {
+            let d2 = defining_sym(link_name(d));
+            if d2 >= 0 { d = d2; }
+        }
+    }
+    return syms[d].def >= 0 && sym_has_attr(d, AM_ALWAYS_INLINE);
 }
 
 // ------------------------------------------------------------ calls
@@ -433,6 +460,7 @@ fn cx_aliases() {
         m_globals[g].func = tg;
         m_globals[g].aux = 0;
         m_globals[g].flags = (m_globals[tg].flags & (GF_WEAK | GF_HIDDEN | GF_INTERNAL | GF_LOCALREF)) | GF_DEFINED;
+        if (cxl[s].flags as i64) & CXL_OWNLINK != 0 { m_globals[g].flags = GF_DEFINED; }
         m_globals[g].align = m_globals[tg].align;
         glob_gen[g].state = 2;
     }
@@ -463,6 +491,37 @@ fn keep_cx_uses(s: i64) {
             work.push(g);
         }
     }
+}
+
+// File-scope asm made only of .globl directives (libstdc++'s <iostream>:
+// .globl _ZSt21ios_base_library_initv): undefined global symbols, as the
+// assembler makes them. False for anything else.
+fn module_asm_globl(sn: u32) -> bool {
+    if sn == 0 || nodes[sn].kind != N_STRING { return false; }
+    let si = nodes[sn].a as i64;
+    let st = strs[si].start as i64;
+    var n = strs[si].len as i64;
+    while n > 0 && strbytes[st + n - 1] == 0 { n--; }
+    let txt = strbytes[st..st + n];
+    // every line: .globl <name>
+    var i: i64 = 0;
+    var names: i64 = 0;
+    loop {
+        while i < n && (txt[i] == ' ' || txt[i] == '\t' || txt[i] == '\n' || txt[i] == ';') { i++; }
+        if i >= n { break; }
+        let d = ".globl";
+        if i + d.len > n || txt[i..i + d.len] != d { return false; }
+        i += d.len;
+        if i >= n || (txt[i] != ' ' && txt[i] != '\t') { return false; }
+        while i < n && (txt[i] == ' ' || txt[i] == '\t') { i++; }
+        let b = i;
+        while i < n && txt[i] != ' ' && txt[i] != '\t' && txt[i] != '\n' && txt[i] != ';' { i++; }
+        if i == b { return false; }
+        let g = global_by_name(intern(txt[b..i]), true);
+        note_use(g);
+        names++;
+    }
+    return names > 0;
 }
 
 // The comdats of the C++ symbols' globals (at the end of the unit), and

@@ -1,0 +1,3162 @@
+[
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/myWindows/myGetTickCount.cpp",
+  "program": "7zip",
+  "gE_off": 0.05176546399889048,
+  "gE_warm": 0.009755574999871897,
+  "gS_off": 0.059788995000417344,
+  "gS_warm": 0.053569296997011406,
+  "cE": 0.0999964180009556,
+  "cS": 0.3044603489979636
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/myWindows/wine_date_and_time.cpp",
+  "program": "7zip",
+  "gE_off": 0.015613178999046795,
+  "gE_warm": 0.00904114199875039,
+  "gS_off": 0.011959937997744419,
+  "gS_warm": 0.005480406998685794,
+  "cE": 0.05610058700040099,
+  "cS": 0.07634863999919617
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/myWindows/myAddExeFlag.cpp",
+  "program": "7zip",
+  "gE_off": 0.03196436000143876,
+  "gE_warm": 0.006888791998790111,
+  "gS_off": 0.04845298599684611,
+  "gS_warm": 0.043296850999468006,
+  "cE": 0.09814589099914883,
+  "cS": 0.2424055320007028
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/myWindows/mySplitCommandLine.cpp",
+  "program": "7zip",
+  "gE_off": 0.0316051760019036,
+  "gE_warm": 0.004942760999256279,
+  "gS_off": 0.05661923400111846,
+  "gS_warm": 0.04448605000288808,
+  "cE": 0.08474024799943436,
+  "cS": 0.3783685089983919
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/BenchCon.cpp",
+  "program": "7zip",
+  "gE_off": 0.016245542999968166,
+  "gE_warm": 0.0037810600006196182,
+  "gS_off": 0.02807189200029825,
+  "gS_warm": 0.04379281500223442,
+  "cE": 0.06361075200038613,
+  "cS": 0.4008962230000179
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/ConsoleClose.cpp",
+  "program": "7zip",
+  "gE_off": 0.030321038997499272,
+  "gE_warm": 0.0037747970018244814,
+  "gS_off": 0.03575074500258779,
+  "gS_warm": 0.02989358299964806,
+  "cE": 0.11926950400084024,
+  "cS": 0.38496626100095455
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/ExtractCallbackConsole.cpp",
+  "program": "7zip",
+  "gE_off": 0.036068148001504596,
+  "gE_warm": 0.004400525001983624,
+  "gS_off": 0.03738376199908089,
+  "gS_warm": 0.04531940499873599,
+  "cE": 0.1183093559993722,
+  "cS": 0.4797809980009333
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/List.cpp",
+  "program": "7zip",
+  "gE_off": 0.04428000099869678,
+  "gE_warm": 0.013519141997676343,
+  "gS_off": 0.04184485299992957,
+  "gS_warm": 0.060985560001427075,
+  "cE": 0.10392805100127589,
+  "cS": 0.37530424099895754
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/Main.cpp",
+  "program": "7zip",
+  "gE_off": 0.023812030998669798,
+  "gE_warm": 0.008608593001554254,
+  "gS_off": 0.0791014050009835,
+  "gS_warm": 0.038563119000173174,
+  "cE": 0.1534929250010464,
+  "cS": 0.42681936900044093
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/MainAr.cpp",
+  "program": "7zip",
+  "gE_off": 0.023935064000397688,
+  "gE_warm": 0.009310114997788332,
+  "gS_off": 0.05043201900116401,
+  "gS_warm": 0.04991279199748533,
+  "cE": 0.10205549300007988,
+  "cS": 0.4029096300000674
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/OpenCallbackConsole.cpp",
+  "program": "7zip",
+  "gE_off": 0.026880055000219727,
+  "gE_warm": 0.005236823999439366,
+  "gS_off": 0.05729744299969752,
+  "gS_warm": 0.04537896599867963,
+  "cE": 0.12260500899719773,
+  "cS": 0.42297705600140034
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/PercentPrinter.cpp",
+  "program": "7zip",
+  "gE_off": 0.03272358399772202,
+  "gE_warm": 0.00703786600206513,
+  "gS_off": 0.036451754000154324,
+  "gS_warm": 0.04356142800315865,
+  "cE": 0.11019117799878586,
+  "cS": 0.3779417050027405
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/UpdateCallbackConsole.cpp",
+  "program": "7zip",
+  "gE_off": 0.035475518998282496,
+  "gE_warm": 0.005940498002019012,
+  "gS_off": 0.0503324999990582,
+  "gS_warm": 0.03864142699967488,
+  "cE": 0.10542844199881074,
+  "cS": 0.37682661399958306
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Console/UserInputUtils.cpp",
+  "program": "7zip",
+  "gE_off": 0.024483108998538228,
+  "gE_warm": 0.004635592998965876,
+  "gS_off": 0.036764417000085814,
+  "gS_warm": 0.02198043599855737,
+  "cE": 0.12100110100072925,
+  "cS": 0.39531068799988134
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/CommandLineParser.cpp",
+  "program": "7zip",
+  "gE_off": 0.029301231999852462,
+  "gE_warm": 0.003720021999470191,
+  "gS_off": 0.06220189899977413,
+  "gS_warm": 0.02562938099799794,
+  "cE": 0.09043825600019773,
+  "cS": 0.28235319899977185
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/CRC.cpp",
+  "program": "7zip",
+  "gE_off": 0.030755408999539213,
+  "gE_warm": 0.003253270999266533,
+  "gS_off": 0.04315890099678654,
+  "gS_warm": 0.01961361199937528,
+  "cE": 0.1258096329984255,
+  "cS": 0.3789405130009982
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/IntToString.cpp",
+  "program": "7zip",
+  "gE_off": 0.03235069400034263,
+  "gE_warm": 0.006850748999568168,
+  "gS_off": 0.051764043997536646,
+  "gS_warm": 0.03175383599955239,
+  "cE": 0.08877652199953445,
+  "cS": 0.29822530499950517
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/ListFileUtils.cpp",
+  "program": "7zip",
+  "gE_off": 0.025429667002754286,
+  "gE_warm": 0.003942485000152374,
+  "gS_off": 0.06037865799953579,
+  "gS_warm": 0.037318745999073144,
+  "cE": 0.10780784699818469,
+  "cS": 0.3085511770004814
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/StdInStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.0229793120015529,
+  "gE_warm": 0.006538808000186691,
+  "gS_off": 0.05681386699870927,
+  "gS_warm": 0.038868797000759514,
+  "cE": 0.12338347499826341,
+  "cS": 0.3692352479993133
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/StdOutStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.025862722999590915,
+  "gE_warm": 0.0037747209971712437,
+  "gS_off": 0.04240204499728861,
+  "gS_warm": 0.03360198099835543,
+  "cE": 0.11101498299831292,
+  "cS": 0.387030458998197
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/MyString.cpp",
+  "program": "7zip",
+  "gE_off": 0.02773837900167564,
+  "gE_warm": 0.007541348997619934,
+  "gS_off": 0.06282712599931983,
+  "gS_warm": 0.023342354001215426,
+  "cE": 0.14921363399844267,
+  "cS": 0.36455171600027825
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/StringConvert.cpp",
+  "program": "7zip",
+  "gE_off": 0.03151323799829697,
+  "gE_warm": 0.003753041000891244,
+  "gS_off": 0.059613541001453996,
+  "gS_warm": 0.039858134998212336,
+  "cE": 0.11057693300244864,
+  "cS": 0.3737183269986417
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/StringToInt.cpp",
+  "program": "7zip",
+  "gE_off": 0.026852027000131784,
+  "gE_warm": 0.006206572998053161,
+  "gS_off": 0.04453616399769089,
+  "gS_warm": 0.02178681799705373,
+  "cE": 0.06050473399955081,
+  "cS": 0.1799637090007309
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/UTFConvert.cpp",
+  "program": "7zip",
+  "gE_off": 0.021982362002745504,
+  "gE_warm": 0.003250341000239132,
+  "gS_off": 0.03721388399935677,
+  "gS_warm": 0.034800279998307815,
+  "cE": 0.09353773499969975,
+  "cS": 0.21932817400011118
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/MyWindows.cpp",
+  "program": "7zip",
+  "gE_off": 0.01688814299996011,
+  "gE_warm": 0.0038184969998837914,
+  "gS_off": 0.03748911799993948,
+  "gS_warm": 0.04000443800032372,
+  "cE": 0.10257333600020502,
+  "cS": 0.2692333619997953
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/MyVector.cpp",
+  "program": "7zip",
+  "gE_off": 0.02034593500138726,
+  "gE_warm": 0.007595571998535888,
+  "gS_off": 0.06688212800145266,
+  "gS_warm": 0.028595749001397053,
+  "cE": 0.08004667400018661,
+  "cS": 0.25726440099970205
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Common/Wildcard.cpp",
+  "program": "7zip",
+  "gE_off": 0.035996038001030684,
+  "gE_warm": 0.0036614000018744264,
+  "gS_off": 0.055259395001485245,
+  "gS_warm": 0.02891345399984857,
+  "cE": 0.08096052800101461,
+  "cS": 0.2626833969989093
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/Error.cpp",
+  "program": "7zip",
+  "gE_off": 0.019332040999870514,
+  "gE_warm": 0.0038031290023354813,
+  "gS_off": 0.03918779499872471,
+  "gS_warm": 0.034826294002414215,
+  "cE": 0.09742453500075499,
+  "cS": 0.28379784999924595
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/FileDir.cpp",
+  "program": "7zip",
+  "gE_off": 0.0185942009993596,
+  "gE_warm": 0.004614010998921003,
+  "gS_off": 0.05715831400084426,
+  "gS_warm": 0.0399618500014185,
+  "cE": 0.09138462099872413,
+  "cS": 0.35107843299920205
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/FileFind.cpp",
+  "program": "7zip",
+  "gE_off": 0.025711753998621134,
+  "gE_warm": 0.004275622999557527,
+  "gS_off": 0.06452979200184927,
+  "gS_warm": 0.045161316000303486,
+  "cE": 0.11877221800023108,
+  "cS": 0.301105328999256
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/FileIO.cpp",
+  "program": "7zip",
+  "gE_off": 0.0249611229992297,
+  "gE_warm": 0.010710102997109061,
+  "gS_off": 0.04733382600170444,
+  "gS_warm": 0.040573942998889834,
+  "cE": 0.10234022000076948,
+  "cS": 0.30804751699906774
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/FileName.cpp",
+  "program": "7zip",
+  "gE_off": 0.02394620600171038,
+  "gE_warm": 0.003969225002947496,
+  "gS_off": 0.04615118099900428,
+  "gS_warm": 0.03973360099917045,
+  "cE": 0.08829408300152863,
+  "cS": 0.24379596300059347
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/PropVariant.cpp",
+  "program": "7zip",
+  "gE_off": 0.023487662998377346,
+  "gE_warm": 0.003527691998897353,
+  "gS_off": 0.04368521400101599,
+  "gS_warm": 0.0339345680004044,
+  "cE": 0.09274882099998649,
+  "cS": 0.24989236599867581
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/PropVariantConversions.cpp",
+  "program": "7zip",
+  "gE_off": 0.024315058002684964,
+  "gE_warm": 0.0040019690022745635,
+  "gS_off": 0.03601324800183647,
+  "gS_warm": 0.03589214300154708,
+  "cE": 0.08330038100029924,
+  "cS": 0.2807277020001493
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/Synchronization.cpp",
+  "program": "7zip",
+  "gE_off": 0.02802155999961542,
+  "gE_warm": 0.003777409001486376,
+  "gS_off": 0.052375365998159396,
+  "gS_warm": 0.03358687499712687,
+  "cE": 0.08105313899795874,
+  "cS": 0.2820914610019827
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/System.cpp",
+  "program": "7zip",
+  "gE_off": 0.00855358699845965,
+  "gE_warm": 0.0072358270008408,
+  "gS_off": 0.01195187999837799,
+  "gS_warm": 0.00515869099763222,
+  "cE": 0.03521131099842023,
+  "cS": 0.04599238999799127
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/Windows/Time.cpp",
+  "program": "7zip",
+  "gE_off": 0.01930060599988792,
+  "gE_warm": 0.0032165800002985634,
+  "gS_off": 0.03940476500065415,
+  "gS_warm": 0.039710287001071265,
+  "cE": 0.06949749599880306,
+  "cS": 0.25245021899900166
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/CreateCoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.023824801999580814,
+  "gE_warm": 0.00842716699844459,
+  "gS_off": 0.03507293900111108,
+  "gS_warm": 0.03074408999964362,
+  "cE": 0.07058212899937644,
+  "cS": 0.283781212001486
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/CWrappers.cpp",
+  "program": "7zip",
+  "gE_off": 0.02445400600117864,
+  "gE_warm": 0.003703853999468265,
+  "gS_off": 0.03879241499816999,
+  "gS_warm": 0.029263861000799807,
+  "cE": 0.08304265499828034,
+  "cS": 0.26557472399872495
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/FilePathAutoRename.cpp",
+  "program": "7zip",
+  "gE_off": 0.02511739699912141,
+  "gE_warm": 0.009668891001638258,
+  "gS_off": 0.03821547500047018,
+  "gS_warm": 0.03395980400091503,
+  "cE": 0.09843864000140456,
+  "cS": 0.2680014220022713
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/FileStreams.cpp",
+  "program": "7zip",
+  "gE_off": 0.024454589998640586,
+  "gE_warm": 0.004923410000628792,
+  "gS_off": 0.0413556419989618,
+  "gS_warm": 0.027516141002706718,
+  "cE": 0.08568948800166254,
+  "cS": 0.26611682799921255
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/FilterCoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.021361776001867838,
+  "gE_warm": 0.003679941000882536,
+  "gS_off": 0.03531924700291711,
+  "gS_warm": 0.027143384999362752,
+  "cE": 0.07332496999879368,
+  "cS": 0.2609301049997157
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/InBuffer.cpp",
+  "program": "7zip",
+  "gE_off": 0.01967796299868496,
+  "gE_warm": 0.0034861109998018946,
+  "gS_off": 0.04749248499865644,
+  "gS_warm": 0.029522636999899987,
+  "cE": 0.09719156099890824,
+  "cS": 0.2864026900024328
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/InOutTempBuffer.cpp",
+  "program": "7zip",
+  "gE_off": 0.02451754999856348,
+  "gE_warm": 0.006505220000690315,
+  "gS_off": 0.03750349699839717,
+  "gS_warm": 0.033201697002368746,
+  "cE": 0.08510054100042908,
+  "cS": 0.28587239799890085
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/LimitedStreams.cpp",
+  "program": "7zip",
+  "gE_off": 0.021796162000100594,
+  "gE_warm": 0.004082971001480473,
+  "gS_off": 0.0655715600005351,
+  "gS_warm": 0.03595861400026479,
+  "cE": 0.10380545600128244,
+  "cS": 0.2648712689988315
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/LockedStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.024885079001251142,
+  "gE_warm": 0.00480629300000146,
+  "gS_off": 0.04489612299948931,
+  "gS_warm": 0.029768714997771895,
+  "cE": 0.08043724399976782,
+  "cS": 0.2623595129989553
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/MemBlocks.cpp",
+  "program": "7zip",
+  "gE_off": 0.024503434000507696,
+  "gE_warm": 0.007938979000755353,
+  "gS_off": 0.03989919900050154,
+  "gS_warm": 0.030688640999869676,
+  "cE": 0.097866152998904,
+  "cS": 0.2679360949987313
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/MethodId.cpp",
+  "program": "7zip",
+  "gE_off": 0.022559749999345513,
+  "gE_warm": 0.0060561390018847305,
+  "gS_off": 0.03689853199830395,
+  "gS_warm": 0.0289675130006799,
+  "cE": 0.08566300699749263,
+  "cS": 0.25013749999925494
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/MethodProps.cpp",
+  "program": "7zip",
+  "gE_off": 0.024090320999675896,
+  "gE_warm": 0.004055020999658154,
+  "gS_off": 0.04334510000262526,
+  "gS_warm": 0.03678870099975029,
+  "cE": 0.12217605300247669,
+  "cS": 0.2573990849996335
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/OffsetStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.03885440600060974,
+  "gE_warm": 0.005151026998646557,
+  "gS_off": 0.051257574999908684,
+  "gS_warm": 0.021559419001278002,
+  "cE": 0.07435473599980469,
+  "cS": 0.24997430399889708
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/OutBuffer.cpp",
+  "program": "7zip",
+  "gE_off": 0.028603201997611905,
+  "gE_warm": 0.004044823999720393,
+  "gS_off": 0.04426873299962608,
+  "gS_warm": 0.03101170299851219,
+  "cE": 0.07743008300167276,
+  "cS": 0.2303187440011243
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/OutMemStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.023277154003153555,
+  "gE_warm": 0.0049976980008068494,
+  "gS_off": 0.04624400700049591,
+  "gS_warm": 0.033877319998282474,
+  "cE": 0.07917213600012474,
+  "cS": 0.26959130999966874
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/ProgressMt.cpp",
+  "program": "7zip",
+  "gE_off": 0.020161893000476994,
+  "gE_warm": 0.008003864000784233,
+  "gS_off": 0.050890676997369155,
+  "gS_warm": 0.031060100998729467,
+  "cE": 0.06272317199909594,
+  "cS": 0.2380638110007567
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/ProgressUtils.cpp",
+  "program": "7zip",
+  "gE_off": 0.02367324000078952,
+  "gE_warm": 0.010764777001895709,
+  "gS_off": 0.03272414499951992,
+  "gS_warm": 0.026732054000603966,
+  "cE": 0.08905764000155614,
+  "cS": 0.1898528389974672
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/StreamBinder.cpp",
+  "program": "7zip",
+  "gE_off": 0.02417412599970703,
+  "gE_warm": 0.003920622999430634,
+  "gS_off": 0.03317147300185752,
+  "gS_warm": 0.019730398002138827,
+  "cE": 0.056722444998740684,
+  "cS": 0.19076755000060075
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/StreamObjects.cpp",
+  "program": "7zip",
+  "gE_off": 0.016137472000991693,
+  "gE_warm": 0.003738478997547645,
+  "gS_off": 0.030641549001302337,
+  "gS_warm": 0.01976797300085309,
+  "cE": 0.05863205500281765,
+  "cS": 0.18267988200022955
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/StreamUtils.cpp",
+  "program": "7zip",
+  "gE_off": 0.029131314000551356,
+  "gE_warm": 0.003955596999730915,
+  "gS_off": 0.05816321699967375,
+  "gS_warm": 0.02947232899896335,
+  "cE": 0.06728071299949079,
+  "cS": 0.1803244069997163
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Common/VirtThread.cpp",
+  "program": "7zip",
+  "gE_off": 0.016094414997496642,
+  "gE_warm": 0.0035949449993495364,
+  "gS_off": 0.02998646500054747,
+  "gS_warm": 0.019000106000021333,
+  "cE": 0.09421837899935781,
+  "cS": 0.27151571400099783
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/ArchiveCommandLine.cpp",
+  "program": "7zip",
+  "gE_off": 0.039998688000196125,
+  "gE_warm": 0.00681831000110833,
+  "gS_off": 0.0367221700034861,
+  "gS_warm": 0.04728588099897024,
+  "cE": 0.07072976899871719,
+  "cS": 0.21323835200018948
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/ArchiveExtractCallback.cpp",
+  "program": "7zip",
+  "gE_off": 0.01619221600049059,
+  "gE_warm": 0.0037635160006175283,
+  "gS_off": 0.044788033002987504,
+  "gS_warm": 0.02783169599933899,
+  "cE": 0.10975720900023589,
+  "cS": 0.33527578500070376
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/ArchiveOpenCallback.cpp",
+  "program": "7zip",
+  "gE_off": 0.01720169300097041,
+  "gE_warm": 0.003543335998983821,
+  "gS_off": 0.02900697099903482,
+  "gS_warm": 0.021766152000054717,
+  "cE": 0.08907249100229819,
+  "cS": 0.19334466600048472
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/Bench.cpp",
+  "program": "7zip",
+  "gE_off": 0.019684348000737373,
+  "gE_warm": 0.006830587000877131,
+  "gS_off": 0.03648293600053876,
+  "gS_warm": 0.026136965003388468,
+  "cE": 0.06000789600147982,
+  "cS": 0.21949052099807886
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/DefaultName.cpp",
+  "program": "7zip",
+  "gE_off": 0.016245154998614453,
+  "gE_warm": 0.008009542998479446,
+  "gS_off": 0.04938229700201191,
+  "gS_warm": 0.029257976002554642,
+  "cE": 0.05533972600096604,
+  "cS": 0.2639114060002612
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/EnumDirItems.cpp",
+  "program": "7zip",
+  "gE_off": 0.017544997001095908,
+  "gE_warm": 0.0034596580007928424,
+  "gS_off": 0.028722154998831684,
+  "gS_warm": 0.0216045600027428,
+  "cE": 0.07843925699853571,
+  "cS": 0.27664174100209493
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/Extract.cpp",
+  "program": "7zip",
+  "gE_off": 0.016540295000595506,
+  "gE_warm": 0.005948725000052946,
+  "gS_off": 0.030738892000954365,
+  "gS_warm": 0.04680280499815126,
+  "cE": 0.08847917599996435,
+  "cS": 0.3107762920008099
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/ExtractingFilePath.cpp",
+  "program": "7zip",
+  "gE_off": 0.01624988299954566,
+  "gE_warm": 0.007950810999318492,
+  "gS_off": 0.05253021300086402,
+  "gS_warm": 0.036825660998147214,
+  "cE": 0.06651147099910304,
+  "cS": 0.21007135100080632
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/LoadCodecs.cpp",
+  "program": "7zip",
+  "gE_off": 0.01660646500022267,
+  "gE_warm": 0.003368268000485841,
+  "gS_off": 0.04127347100074985,
+  "gS_warm": 0.023311679000471486,
+  "cE": 0.06614422400161857,
+  "cS": 0.18653556799836224
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/OpenArchive.cpp",
+  "program": "7zip",
+  "gE_off": 0.017754569998942316,
+  "gE_warm": 0.006065426001441665,
+  "gS_off": 0.0300336159998551,
+  "gS_warm": 0.03411383999991813,
+  "cE": 0.09119157299937797,
+  "cS": 0.28392975400129217
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/PropIDUtils.cpp",
+  "program": "7zip",
+  "gE_off": 0.015532073000940727,
+  "gE_warm": 0.0034423739998601377,
+  "gS_off": 0.028929276999406284,
+  "gS_warm": 0.03796820000206935,
+  "cE": 0.10799270899951807,
+  "cS": 0.2235507300028985
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/SetProperties.cpp",
+  "program": "7zip",
+  "gE_off": 0.01631891699798871,
+  "gE_warm": 0.0036736660003953148,
+  "gS_off": 0.03982268199979444,
+  "gS_warm": 0.04047207500116201,
+  "cE": 0.0909926499989524,
+  "cS": 0.2708976510002685
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/SortUtils.cpp",
+  "program": "7zip",
+  "gE_off": 0.035523312999430345,
+  "gE_warm": 0.007628296996699646,
+  "gS_off": 0.034734136002953164,
+  "gS_warm": 0.028801235002902104,
+  "cE": 0.06361947100231191,
+  "cS": 0.21410563500103308
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/TempFiles.cpp",
+  "program": "7zip",
+  "gE_off": 0.015554157998849405,
+  "gE_warm": 0.0032777070009615272,
+  "gS_off": 0.02923552599895629,
+  "gS_warm": 0.021949350000795675,
+  "cE": 0.08162281200202415,
+  "cS": 0.19065325200062944
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/Update.cpp",
+  "program": "7zip",
+  "gE_off": 0.020576000002620276,
+  "gE_warm": 0.005652478997944854,
+  "gS_off": 0.053431176998856245,
+  "gS_warm": 0.028702013001748128,
+  "cE": 0.07595831299840938,
+  "cS": 0.3594706110015977
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/UpdateAction.cpp",
+  "program": "7zip",
+  "gE_off": 0.015163385000050766,
+  "gE_warm": 0.00659646400163183,
+  "gS_off": 0.04546749800283578,
+  "gS_warm": 0.04094426200026646,
+  "cE": 0.10274722399844904,
+  "cS": 0.17577880200042273
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/UpdateCallback.cpp",
+  "program": "7zip",
+  "gE_off": 0.016538743999262806,
+  "gE_warm": 0.004457716000615619,
+  "gS_off": 0.029624650996993296,
+  "gS_warm": 0.020976026000425918,
+  "cE": 0.1017312949988991,
+  "cS": 0.4386453930019343
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/UpdatePair.cpp",
+  "program": "7zip",
+  "gE_off": 0.03400157600117382,
+  "gE_warm": 0.00598093299777247,
+  "gS_off": 0.05345701600163011,
+  "gS_warm": 0.03913631999967038,
+  "cE": 0.09367264400134445,
+  "cS": 0.47605638399909367
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/UI/Common/UpdateProduce.cpp",
+  "program": "7zip",
+  "gE_off": 0.03130539200355997,
+  "gE_warm": 0.008231216997955926,
+  "gS_off": 0.04761330199835356,
+  "gS_warm": 0.04888915999981691,
+  "cE": 0.10970628499853774,
+  "cS": 0.4173568959995464
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Bz2Handler.cpp",
+  "program": "7zip",
+  "gE_off": 0.034655624000151874,
+  "gE_warm": 0.010821681000379613,
+  "gS_off": 0.058228824000252644,
+  "gS_warm": 0.07196329399812385,
+  "cE": 0.09740691600018181,
+  "cS": 0.36839746400073636
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/DeflateProps.cpp",
+  "program": "7zip",
+  "gE_off": 0.022426756000641035,
+  "gE_warm": 0.005648294001730392,
+  "gS_off": 0.03132203799759736,
+  "gS_warm": 0.04613244400024996,
+  "cE": 0.09224546300174552,
+  "cS": 0.19689323700004024
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/GzHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.017903173000377137,
+  "gE_warm": 0.007974322001246037,
+  "gS_off": 0.04018810900015524,
+  "gS_warm": 0.040725738002947764,
+  "cE": 0.07598858200071845,
+  "cS": 0.26401428900135215
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/LzmaHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.015645613999367924,
+  "gE_warm": 0.0036613920019590296,
+  "gS_off": 0.030689841998537304,
+  "gS_warm": 0.03162601999792969,
+  "cE": 0.08980436899946653,
+  "cS": 0.195223442002316
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/PpmdHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.02570440999988932,
+  "gE_warm": 0.0062090469982649665,
+  "gS_off": 0.03149523899992346,
+  "gS_warm": 0.03221953499814845,
+  "cE": 0.11203213499902631,
+  "cS": 0.24890821799999685
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/SplitHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.02077994499995839,
+  "gE_warm": 0.0038133199996082112,
+  "gS_off": 0.03889233699737815,
+  "gS_warm": 0.027624777998425998,
+  "cE": 0.05751376699845423,
+  "cS": 0.2502034159988398
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/XzHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.016240721997746732,
+  "gE_warm": 0.00865790700117941,
+  "gS_off": 0.030607464999775402,
+  "gS_warm": 0.030520543998136418,
+  "cE": 0.06771721800032537,
+  "cS": 0.19925816699833376
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/ZHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.01670966299934662,
+  "gE_warm": 0.005252069000562187,
+  "gS_off": 0.03261180999834323,
+  "gS_warm": 0.037479979000636376,
+  "cE": 0.05797954599984223,
+  "cS": 0.25695735100089223
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/CoderMixer2.cpp",
+  "program": "7zip",
+  "gE_off": 0.02798988400172675,
+  "gE_warm": 0.005007244999433169,
+  "gS_off": 0.03094453099765815,
+  "gS_warm": 0.01908653099962976,
+  "cE": 0.05895931700069923,
+  "cS": 0.18394192299820133
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/CoderMixer2MT.cpp",
+  "program": "7zip",
+  "gE_off": 0.01516543900288525,
+  "gE_warm": 0.007946008001454175,
+  "gS_off": 0.03188660600062576,
+  "gS_warm": 0.020061911000084365,
+  "cE": 0.07086777800213895,
+  "cS": 0.18831017599950428
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/CrossThreadProgress.cpp",
+  "program": "7zip",
+  "gE_off": 0.014943694000976393,
+  "gE_warm": 0.0031142399966483936,
+  "gS_off": 0.02666279500044766,
+  "gS_warm": 0.028416139997716527,
+  "cE": 0.05499480299840798,
+  "cS": 0.21692992799944477
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/DummyOutStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.023059682000166504,
+  "gE_warm": 0.0038996709990897216,
+  "gS_off": 0.040040211999439634,
+  "gS_warm": 0.02208835000055842,
+  "cE": 0.06790909899791586,
+  "cS": 0.17450444099813467
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/FindSignature.cpp",
+  "program": "7zip",
+  "gE_off": 0.01571669899931294,
+  "gE_warm": 0.0034487430020817555,
+  "gS_off": 0.03643896600260632,
+  "gS_warm": 0.030564319000404794,
+  "cE": 0.05381601699991734,
+  "cS": 0.16531347799900686
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/HandlerOut.cpp",
+  "program": "7zip",
+  "gE_off": 0.01526204800029518,
+  "gE_warm": 0.0034459060007066,
+  "gS_off": 0.027679481001541717,
+  "gS_warm": 0.02095849800025462,
+  "cE": 0.07999837600073079,
+  "cS": 0.18680089400004363
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/InStreamWithCRC.cpp",
+  "program": "7zip",
+  "gE_off": 0.015036930002679583,
+  "gE_warm": 0.002980916000524303,
+  "gS_off": 0.02650925499983714,
+  "gS_warm": 0.01825743800145574,
+  "cE": 0.05520138900101301,
+  "cS": 0.1708513839985244
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/ItemNameUtils.cpp",
+  "program": "7zip",
+  "gE_off": 0.015554637997411191,
+  "gE_warm": 0.0033977370003412943,
+  "gS_off": 0.05864858499990078,
+  "gS_warm": 0.027600828998401994,
+  "cE": 0.06314946900238283,
+  "cS": 0.2225575160009612
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/MultiStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.02044617499996093,
+  "gE_warm": 0.007451822999428259,
+  "gS_off": 0.039516857999842614,
+  "gS_warm": 0.023042066000925843,
+  "cE": 0.0697688760010351,
+  "cS": 0.18195996500071487
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/OutStreamWithCRC.cpp",
+  "program": "7zip",
+  "gE_off": 0.020039623999764444,
+  "gE_warm": 0.003736376002052566,
+  "gS_off": 0.0367554590011423,
+  "gS_warm": 0.024557963999541244,
+  "cE": 0.07443313499970827,
+  "cS": 0.23149007199754124
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Common/ParseProperties.cpp",
+  "program": "7zip",
+  "gE_off": 0.028310883000813192,
+  "gE_warm": 0.007962019000842702,
+  "gS_off": 0.030487170999549562,
+  "gS_warm": 0.03083018400138826,
+  "cE": 0.08465753500058781,
+  "cS": 0.2571574290013814
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zCompressionMode.cpp",
+  "program": "7zip",
+  "gE_off": 0.03596298599950387,
+  "gE_warm": 0.0057764240009419154,
+  "gS_off": 0.029204524002125254,
+  "gS_warm": 0.020115798000915674,
+  "cE": 0.06846779099942069,
+  "cS": 0.2563556039967807
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zDecode.cpp",
+  "program": "7zip",
+  "gE_off": 0.01614137399883475,
+  "gE_warm": 0.007628789000591496,
+  "gS_off": 0.043464925001899246,
+  "gS_warm": 0.04365492000215454,
+  "cE": 0.0995719940001436,
+  "cS": 0.25991305600109627
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zEncode.cpp",
+  "program": "7zip",
+  "gE_off": 0.03898117000062484,
+  "gE_warm": 0.01156337800057372,
+  "gS_off": 0.06505979300345643,
+  "gS_warm": 0.03623486299693468,
+  "cE": 0.08450458900188096,
+  "cS": 0.21041906900063623
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zExtract.cpp",
+  "program": "7zip",
+  "gE_off": 0.027091984997241525,
+  "gE_warm": 0.006205434001458343,
+  "gS_off": 0.05701821099864901,
+  "gS_warm": 0.030306278000352904,
+  "cE": 0.07491898900116212,
+  "cS": 0.23313383500135387
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zFolderInStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.024774121997324983,
+  "gE_warm": 0.003985487997852033,
+  "gS_off": 0.05487168800027575,
+  "gS_warm": 0.026509360999625642,
+  "cE": 0.07188776900147786,
+  "cS": 0.1924379960000806
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zFolderOutStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.015898845998890465,
+  "gE_warm": 0.0034545150010671932,
+  "gS_off": 0.037315582998417085,
+  "gS_warm": 0.02010838100250112,
+  "cE": 0.056888201001129346,
+  "cS": 0.23524910700143664
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.01582137700097519,
+  "gE_warm": 0.0036137099996267352,
+  "gS_off": 0.03414383299968904,
+  "gS_warm": 0.031078945998160634,
+  "cE": 0.05719506800232921,
+  "cS": 0.20165701399673708
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zHandlerOut.cpp",
+  "program": "7zip",
+  "gE_off": 0.016006085999833886,
+  "gE_warm": 0.004526410997641506,
+  "gS_off": 0.04088660100023844,
+  "gS_warm": 0.021790116999909515,
+  "cE": 0.058433116999367485,
+  "cS": 0.20535407599891187
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zHeader.cpp",
+  "program": "7zip",
+  "gE_off": 0.014461560000199825,
+  "gE_warm": 0.0028995640022912994,
+  "gS_off": 0.02923851699961233,
+  "gS_warm": 0.021601412001473363,
+  "cE": 0.055253052996704355,
+  "cS": 0.19903195100050652
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zIn.cpp",
+  "program": "7zip",
+  "gE_off": 0.016370213001209777,
+  "gE_warm": 0.003968730001361109,
+  "gS_off": 0.050752623999869684,
+  "gS_warm": 0.023082370000338415,
+  "cE": 0.08969638399867108,
+  "cS": 0.21833170500030974
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zOut.cpp",
+  "program": "7zip",
+  "gE_off": 0.017025640001520514,
+  "gE_warm": 0.004568645999825094,
+  "gS_off": 0.030258464998041745,
+  "gS_warm": 0.024120578997099074,
+  "cE": 0.05996566099929623,
+  "cS": 0.21791091499835602
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zProperties.cpp",
+  "program": "7zip",
+  "gE_off": 0.018101421002938878,
+  "gE_warm": 0.007980850001331419,
+  "gS_off": 0.030338583997945534,
+  "gS_warm": 0.02749708899864345,
+  "cE": 0.08342234399970039,
+  "cS": 0.195646594002028
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zSpecStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.016124748999573058,
+  "gE_warm": 0.0032981410004140344,
+  "gS_off": 0.02783079499931773,
+  "gS_warm": 0.03758982599902083,
+  "cE": 0.06635939900297672,
+  "cS": 0.1920171419988037
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zUpdate.cpp",
+  "program": "7zip",
+  "gE_off": 0.01758322100067744,
+  "gE_warm": 0.004393663002701942,
+  "gS_off": 0.03356938000069931,
+  "gS_warm": 0.02670435799882398,
+  "cE": 0.08580941900072503,
+  "cS": 0.24658741500024917
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/7z/7zRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.016200287001993274,
+  "gE_warm": 0.003443703997618286,
+  "gS_off": 0.02941419700073311,
+  "gS_warm": 0.0201315459999023,
+  "cE": 0.057050385999900755,
+  "cS": 0.18596636199799832
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Cab/CabBlockInStream.cpp",
+  "program": "7zip",
+  "gE_off": 0.019614205000834772,
+  "gE_warm": 0.007219877999887103,
+  "gS_off": 0.027408523001213325,
+  "gS_warm": 0.01940707800167729,
+  "cE": 0.055025486999511486,
+  "cS": 0.16805778699927032
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Cab/CabHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.015866599998844322,
+  "gE_warm": 0.003930074999516364,
+  "gS_off": 0.03064012400136562,
+  "gS_warm": 0.03608142400116776,
+  "cE": 0.06683184500070638,
+  "cS": 0.2673443640014739
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Cab/CabHeader.cpp",
+  "program": "7zip",
+  "gE_off": 0.015733342999737943,
+  "gE_warm": 0.0033181269973283634,
+  "gS_off": 0.0402690379996784,
+  "gS_warm": 0.02440604399816948,
+  "cE": 0.07330100200124434,
+  "cS": 0.22329881999758072
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Cab/CabIn.cpp",
+  "program": "7zip",
+  "gE_off": 0.015678454001317732,
+  "gE_warm": 0.0033090780016209465,
+  "gS_off": 0.030625411000073655,
+  "gS_warm": 0.02636400199844502,
+  "cE": 0.079272917999333,
+  "cS": 0.18695667900101398
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Cab/CabRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.023859369997808244,
+  "gE_warm": 0.005840261997946072,
+  "gS_off": 0.040841456000634935,
+  "gS_warm": 0.028537751000840217,
+  "cE": 0.05914306100021349,
+  "cS": 0.1876230410016433
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Tar/TarHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.029429346999677364,
+  "gE_warm": 0.0046011109989194665,
+  "gS_off": 0.04164376500193612,
+  "gS_warm": 0.03257124200172257,
+  "cE": 0.09877814400169882,
+  "cS": 0.25204183499954524
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Tar/TarHandlerOut.cpp",
+  "program": "7zip",
+  "gE_off": 0.025758133000636008,
+  "gE_warm": 0.009172977999696741,
+  "gS_off": 0.053788319000886986,
+  "gS_warm": 0.0202734539998346,
+  "cE": 0.08255795199875138,
+  "cS": 0.25545277499986696
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Tar/TarHeader.cpp",
+  "program": "7zip",
+  "gE_off": 0.015693733999796677,
+  "gE_warm": 0.0034265940012119245,
+  "gS_off": 0.03186508200087701,
+  "gS_warm": 0.02003366699864273,
+  "cE": 0.07425525100188679,
+  "cS": 0.1957722430015565
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Tar/TarIn.cpp",
+  "program": "7zip",
+  "gE_off": 0.016120840999064967,
+  "gE_warm": 0.0058331600012024865,
+  "gS_off": 0.04080424799758475,
+  "gS_warm": 0.02006297700063442,
+  "cE": 0.08777069400093751,
+  "cS": 0.2736598940027761
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Tar/TarOut.cpp",
+  "program": "7zip",
+  "gE_off": 0.01588059800269548,
+  "gE_warm": 0.0034277159975317772,
+  "gS_off": 0.028758303000358865,
+  "gS_warm": 0.04148106499997084,
+  "cE": 0.057071995001024334,
+  "cS": 0.18929893699896638
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Tar/TarUpdate.cpp",
+  "program": "7zip",
+  "gE_off": 0.015970493001077557,
+  "gE_warm": 0.0035174500007997267,
+  "gS_off": 0.028049551001458894,
+  "gS_warm": 0.01972046100127045,
+  "cE": 0.08003425900096772,
+  "cS": 0.18682839599932777
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Tar/TarRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.016016744000808103,
+  "gE_warm": 0.0059685299966076855,
+  "gS_off": 0.031894023002678296,
+  "gS_warm": 0.02198508400033461,
+  "cE": 0.05475089300307445,
+  "cS": 0.17655036900032428
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Zip/ZipAddCommon.cpp",
+  "program": "7zip",
+  "gE_off": 0.03329808800117462,
+  "gE_warm": 0.007512980999308638,
+  "gS_off": 0.03405821799969999,
+  "gS_warm": 0.022565963001397904,
+  "cE": 0.0692722470012086,
+  "cS": 0.21075725500122644
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Zip/ZipHandler.cpp",
+  "program": "7zip",
+  "gE_off": 0.01814868099972955,
+  "gE_warm": 0.004520340000453871,
+  "gS_off": 0.032376071001635864,
+  "gS_warm": 0.02874006499769166,
+  "cE": 0.06064330000299378,
+  "cS": 0.2390098340001714
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Zip/ZipHandlerOut.cpp",
+  "program": "7zip",
+  "gE_off": 0.016681796001648763,
+  "gE_warm": 0.004035950001707533,
+  "gS_off": 0.05048748599801911,
+  "gS_warm": 0.028304559000389418,
+  "cE": 0.07538905200271984,
+  "cS": 0.25848890399720403
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Zip/ZipHeader.cpp",
+  "program": "7zip",
+  "gE_off": 0.018587257000035606,
+  "gE_warm": 0.004434791000676341,
+  "gS_off": 0.03590571700260625,
+  "gS_warm": 0.03727616099786246,
+  "cE": 0.06636928399893804,
+  "cS": 0.16485362999810604
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Zip/ZipIn.cpp",
+  "program": "7zip",
+  "gE_off": 0.016783204999228474,
+  "gE_warm": 0.003726390001247637,
+  "gS_off": 0.02884115000051679,
+  "gS_warm": 0.02335331499853055,
+  "cE": 0.05774606300110463,
+  "cS": 0.2214432439977827
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Zip/ZipItem.cpp",
+  "program": "7zip",
+  "gE_off": 0.03645385100026033,
+  "gE_warm": 0.0036481269999057986,
+  "gS_off": 0.02863739099848317,
+  "gS_warm": 0.022061817999201594,
+  "cE": 0.08339214100124082,
+  "cS": 0.20392260199878365
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Zip/ZipOut.cpp",
+  "program": "7zip",
+  "gE_off": 0.015411944001243683,
+  "gE_warm": 0.0037851740016776603,
+  "gS_off": 0.05180977799682296,
+  "gS_warm": 0.030866656001308,
+  "cE": 0.06665621299907798,
+  "cS": 0.18359350500031724
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Zip/ZipUpdate.cpp",
+  "program": "7zip",
+  "gE_off": 0.017334363001282327,
+  "gE_warm": 0.004271218000212684,
+  "gS_off": 0.05483694199938327,
+  "gS_warm": 0.047661334996519145,
+  "cE": 0.06161334900025395,
+  "cS": 0.2440896320003958
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Archive/Zip/ZipRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.016487453001900576,
+  "gE_warm": 0.0034470399987185374,
+  "gS_off": 0.02834282099865959,
+  "gS_warm": 0.020474601002206327,
+  "cE": 0.0566520850006782,
+  "cS": 0.19652192300054594
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/Bcj2Coder.cpp",
+  "program": "7zip",
+  "gE_off": 0.015144084001804003,
+  "gE_warm": 0.0033835139984148555,
+  "gS_off": 0.02691654699810897,
+  "gS_warm": 0.019600886000262108,
+  "cE": 0.05556116299703717,
+  "cS": 0.1735070589966199
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/Bcj2Register.cpp",
+  "program": "7zip",
+  "gE_off": 0.016220911998971133,
+  "gE_warm": 0.007793330001732102,
+  "gS_off": 0.02948986899718875,
+  "gS_warm": 0.020152856999629876,
+  "cE": 0.06170366899823421,
+  "cS": 0.25682812800005195
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BcjCoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.014972499997384148,
+  "gE_warm": 0.0040706450017751195,
+  "gS_off": 0.03593178200026159,
+  "gS_warm": 0.035977755000203615,
+  "cE": 0.07601561400224455,
+  "cS": 0.20941182000024128
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BcjRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.026078680999489734,
+  "gE_warm": 0.006905821999680484,
+  "gS_off": 0.03602392799803056,
+  "gS_warm": 0.035721312000532635,
+  "cE": 0.06798949899894069,
+  "cS": 0.1758770779997576
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BitlDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.014399302999663632,
+  "gE_warm": 0.0030006840024725534,
+  "gS_off": 0.0264321309987281,
+  "gS_warm": 0.024050124000495998,
+  "cE": 0.07553674500013585,
+  "cS": 0.20283840800038888
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BranchCoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.014843953002127819,
+  "gE_warm": 0.0030640100012533367,
+  "gS_off": 0.026004171999375103,
+  "gS_warm": 0.018146730999433203,
+  "cE": 0.05491625299691805,
+  "cS": 0.17848993400184554
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BranchMisc.cpp",
+  "program": "7zip",
+  "gE_off": 0.015307693000067957,
+  "gE_warm": 0.003129503998934524,
+  "gS_off": 0.027995707998343278,
+  "gS_warm": 0.018644241001311457,
+  "cE": 0.054565853999520186,
+  "cS": 0.1773980380021385
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BranchRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.018920855000033043,
+  "gE_warm": 0.0034420359988871496,
+  "gS_off": 0.029230326999822864,
+  "gS_warm": 0.028119521000917302,
+  "cE": 0.05645902099786326,
+  "cS": 0.17613390099722892
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/ByteSwap.cpp",
+  "program": "7zip",
+  "gE_off": 0.015070212997670751,
+  "gE_warm": 0.0039951100006874185,
+  "gS_off": 0.02727082500132383,
+  "gS_warm": 0.01976593600193155,
+  "cE": 0.06959147000088706,
+  "cS": 0.17995123299988336
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BZip2Crc.cpp",
+  "program": "7zip",
+  "gE_off": 0.014749259000382153,
+  "gE_warm": 0.0029372489989327732,
+  "gS_off": 0.02743144199848757,
+  "gS_warm": 0.026798309001605958,
+  "cE": 0.05369042199890828,
+  "cS": 0.2012876509979833
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BZip2Decoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.02043055400281446,
+  "gE_warm": 0.0041689850004331674,
+  "gS_off": 0.032282891999784624,
+  "gS_warm": 0.04331560399805312,
+  "cE": 0.0970553419974749,
+  "cS": 0.24654342199937673
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BZip2Encoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.016290669998852536,
+  "gE_warm": 0.005720882003515726,
+  "gS_off": 0.03662055899985717,
+  "gS_warm": 0.02807363900137716,
+  "cE": 0.09251621500152396,
+  "cS": 0.1878710150012921
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/BZip2Register.cpp",
+  "program": "7zip",
+  "gE_off": 0.015523204998316942,
+  "gE_warm": 0.003395995001483243,
+  "gS_off": 0.05830289499863284,
+  "gS_warm": 0.039795278000383405,
+  "cE": 0.0572793739993358,
+  "cS": 0.18599493900183006
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/CopyCoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.014923881000868278,
+  "gE_warm": 0.00322589200004586,
+  "gS_off": 0.026889181001024554,
+  "gS_warm": 0.019518017001246335,
+  "cE": 0.057391510003071744,
+  "cS": 0.18351297299886937
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/CopyRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.014600517999497242,
+  "gE_warm": 0.0032251969969365746,
+  "gS_off": 0.026545601001998875,
+  "gS_warm": 0.018429479001497384,
+  "cE": 0.05548319100125809,
+  "cS": 0.2323267259998829
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/Deflate64Register.cpp",
+  "program": "7zip",
+  "gE_off": 0.015620591002516448,
+  "gE_warm": 0.0033017540008586366,
+  "gS_off": 0.02933203499924275,
+  "gS_warm": 0.04240860400022939,
+  "cE": 0.07297208499949193,
+  "cS": 0.2146564370013948
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/DeflateDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.01970293499834952,
+  "gE_warm": 0.006843693001428619,
+  "gS_off": 0.03916433400081587,
+  "gS_warm": 0.022888687999511603,
+  "cE": 0.07043928100029007,
+  "cS": 0.2427350860016304
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/DeflateEncoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.019376738997380016,
+  "gE_warm": 0.005488574999617413,
+  "gS_off": 0.03276964300312102,
+  "gS_warm": 0.024819148999085883,
+  "cE": 0.05860595000194735,
+  "cS": 0.2058600180025678
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/DeflateRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.020152250999672106,
+  "gE_warm": 0.003756096000870457,
+  "gS_off": 0.03694792500027688,
+  "gS_warm": 0.02636404499935452,
+  "cE": 0.07599708099951386,
+  "cS": 0.20144245499977842
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/DeltaFilter.cpp",
+  "program": "7zip",
+  "gE_off": 0.015021746003185399,
+  "gE_warm": 0.0033936450017790776,
+  "gS_off": 0.03736725899943849,
+  "gS_warm": 0.027449025998066645,
+  "cE": 0.07230918200002634,
+  "cS": 0.18698850800137734
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/ImplodeDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.015952036999806296,
+  "gE_warm": 0.005022454002755694,
+  "gS_off": 0.02823146800074028,
+  "gS_warm": 0.019226435000746278,
+  "cE": 0.07909053799812682,
+  "cS": 0.22987475499758148
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/ImplodeHuffmanDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.01999795899973833,
+  "gE_warm": 0.007528158999775769,
+  "gS_off": 0.04566222699941136,
+  "gS_warm": 0.036754306998773245,
+  "cE": 0.06935073500062572,
+  "cS": 0.23058133000085945
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/Lzma2Decoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.02382300099998247,
+  "gE_warm": 0.0036249889999453444,
+  "gS_off": 0.04024538899830077,
+  "gS_warm": 0.021726380000473,
+  "cE": 0.07937983800002257,
+  "cS": 0.22158259199932218
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/Lzma2Encoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.015420897001604317,
+  "gE_warm": 0.0036687920000986196,
+  "gS_off": 0.05236249700101325,
+  "gS_warm": 0.0369237710001471,
+  "cE": 0.08307278899883386,
+  "cS": 0.18428399599724798
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/Lzma2Register.cpp",
+  "program": "7zip",
+  "gE_off": 0.01967478900041897,
+  "gE_warm": 0.004847037998843007,
+  "gS_off": 0.0354612070004805,
+  "gS_warm": 0.025540270002238685,
+  "cE": 0.06784870399860665,
+  "cS": 0.19458841900268453
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/LzmaDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.015543206998700043,
+  "gE_warm": 0.003816037002252415,
+  "gS_off": 0.03468611499920371,
+  "gS_warm": 0.025860418998490786,
+  "cE": 0.07323139999789419,
+  "cS": 0.18372291600098833
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/LzmaEncoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.02363503100059461,
+  "gE_warm": 0.003745340000023134,
+  "gS_off": 0.03515706399775809,
+  "gS_warm": 0.028483300000516465,
+  "cE": 0.05736460199841531,
+  "cS": 0.21532246000060695
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/LzmaRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.015928141001495533,
+  "gE_warm": 0.004284332000679569,
+  "gS_off": 0.05799155599743244,
+  "gS_warm": 0.04096268200009945,
+  "cE": 0.07786671400026535,
+  "cS": 0.23248118400078965
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/LzOutWindow.cpp",
+  "program": "7zip",
+  "gE_off": 0.016576866997638717,
+  "gE_warm": 0.009839615002420032,
+  "gS_off": 0.04798974699951941,
+  "gS_warm": 0.021021751999796834,
+  "cE": 0.07610581499830005,
+  "cS": 0.1942082890018355
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/Lzx86Converter.cpp",
+  "program": "7zip",
+  "gE_off": 0.016326349999872036,
+  "gE_warm": 0.004024503999971785,
+  "gS_off": 0.03609126200171886,
+  "gS_warm": 0.025981295002566185,
+  "cE": 0.07021796899789479,
+  "cS": 0.22022058100264985
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/LzxDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.017040388000168605,
+  "gE_warm": 0.006712145001074532,
+  "gS_off": 0.033052263999707066,
+  "gS_warm": 0.023644819000764983,
+  "cE": 0.08269170700077666,
+  "cS": 0.24593098900004406
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/PpmdDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.026875880001171026,
+  "gE_warm": 0.0053928380002616905,
+  "gS_off": 0.05318615899886936,
+  "gS_warm": 0.02103300200178637,
+  "cE": 0.07885497100141947,
+  "cS": 0.24532892100251047
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/PpmdEncoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.021884961999603547,
+  "gE_warm": 0.0067810280015692115,
+  "gS_off": 0.0326542069997231,
+  "gS_warm": 0.022425773000577465,
+  "cE": 0.0720382459985558,
+  "cS": 0.22634522699809168
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/PpmdRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.01933553200069582,
+  "gE_warm": 0.003289456999482354,
+  "gS_off": 0.037933651998173445,
+  "gS_warm": 0.02530880700214766,
+  "cE": 0.07074335899960715,
+  "cS": 0.26940047899915953
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/PpmdZip.cpp",
+  "program": "7zip",
+  "gE_off": 0.02849404800144839,
+  "gE_warm": 0.005539959001907846,
+  "gS_off": 0.059723261001636274,
+  "gS_warm": 0.030488363998301793,
+  "cE": 0.07239664300141158,
+  "cS": 0.2496248139977979
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/QuantumDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.019450289000815246,
+  "gE_warm": 0.006664939999609487,
+  "gS_off": 0.03435408700170228,
+  "gS_warm": 0.031024764997710008,
+  "cE": 0.08069998299833969,
+  "cS": 0.23707655899852398
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/ShrinkDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.020766407000337495,
+  "gE_warm": 0.006195178997586481,
+  "gS_off": 0.03171759200267843,
+  "gS_warm": 0.01935805199900642,
+  "cE": 0.057993524002085906,
+  "cS": 0.25000164000084624
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Compress/ZDecoder.cpp",
+  "program": "7zip",
+  "gE_off": 0.022152458997879876,
+  "gE_warm": 0.0034101620003639255,
+  "gS_off": 0.040367385001445655,
+  "gS_warm": 0.023207072001241613,
+  "cE": 0.0643487390007067,
+  "cS": 0.18943281700194348
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/7zAes.cpp",
+  "program": "7zip",
+  "gE_off": 0.015418457001942443,
+  "gE_warm": 0.003656956003396772,
+  "gS_off": 0.028062654000677867,
+  "gS_warm": 0.02052982500026701,
+  "cE": 0.07450682299895561,
+  "cS": 0.19243233900124324
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/7zAesRegister.cpp",
+  "program": "7zip",
+  "gE_off": 0.015762096001708414,
+  "gE_warm": 0.0033827900006144773,
+  "gS_off": 0.027769953998358687,
+  "gS_warm": 0.019011485997907585,
+  "cE": 0.057608279999840306,
+  "cS": 0.23093164499732666
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/HmacSha1.cpp",
+  "program": "7zip",
+  "gE_off": 0.01532311999835656,
+  "gE_warm": 0.004220570997858886,
+  "gS_off": 0.056602364002174,
+  "gS_warm": 0.020702542999060825,
+  "cE": 0.061520628001744626,
+  "cS": 0.24173478200100362
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/MyAes.cpp",
+  "program": "7zip",
+  "gE_off": 0.019504666001012083,
+  "gE_warm": 0.004089169000508264,
+  "gS_off": 0.03237094900032389,
+  "gS_warm": 0.04039127099895268,
+  "cE": 0.058014039997942746,
+  "cS": 0.17771206699762843
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/Pbkdf2HmacSha1.cpp",
+  "program": "7zip",
+  "gE_off": 0.01979399099946022,
+  "gE_warm": 0.003073274998314446,
+  "gS_off": 0.035849880001478596,
+  "gS_warm": 0.024627120001241565,
+  "cE": 0.06936427500113496,
+  "cS": 0.18428373799906694
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/RandGen.cpp",
+  "program": "7zip",
+  "gE_off": 0.02404475699950126,
+  "gE_warm": 0.007286537998879794,
+  "gS_off": 0.027554758999031037,
+  "gS_warm": 0.029471933001332218,
+  "cE": 0.05472122300125193,
+  "cS": 0.21847284900286468
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/Sha1.cpp",
+  "program": "7zip",
+  "gE_off": 0.02546222299861256,
+  "gE_warm": 0.007449251999787521,
+  "gS_off": 0.043836922999616945,
+  "gS_warm": 0.026625473001331557,
+  "cE": 0.057130968998535536,
+  "cS": 0.24125197600005777
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/WzAes.cpp",
+  "program": "7zip",
+  "gE_off": 0.015808586998900864,
+  "gE_warm": 0.004759937000926584,
+  "gS_off": 0.04320939399985946,
+  "gS_warm": 0.02604770299876691,
+  "cE": 0.05698948200006271,
+  "cS": 0.1859148199982883
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/ZipCrypto.cpp",
+  "program": "7zip",
+  "gE_off": 0.020423474001290742,
+  "gE_warm": 0.0033570150008017663,
+  "gS_off": 0.031098383999051293,
+  "gS_warm": 0.023670184000366135,
+  "cE": 0.06923259899849654,
+  "cS": 0.22869907800122746
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/7zip/CPP/7zip/Crypto/ZipStrong.cpp",
+  "program": "7zip",
+  "gE_off": 0.023836798998672748,
+  "gE_warm": 0.005113249000714859,
+  "gS_off": 0.04069149200222455,
+  "gS_warm": 0.03327970799728064,
+  "cE": 0.07882843400147976,
+  "cS": 0.25246186399817816
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/BenchmarkDemo.cpp",
+  "program": "Bullet",
+  "gE_off": 0.05100892699920223,
+  "gE_warm": 0.00669656999889412,
+  "gS_off": 0.07137531099942862,
+  "gS_warm": 0.06550917399727041,
+  "cE": 0.12264437599878875,
+  "cS": 0.7310595759990974
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/SphereTriangleDetector.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01487053000164451,
+  "gE_warm": 0.005466613998578396,
+  "gS_off": 0.018712511999183334,
+  "gS_warm": 0.008225183999456931,
+  "cE": 0.040190884999901755,
+  "cS": 0.11039015600181301
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btActivatingCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01340636199893197,
+  "gE_warm": 0.0027408249989093747,
+  "gS_off": 0.016663172998960363,
+  "gS_warm": 0.01644279999891296,
+  "cE": 0.07356074999916018,
+  "cS": 0.11407847000009497
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btAlignedAllocator.cpp",
+  "program": "Bullet",
+  "gE_off": 0.0114620919994195,
+  "gE_warm": 0.005000623998057563,
+  "gS_off": 0.01730175699776737,
+  "gS_warm": 0.009080612999241566,
+  "cE": 0.051215297000453575,
+  "cS": 0.06792504300028668
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btAxisSweep3.cpp",
+  "program": "Bullet",
+  "gE_off": 0.00926396200156887,
+  "gE_warm": 0.0026426189979247283,
+  "gS_off": 0.01472718500008341,
+  "gS_warm": 0.010624970000208123,
+  "cE": 0.04204684899741551,
+  "cS": 0.14805886600152007
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btBox2dBox2dCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.0119611599984637,
+  "gE_warm": 0.007162565998442005,
+  "gS_off": 0.018157841001084307,
+  "gS_warm": 0.01351807199898758,
+  "cE": 0.05332456399992225,
+  "cS": 0.13260114699733094
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btBox2dShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012437155997758964,
+  "gE_warm": 0.0040615369980514515,
+  "gS_off": 0.01413346000117599,
+  "gS_warm": 0.01547561999905156,
+  "cE": 0.08326310200209264,
+  "cS": 0.10413984799743048
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btBoxBoxCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.011797058999945875,
+  "gE_warm": 0.008723327999177855,
+  "gS_off": 0.015570517000014661,
+  "gS_warm": 0.01233944799969322,
+  "cE": 0.06016091600031359,
+  "cS": 0.1513124240009347
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btBoxBoxDetector.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01969352599917329,
+  "gE_warm": 0.010932438002782874,
+  "gS_off": 0.013822263998008566,
+  "gS_warm": 0.014939840002625715,
+  "cE": 0.06367899699762347,
+  "cS": 0.1450672540013329
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btBoxShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008766750997892814,
+  "gE_warm": 0.003029608997167088,
+  "gS_off": 0.012078312000085134,
+  "gS_warm": 0.007958330999827012,
+  "cE": 0.05526203399858787,
+  "cS": 0.09120060100030969
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btBroadphaseProxy.cpp",
+  "program": "Bullet",
+  "gE_off": 0.011846860998048214,
+  "gE_warm": 0.005566088002524339,
+  "gS_off": 0.011948473002121318,
+  "gS_warm": 0.006165873997815652,
+  "cE": 0.05280616899835877,
+  "cS": 0.0801916149976023
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btBvhTriangleMeshShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008592756999860285,
+  "gE_warm": 0.00260674500168534,
+  "gS_off": 0.012454200998035958,
+  "gS_warm": 0.008763366997300182,
+  "cE": 0.06126843899983214,
+  "cS": 0.10455307300071581
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btCapsuleShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015874436998274177,
+  "gE_warm": 0.004050688999996055,
+  "gS_off": 0.014810325999860652,
+  "gS_warm": 0.008605615999840666,
+  "cE": 0.0481295030003821,
+  "cS": 0.09474432800197974
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.016102457000670256,
+  "gE_warm": 0.003848528998787515,
+  "gS_off": 0.011352524001267739,
+  "gS_warm": 0.008761332999711158,
+  "cE": 0.04567644700000528,
+  "cS": 0.06854285300141782
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btCollisionDispatcher.cpp",
+  "program": "Bullet",
+  "gE_off": 0.014864926997688599,
+  "gE_warm": 0.003059922000829829,
+  "gS_off": 0.01907826300157467,
+  "gS_warm": 0.01558706900323159,
+  "cE": 0.04031397200014908,
+  "cS": 0.09988985000018147
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btCollisionObject.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008882316000381252,
+  "gE_warm": 0.0024354410015803296,
+  "gS_off": 0.011692205000144895,
+  "gS_warm": 0.010760072000266518,
+  "cE": 0.04031919599947287,
+  "cS": 0.08312450100129354
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btCollisionShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008116016000712989,
+  "gE_warm": 0.0023883149988250807,
+  "gS_off": 0.01142150799933006,
+  "gS_warm": 0.010131413997441996,
+  "cE": 0.07753838699863991,
+  "cS": 0.09700571400026092
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btCollisionWorld.cpp",
+  "program": "Bullet",
+  "gE_off": 0.010434076000819914,
+  "gE_warm": 0.006816412998887245,
+  "gS_off": 0.019141699998726835,
+  "gS_warm": 0.013566498997533927,
+  "cE": 0.05137355999977444,
+  "cS": 0.1653994469997997
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btCompoundCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012887300999864237,
+  "gE_warm": 0.004439814998477232,
+  "gS_off": 0.023799129001417896,
+  "gS_warm": 0.014936968000256456,
+  "cE": 0.0436334709993389,
+  "cS": 0.14859192199946847
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btCompoundShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012351328998192912,
+  "gE_warm": 0.004137314997933572,
+  "gS_off": 0.014193786999385338,
+  "gS_warm": 0.014101523000135785,
+  "cE": 0.06178609899870935,
+  "cS": 0.10347114099931787
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConcaveShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008298788998217788,
+  "gE_warm": 0.0037789140005770605,
+  "gS_off": 0.01613507499860134,
+  "gS_warm": 0.007299673001398332,
+  "cE": 0.0424997070003883,
+  "cS": 0.0998030299997481
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConeShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012678068997047376,
+  "gE_warm": 0.0037811940019309986,
+  "gS_off": 0.015847898001084104,
+  "gS_warm": 0.009616101000574417,
+  "cE": 0.05305832700105384,
+  "cS": 0.10799629499888397
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConeTwistConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.009684869000921026,
+  "gE_warm": 0.005879210002603941,
+  "gS_off": 0.019256867999501992,
+  "gS_warm": 0.010555142001976492,
+  "cE": 0.08226446600019699,
+  "cS": 0.13891904900083318
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btContactConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01197258300089743,
+  "gE_warm": 0.0029129050017218105,
+  "gS_off": 0.01893190299961134,
+  "gS_warm": 0.009036800998728722,
+  "cE": 0.04424103400015156,
+  "cS": 0.15140108599734958
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btContactProcessing.cpp",
+  "program": "Bullet",
+  "gE_off": 0.009480831002292689,
+  "gE_warm": 0.006530339000164531,
+  "gS_off": 0.023286379997443873,
+  "gS_warm": 0.013343591999728233,
+  "cE": 0.05027814399727504,
+  "cS": 0.13619201199981035
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btContinuousConvexCollision.cpp",
+  "program": "Bullet",
+  "gE_off": 0.017079320998163894,
+  "gE_warm": 0.0029488619984476827,
+  "gS_off": 0.013194606002798537,
+  "gS_warm": 0.013611025002319366,
+  "cE": 0.05428050299815368,
+  "cS": 0.1256617550025112
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btContinuousDynamicsWorld.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01597027000025264,
+  "gE_warm": 0.0034344249979767483,
+  "gS_off": 0.021305801001290092,
+  "gS_warm": 0.013880266997148283,
+  "cE": 0.06676713900014875,
+  "cS": 0.15474186000210466
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvex2dConvex2dAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015190318001259584,
+  "gE_warm": 0.011568904999876395,
+  "gS_off": 0.03371348300061072,
+  "gS_warm": 0.013591876999271335,
+  "cE": 0.045948603001306765,
+  "cS": 0.16127896800026065
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvex2dShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008209053998143645,
+  "gE_warm": 0.0025242550000257324,
+  "gS_off": 0.01158038699941244,
+  "gS_warm": 0.012498274001700338,
+  "cE": 0.05731364500024938,
+  "cS": 0.10611694399995031
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexCast.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01849326900264714,
+  "gE_warm": 0.005027942999731749,
+  "gS_off": 0.020924159998685354,
+  "gS_warm": 0.017288040999119403,
+  "cE": 0.06021171900283662,
+  "cS": 0.1196324030024698
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexConcaveCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013983303000713931,
+  "gE_warm": 0.003719029999047052,
+  "gS_off": 0.0195467559969984,
+  "gS_warm": 0.012388186001771828,
+  "cE": 0.05449830499856034,
+  "cS": 0.16485355999975582
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexConvexAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015267232000041986,
+  "gE_warm": 0.006959357000596356,
+  "gS_off": 0.024522122999769635,
+  "gS_warm": 0.02602511700024479,
+  "cE": 0.05060306100131129,
+  "cS": 0.14094443499925546
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexHull.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012849512000684626,
+  "gE_warm": 0.0032221729998127557,
+  "gS_off": 0.01684738200128777,
+  "gS_warm": 0.01602896199983661,
+  "cE": 0.052808150998316705,
+  "cS": 0.139099833999353
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexHullShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013361532000999432,
+  "gE_warm": 0.0031641619971196633,
+  "gS_off": 0.02779081099652103,
+  "gS_warm": 0.01679751700066845,
+  "cE": 0.07667312999910791,
+  "cS": 0.1552751730014279
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexInternalShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012875118001829833,
+  "gE_warm": 0.0027569270023377612,
+  "gS_off": 0.012327270000241697,
+  "gS_warm": 0.012135631001001457,
+  "cE": 0.05765698100003647,
+  "cS": 0.10698566999781178
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexPlaneCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013521947999834083,
+  "gE_warm": 0.0031539640003757086,
+  "gS_off": 0.017273568002565298,
+  "gS_warm": 0.016011014999094186,
+  "cE": 0.09297748500102898,
+  "cS": 0.1019875640013197
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexPointCloudShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01649709200137295,
+  "gE_warm": 0.005200411000259919,
+  "gS_off": 0.017192739000165602,
+  "gS_warm": 0.022413677001168253,
+  "cE": 0.08330958599981386,
+  "cS": 0.1492775779988733
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.00870383999790647,
+  "gE_warm": 0.002784316999168368,
+  "gS_off": 0.013036307998845587,
+  "gS_warm": 0.008882593996531796,
+  "cE": 0.04041391600185307,
+  "cS": 0.09054546399784158
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btConvexTriangleMeshShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012801044002117123,
+  "gE_warm": 0.0027462209982331842,
+  "gS_off": 0.01674793900019722,
+  "gS_warm": 0.017097113999625435,
+  "cE": 0.07270444499954465,
+  "cS": 0.11648667799818213
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btCylinderShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.016301644998748088,
+  "gE_warm": 0.002545747000112897,
+  "gS_off": 0.02043670900093275,
+  "gS_warm": 0.012361750003037741,
+  "cE": 0.05753937500048778,
+  "cS": 0.11748670000088168
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btDbvt.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015005973000370432,
+  "gE_warm": 0.0028080560005037114,
+  "gS_off": 0.020373223000206053,
+  "gS_warm": 0.009486615999776404,
+  "cE": 0.060750297001504805,
+  "cS": 0.1589528069998778
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btDbvtBroadphase.cpp",
+  "program": "Bullet",
+  "gE_off": 0.017549088999658125,
+  "gE_warm": 0.0031342500005848706,
+  "gS_off": 0.03602871000111918,
+  "gS_warm": 0.020161445001576794,
+  "cE": 0.09584149400325259,
+  "cS": 0.10727422800118802
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btDefaultCollisionConfiguration.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013666123999428237,
+  "gE_warm": 0.004262254002242116,
+  "gS_off": 0.021398877001047367,
+  "gS_warm": 0.013715839999349555,
+  "cE": 0.06177334600215545,
+  "cS": 0.17303367199929198
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btDiscreteDynamicsWorld.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015408197003125679,
+  "gE_warm": 0.007030621000012616,
+  "gS_off": 0.020440753000002587,
+  "gS_warm": 0.036144650002825074,
+  "cE": 0.0791687089986226,
+  "cS": 0.24176916400028858
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btDispatcher.cpp",
+  "program": "Bullet",
+  "gE_off": 0.007606356000906089,
+  "gE_warm": 0.0023929279996082187,
+  "gS_off": 0.018221423000795767,
+  "gS_warm": 0.013560019000578905,
+  "cE": 0.05596791000061785,
+  "cS": 0.09801205000258051
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btEmptyCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015837801998713985,
+  "gE_warm": 0.006319764997897437,
+  "gS_off": 0.025994405998062575,
+  "gS_warm": 0.007882001002144534,
+  "cE": 0.053400417000375455,
+  "cS": 0.10547996199966292
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btEmptyShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012719982001726748,
+  "gE_warm": 0.00295234900113428,
+  "gS_off": 0.028358367999317124,
+  "gS_warm": 0.01849949099778314,
+  "cE": 0.0764448709996941,
+  "cS": 0.12868921299741487
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGImpactBvh.cpp",
+  "program": "Bullet",
+  "gE_off": 0.02136785499897087,
+  "gE_warm": 0.008452428999589756,
+  "gS_off": 0.03266425299807452,
+  "gS_warm": 0.019588913000916364,
+  "cE": 0.06531588799771271,
+  "cS": 0.206004193998524
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGImpactCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01969564499813714,
+  "gE_warm": 0.01037742500193417,
+  "gS_off": 0.038641931998427026,
+  "gS_warm": 0.03621889300120529,
+  "cE": 0.08801055200092378,
+  "cS": 0.22975087899976643
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGImpactQuantizedBvh.cpp",
+  "program": "Bullet",
+  "gE_off": 0.014385247002792312,
+  "gE_warm": 0.0030687409998790827,
+  "gS_off": 0.029766615996777546,
+  "gS_warm": 0.022836079999251524,
+  "cE": 0.09198224500141805,
+  "cS": 0.19440702399879228
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGImpactShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.021569327000179328,
+  "gE_warm": 0.004360124999948312,
+  "gS_off": 0.03737337999700685,
+  "gS_warm": 0.02077730200107908,
+  "cE": 0.10494061200006399,
+  "cS": 0.2002792210005282
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGeneric6DofConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.00903091700092773,
+  "gE_warm": 0.0029618640000990126,
+  "gS_off": 0.014092665998759912,
+  "gS_warm": 0.024568658001953736,
+  "cE": 0.0952749460011546,
+  "cS": 0.11263792799945804
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGeneric6DofSpringConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01596829399932176,
+  "gE_warm": 0.006600291999347974,
+  "gS_off": 0.024650540999573423,
+  "gS_warm": 0.020224667998263612,
+  "cE": 0.0674483259972476,
+  "cS": 0.13457639699845458
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGenericPoolAllocator.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013502087000233587,
+  "gE_warm": 0.007351452997681918,
+  "gS_off": 0.03229528999872855,
+  "gS_warm": 0.01450267700056429,
+  "cE": 0.07598810300260084,
+  "cS": 0.07968811400132836
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGeometryUtil.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01597335199767258,
+  "gE_warm": 0.006580212000699248,
+  "gS_off": 0.033342382001137594,
+  "gS_warm": 0.021930576000158908,
+  "cE": 0.06962911800292204,
+  "cS": 0.09839655899850186
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGhostObject.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013723460000619525,
+  "gE_warm": 0.0033094919999712147,
+  "gS_off": 0.015734779997728765,
+  "gS_warm": 0.01518269599910127,
+  "cE": 0.061559652000141796,
+  "cS": 0.15221403500254382
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGjkConvexCast.cpp",
+  "program": "Bullet",
+  "gE_off": 0.009180711000226438,
+  "gE_warm": 0.004691531998105347,
+  "gS_off": 0.023839393998059677,
+  "gS_warm": 0.008910807999200188,
+  "cE": 0.043336390001059044,
+  "cS": 0.11189836699850275
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGjkEpa2.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013556701997003984,
+  "gE_warm": 0.006851663998531876,
+  "gS_off": 0.03093710800021654,
+  "gS_warm": 0.017414425001334166,
+  "cE": 0.04812607100029709,
+  "cS": 0.1266624879972369
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGjkEpaPenetrationDepthSolver.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013307146000443026,
+  "gE_warm": 0.005542661998333642,
+  "gS_off": 0.015834013000130653,
+  "gS_warm": 0.012154603999078972,
+  "cE": 0.05156237799747032,
+  "cS": 0.09450193800148554
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btGjkPairDetector.cpp",
+  "program": "Bullet",
+  "gE_off": 0.0126580889991601,
+  "gE_warm": 0.002694672002689913,
+  "gS_off": 0.02269803600211162,
+  "gS_warm": 0.01376096899912227,
+  "cE": 0.06789186099922517,
+  "cS": 0.10284085800230969
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btHeightfieldTerrainShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012437181998393498,
+  "gE_warm": 0.004526011001871666,
+  "gS_off": 0.020365305001178058,
+  "gS_warm": 0.012109932999010198,
+  "cE": 0.05925611999919056,
+  "cS": 0.1399950090017228
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btHinge2Constraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013506237999536097,
+  "gE_warm": 0.0030753449973417446,
+  "gS_off": 0.015023738997115288,
+  "gS_warm": 0.029514668000047095,
+  "cE": 0.07158913100283826,
+  "cS": 0.14562442500027828
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btHingeConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013300186001288239,
+  "gE_warm": 0.002926848999777576,
+  "gS_off": 0.01832168900000397,
+  "gS_warm": 0.01619728799778386,
+  "cE": 0.06850464300077874,
+  "cS": 0.1620926520008652
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btKinematicCharacterController.cpp",
+  "program": "Bullet",
+  "gE_off": 0.017826162002165802,
+  "gE_warm": 0.007957653997436864,
+  "gS_off": 0.02572548900207039,
+  "gS_warm": 0.011808729999756906,
+  "cE": 0.07734480599901872,
+  "cS": 0.1149744889989961
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btManifoldResult.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012823432000004686,
+  "gE_warm": 0.0028190779994474724,
+  "gS_off": 0.019163329001457896,
+  "gS_warm": 0.02403193699865369,
+  "cE": 0.08396721299868659,
+  "cS": 0.139125456000329
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btMinkowskiPenetrationDepthSolver.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013030821002757875,
+  "gE_warm": 0.0031544739977107383,
+  "gS_off": 0.01715210100155673,
+  "gS_warm": 0.019771427996602142,
+  "cE": 0.04972513699976844,
+  "cS": 0.09966912999880151
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btMinkowskiSumShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013038277997111436,
+  "gE_warm": 0.0029505029997380916,
+  "gS_off": 0.02338487800079747,
+  "gS_warm": 0.016589591999945696,
+  "cE": 0.06568449900078122,
+  "cS": 0.12627679200159037
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btMultiSapBroadphase.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013597782999568153,
+  "gE_warm": 0.002809063000313472,
+  "gS_off": 0.018358721001277445,
+  "gS_warm": 0.014224073001969373,
+  "cE": 0.05781317999935709,
+  "cS": 0.13931469800081686
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btMultiSphereShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013007839999772841,
+  "gE_warm": 0.0028360440010146704,
+  "gS_off": 0.02095416999873123,
+  "gS_warm": 0.010168080996663775,
+  "cE": 0.05643265699836775,
+  "cS": 0.14109968399861827
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btMultimaterialTriangleMeshShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013095911999698728,
+  "gE_warm": 0.011972742999205366,
+  "gS_off": 0.024115312000503764,
+  "gS_warm": 0.009087235997867538,
+  "cE": 0.042960430997482035,
+  "cS": 0.13797459700072068
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btOptimizedBvh.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015994938999938313,
+  "gE_warm": 0.0032255400001304224,
+  "gS_off": 0.031395303001772845,
+  "gS_warm": 0.02020338299917057,
+  "cE": 0.09685775700199883,
+  "cS": 0.15479999700255576
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btOverlappingPairCache.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013295287000801181,
+  "gE_warm": 0.002928064001025632,
+  "gS_off": 0.017857353999715997,
+  "gS_warm": 0.01682523300041794,
+  "cE": 0.08487482400232693,
+  "cS": 0.11727978899943992
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btPersistentManifold.cpp",
+  "program": "Bullet",
+  "gE_off": 0.011421176001022104,
+  "gE_warm": 0.005651752002449939,
+  "gS_off": 0.016314723001414677,
+  "gS_warm": 0.01149691799946595,
+  "cE": 0.05607514099756372,
+  "cS": 0.10331004100225982
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btPoint2PointConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013368386000365717,
+  "gE_warm": 0.0026444799987075385,
+  "gS_off": 0.017440351999539416,
+  "gS_warm": 0.01310532700153999,
+  "cE": 0.053053486000862904,
+  "cS": 0.1205749430009746
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btPolyhedralConvexShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008756736002396792,
+  "gE_warm": 0.0024478080013068393,
+  "gS_off": 0.01608577799925115,
+  "gS_warm": 0.010370419000537368,
+  "cE": 0.08118105000176001,
+  "cS": 0.09199913300108165
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btQuantizedBvh.cpp",
+  "program": "Bullet",
+  "gE_off": 0.009158603999821935,
+  "gE_warm": 0.0030153240004437976,
+  "gS_off": 0.018108103002305143,
+  "gS_warm": 0.013523826997698052,
+  "cE": 0.05623736399866175,
+  "cS": 0.12835255900063203
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btQuickprof.cpp",
+  "program": "Bullet",
+  "gE_off": 0.011422759998822585,
+  "gE_warm": 0.004267528998752823,
+  "gS_off": 0.02005531900067581,
+  "gS_warm": 0.011726935001206584,
+  "cE": 0.05105535499751568,
+  "cS": 0.09792256700166035
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btRaycastCallback.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012646291001146892,
+  "gE_warm": 0.006702226997731486,
+  "gS_off": 0.021679199002392124,
+  "gS_warm": 0.019133497997245286,
+  "cE": 0.0817263790013385,
+  "cS": 0.10104187899924
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btRaycastVehicle.cpp",
+  "program": "Bullet",
+  "gE_off": 0.014028494999365648,
+  "gE_warm": 0.0036772120001842268,
+  "gS_off": 0.021124732000316726,
+  "gS_warm": 0.017113909001636785,
+  "cE": 0.04577780700128642,
+  "cS": 0.14536301200132584
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btRigidBody.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01386232100048801,
+  "gE_warm": 0.0070600260005448945,
+  "gS_off": 0.022189126997545827,
+  "gS_warm": 0.010896455998590682,
+  "cE": 0.04787509099696763,
+  "cS": 0.11218804700183682
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btScaledBvhTriangleMeshShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.0134636370021326,
+  "gE_warm": 0.006662633997621015,
+  "gS_off": 0.014572659998520976,
+  "gS_warm": 0.014893544001097325,
+  "cE": 0.05932149699947331,
+  "cS": 0.11420917600116809
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSequentialImpulseConstraintSolver.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015846424001210835,
+  "gE_warm": 0.00793319000149495,
+  "gS_off": 0.034474577001674334,
+  "gS_warm": 0.016177913999854354,
+  "cE": 0.08344419399873004,
+  "cS": 0.15059374400152592
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btShapeHull.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01154502200006391,
+  "gE_warm": 0.002652884999406524,
+  "gS_off": 0.015360802000941476,
+  "gS_warm": 0.012432707000698429,
+  "cE": 0.06742328600012115,
+  "cS": 0.10125301700099953
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSimpleBroadphase.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012588254001457244,
+  "gE_warm": 0.0031490879991906695,
+  "gS_off": 0.01647064999997383,
+  "gS_warm": 0.011734612999134697,
+  "cE": 0.049760252000851324,
+  "cS": 0.10938153000097373
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSimpleDynamicsWorld.cpp",
+  "program": "Bullet",
+  "gE_off": 0.009864139999990584,
+  "gE_warm": 0.007701727998210117,
+  "gS_off": 0.027849707003042568,
+  "gS_warm": 0.01737156200033496,
+  "cE": 0.06706605100043816,
+  "cS": 0.1573512100003427
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSimulationIslandManager.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015244225000060396,
+  "gE_warm": 0.004474812998523703,
+  "gS_off": 0.02204368000093382,
+  "gS_warm": 0.013553477998357266,
+  "cE": 0.06017453099775594,
+  "cS": 0.1007707680000749
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSliderConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008916411999962293,
+  "gE_warm": 0.0028084849982406013,
+  "gS_off": 0.017926831998920534,
+  "gS_warm": 0.01570068200089736,
+  "cE": 0.040092213999741944,
+  "cS": 0.1068782080001256
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSoftBody.cpp",
+  "program": "Bullet",
+  "gE_off": 0.016216762996918987,
+  "gE_warm": 0.004052239000884583,
+  "gS_off": 0.03171766299783485,
+  "gS_warm": 0.02645660900088842,
+  "cE": 0.04629282699897885,
+  "cS": 0.27413726300073904
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSoftBodyConcaveCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01560398199944757,
+  "gE_warm": 0.005355390996555798,
+  "gS_off": 0.02692452600240358,
+  "gS_warm": 0.02074936699864338,
+  "cE": 0.06748154500019155,
+  "cS": 0.19917841000278713
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSoftBodyHelpers.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01663333200121997,
+  "gE_warm": 0.007235755001602229,
+  "gS_off": 0.021324757999536814,
+  "gS_warm": 0.036932101000275,
+  "cE": 0.04814817200167454,
+  "cS": 0.28009386899793753
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSoftBodyRigidBodyCollisionConfiguration.cpp",
+  "program": "Bullet",
+  "gE_off": 0.017350643000099808,
+  "gE_warm": 0.0032937200012383983,
+  "gS_off": 0.03131484199911938,
+  "gS_warm": 0.023110546000680188,
+  "cE": 0.06562563899933593,
+  "cS": 0.1271624900000461
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSoftRigidCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.014883686999382917,
+  "gE_warm": 0.005555952000577236,
+  "gS_off": 0.0254400980011269,
+  "gS_warm": 0.024502361000486417,
+  "cE": 0.054729479998059105,
+  "cS": 0.18563424599778955
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSoftRigidDynamicsWorld.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015956521998305107,
+  "gE_warm": 0.004737683000712423,
+  "gS_off": 0.024152204001438804,
+  "gS_warm": 0.0260568459998467,
+  "cE": 0.060220687999390066,
+  "cS": 0.18244546500136494
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSoftSoftCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.014974621000874322,
+  "gE_warm": 0.007727023003099021,
+  "gS_off": 0.019980066001153318,
+  "gS_warm": 0.018494107000151416,
+  "cE": 0.06818875599856256,
+  "cS": 0.13937798899860354
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSolve2LinearConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008650466999824857,
+  "gE_warm": 0.0027392769989091903,
+  "gS_off": 0.013517205999960424,
+  "gS_warm": 0.013711785999475978,
+  "cE": 0.061251913000887726,
+  "cS": 0.10937896999894292
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSphereBoxCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.014982461001636693,
+  "gE_warm": 0.007755127000564244,
+  "gS_off": 0.013355281997064594,
+  "gS_warm": 0.011898971999471541,
+  "cE": 0.0604649810011324,
+  "cS": 0.1392554120029672
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSphereShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008951152001827722,
+  "gE_warm": 0.0028840800005127676,
+  "gS_off": 0.012460636000469094,
+  "gS_warm": 0.019497024000884267,
+  "cE": 0.04169036900202627,
+  "cS": 0.10514452200004598
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSphereSphereCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015079993001563707,
+  "gE_warm": 0.0036375799973029643,
+  "gS_off": 0.018833746999007417,
+  "gS_warm": 0.013778687000012724,
+  "cE": 0.05592161100139492,
+  "cS": 0.11428014299963252
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSphereTriangleCollisionAlgorithm.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008980720998806646,
+  "gE_warm": 0.0028498360006778967,
+  "gS_off": 0.013145660999725806,
+  "gS_warm": 0.009504263998678653,
+  "cE": 0.05408960699787713,
+  "cS": 0.12092952600141871
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btStaticPlaneShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.015620253998349654,
+  "gE_warm": 0.002691699999559205,
+  "gS_off": 0.012475662999349879,
+  "gS_warm": 0.012413332999130944,
+  "cE": 0.06128591900051106,
+  "cS": 0.102967032999004
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btStridingMeshInterface.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008701089001988294,
+  "gE_warm": 0.005934171000262722,
+  "gS_off": 0.015893611001956742,
+  "gS_warm": 0.012443726001947653,
+  "cE": 0.05244796400074847,
+  "cS": 0.10598345399921527
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btSubSimplexConvexCast.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008585193998442264,
+  "gE_warm": 0.006359708000672981,
+  "gS_off": 0.025621715998568106,
+  "gS_warm": 0.014127703001577174,
+  "cE": 0.04942373100129771,
+  "cS": 0.12348395800290746
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btTetrahedronShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013428793998173205,
+  "gE_warm": 0.002773939999315189,
+  "gS_off": 0.013232313001935836,
+  "gS_warm": 0.011820763000287116,
+  "cE": 0.05939476899948204,
+  "cS": 0.11503188800270436
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btTriangleBuffer.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012272693998966133,
+  "gE_warm": 0.0035084570008621085,
+  "gS_off": 0.014877440000418574,
+  "gS_warm": 0.010190492001129314,
+  "cE": 0.05097045099682873,
+  "cS": 0.0900973210009397
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btTriangleCallback.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012644114998693112,
+  "gE_warm": 0.0033678700019663665,
+  "gS_off": 0.014637742999184411,
+  "gS_warm": 0.01171380199957639,
+  "cE": 0.03890944100203342,
+  "cS": 0.08106870999836246
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btTriangleIndexVertexArray.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013818003997585038,
+  "gE_warm": 0.0076772389984398615,
+  "gS_off": 0.023741438999422826,
+  "gS_warm": 0.019341254999744706,
+  "cE": 0.06190746999709518,
+  "cS": 0.14252658699842868
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btTriangleIndexVertexMaterialArray.cpp",
+  "program": "Bullet",
+  "gE_off": 0.016680336997524137,
+  "gE_warm": 0.008367025999177713,
+  "gS_off": 0.021230592999927467,
+  "gS_warm": 0.01636837700061733,
+  "cE": 0.08581550500093726,
+  "cS": 0.1410313930027769
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btTriangleMesh.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012880137001047842,
+  "gE_warm": 0.005505732002347941,
+  "gS_off": 0.013236466998932883,
+  "gS_warm": 0.017026350000378443,
+  "cE": 0.05348017099822755,
+  "cS": 0.13541882500067004
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btTriangleMeshShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.008491134998621419,
+  "gE_warm": 0.0035888849997718353,
+  "gS_off": 0.012084672998753376,
+  "gS_warm": 0.008302276000904385,
+  "cE": 0.05999766700188047,
+  "cS": 0.1282379830008722
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btTriangleShapeEx.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01160252599947853,
+  "gE_warm": 0.0028041250006936025,
+  "gS_off": 0.017855165002401918,
+  "gS_warm": 0.01792734499758808,
+  "cE": 0.068852214000799,
+  "cS": 0.13618295500054955
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btTypedConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01604468799996539,
+  "gE_warm": 0.0056504040003346745,
+  "gS_off": 0.017588615999557078,
+  "gS_warm": 0.013698789996851701,
+  "cE": 0.06370511599743622,
+  "cS": 0.13314581499798805
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btUniformScalingShape.cpp",
+  "program": "Bullet",
+  "gE_off": 0.016209365996473935,
+  "gE_warm": 0.006194485999003518,
+  "gS_off": 0.023894166999525623,
+  "gS_warm": 0.016870504998223623,
+  "cE": 0.045311582998692757,
+  "cS": 0.10959355600061826
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btUnionFind.cpp",
+  "program": "Bullet",
+  "gE_off": 0.011151588998473017,
+  "gE_warm": 0.002687806998437736,
+  "gS_off": 0.010879835001105675,
+  "gS_warm": 0.007144939998397604,
+  "cE": 0.06989912800054299,
+  "cS": 0.11378544199760654
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btUniversalConstraint.cpp",
+  "program": "Bullet",
+  "gE_off": 0.02171341700159246,
+  "gE_warm": 0.0068350600013218354,
+  "gS_off": 0.034041008999338374,
+  "gS_warm": 0.024344253997696796,
+  "cE": 0.09635591299957014,
+  "cS": 0.14161613500255044
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btVoronoiSimplexSolver.cpp",
+  "program": "Bullet",
+  "gE_off": 0.012117590998968808,
+  "gE_warm": 0.0026054219997604378,
+  "gS_off": 0.01514432100157137,
+  "gS_warm": 0.006608815998333739,
+  "cE": 0.05508347599970875,
+  "cS": 0.09946573699926375
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/btWheelInfo.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01229824300025939,
+  "gE_warm": 0.0029189789966039825,
+  "gS_off": 0.012907255000754958,
+  "gS_warm": 0.012388562001433456,
+  "cE": 0.05635232999702566,
+  "cS": 0.13231030199676752
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/gim_box_set.cpp",
+  "program": "Bullet",
+  "gE_off": 0.014168109999445733,
+  "gE_warm": 0.0027114740005345084,
+  "gS_off": 0.014151447998301592,
+  "gS_warm": 0.013232366000011098,
+  "cE": 0.06081550700037042,
+  "cS": 0.16501192799842102
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/gim_contact.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01673885799755226,
+  "gE_warm": 0.002723357996728737,
+  "gS_off": 0.024013338999793632,
+  "gS_warm": 0.015200794998236233,
+  "cE": 0.06502753399763606,
+  "cS": 0.18578647700269357
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/gim_memory.cpp",
+  "program": "Bullet",
+  "gE_off": 0.017325496999546885,
+  "gE_warm": 0.0023931940013426356,
+  "gS_off": 0.01714781700138701,
+  "gS_warm": 0.006846432999736862,
+  "cE": 0.08472527399862884,
+  "cS": 0.07756348199836793
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/gim_tri_collision.cpp",
+  "program": "Bullet",
+  "gE_off": 0.013845850997313391,
+  "gE_warm": 0.007460648997948738,
+  "gS_off": 0.018892378997406922,
+  "gS_warm": 0.01759574499737937,
+  "cE": 0.04799484800241771,
+  "cS": 0.15112807599871303
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/Bullet/main.cpp",
+  "program": "Bullet",
+  "gE_off": 0.01332017400272889,
+  "gE_warm": 0.006629011000768514,
+  "gS_off": 0.04084881000017049,
+  "gS_warm": 0.0325535329975537,
+  "cE": 0.07617478199972538,
+  "cS": 0.2579494190031255
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/abs.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.021376854998379713,
+  "gE_warm": 0.0037774619995616376,
+  "gS_off": 0.03161565900154528,
+  "gS_warm": 0.03736613799992483,
+  "cE": 0.07097668700225768,
+  "cS": 0.30997907599885366
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/error.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.01833076299953973,
+  "gE_warm": 0.007668225000088569,
+  "gS_off": 0.061014956001599785,
+  "gS_warm": 0.03452970299986191,
+  "cE": 0.09581658800016157,
+  "cS": 0.31053183900075965
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/gen.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.02129472600063309,
+  "gE_warm": 0.00454260699916631,
+  "gS_off": 0.03427548199761077,
+  "gS_warm": 0.031791306002560304,
+  "cE": 0.08010490000015125,
+  "cS": 0.31387987100242754
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/gutil.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.014223185000446392,
+  "gE_warm": 0.005698403998394497,
+  "gS_off": 0.0562428409975837,
+  "gS_warm": 0.03096049800296896,
+  "cE": 0.06449402699945495,
+  "cS": 0.3478009770005883
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/k.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.03456529499817407,
+  "gE_warm": 0.019041943000047468,
+  "gS_off": 0.13964812600170262,
+  "gS_warm": 0.12458669999978156,
+  "cE": 0.1206772860023193,
+  "cS": 0.9518093780025083
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/kimwl.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.01799759300047299,
+  "gE_warm": 0.006179700001666788,
+  "gS_off": 0.036609130998840556,
+  "gS_warm": 0.032002765001379885,
+  "cE": 0.058182272001431556,
+  "cS": 0.28778989700003876
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/kimwy.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.015096852999704424,
+  "gE_warm": 0.005287992000376107,
+  "gS_off": 0.04335631299909437,
+  "gS_warm": 0.05277517099966644,
+  "cE": 0.06764796800052864,
+  "cS": 0.388287510999362
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/main.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.03284855200035963,
+  "gE_warm": 0.010278686000674497,
+  "gS_off": 0.05736387800061493,
+  "gS_warm": 0.06116998400102602,
+  "cE": 0.07772107399796369,
+  "cS": 0.39478646499992465
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/occur.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.02814037600182928,
+  "gE_warm": 0.008599314001912717,
+  "gS_off": 0.055606530000659404,
+  "gS_warm": 0.03301036100310739,
+  "cE": 0.08963634600149817,
+  "cS": 0.2788372579998395
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/parse.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.012853321997681633,
+  "gE_warm": 0.004007040999567835,
+  "gS_off": 0.027176308998605236,
+  "gS_warm": 0.031060779001563787,
+  "cE": 0.049054229999455856,
+  "cS": 0.22709670499898493
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/pat.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.01845453599889879,
+  "gE_warm": 0.004698390002886299,
+  "gS_off": 0.04598849399917526,
+  "gS_warm": 0.04669393800213584,
+  "cE": 0.06619742800103268,
+  "cS": 0.28655122100099106
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/rk.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.021235861000604928,
+  "gE_warm": 0.0067260929972690064,
+  "gS_off": 0.02831195100225159,
+  "gS_warm": 0.02720138900258462,
+  "cE": 0.08223893299873453,
+  "cS": 0.4653822830005083
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/unpk.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.024130606001563137,
+  "gE_warm": 0.01629364900145447,
+  "gS_off": 0.09596030200191308,
+  "gS_warm": 0.09297622899975977,
+  "cE": 0.11044120299993665,
+  "cS": 0.9376181660009024
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Applications/kimwitu++/util.cc",
+  "program": "kimwitu++",
+  "gE_off": 0.017540840999572538,
+  "gE_warm": 0.004922075000649784,
+  "gS_off": 0.0316082280005503,
+  "gS_warm": 0.030879419999109814,
+  "cE": 0.06693813699894235,
+  "cS": 0.33782918700308073
+ },
+ {
+  "file": "/home/user/llvm/llvm-test-suite/MultiSource/Benchmarks/tramp3d-v4/tramp3d-v4.cpp",
+  "program": "tramp3d-v4",
+  "gE_off": 0.10148208299870021,
+  "gE_warm": 0.027606540999840945,
+  "gS_off": 0.41700282400051947,
+  "gS_warm": 0.3722226910031168,
+  "cE": 0.16443239799991716,
+  "cS": 3.0529294420011865
+ }
+]

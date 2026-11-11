@@ -77,6 +77,7 @@ fn declare_tag(name: u32, is_union: bool, loc: u32, in_block: bool, sc: i64) -> 
         scope_add(sc, s);
     }
     class_setup(r, s, sc);
+    if cg_on && in_block { note_local_class(r, sc); }     // code generation: a local class's name
     return s;
 }
 
@@ -138,6 +139,7 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
             let t = qn_type(qn);
             ds.tag_ty = if t == 0 { t_unknown } else { t };
             note_spec_decl(qn);
+            if cg_on && pending_inst && t != 0 { note_class_inst(t, cur_extern_inst); }
             return ds.tag_ty;
         }
         if qn.qual {
