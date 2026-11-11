@@ -40,6 +40,7 @@ import .gen_stmt;
 import .gen_call;
 import .gen_builtin;
 import .gen_neon;
+import .gen_asm_a64;
 import .gen_asm;
 import .gen_debug;
 import .gen_dwarf;
