@@ -78,7 +78,9 @@ let CXL_NOEXCEPT = 1;   // the function's body is a terminate scope (noexcept)
 let CXL_NOUNWIND = 2;   // calls of it never throw (plain calls, not invokes)
 let CXL_HIDDEN = 4;     // hidden visibility
 let CXL_RELRO = 8;      // a constant with relocations: .data.rel.ro (clang's section for vtables, typeinfo)
-let CXL_COMDAT = 16;    // in a comdat (the group named `comdat`, or after itself when 0)
+let CXL_COMDAT = 16;
+let CXL_OWNLINK = 64;
+let CXL_EXTINST = 128;  // defined elsewhere by an explicit instantiation: not emitted (a declaration)   // an alias with its own (default, global) linkage, not its target's    // in a comdat (the group named `comdat`, or after itself when 0)
 
 struct CxLink { link: u8, flags: u8, rsv: u16, comdat: u32, alias: i32 }
 var cxl: CxLink[>..] = [];

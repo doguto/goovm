@@ -36,9 +36,8 @@ recursive fn cish(t: u32) -> bool {
     let k = kind_of(t);
     if k == TY_POINTER { return cish_ptr(tbase(t)); }
     if k == TY_ARRAY || k == TY_VLA {
-        // code generation: arrays of classes decay to pointers C handles
-        if cg_on { return cish_ptr(tbase(t)) && (cish(tbase(t)) || is_record(tbase(t))); }
-        return cish(tbase(t));
+        // arrays of classes decay to pointers C handles
+        return cish_ptr(tbase(t)) && (cish(tbase(t)) || is_record(tbase(t)));
     }
     if k == TY_FUNC { return true; }
     if k == TY_MEMPTR { return cg_on; }     // code generation: copied, stored and initialized as C values
@@ -58,7 +57,7 @@ fn is_cmp_or_logic(op: i64) -> bool {
 recursive fn mk_binop(op_cx: i64, op_c: i64, l0: u32, r0: u32, loc: u32) -> u32 {
     var l = l0;
     var r = r0;
-    if is_opq(l) || is_opq(r) { return dep_node(t_unknown, loc); }
+    if is_opq(l) || (is_opq(r) && !(nodes[r].kind as i64 == N_FUNCREF && is_record(nodes[l].ty))) { return dep_node(t_unknown, loc); }
     // (.* is the only binary operator without an OP_ code: C's bin_op maps it to B_REM)
     if cg_on && (op_cx == OP_ARROWSTAR || op_cx == 0) { return cg_memptr_access(l, r, op_cx == OP_ARROWSTAR, loc); }
     if op_cx == OP_ARROWSTAR || op_cx == 0 && op_c == 0 { return dep_node(t_unknown, loc); }
@@ -68,10 +67,15 @@ recursive fn mk_binop(op_cx: i64, op_c: i64, l0: u32, r0: u32, loc: u32) -> u32 
         let o = overloaded_binop(op_cx, l, r, loc);
         if o != 0 { return o; }
         if op_c == B_COMMA { return node(N_BINARY, B_COMMA, tr, discard_value(l) as i64, r as i64, 0, loc); }
+        // D2: the built-in operator, class operands converted by their conversion functions
+        let want = if op_c == B_LAND || op_c == B_LOR { t_bool } else { 0 };
+        let l2 = if is_record(tl) { builtin_conv_operand(l, want) } else { l };
+        let r2 = if is_record(tr) { builtin_conv_operand(r, want) } else { r };
+        if l2 != 0 && r2 != 0 && !is_record(nodes[l2].ty) && !is_record(nodes[r2].ty) { return mk_binop(op_cx, op_c, l2, r2, loc); }
         return dep_node(t_unknown, loc);
     }
-    if cg_on && (kind_of(nonref(tl)) == TY_ENUM || kind_of(nonref(tr)) == TY_ENUM) && op_c != B_COMMA && op_c != B_LAND && op_c != B_LOR {
-        // code generation: operators declared for enumerations
+    if (kind_of(nonref(tl)) == TY_ENUM || kind_of(nonref(tr)) == TY_ENUM) && op_c != B_COMMA && op_c != B_LAND && op_c != B_LOR {
+        // operators declared for enumerations
         let o = overloaded_binop(op_cx, l, r, loc);
         if o != 0 { return o; }
     }
@@ -126,16 +130,39 @@ recursive fn to_bool(e: u32) -> u32 {
 // The condition of if/while/for/?:, converted to bool.
 recursive fn cond_cx(e: u32) -> u32 { to_bool(e) }
 
-recursive fn mk_assign_cx(op: i64, l: u32, r: u32, loc: u32, tok: i64) -> u32 {
+recursive fn mk_assign_cx(op: i64, l: u32, r0: u32, loc: u32, tok: i64) -> u32 {
+    var r = r0;
+    if op == 0 && !is_opq(l) && nodes[r].kind as i64 == N_FUNCREF && is_pointer(nodes[l].ty) && is_func(tbase(nodes[l].ty)) {
+        // p = f with f overloaded: the function p's type selects
+        let a = funcref_addr_to(r, nodes[l].ty, loc);
+        if !is_opq(a) { r = a; }
+    }
     if is_opq(l) || is_opq(r) { return dep_node(t_unknown, loc); }
     let tl = nodes[l].ty;
     if is_record(tl) || is_record(nodes[r].ty) || nodes[r].kind as i64 == N_INITBRACE {
         let o = overloaded_assign(op, l, r, loc, tok);
         if o != 0 { return o; }
+        if !is_record(tl) && is_record(nodes[r].ty) {
+            // D2: a class value assigned to a scalar: its conversion function
+            let c = ics_user(r, unqual(tl), CV_COPY, false, false);
+            if c.kind as i64 == ICS_USER && c.user >= 0 {
+                let x = apply_user_conv(r, c.user as i64, tl);
+                if x != 0 && !is_opq(x) { return mk_assign_cx(op, l, x, loc, tok); }
+            }
+        }
+        if is_record(tl) && op == 0 && !cg_on && is_lvalue(l) {
+            // D2: the implicit copy or move assignment X& operator=(const X&) / (X&&)
+            let c = ics_of(r, mk_lref(with_q(unqual(tl), Q_CONST)), CV_COPY);
+            if c.kind as i64 != ICS_BAD && c.flags & IF_UNKNOWN == 0 {
+                let n = node(N_CXX, 0, tl, 0, 0, 0, loc);
+                nodes[n].flags = NF_LVALUE;
+                return n;
+            }
+        }
         return dep_node(tl, loc);
     }
-    if cg_on && op != 0 && kind_of(nonref(tl)) == TY_ENUM {
-        // code generation: compound assignments declared for enumerations
+    if op != 0 && kind_of(nonref(tl)) == TY_ENUM {
+        // compound assignments declared for enumerations
         let o = overloaded_assign(op, l, r, loc, tok);
         if o != 0 { return o; }
     }
@@ -203,50 +230,170 @@ recursive fn mk_cond_cx(c: u32, a: u32, b: u32, loc: u32) -> u32 {
     return n;
 }
 
-recursive fn mk_cast_cx(t: u32, e: u32, loc: u32, kind: i64) -> u32 {
+recursive fn mk_cast_cx(t: u32, e0: u32, loc: u32, kind: i64) -> u32 {
+    var e = e0;
     if is_opaque(t) || is_opq(e) {
+        if nodes[e].kind as i64 == N_FUNCREF && !is_opaque(t) {
+            // a cast of an overload set: the function of the target type
+            let c = ics_overload_set(e, t, 0);
+            if c.kind as i64 != ICS_BAD { let a = funcref_addr(e, loc); if !is_opq(a) { return mk_cast_cx(t, a, loc, kind); } }
+        }
         let n = dep_node(nonref(t), loc);
         if is_ref(t) { nodes[n].flags = nodes[n].flags | NF_LVALUE; }
         return n;
     }
     if kind == CAST_DYNAMIC {
         if cg_on && !dependent_ctx() { return cg_dynamic_cast(t, e, loc); }
-        return dep_node(nonref(t), loc);
+        // the type is known; the run-time check is code generation's
+        need_complete(nonref(t));
+        if is_pointer(t) { need_complete(tbase(t)); }
+        let n = node(N_DYNCAST, 0, nonref(t), e as i64, 0, 0, loc);
+        if is_ref(t) { nodes[n].flags = (NF_LVALUE | (if kind_of(t) == TY_RREF { NF_XVALUE } else { 0 })) as! u16; }
+        return n;
     }
     if cg_on && (kind == CAST_STATIC || kind == CAST_C || kind == CAST_FUNCTIONAL) {
+        // class templates involved are instantiated before their bases are asked
+        if is_ref(t) || is_pointer(t) { if is_record(tbase(t)) { need_complete(tbase(t)); } }
+        let et = nodes[e].ty;
+        if is_record(et) { need_complete(et); }
+        else if is_pointer(et) && is_record(tbase(et)) { need_complete(tbase(et)); }
         let cc = cg_class_cast(t, e, loc);
         if cc != 0 { return cc; }
     }
+    let ft = nodes[e].ty;
     if is_ref(t) {
-        // a cast to a reference: the operand as an lvalue (xvalue) of the target type
         let to = tbase(t);
-        if is_lvalue(e) && (unqual(nodes[e].ty) == unqual(to) || kind == CAST_REINTERPRET || kind == CAST_CONST || kind == CAST_C) {
-            let n = node(N_CAST, CK_NOOP, to, e as i64, 0, 0, loc);
-            nodes[n].flags = (NF_LVALUE | (if kind_of(t) == TY_RREF { NF_XVALUE } else { 0 })) as! u16;
+        let xv = if kind_of(t) == TY_RREF { NF_XVALUE } else { 0 };
+        need_complete(to);
+        if is_record(ft) { need_complete(ft); }
+        // the same type (cv may be added, or dropped by const_cast / C casts)
+        if unqual(ft) == unqual(to) || ((kind == CAST_REINTERPRET || kind == CAST_CONST) && is_lvalue(e)) {
+            var x = e;
+            if !is_lvalue(e) { x = materialize_rv(e, loc); }
+            let n = node(N_CAST, CK_NOOP, to, x as i64, 0, 0, loc);
+            nodes[n].flags = (NF_LVALUE | xv) as! u16;
             return n;
         }
-        if is_record(to) && is_record(nodes[e].ty) {
-            let c = derived_to_base_lv(e, to, loc);
-            if c != 0 {
-                nodes[c].flags = (nodes[c].flags | (if kind_of(t) == TY_RREF { NF_XVALUE } else { 0 })) as! u16;
-                return c;
+        if is_record(to) && is_record(ft) {
+            // to a base (any cast), or down to a derived class (static_cast and C casts)
+            let up = base_offset(unqual(ft), unqual(to));
+            if up >= 0 {
+                let c = derived_to_base_lv(e, to, loc);
+                if c != 0 { nodes[c].flags = (nodes[c].flags | xv) as! u16; return c; }
             }
+            let down = base_offset(unqual(to), unqual(ft));
+            if down >= 0 && (kind == CAST_STATIC || kind == CAST_C || kind == CAST_FUNCTIONAL) {
+                let n = node_v(N_ICAST, CK_DERIVED2BASE, with_q(unqual(to), quals(to) | quals(ft)), e as i64, 0, 0, loc, 0 - down);
+                nodes[n].flags = (NF_LVALUE | xv) as! u16;
+                return n;
+            }
+        }
+        if kind == CAST_C && is_lvalue(e) {
+            // a C cast to an unrelated reference: reinterpret
+            let n = node(N_CAST, CK_NOOP, to, e as i64, 0, 0, loc);
+            nodes[n].flags = (NF_LVALUE | xv) as! u16;
+            return n;
+        }
+        // const T& / T&& from a value of another type: a temporary of T
+        if (quals(to) & Q_CONST != 0 || xv != 0) && !is_record(to) {
+            let v = mk_cast_cx(unqual(to), e, loc, kind);
+            if is_opq(v) { return dep_node(to, loc); }
+            let n = node(N_CAST, CK_NOOP, to, materialize_rv(v, loc) as i64, 0, 0, loc);
+            nodes[n].flags = (NF_LVALUE | xv) as! u16;
+            return n;
         }
         return dep_node(to, loc);
     }
-    if is_record(t) || is_record(nodes[e].ty) {
+    if is_void(t) { return node(N_CAST, CK_TOVOID, t_void, e as i64, 0, 0, loc); }
+    if is_record(t) || is_record(ft) {
+        need_complete(t);
+        if is_record(ft) { need_complete(ft); }
         let o = cast_to_class(t, e, loc);
         if o != 0 { return o; }
+        if is_record(ft) && !is_record(t) {
+            // a conversion function (explicit ones too: direct-initialization)
+            let c = ics_user(e, unqual(t), 0, false, false);
+            if c.kind as i64 == ICS_USER && c.user >= 0 {
+                let x = apply_user_conv(e, c.user as i64, t);
+                if x != 0 && !is_opq(x) { return mk_cast_cx(t, x, loc, kind); }
+            }
+        }
         return dep_node(t, loc);
     }
-    if kind_of(nodes[e].ty) == TY_NULLPTR {
-        if is_pointer(t) { return icast(e, CK_NULL2PTR, t); }
-        if is_integer(t) { return int_node(0, t, loc); }
+    if kind_of(ft) == TY_NULLPTR {
+        if is_pointer(t) || kind_of(t) == TY_MEMPTR { return icast(e, CK_NULL2PTR, t); }
+        if is_integer(t) || kind_of(t) == TY_BOOL { return int_node(0, t, loc); }
+        if kind_of(t) == TY_NULLPTR { return rv_cx(e); }
+        return dep_node(t, loc);
+    }
+    if is_array(ft) || is_func(ft) { e = decay_cx(e); }
+    let ft2 = nodes[e].ty;
+    // class pointers: to a base or down to a derived class, the offset applied
+    if is_pointer(t) && is_pointer(ft2) && is_record(tbase(t)) && is_record(tbase(ft2)) && kind != CAST_REINTERPRET &&
+       unqual(tbase(t)) != unqual(tbase(ft2)) {
+        let a = unqual(tbase(ft2));
+        let b = unqual(tbase(t));
+        need_complete(a);
+        need_complete(b);
+        var off = base_offset(a, b);
+        if off < 0 {
+            let d = base_offset(b, a);
+            if d >= 0 && kind != CAST_CONST { off = 0 - d; }
+            else { off = 0; }
+        }
+        if off != 0 { return ptr_offset_cast(rv_cx(e), unqual(t), off, loc); }
+    }
+    if kind_of(t) == TY_MEMPTR || kind_of(ft2) == TY_MEMPTR {
+        if unqual(t) == unqual(ft2) { return rv_cx(e); }
         return dep_node(t, loc);
     }
     if !cish(t) || !cish_node(e) { return dep_node(t, loc); }
-    if is_void(t) { return node(N_CAST, CK_TOVOID, t_void, e as i64, 0, 0, loc); }
     return mk_cast(unqual(t), e, loc);
+}
+
+fn rv_cx(e: u32) -> u32 { if is_lvalue(e) { return rv(e); } return e; }
+fn decay_cx(e: u32) -> u32 {
+    let t = nodes[e].ty;
+    if is_array(t) { return icast(e, CK_ARRAY2PTR, mk_ptr(tbase(t))); }
+    if is_func(t) { return icast(e, CK_FUNC2PTR, mk_ptr(t)); }
+    return e;
+}
+
+// A prvalue as an object (a reference cast binds it).
+fn materialize_rv(e: u32, loc: u32) -> u32 {
+    if is_lvalue(e) { return e; }
+    let t = unqual(nodes[e].ty);
+    let s = csym(SK_VAR, 0, t, loc);
+    syms[s].flags = SF_COMPLIT;
+    if block_fn_depth == 0 { syms[s].sc = SC_STATIC as! u8; syms[s].flags = syms[s].flags | SF_FILESCOPE; }
+    let cl = node(N_COMPLIT, 0, t, e as i64, s, 0, loc);
+    nodes[cl].flags = NF_LVALUE;
+    return cl;
+}
+
+// Pointer p (a prvalue) converted to pointer type `to` with off added to
+// the address, a null pointer kept:
+// ({ T *tmp = p; tmp ? (U *)((char *)tmp + off) : (U *)0; })
+fn ptr_offset_cast(p: u32, to: u32, off: i64, loc: u32) -> u32 {
+    let ft = unqual(nodes[p].ty);
+    let s = csym(SK_VAR, intern("__base_tmp"), ft, loc);
+    syms[s].scope = 1;
+    let mark = nscratch.len;
+    nscratch.push(node(N_DECL, 0, ft, s, p as i64, loc as i64, loc));
+    let v = node(N_DECLREF, 0, ft, s, 0, 0, loc);
+    nodes[v].flags = NF_LVALUE;
+    let cp = node(N_ICAST, CK_BITCAST, mk_ptr(t_char), rv(v) as i64, 0, 0, loc);
+    let add = node(N_BINARY, B_PTRADD, mk_ptr(t_char), cp as i64, int_node(off, t_long, loc) as i64, 0, loc);
+    let bp = node(N_ICAST, CK_BITCAST, to, add as i64, 0, 0, loc);
+    let z = node(N_ICAST, CK_NULL2PTR, to, int_node(0, t_int, loc) as i64, 0, 0, loc);
+    let v2 = node(N_DECLREF, 0, ft, s, 0, 0, loc);
+    nodes[v2].flags = NF_LVALUE;
+    let c = node(N_COND, 0, to, icast(rv(v2), CK_PTR2BOOL, t_bool) as i64, bp as i64, z as i64, loc);
+    nscratch.push(node(N_EXPR, 0, 0, c as i64, 0, 0, loc));
+    let count = nscratch.len - mark;
+    let start = commit_list(mark);
+    let body = node_v(N_COMPOUND, 0, 0, 0, 0, count, loc, start);
+    return node(N_STMTEXPR, 0, to, body as i64, 0, 0, loc);
 }
 
 recursive fn mk_incdec_cx(e: u32, op: i64, loc: u32, pre: bool) -> u32 {
@@ -302,10 +449,12 @@ recursive fn mk_unary_cx(k: i64, e: u32, loc: u32) -> u32 {
         let o = overloaded_unop(op, e, loc, false);
         if o != 0 { return o; }
         if k == TK_EXCLAIM { let b = conv_to_bool(e); if b != 0 && !is_opq(b) { return node(N_UNARY, U_NOT, t_bool, b as i64, 0, 0, loc); } }
+        let e2 = builtin_conv_operand(e, 0);
+        if e2 != 0 && !is_record(nodes[e2].ty) { return mk_unary_cx(k, e2, loc); }
         return dep_node(if k == TK_EXCLAIM { t_bool } else { t_unknown }, loc);
     }
-    if cg_on && kind_of(nonref(nodes[e].ty)) == TY_ENUM {
-        // code generation: operators declared for enumerations
+    if kind_of(nonref(nodes[e].ty)) == TY_ENUM {
+        // operators declared for enumerations
         let op = match k { TK_PLUS => OP_PLUS, TK_MINUS => OP_MINUS, TK_TILDE => OP_TILDE, _ => OP_EXCLAIM };
         let o = overloaded_unop(op, e, loc, false);
         if o != 0 { return o; }
@@ -375,6 +524,11 @@ recursive fn mk_name_ref(qn: QN&, s0: i64, loc: u32) -> u32 {
             nodes[n].flags = nodes[n].flags | NF_LVALUE;
             return n;
         }
+        if cg_on && lams.len > 0 {
+            // code generation: a capture in a lambda's body
+            let c = cg_lambda_var(s, loc);
+            if c != 0 { return c; }
+        }
         if kind_of(t) == TY_AUTO { return opaque_node(loc); }
         let n = node(N_DECLREF, 0, nonref(t), s, 0, 0, loc);
         nodes[n].flags = (NF_LVALUE | (if is_ref(t) { NF_REFDEREF } else { 0 })) as! u16;
@@ -396,7 +550,17 @@ recursive fn mk_name_ref(qn: QN&, s0: i64, loc: u32) -> u32 {
         return n;
     }
     if k == SK_FUNC || k == SK_TEMPLATE {
-        if k == SK_TEMPLATE && tmpl_kind(s) == TT_VAR { return dep_node(t_unknown, loc); }
+        if k == SK_TEMPLATE && tmpl_kind(s) == TT_VAR {
+            // D2: a variable template specialization
+            if qn.has_targs {
+                let v = var_spec(s, qn.targs);
+                if v >= 0 {
+                    var q2 = QN { .. };
+                    return mk_name_ref(q2, v, loc);
+                }
+            }
+            return dep_node(t_unknown, loc);
+        }
         let n = node(N_FUNCREF, 0, t_unknown, s0, 0, (if qn.has_targs { qn.targs + 1 } else { 0 }) as i64, loc);
         nodes[n].op = if qn.qual { 1 } else { 0 };
         return n;
@@ -696,6 +860,15 @@ recursive fn parse_var_init(s: i64, d: CD&, ctx: i64) {
         form = 3;
         init = parse_braced();
     }
+    // an overload set initializing a function pointer or reference: the
+    // function the target type selects ([over.over])
+    if init != 0 && nodes[init].kind as i64 == N_FUNCREF && !has_auto(syms[s].ty) && !dependent_ctx() {
+        let ft = nonref(syms[s].ty);
+        if is_func(ft) || (is_pointer(ft) && is_func(tbase(ft))) {
+            let a = funcref_addr_to(init, syms[s].ty, loc);
+            if !is_opq(a) { init = a; }
+        }
+    }
     // auto: the initializer's type
     let t = syms[s].ty;
     if init != 0 && has_auto(t) {
@@ -709,6 +882,8 @@ recursive fn parse_var_init(s: i64, d: CD&, ctx: i64) {
         return;
     }
     let conv = if init != 0 { init_convert(s, init, form, loc) } else { default_init(s, loc) };
+    // the destructor of a class object is potentially invoked ([class.dtor]p15)
+    if is_record(base_elem_t(syms[s].ty)) && !is_ref(syms[s].ty) { use_dtor(base_elem_t(syms[s].ty)); }
     // const integral (and enum) variables are usable in constant expressions
     if conv != 0 && !is_opq(conv) && (is_integer(syms[s].ty) || kind_of(syms[s].ty) == TY_BOOL) && quals(syms[s].ty) & Q_CONST != 0 &&
        nodes[conv].kind as i64 != N_INITBRACE {
@@ -765,4 +940,16 @@ recursive fn deduce_auto(t: u32, init: u32) -> u32 {
 
 fn cvar_note(s: i64, init: u32) {
     cv_define(s, 0, init);
+}
+
+// The destructor of class type t (user-declared) is odr-used: instantiated.
+fn use_dtor(t: u32) {
+    if is_opaque(t) { return; }
+    need_complete(t);
+    let sc = type_scope(t);
+    if sc < 0 { return; }
+    let d = scope_find(sc, id_dtor);
+    if d < 0 { return; }
+    let f = resolve(d);
+    if f >= 0 && syms[f].kind as i64 == SK_FUNC { inst_use(f); }
 }

@@ -55,7 +55,7 @@ fn is_std_ns(sc: i64) -> bool {
 
 // The mangled name of symbol s (a function or variable) into mg; false
 // when D1 cannot mangle it (a dependent or unknown type).
-fn mangle_sym(s: i64) -> bool {
+recursive fn mangle_sym(s: i64) -> bool {
     mg.clear();
     msubs.clear();
     mg_fail = false;
@@ -72,15 +72,30 @@ fn mangle_sym(s: i64) -> bool {
     }
     mg.append("_Z");
     mg_tags.clear();
+    // a function template specialization: <name> <template-args>, then the
+    // template's declared return and parameter types (its parameters T_, T0_ ...)
+    mg_ft = -1;
+    var pft: u32 = 0;
+    if k == SK_FUNC && cxs[s].flags2 & CF2_FSPEC != 0 && cxs[s].tmpl >= 0 && cxs[s].targs >= 0 {
+        let t = cxs[s].tmpl as i64;
+        let pf = tmpls[t].pattern as i64;
+        if pf >= 0 && kind_of(syms[pf].ty) == TY_FUNC {
+            mg_ft = t;
+            mg_fsym = s;
+            pft = syms[pf].ty;
+        }
+    }
     mangle_name(s);
     let name_end = mg_name_end;
     if k == SK_FUNC {
-        let ft = syms[s].ty;
+        let ft = if pft != 0 { pft } else { syms[s].ty };
         let f = types[ft >> 4];
+        if pft != 0 && fl & (CF_CTOR | CF_DTOR | CF_CONV) == 0 { mangle_type(f.base); }
         if f.n == 0 && f.flags & TF_VARIADIC == 0 { mg.push('v'); }
         for i in f.n { mangle_type(tparams[f.extra + i]); }
         if f.flags & TF_VARIADIC != 0 { mg.push('z'); }
     }
+    mg_ft = -1;
     // implicit ABI tags: those of the return type (variables: of their
     // type) that the name and the parameters do not already carry
     let used = mg_tags.len;
@@ -139,7 +154,7 @@ var mg_debug: bool = false;
 var mg_tail: u8[>..] = [];
 
 // <name> of a declaration.
-fn mangle_name(s: i64) {
+recursive fn mangle_name(s: i64) {
     let sc = cxs[s].dscope as i64;
     let k = syms[s].kind as i64;
     let member_fn = k == SK_FUNC && cxs[s].flags & CF_MEMBER != 0 && cxs[s].flags & CF_STATIC == 0;
@@ -147,7 +162,37 @@ fn mangle_name(s: i64) {
         if is_std_ns(sc) { mg.append("St"); }
         if internal_linkage(s) { mg.push('L'); }
         unqualified(s);
+        if mg_ft >= 0 && mg_fsym == s {
+            // <unscoped-template-name> <template-args>
+            msubs.push(MK_TMPL | (tmpls[mg_ft].sym as u64));
+            mangle_targs_t(cxs[s].targs as i64, mg_ft);
+        }
         mg_name_end = mg.len;
+        return;
+    }
+    // code generation: a member of a lambda's closure type, a local name:
+    // Z <function encoding> E N [K] <closure> <name> E
+    if cg_on && scopes[sc].kind as i64 == CS_CLASS && scopes[sc].rec >= 0 && closure_mangled(scopes[sc].rec as i64) {
+        let n0 = cm_name.len;
+        let c0 = mg_stack.len;
+        mg_stack.append(cm_name);
+        mangle_local_prefix(scopes[sc].rec as i64);
+        cm_name.clear();
+        cm_name.append(mg_stack[c0..c0 + n0]);
+        mg_stack.resize(c0);
+        mg.push('N');
+        if member_fn && (types[syms[s].ty >> 4].flags as i64) & TF_MCONST != 0 { mg.push('K'); }
+        mg.append(cm_name);
+        msubs.push(MK_SCOPE | (sc as u64));
+        let disc_l = cm_disc.len;
+        let d0 = mg_stack.len;
+        mg_stack.append(cm_disc);
+        unqualified(s);
+        mg_name_end = mg.len;
+        mg.push('E');
+        // a local class's discriminator ends the local name
+        mg.append(mg_stack[d0..d0 + disc_l]);
+        mg_stack.resize(d0);
         return;
     }
     mg.push('N');
@@ -158,11 +203,96 @@ fn mangle_name(s: i64) {
         if f & TF_MLREF != 0 { mg.push('R'); }
         if f & TF_MRREF != 0 { mg.push('O'); }
     }
+    note_tags(sc);      // (the enclosing namespaces' ABI tags are carried by the name)
     mangle_prefix(sc);
     if internal_linkage(s) { mg.push('L'); }
     unqualified(s);
+    if mg_ft >= 0 && mg_fsym == s {
+        // <template-prefix> <template-args>
+        msubs.push(MK_TMPL | (tmpls[mg_ft].sym as u64));
+        mangle_targs_t(cxs[s].targs as i64, mg_ft);
+    }
     mg_name_end = mg.len;
     mg.push('E');
+}
+// The class template whose pattern record r is, or -1.
+fn class_of_pattern(r: i64) -> i64 {
+    if r >= crecs.len || crecs[r].flags & CR_PATTERN == 0 { return -1; }
+    let cs = crecs[r].sym as i64;
+    if cs < 0 || cxs[cs].tmpl < 0 { return -1; }
+    let t = cxs[cs].tmpl as i64;
+    if tmpls[t].kind as i64 != TT_CLASS || tmpls[t].pattern as i64 != r || tmpls[t].sym < 0 { return -1; }
+    return t;
+}
+// Z <encoding of the function local class or closure r is in> E (nothing
+// at namespace scope), the function's components substitution candidates.
+recursive fn mangle_local_prefix(r: i64) {
+    let e = local_encl(r);
+    if e < 0 { return; }
+    mg.push('Z');
+    let k = syms[e].kind as i64;
+    let fl = cxs[e].flags;
+    if (syms[e].name == id_main && cxs[e].dscope <= 0) || (fl & CF_EXTERN_C != 0 && fl & CF_MEMBER == 0 && syms[e].sc as i64 != SC_STATIC) {
+        source_name(ident_text(syms[e].name as i64));
+        mg.push('E');
+        return;
+    }
+    let ft0 = mg_ft;
+    let fs0 = mg_fsym;
+    let ne0 = mg_name_end;
+    let st0 = mg_structor;
+    mg_structor = 1;
+    mg_ft = -1;
+    var pft: u32 = 0;
+    if k == SK_FUNC && cxs[e].flags2 & CF2_FSPEC != 0 && cxs[e].tmpl >= 0 && cxs[e].targs >= 0 {
+        let t = cxs[e].tmpl as i64;
+        let pf = tmpls[t].pattern as i64;
+        if pf >= 0 && kind_of(syms[pf].ty) == TY_FUNC { mg_ft = t; mg_fsym = e; pft = syms[pf].ty; }
+    }
+    mangle_name(e);
+    let ft = if pft != 0 { pft } else { syms[e].ty };
+    let f = types[ft >> 4];
+    if pft != 0 && fl & (CF_CTOR | CF_DTOR | CF_CONV) == 0 { mangle_type(f.base); }
+    if f.n == 0 && f.flags & TF_VARIADIC == 0 { mg.push('v'); }
+    for i in f.n { mangle_type(tparams[f.extra + i]); }
+    if f.flags & TF_VARIADIC != 0 { mg.push('z'); }
+    mg_ft = ft0;
+    mg_fsym = fs0;
+    mg_name_end = ne0;
+    mg_structor = st0;
+    mg.push('E');
+}
+var mg_ft: i64 = -1;        // the function template whose specialization's signature is mangled (-1 none)
+var mg_fsym: i64 = -1;      // ... and the specialization
+
+// A template parameter in mg_ft's signature: its own (T_, T0_ ...) or an
+// enclosing class template's, whose argument is mangled instead.
+recursive fn mangle_tparam(t: u32) {
+    let n = types[t >> 4].n;
+    let d = n >> 16;
+    let idx = n & 0xFFFF;
+    if mg_ft >= 0 && d == tmpls[mg_ft].depth as i64 {
+        if idx == 0 { mg.append("T_"); } else { format(mg, "T", idx - 1, "_"); }
+        msubs.push(MK_TYPE | (unqual(t) as u64));
+        return;
+    }
+    // an enclosing class template's: the instantiated class's argument
+    if mg_ft >= 0 {
+        var sc = cxs[mg_fsym].dscope as i64;
+        while sc > 0 {
+            if scopes[sc].kind as i64 == CS_CLASS && scopes[sc].rec >= 0 {
+                let cs = crecs[scopes[sc].rec].sym as i64;
+                if cs >= 0 && cxs[cs].flags & CF_SPEC != 0 && cxs[cs].tmpl >= 0 && tmpls[cxs[cs].tmpl].depth as i64 == d {
+                    let a = tl_arg(cxs[cs].targs as i64, idx);
+                    if a.kind as i64 == TA_TYPE { mangle_type(with_q(a.ty, quals(a.ty) | quals(t))); return; }
+                    mg_fail = true;
+                    return;
+                }
+            }
+            sc = scopes[sc].parent as i64;
+        }
+    }
+    mg_fail = true;
 }
 
 // Internal linkage of a namespace member (C++ [basic.link]p3): static
@@ -208,8 +338,9 @@ recursive fn mangle_prefix(sc: i64) {
         let cs = crecs[r].sym as i64;
         if cs >= 0 && cxs[cs].flags & CF_SPEC != 0 && cxs[cs].tmpl >= 0 {
             let t = cxs[cs].tmpl as i64;
+            if std_class_abbrev(sc, tmpls[t].sym as i64, cxs[cs].targs as i64, t) { return; }
             mangle_tmpl_prefix(tmpls[t].sym as i64, scopes[sc].parent as i64);
-            mangle_targs(cxs[cs].targs as i64);
+            mangle_targs_t(cxs[cs].targs as i64, cxs[cs].tmpl as i64);
             msubs.push(MK_SCOPE | (sc as u64));
             return;
         }
@@ -312,6 +443,14 @@ recursive fn mangle_type(t: u32) {
         mg.push('A');
         let n = types[t >> 4].n;
         if n >= 0 { format(mg, n); }
+        else if n <= -2 && mg_ft >= 0 {
+            // T[N] in a function template's signature: the bound is a template parameter
+            let dn = -2 - n;
+            let idx = dn & 0xFFFF;
+            if dn >> 16 == tmpls[mg_ft].depth as i64 {
+                if idx == 0 { mg.append("T_"); } else { format(mg, "T", idx - 1, "_"); }
+            } else { mg_fail = true; }
+        }
         mg.push('_');
         mangle_type(tbase(t));
     } else if k == TY_FUNC {
@@ -326,6 +465,12 @@ recursive fn mangle_type(t: u32) {
             if f & TF_MCONST != 0 { mg.push('K'); }
         }
         mangle_type(mt);
+    } else if (k == TY_STRUCT || k == TY_UNION) && mg_ft >= 0 && class_of_pattern(rec_of(t)) >= 0 {
+        // X<P...> written with X's own parameter positions (cx_tmpl makes it
+        // X's pattern) in a function template's signature: X<P...>
+        let pt = class_of_pattern(rec_of(t));
+        mangle_type(with_q(mk_depspec(tmpls[pt].sym as i64, own_args(pt)), q));
+        return;
     } else if k == TY_STRUCT || k == TY_UNION {
         let r = rec_of(t);
         if r < crecs.len && crecs[r].scope >= 0 {
@@ -345,12 +490,29 @@ recursive fn mangle_type(t: u32) {
     } else if k == TY_VECTOR || k == TY_EXTVECTOR {
         format(mg, "Dv", types[t >> 4].n, "_");
         mangle_type(tbase(t));
+    } else if k == TY_TPARAM {
+        mangle_tparam(t);
+        return;
+    } else if k == TY_PACKEXP {
+        mg.append("Dp");
+        mangle_type(tbase(t));
+    } else if k == TY_DEPNAME {
+        // typename Q::name[<args>]: N <qualifier> <name> [<args>] E
+        let q0 = types[t >> 4].base;
+        let nm = types[t >> 4].extra;
+        let al = types[t >> 4].n;
+        mg.push('N');
+        mangle_type(q0);
+        source_name(ident_text(nm as i64));
+        if al >= 0 { mangle_targs(al as i64); }
+        mg.push('E');
     } else if k == TY_DEPSPEC {
-        // an uninstantiated specialization with concrete arguments
+        // an uninstantiated specialization with concrete arguments (or, in
+        // a function template's signature, dependent ones)
         let ts = types[t >> 4].extra as i64;
         let args = types[t >> 4].n;
         if mg_debug { write_stderr(str("depspec ts=", ts, " args=", args, " dep=", args_dependent(args as i32), " dsc=", cxs[ts].dscope, "\n")); }
-        if args_dependent(args as i32) { mg_fail = true; return; }
+        if args_dependent(args as i32) && mg_ft < 0 { mg_fail = true; return; }
         let dsc = cxs[ts].dscope as i64;
         note_tags(dsc);
         if dsc <= 0 || is_std_ns(dsc) {
@@ -361,11 +523,11 @@ recursive fn mangle_type(t: u32) {
                 source_name(ident_text(syms[ts].name as i64));
                 msubs.push(MK_TMPL | (ts as u64));
             }
-            mangle_targs(args);
+            mangle_targs_t(args, cxs[ts].tmpl as i64);
         } else {
             mg.push('N');
             mangle_tmpl_prefix(ts, dsc);
-            mangle_targs(args);
+            mangle_targs_t(args, cxs[ts].tmpl as i64);
             mg.push('E');
         }
     } else {
@@ -379,6 +541,20 @@ recursive fn mangle_type(t: u32) {
 recursive fn mangle_class_name(sc: i64) {
     let i = sub_find(MK_SCOPE | (sc as u64));
     if i >= 0 { sub_emit(i); return; }
+    // code generation: a lambda's closure type (cx_gen_lambda)
+    if cg_on && scopes[sc].rec >= 0 && closure_mangled(scopes[sc].rec as i64) {
+        // Z <encoding> E <name> [<discriminator>]
+        let c0 = mg_stack.len;
+        mg_stack.append(cm_name);
+        let n0 = cm_name.len;
+        mg_stack.append(cm_disc);
+        let d0 = cm_disc.len;
+        mangle_local_prefix(scopes[sc].rec as i64);
+        mg.append(mg_stack[c0..c0 + n0 + d0]);
+        mg_stack.resize(c0);
+        msubs.push(MK_SCOPE | (sc as u64));
+        return;
+    }
     let parent = scopes[sc].parent as i64;
     if parent <= 0 || is_std_ns(parent) {
         // unscoped (::X or ::std::X): a template specialization is <unscoped-template-name> <template-args>
@@ -387,13 +563,14 @@ recursive fn mangle_class_name(sc: i64) {
             let cs = crecs[r].sym as i64;
             if cs >= 0 && cxs[cs].flags & CF_SPEC != 0 && cxs[cs].tmpl >= 0 {
                 let ts = tmpls[cxs[cs].tmpl].sym as i64;
+                if std_class_abbrev(sc, ts, cxs[cs].targs as i64, cxs[cs].tmpl as i64) { return; }
                 if is_std_ns(parent) { mg.append("St"); }
                 let j = sub_find(MK_TMPL | (ts as u64));
                 if j >= 0 { sub_emit(j); } else {
                     source_name(ident_text(syms[ts].name as i64));
                     msubs.push(MK_TMPL | (ts as u64));
                 }
-                mangle_targs(cxs[cs].targs as i64);
+                mangle_targs_t(cxs[cs].targs as i64, cxs[cs].tmpl as i64);
                 msubs.push(MK_SCOPE | (sc as u64));
                 return;
             }
@@ -426,6 +603,25 @@ recursive fn std_abbrev(ts: i64, args: i64, t: u32) -> bool {
         if j >= 0 { sub_emit(j); } else { mg.append(if nm == "allocator" { "Sa" } else { "Sb" }); }
         mangle_targs(args);
         msubs.push(MK_TYPE | (unqual(t) as u64));
+        return true;
+    }
+    return false;
+}
+
+// A specialization (class scope sc) of std::basic_istream / basic_ostream /
+// basic_iostream<char, char_traits<char>> (Si, So, Sd: no substitution
+// candidate) or std::allocator / basic_string (Sa, Sb <args>: one), or false.
+recursive fn std_class_abbrev(sc: i64, ts: i64, args: i64, t: i64) -> bool {
+    if !is_std_ns(scopes[sc].parent as i64) { return false; }
+    let nm = ident_text(syms[ts].name as i64);
+    if (nm == "basic_istream" || nm == "basic_ostream" || nm == "basic_iostream") && char_traits_char(args) {
+        mg.append(if nm == "basic_istream" { "Si" } else if nm == "basic_ostream" { "So" } else { "Sd" });
+        return true;
+    }
+    if nm == "allocator" || nm == "basic_string" {
+        mg.append(if nm == "allocator" { "Sa" } else { "Sb" });
+        mangle_targs_t(args, t);
+        msubs.push(MK_SCOPE | (sc as u64));
         return true;
     }
     return false;
@@ -491,6 +687,25 @@ recursive fn mangle_fn_type(t: u32) {
     mg.push('E');
 }
 
+// The template arguments of template t (-1 unknown): the arguments of a
+// trailing parameter pack (kept one by one in the list) as one pack, J...E.
+recursive fn mangle_targs_t(l: i64, t: i64) {
+    if t < 0 || tmpls[t].nparams == 0 { mangle_targs(l); return; }
+    let np = tmpls[t].nparams as i64;
+    let last = tps[tmpls[t].params as i64 + np - 1];
+    let n = tl_count(l);
+    if !last.pack || (n == np && tl_arg(l, np - 1).kind as i64 == TA_PACK) || n < np - 1 { mangle_targs(l); return; }
+    // the arguments before the pack, then J <the rest> E
+    let m = targ_scratch.len;
+    for i in np - 1 { targ_scratch.push(tl_arg(l, i)); }
+    let m2 = targ_scratch.len;
+    for i in np - 1..n { targ_scratch.push(tl_arg(l, i)); }
+    let pl = targ_intern(m2);
+    targ_scratch.push(TArg { kind: TA_PACK as! u8, rsv: 0, rsv2: 0, ty: 0, v: pl as i64 });
+    let l2 = targ_intern(m);
+    mangle_targs(l2 as i64);
+}
+
 recursive fn mangle_targs(l: i64) {
     mg.push('I');
     let n = tl_count(l);
@@ -505,6 +720,21 @@ recursive fn mangle_targs(l: i64) {
             if kind_of(a.ty) == TY_BOOL { format(mg, a.v); }
             else if a.v < 0 { mg.push('n'); format(mg, 0 - a.v); }
             else { format(mg, a.v); }
+            mg.push('E');
+        } else if ak == TA_PACK {
+            // an argument pack: J <args> E
+            let pl = a.v;
+            mg.push('J');
+            for j in tl_count(pl) {
+                let b = tl_arg(pl, j);
+                if b.kind as i64 == TA_TYPE { mangle_type(b.ty); }
+                else if b.kind as i64 == TA_VALUE && b.ty != 0 && !is_opaque(b.ty) {
+                    mg.push('L');
+                    mangle_type(b.ty);
+                    if b.v < 0 { mg.push('n'); format(mg, 0 - b.v); } else { format(mg, b.v); }
+                    mg.push('E');
+                } else { mg_fail = true; }
+            }
             mg.push('E');
         } else {
             mg_fail = true;

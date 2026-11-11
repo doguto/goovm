@@ -242,8 +242,16 @@ var inl_pslots: u32[>..] = [];
 // The function a call expands in place, or -1.
 fn inline_target(n: u32) -> i64 {
     let nd = nodes[n];
-    let ds = direct_callee(nd.a);
+    var ds = direct_callee(nd.a);
     if ds < 0 || syms[ds].kind != SK_FUNC { return -1; }
+    // (C++: a structor's complete-object variant that is its base one)
+    if opt_cxx && syms[ds].def < 0 {
+        if ds < cxl.len && cxl[ds].alias >= 0 { ds = cxl[ds].alias as i64; }
+        else {
+            let d2 = defining_sym(link_name(ds));
+            if d2 >= 0 { ds = d2; }
+        }
+    }
     // (C++: clang inlines every always_inline function; goosecc the free
     // functions among them, their code at the call as for nodebug ones)
     if !sym_has_attr(ds, AM_ALWAYS_INLINE) || !(sym_has_attr(ds, AM_NODEBUG) || opt_cxx) { return -1; }
@@ -281,7 +289,8 @@ recursive fn inline_viable(n: u32) -> bool {
     if k == N_FOR { return inline_viable(nd.a) && inline_viable(nd.v as! u32); }
     if k == N_CASE || k == N_DEFAULT { return inline_viable(nd.a); }
     if k == N_LABEL || k == N_GOTO || k == N_IGOTO || k == N_ASM { return false; }
-    if k >= N_XTEMP { return false; }      // C++ lowering statements (cleanups, try)
+    if k == N_XPUSH { return opt_cxx; }    // (C++: a cleanup of the body's scope: run by the expansion's)
+    if k >= N_XTEMP { return false; }      // C++ lowering statements (try)
     return true;
 }
 

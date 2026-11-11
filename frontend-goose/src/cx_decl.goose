@@ -78,6 +78,10 @@ recursive fn cx_attr_one(a: Attrs&) {
         }
     } else if name == "vector_size" {
         if at(TK_L_PAREN) { a.vector_size = cx_attr_int(); }
+    } else if name == "matrix_type" {
+        // clang's matrix types (-fenable-matrix): not implemented, the type is unknown
+        a.matrix = true;
+        if at(TK_L_PAREN) { skip_to(TK_R_PAREN); accept(TK_R_PAREN); }
     } else if name == "ext_vector_type" {
         if at(TK_L_PAREN) { a.ext_vector = cx_attr_int(); }
     } else if name == "noreturn" { a.misc = a.misc | AM_NORETURN; }
@@ -202,6 +206,8 @@ struct CDS {
     is_explicit: bool = false,
     is_friend: bool = false,
     is_constexpr: bool = false,
+    is_constinit: bool = false,
+    is_consteval: bool = false,
     is_mutable: bool = false,
     noreturn: bool = false,
     q: u8 = 0,
@@ -322,9 +328,15 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             // a type name?
             let sv = save();
             var qn = QN { .. };
+            let lvl_here = diag_suppress;
+            let wl0 = diag_watch_level;
+            let we0 = diag_watch_errors;
             diag_suppress++;
+            diag_watch_level = diag_suppress;
             let ok = parse_qname(qn);
             diag_suppress--;
+            let errs_in_name = diag_watch_errors - we0;
+            diag_watch_level = wl0;
             if !ok || qn.kind as i64 != QK_IDENT { restore(sv); break; }
             lookup_qn(qn);
             var t = qn_type(qn);
@@ -333,6 +345,9 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
                 restore(sv);
                 break;
             }
+            // D2: a type name it is: the errors met in its template arguments
+            // count (a substitution failure in an instantiation)
+            if errs_in_name > 0 { diag_propagate(lvl_here); }
             ds.named = t;
             ds.nnamed++;
             ds.any = true;
@@ -366,7 +381,14 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             if at(TK_L_PAREN) { skip_group(); }
             continue;
         }
-        if w == KW_CONSTEXPR || w == KW_CONSTEVAL || w == KW_CONSTINIT { ds.is_constexpr = true; ds.any = true; adv(); continue; }
+        if w == KW_CONSTINIT { ds.is_constinit = true; ds.any = true; adv(); continue; }
+        if w == KW_CONSTEXPR || w == KW_CONSTEVAL {
+            ds.is_constexpr = true;
+            if w == KW_CONSTEVAL { ds.is_consteval = true; }
+            ds.any = true;
+            adv();
+            continue;
+        }
         if w == KW_NORETURN { ds.noreturn = true; ds.any = true; adv(); continue; }
         if w == KW_CONST { ds.q = ds.q | Q_CONST; ds.any = true; adv(); continue; }
         if w == KW_VOLATILE { ds.q = ds.q | Q_VOLATILE; ds.any = true; adv(); continue; }
@@ -423,8 +445,15 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             lookup_qn(qn);
             var t = qn_type(qn);
             if t == 0 {
-                if qn.dep == 0 && qn.qual && qn.scope >= 0 {
-                    // a member of a non-dependent class D1 does not know
+                if qn.dep == 0 && qn.qual && qn.scope >= 0 && known_class_scope(qn.scope as i64) {
+                    // D2: a complete class without unknown bases has no such type
+                    // (a substitution failure in a template's declaration)
+                    if !dependent_ctx() {
+                        err_at(qn.loc, str("no type named '", ident_text(qn.name as i64), "' in ", ctname(scope_class_type(qn.scope as i64))));
+                    }
+                    t = t_unknown;
+                } else if qn.dep == 0 && qn.qual && qn.scope >= 0 {
+                    // a member of a class whose members are not all known
                     t = t_unknown;
                 } else if qn.dep == 0 {
                     t = t_unknown;
@@ -455,7 +484,16 @@ recursive fn parse_cds(ds: CDS&, a: Attrs&, ctx: i64) {
             expect(TK_L_PAREN, "'('");
             var ty: u32 = t_unknown;
             if looks_like_type_id() && type_id_then(TK_R_PAREN, TK_R_PAREN) { ty = parse_type_id(); }
-            else { let sp = paren_depth; paren_depth++; let e = parse_cexpr_full(); paren_depth = sp; ty = nonref(nodes[e].ty); }
+            else {
+                let sp = paren_depth;
+                paren_depth++;
+                unevaluated++;
+                let e = parse_cexpr_full();
+                unevaluated--;
+                paren_depth = sp;
+                ty = nonref(nodes[e].ty);
+                if nodes[e].kind as i64 == N_FUNCREF { ty = single_fn_type(e); }
+            }
             expect(TK_R_PAREN, "')'");
             if w == KW_TYPEOF_UNQUAL { ty = unqual(ty); }
             ds.named = ty;
@@ -853,8 +891,25 @@ recursive fn parse_csuffixes(base: u32, d: CD&, first: bool) -> u32 {
                 noexc = true;
                 exck = 1;
                 if at(TK_L_PAREN) {
-                    if tk_n(1) == TK_KW + KW_FALSE && tk_n(2) == TK_R_PAREN { noexc = false; exck = 2; }
-                    skip_group();
+                    if tk_n(1) == TK_KW + KW_FALSE && tk_n(2) == TK_R_PAREN { noexc = false; exck = 2; skip_group(); }
+                    else if dependent_ctx() { skip_group(); }
+                    else {
+                        // D2: noexcept(constant-expression), the parameters in scope
+                        adv();
+                        push_scope();
+                        bind_params(start, count);
+                        let sp = paren_depth;
+                        paren_depth++;
+                        diag_suppress++;
+                        let ce = parse_cexpr();
+                        diag_suppress--;
+                        paren_depth = sp;
+                        pop_scope();
+                        skip_to(TK_R_PAREN);
+                        expect(TK_R_PAREN, "')'");
+                        let okc, vc = const_int(ce);
+                        if okc && vc == 0 { noexc = false; exck = 2; }
+                    }
                 }
                 continue;
             }
@@ -1108,6 +1163,22 @@ recursive fn parse_conv_type() -> u32 {
 }
 
 // decltype ( expression ) / decltype(auto) at pc.
+// The type of an overload set naming one function (decltype(f), typeof(f)), or unknown.
+fn single_fn_type(e: u32) -> u32 {
+    var s = nodes[e].a as i64;
+    var found: i64 = -1;
+    var n = 0;
+    while s >= 0 {
+        let f = resolve(s);
+        if f >= 0 && visible(s) && (syms[f].kind as i64 == SK_FUNC || syms[f].kind as i64 == SK_TEMPLATE) {
+            if f != found { found = f; n++; }
+        }
+        s = cxs[s].nnext as i64;
+    }
+    if n == 1 && syms[found].kind as i64 == SK_FUNC && nodes[e].c == 0 { return syms[found].ty; }
+    return if dependent_ctx() { mk_depexpr(nodes[e].loc as i64) } else { t_unknown };
+}
+
 recursive fn parse_decltype() -> u32 {
     let t0 = pc;
     adv();
@@ -1124,13 +1195,14 @@ recursive fn parse_decltype() -> u32 {
     paren_depth = sp;
     unevaluated--;
     expect(TK_R_PAREN, "')'");
-    let ty = nodes[e].ty;
+    var ty = nodes[e].ty;
+    if nodes[e].kind as i64 == N_FUNCREF { return single_fn_type(e); }
     if is_opaque(ty) || ty == 0 { return if dependent_ctx() { mk_depexpr(t0) } else { t_unknown }; }
     // decltype(id) is the declared type; decltype(expr) adds & for lvalues,
     // && for xvalues
     if decltype_is_id(e) { return ty_decl_of(e); }
-    if is_lvalue(e) { return mk_lref(ty); }
     if nodes[e].flags & NF_XVALUE != 0 { return mk_rref(ty); }
+    if is_lvalue(e) { return mk_lref(ty); }
     return ty;
 }
 var unevaluated: i64 = 0;

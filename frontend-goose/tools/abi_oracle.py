@@ -153,15 +153,73 @@ def defined_globals(obj):
     return out
 
 
-def split_objects(co, go, wd, tag, parity):
+def internal_data_users(obj):
+    """The functions of an object whose code refers to its internal writable
+    data (static variables and static locals: local symbols or section
+    symbols of .data / .bss sections)."""
+    r = sh(["readelf", "-SsrW", obj])
+    text = r.stdout.decode(errors="replace").splitlines()
+    secs = {}            # section index -> name
+    funcs = []           # (section name, start, end, name)
+    local_data = set()   # local symbols in writable data sections
+    mode = None
+    cur_rel = ""
+    users = set()
+    relocs = []
+    wdata = (".data", ".bss", ".tbss", ".tdata")
+    for line in text:
+        if line.startswith("Section Headers"):
+            mode = "sec"
+            continue
+        if line.startswith("Symbol table"):
+            mode = "sym"
+            continue
+        if line.startswith("Relocation section"):
+            mode = "rel"
+            m = line.split("'")[1] if "'" in line else ""
+            cur_rel = m[len(".rela"):] if m.startswith(".rela") else m
+            continue
+        f = line.split()
+        if mode == "sec" and line.strip().startswith("[") and "]" in line:
+            idx = line[line.index("[") + 1:line.index("]")].strip()
+            rest = line[line.index("]") + 1:].split()
+            if idx.isdigit() and rest:
+                secs[int(idx)] = rest[0]
+        elif mode == "sym" and len(f) >= 7 and f[0].endswith(":"):
+            ndx = f[6]
+            if f[3] == "FUNC" and ndx.isdigit() and len(f) >= 8:
+                funcs.append((secs.get(int(ndx), ""), int(f[1], 16), int(f[1], 16) + int(f[2]), f[7]))
+            if f[4] == "LOCAL" and f[3] in ("OBJECT", "SECTION") and ndx.isdigit():
+                sn = secs.get(int(ndx), "")
+                if sn.startswith(wdata):
+                    local_data.add(f[7] if f[3] == "OBJECT" and len(f) >= 8 else sn)
+        elif mode == "rel" and len(f) >= 5 and all(c in "0123456789abcdef" for c in f[0]):
+            relocs.append((cur_rel, int(f[0], 16), f[4]))
+    # (readelf prints the relocations before the symbols)
+    for sec_r, off, target in relocs:
+        if target in local_data or target.startswith(wdata):
+            for sec, a, b, name in funcs:
+                if sec == sec_r and a <= off < b:
+                    users.add(name)
+    return users
+
+
+def split_objects(co, go, wd, tag, parity, order="gc"):
     """Copies of the two objects where each function defined (global, not in
     a comdat) in both comes from one of them: index parity -> goosecc."""
     gsyms = dict(defined_globals(go))
     csyms = dict(defined_globals(co))
     both = sorted(n for n in gsyms if n in csyms and gsyms[n][1] == "GLOBAL" and csyms[n][1] == "GLOBAL")
+    # a function using the unit's internal variables comes from the object
+    # whose inline (comdat) functions the link keeps, the first one (each
+    # object has its own copy of those variables: one program, one copy)
+    pinned = internal_data_users(go) | internal_data_users(co)
     weak_in_g, weak_in_c = [], []
     for k, n in enumerate(both):
-        if gsyms[n][3] == "FUNC" and k % 2 != parity:
+        from_clang = k % 2 != parity
+        if n in pinned:
+            from_clang = order == "cg"
+        if gsyms[n][3] == "FUNC" and from_clang:
             weak_in_g.append(n)     # from clang
         else:
             weak_in_c.append(n)     # from goosecc (all variables too)
@@ -171,7 +229,7 @@ def split_objects(co, go, wd, tag, parity):
     r = sh(cmd)
     if r.returncode:
         raise suite.Fail("fail", "objcopy: " + r.stderr.decode(errors="replace")[:300])
-    cmd = ["objcopy", "--remove-section=.init_array", "--remove-section=.rela.init_array"]
+    cmd = ["objcopy", "--remove-section=.init_array*", "--remove-section=.rela.init_array*"]
     cmd += [f"--weaken-symbol={n}" for n in weak_in_c] + [co, c2]
     r = sh(cmd)
     if r.returncode:
@@ -218,7 +276,7 @@ def do_test(t, args, baseline):
                         if co is None:
                             link.append(go)
                             continue
-                        g2, c2, n = split_objects(co, go, wd, f"{tag}.{k}", parity)
+                        g2, c2, n = split_objects(co, go, wd, f"{tag}.{k}", parity, order)
                         nb += n
                         link += [g2, c2] if order == "gc" else [c2, g2]
                     exe = os.path.join(wd, tag + ".exe")
@@ -267,7 +325,7 @@ def files_mode(args, files, flags):
         for order in ("gc", "cg"):
             link = []
             for k, (co, go, s) in enumerate(objs):
-                g2, c2, n = split_objects(co, go, wd, f"s{parity}{order}{k}", parity)
+                g2, c2, n = split_objects(co, go, wd, f"s{parity}{order}{k}", parity, order)
                 link += [g2, c2] if order == "gc" else [c2, g2]
             exe = os.path.join(wd, f"s{parity}{order}.exe")
             r = sh([CXX] + link + ["-o", exe])
@@ -324,6 +382,13 @@ def main():
         sys.exit(files_mode(args, args.rest, flags))
     if not args.work:
         args.work = tempfile.mkdtemp(prefix="abi-oracle-")
+    os.makedirs(args.work, exist_ok=True)
+    args.work = os.path.abspath(args.work)
+    args.fpcmp = os.path.join(args.work, "fpcmp")
+    if not os.path.exists(args.fpcmp):
+        r = sh([args.clang, "-O2", "-w", os.path.join(args.suite, "tools/fpcmp.c"), "-o", args.fpcmp])
+        if r.returncode:
+            sys.exit("cannot build fpcmp: " + r.stderr.decode())
     tests = suite.all_tests(args.suite, args.corpus.split(","))
     if args.rest:
         tests = [t for t in tests if any(f in t.id for f in args.rest)]

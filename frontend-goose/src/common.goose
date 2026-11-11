@@ -11,6 +11,7 @@ import os;
 // (--target=aarch64-linux-gnu: AAPCS64, char unsigned, long double binary128).
 var opt_a64: bool = false;
 var char_unsigned: bool = false;   // plain char is unsigned (AArch64 unless -fsigned-char)
+var opt_fp_contract: i64 = 1;      // -ffp-contract=: 0 off, 1 on (clang's default for C), 2 fast (taken as on)
 
 // ---------------------------------------------------------------------------
 // Token kinds. Punctuators each have their own kind; keywords are
@@ -446,10 +447,22 @@ var diag_suppressed_errors: i64 = 0;
 // parses inside it) are counted when the suppression level is this one
 var diag_inst_level: i64 = -1;
 var diag_inst_errors: i64 = 0;
+var diag_watch_level: i64 = -1;     // C++ (D2): errors at exactly this level are counted too
+var diag_watch_errors: i64 = 0;
+var diag_show_all: bool = false;    // debugging (GOOSECC_INST_ERRORS=2): suppressed errors printed too
 
 fn error_at(loc: i64, msg: const u8[:]) {
     if rec_on { hk_bad(HC_BAD_DIAG); }
     if diag_suppress == diag_inst_level { diag_inst_errors++; }
+    if diag_suppress == diag_watch_level { diag_watch_errors++; }
+    if diag_suppress > 0 && diag_show_all {
+        var so: u8[>..] = [];
+        loc_prefix(so, loc);
+        format(so, "suppressed(", diag_suppress, "/", diag_inst_level, "/", diag_watch_level, "): ");
+        so.append(msg);
+        so.push('\n');
+        write_stderr(so);
+    }
     if diag_suppress > 0 { diag_suppressed_errors++; return; }
     var err_out: u8[>..] = [];
     loc_prefix(err_out, loc);
@@ -459,6 +472,12 @@ fn error_at(loc: i64, msg: const u8[:]) {
     write_stderr(err_out);
     n_errors++;
     if n_errors >= 50 { write_stderr("fatal error: too many errors emitted, stopping now\n"); exit(1); }
+}
+
+// C++ (D2): an error met (and suppressed) below counts as one at level l.
+fn diag_propagate(l: i64) {
+    if l == diag_inst_level { diag_inst_errors++; }
+    if l == diag_watch_level { diag_watch_errors++; }
 }
 
 fn warn_at(loc: i64, msg: const u8[:]) {

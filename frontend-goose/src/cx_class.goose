@@ -77,6 +77,7 @@ fn declare_tag(name: u32, is_union: bool, loc: u32, in_block: bool, sc: i64) -> 
         scope_add(sc, s);
     }
     class_setup(r, s, sc);
+    if cg_on && in_block { note_local_class(r, sc); }     // code generation: a local class's name
     return s;
 }
 
@@ -138,6 +139,7 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
             let t = qn_type(qn);
             ds.tag_ty = if t == 0 { t_unknown } else { t };
             note_spec_decl(qn);
+            if cg_on && pending_inst && t != 0 { note_class_inst(t, cur_extern_inst); }
             return ds.tag_ty;
         }
         if qn.qual {
@@ -153,6 +155,7 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
             if s >= 0 { return tag_type_of(s); }
             if pending_tmpl >= 0 { return declare_class_template(qn.name, is_union, loc, false); }
             let ns = declare_tag(qn.name, is_union, loc, in_block, cur_scope);
+            if inst_depth > 0 && scopes[cur_scope].kind as i64 == CS_CLASS && scopes[cur_scope].flags & SCF_INST != 0 { member_class_declared(ns); }
             return syms[ns].ty;
         }
         lookup_qn(qn);
@@ -189,6 +192,11 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
         } else if f >= 0 && is_record(syms[f].ty) {
             s = f;
             r = rec_of(syms[f].ty);
+            // D2: template<class T> class Outer<T>::Inner { }: the member
+            // class of the pattern defined out of its class, instantiated
+            // with each instantiation of Outer that needs it complete
+            let rs = crecs[r].scope as i64;
+            if pending_tmpl >= 0 && rs >= 0 && scopes[rs].flags & SCF_PATTERN != 0 { cxs[s].odef = pending_tmpl as! i32; }
         } else {
             // a member of an opaque class: parse and drop
             s = declare_tag(qn.name, is_union, loc, false, cur_scope);
@@ -225,6 +233,7 @@ recursive fn parse_class_spec(ds: CDS&, w: i64, ctx: i64) -> u32 {
         r = rr;
     }
     if w == KW_CLASS { crecs[r].flags = crecs[r].flags | CR_CLASS_KW; }
+    if is_final { mark_final(r); }
     if ca.aligned > 0 { records[r].attr_align = ca.aligned; }
     if ca.misc & AM_PACKED != 0 { records[r].flags = records[r].flags | RF_PACKED; }
     records[r].pack = pack_now();

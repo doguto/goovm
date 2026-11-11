@@ -381,6 +381,15 @@ fn builtin_call(s: i64, mark: i64, loc: u32) -> u32 {
         if ends_with(name, "has_single_bit") { rt = t_bool; }
     } else if name == "__builtin_counted_by_ref" || name == "__builtin_get_vtable_pointer" {
         rt = t_voidptr;
+    } else if name == "__builtin_arm_ldrex" || name == "__builtin_arm_ldaex" {
+        // AArch64 (F1): the pointee's value
+        rt = if is_pointer(a0t) { unqual(tbase(a0t)) } else { t_int };
+    } else if name == "__builtin_arm_strex" || name == "__builtin_arm_stlex" {
+        rt = t_int;
+        if nargs == 2 && is_pointer(nty(arg(mark, 1))) {
+            let x = arg(mark, 0);
+            if nodes[x].kind != N_ERROR { nscratch[mark] = assign_convert(x, unqual(tbase(nty(arg(mark, 1)))), nodes[x].loc, 2); }
+        }
     }
     // otherwise the declared result type (int for __builtin_isnan & co.)
     let start = commit_list(mark);

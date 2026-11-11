@@ -102,13 +102,28 @@ def main_a64(a):
     d = open(os.path.join(HERE, "..", "src", "predef_a64_gen.goose")).read()
     m = re.search(r'let A64_DELTA = """\n(.*?)\n""";', d, re.S)
     added = [l.split()[1] for l in m.group(1).splitlines() if l.startswith("0 ") and not l.endswith(" 0")]
-    names = sorted(set(x86) | set(added))
+    # and the target builtins clang's AArch64 headers call (their names are not all strings of libclang-cpp)
+    inc = "/usr/lib/llvm-20/lib/clang/20/include"
+    hdr = set()
+    for h in ("arm_acle.h", "arm_neon.h", "arm_fp16.h", "arm_bf16.h", "arm_vector_types.h"):
+        if os.path.exists(os.path.join(inc, h)):
+            hdr |= set(re.findall(r"__builtin_(?:arm|neon|aarch64)_\w+", open(os.path.join(inc, h)).read()))
+    names = sorted(set(x86) | set(added) | hdr)
     names = [n for n in names if not n.startswith("__is_") and not n.startswith("_Block")]
-    types = probe(a.clang, names, "", flags)
-    with_file = probe(a.clang, names, "typedef struct _IO_FILE FILE;\n", flags)
-    for n, (t, f) in with_file.items():
-        if "FILE" in t and types.get(n, ("", ""))[0] != t:
-            types[n] = (t, f)
+    # in chunks: clang stops on some of the target builtins' probes (a crash takes its chunk only)
+    types = {}
+    for k in range(0, len(names), 150):
+        part = names[k:k + 150]
+        t1 = probe(a.clang, part, "", flags)
+        if not t1:
+            for n in part:
+                t1.update(probe(a.clang, [n], "", flags))
+        types.update(t1)
+        with_file = probe(a.clang, [n for n in part if "printf" in n or "scanf" in n or "FILE" in types.get(n, ("", ""))[0]],
+                          "typedef struct _IO_FILE FILE;\n", flags)
+        for n, (t, f) in with_file.items():
+            if "FILE" in t and types.get(n, ("", ""))[0] != t:
+                types[n] = (t, f)
     lines = []
     for n in names:
         if n not in types:

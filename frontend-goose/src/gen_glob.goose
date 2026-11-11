@@ -160,6 +160,7 @@ fn defined_on_use(s: i64) -> bool {
 fn fn_emitted_def(s: i64) -> bool {
     let sy = syms[s];
     if sy.def < 0 { return false; }
+    if opt_cxx && cxl_has(s, CXL_EXTINST) { return false; }
     if opt_cxx && cxl_link(s) != LK_DEFAULT { return true; }
     if sy.sc == SC_STATIC { return true; }
     if sy.flags & SF_INLINE == 0 { return true; }

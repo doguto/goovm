@@ -255,7 +255,8 @@ recursive fn parse_stmt_cx() -> u32 {
     let w = k - TK_KW;
     if w == KW_IF {
         adv();
-        if at_kw(KW_CONSTEXPR) { adv(); }
+        var is_cx = false;
+        if at_kw(KW_CONSTEXPR) { adv(); is_cx = true; }
         if at(TK_EXCLAIM) && tk_n(1) == TK_KW + KW_CONSTEVAL { adv(); }
         if at_kw(KW_CONSTEVAL) {
             // if consteval { } else { }: the else branch at run time
@@ -271,10 +272,24 @@ recursive fn parse_stmt_cx() -> u32 {
         let init = parse_init_stmt();
         let c = parse_condition();
         expect(TK_R_PAREN, "')'");
-        let t = parse_stmt_cx();
+        // if constexpr in an instantiation: the discarded substatement is
+        // not instantiated (C++ [stmt.if]p2)
+        var taken: i64 = -1;
+        if is_cx && inst_depth > 0 && !dependent_ctx() {
+            let ok, v = const_int(c);
+            if ok { taken = if v != 0 { 1 } else { 0 }; }
+        }
+        var t: u32 = 0;
+        if taken == 0 { skip_stmt_tokens(); } else { t = parse_stmt_cx(); }
         var e: u32 = 0;
-        if accept_kw(KW_ELSE) { e = parse_stmt_cx(); }
+        if accept_kw(KW_ELSE) {
+            if taken == 1 { skip_stmt_tokens(); } else { e = parse_stmt_cx(); }
+        }
         pop_scope();
+        if taken >= 0 {
+            let n = if taken == 1 { t } else if e != 0 { e } else { node(N_NULL, 0, 0, 0, 0, 0, loc) };
+            return wrap_decls(mark, n, loc);
+        }
         let n = node(N_IF, 0, 0, c as i64, t as i64, e as i64, loc);
         return wrap_decls(mark, n, loc);
     }
@@ -424,10 +439,12 @@ fn discard_cx(e: u32) -> u32 {
 
 // The value of a return statement converted to the function's return type.
 recursive fn return_convert(x: u32, loc: u32) -> u32 {
+    if cg_on && ret_type != 0 && has_auto(ret_type) && !is_opq(x) && nodes[x].kind as i64 != N_INITBRACE { cg_deduce_return(x, loc); }
     let rt = ret_type;
     if cg_on && rt != 0 && !is_opaque(rt) && !is_void(rt) {
         if is_ref(rt) || is_record(rt) || nodes[x].kind as i64 == N_INITBRACE { return cg_return(x, rt, loc); }
         if kind_of(rt) == TY_MEMPTR { return conv_value(x, unqual(rt), loc); }
+        if nodes[x].kind as i64 == N_FUNCREF && is_pointer(rt) { return conv_value(x, unqual(rt), loc); }
         if !is_opq(x) && is_record(nodes[x].ty) { return conv_value(x, unqual(rt), loc); }
         if is_pointer(rt) && !is_opq(x) {
             let c = cg_ptr_conv(rv(x), unqual(rt), loc);
@@ -506,6 +523,19 @@ recursive fn parse_for() -> u32 {
         var r: u32 = 0;
         if at(TK_L_BRACE) { r = parse_braced(); } else { r = parse_expr_cx(); }
         expect(TK_R_PAREN, "')'");
+        if cg_on && !dependent_ctx() && d.qn.name != 0 && !is_opq(r) {
+            // code generation: the desugared loop
+            let n = cg_range_for(d.ty, d.qn.name, d.loc, r, loc);
+            if n != 0 {
+                let rest = nscratch.len;
+                if rest > mark {
+                    // (what the declaration parsing left: none expected)
+                    nscratch.resize(mark);
+                }
+                pop_scope();
+                return n;
+            }
+        }
         // the loop variable: its type from the range's elements when known
         var vt = d.ty;
         if has_auto(vt) { vt = range_elem_auto(vt, r); }
@@ -859,6 +889,7 @@ recursive fn parse_member_body(s: i64, sc: i64) {
     pc = cxs[s].body as i64;
     gt_pos = -1;
     let st, n = fn_param_list(s);
+    if inst_debug() { write_stderr(str("member_body ", s, " st=", st, " n=", n, " p0=", if n > 0 { nlist[st] as i64 } else { -1 }, " name=", if n > 0 { syms[nlist[st] as i64].name as i64 } else { -1 }, "\n")); }
     let f = parse_function_body(s, if st < 0 { 0 } else { st }, if st < 0 { 0 } else { n });
     if f != 0 {
         if block_fn_depth > 0 { fdefs_extra.push(f); } else { nscratch.push(f); }
@@ -867,4 +898,57 @@ recursive fn parse_member_body(s: i64, sc: i64) {
     cur_scope = sv_scope;
     local_floor = sv_floor;
     restore(sv);
+}
+
+// Skips the tokens of one statement (a discarded substatement of if
+// constexpr in an instantiation).
+recursive fn skip_stmt_tokens() {
+    loop {
+        // labels: case x: / default: / name:
+        if at_kw(KW_CASE) { adv(); skip_to(TK_COLON); accept(TK_COLON); continue; }
+        if at_kw(KW_DEFAULT) && tk_n(1) == TK_COLON { adv(); adv(); continue; }
+        if at(TK_IDENT) && tk_n(1) == TK_COLON && tk_n(2) != TK_COLON { adv(); adv(); continue; }
+        break;
+    }
+    let k = tk();
+    if k == TK_L_BRACE { skip_group(); return; }
+    if k == TK_SEMI { adv(); return; }
+    if k >= TK_KW {
+        let w = k - TK_KW;
+        if w == KW_IF {
+            adv();
+            if at_kw(KW_CONSTEXPR) { adv(); }
+            if at(TK_EXCLAIM) { adv(); }
+            if at_kw(KW_CONSTEVAL) { adv(); } else if at(TK_L_PAREN) { skip_group(); }
+            skip_stmt_tokens();
+            if accept_kw(KW_ELSE) { skip_stmt_tokens(); }
+            return;
+        }
+        if w == KW_WHILE || w == KW_FOR || w == KW_SWITCH {
+            adv();
+            if at(TK_L_PAREN) { skip_group(); }
+            skip_stmt_tokens();
+            return;
+        }
+        if w == KW_DO {
+            adv();
+            skip_stmt_tokens();
+            if accept_kw(KW_WHILE) { if at(TK_L_PAREN) { skip_group(); } }
+            accept(TK_SEMI);
+            return;
+        }
+        if w == KW_TRY {
+            adv();
+            if at(TK_L_BRACE) { skip_group(); }
+            while at_kw(KW_CATCH) {
+                adv();
+                if at(TK_L_PAREN) { skip_group(); }
+                if at(TK_L_BRACE) { skip_group(); }
+            }
+            return;
+        }
+    }
+    // an expression or declaration statement: to its ';'
+    skip_to(TK_SEMI);
+    accept(TK_SEMI);
 }
